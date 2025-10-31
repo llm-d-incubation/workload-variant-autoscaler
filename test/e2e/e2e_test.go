@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	v1alpha1 "github.com/llm-d-incubation/workload-variant-autoscaler/api/v1alpha1"
@@ -28,8 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,20 +49,25 @@ const (
 	controllerNamespace           = "workload-variant-autoscaler-system"
 	controllerMonitoringNamespace = "workload-variant-autoscaler-monitoring"
 	llmDNamespace                 = "llm-d-sim"
-	gatewayName                   = "infra-sim-inference-gateway"
+	gatewayName                   = "infra-sim-inference-gateway-istio"
 )
 
 const (
-	defaultModelId = "default/default"
-	llamaModelId   = "meta/llama0-70b"
-	a100Acc        = "A100"
-	// mi300xAcc            = "MI300X"
+	llamaModelId        = "unsloth/Meta-Llama-3.1-8B"
+	a100Acc             = "A100"
+	h100Acc             = "H100"
+	inputTokens         = 64
+	outputTokens        = 64
+	maxExecutionTimeSec = 300
+	loadRateTolerance   = 10
 )
 
 var (
 	k8sClient *kubernetes.Clientset
 	crClient  client.Client
 	scheme    = runtime.NewScheme()
+
+	GuidellmImage = "ghcr.io/vllm-project/guidellm:latest"
 )
 
 func init() {
@@ -139,16 +145,15 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-var _ = Describe("Test workload-variant-autoscaler with vllme deployment - single VA - critical requests", Ordered, func() {
+var _ = Describe("Test workload-variant-autoscaler in emulated environment - single VariantAutoscaling", Ordered, func() {
 	var (
+		name           string
 		namespace      string
 		deployName     string
 		serviceName    string
 		serviceMonName string
-		inferenceModel *unstructured.Unstructured
 		appLabel       string
-		loadGenCmd     *exec.Cmd
-		portForwardCmd *exec.Cmd
+		loadGenJob     *batchv1.Job
 		port           int
 		loadRate       int
 		modelName      string
@@ -163,43 +168,52 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		initializeK8sClient()
 
 		ctx = context.Background()
+		name = "llm-d-sim"
 		namespace = llmDNamespace
-		deployName = "vllme-deployment"
-		serviceName = "vllme-service"
-		serviceMonName = "vllme-servicemonitor"
-		appLabel = "vllme"
+		deployName = name + "-deployment"
+		serviceName = name + "-service"
+		serviceMonName = name + "-servicemonitor"
+		appLabel = name
 		port = 8000
-		loadRate = 30
-		modelName = defaultModelId
+		loadRate = 5 // requests per second
+		modelName = llamaModelId
 
 		By("ensuring unique app label for deployment and service")
 		utils.ValidateAppLabelUniqueness(namespace, appLabel, k8sClient, crClient)
-		utils.ValidateVariantAutoscalingUniqueness(namespace, defaultModelId, a100Acc, crClient)
+		utils.ValidateVariantAutoscalingUniqueness(namespace, llamaModelId, a100Acc, crClient)
 
-		By("creating vllme deployment")
-		deployment := utils.CreateVllmeDeployment(namespace, deployName, modelName, appLabel)
+		By("creating llm-d-sim deployment")
+		deployment := utils.CreateLlmdSimDeployment(namespace, deployName, modelName, appLabel, fmt.Sprintf("%d", port))
 		_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create Deployment: %s", deployName))
 
-		By("creating vllme service")
-		service := utils.CreateVllmeService(namespace, serviceName, appLabel, 30000)
+		By("creating service to expose llm-d-sim deployment")
+		service := utils.CreateLlmdSimService(namespace, serviceName, appLabel, 30000, port)
 		_, err = k8sClient.CoreV1().Services(namespace).Create(ctx, service, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create Service: %s", serviceName))
 
-		By("creating ServiceMonitor for vllme metrics")
-		serviceMonitor := utils.CreateVllmeServiceMonitor(serviceMonName, controllerMonitoringNamespace, appLabel)
+		By("creating ServiceMonitor for vLLM metrics")
+		serviceMonitor := utils.CreateLlmdSimServiceMonitor(serviceMonName, controllerMonitoringNamespace, llmDNamespace, appLabel)
 		err = crClient.Create(ctx, serviceMonitor)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create ServiceMonitor: %s", serviceMonName))
+
+		By("pod should be running before creating VariantAutoscaling resource")
+		Eventually(func(g Gomega) {
+			podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: "app=" + appLabel,
+			})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(podList.Items).To(HaveLen(1))
+
+			pod := podList.Items[0]
+			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning), fmt.Sprintf("Pod %s is not running", pod.Name))
+
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 		By("creating VariantAutoscaling resource")
 		variantAutoscaling := utils.CreateVariantAutoscalingResource(namespace, deployName, modelName, a100Acc)
 		err = crClient.Create(ctx, variantAutoscaling)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create VariantAutoscaling for: %s", deployName))
-
-		By("adding an InferenceModel for the deployment")
-		inferenceModel = utils.CreateInferenceModel(deployName, namespace, modelName)
-		err = crClient.Create(ctx, inferenceModel)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create InferenceModel: %s", modelName))
 
 		logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 	})
@@ -234,30 +248,6 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		Expect(podLabels).To(HaveKeyWithValue("llm-d.ai/model", "ms-sim-llm-d-modelservice"))
 	})
 
-	It("deployment should have correct resource configuration", func() {
-		deployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get Deployment: %s", deployName))
-
-		By("verifying container resource limits")
-		container := deployment.Spec.Template.Spec.Containers[0]
-		Expect(container.Resources.Limits).To(HaveKeyWithValue(corev1.ResourceName("nvidia.com/gpu"), resource.MustParse("1")))
-
-		By("verifying environment variables")
-		var modelNameEnv, maxBatchSizeEnv *corev1.EnvVar
-		for _, env := range container.Env {
-			if env.Name == "MODEL_NAME" {
-				modelNameEnv = &env
-			}
-			if env.Name == "MAX_BATCH_SIZE" {
-				maxBatchSizeEnv = &env
-			}
-		}
-		Expect(modelNameEnv).NotTo(BeNil(), "MODEL_NAME environment variable should be set")
-		Expect(modelNameEnv.Value).To(Equal("default/default"))
-		Expect(maxBatchSizeEnv).NotTo(BeNil(), "MAX_BATCH_SIZE environment variable should be set")
-		Expect(maxBatchSizeEnv.Value).To(Equal("8"))
-	})
-
 	It("deployment should have corresponding service with correct selector", func() {
 		service, err := k8sClient.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get Service: %s", serviceName))
@@ -290,14 +280,6 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		Expect(pod.Labels).To(HaveKeyWithValue("llm-d.ai/model", "ms-sim-llm-d-modelservice"))
 	})
 
-	It("should have correct GPU resource requests", func() {
-		deployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get Deployment: %s", deployName))
-
-		container := deployment.Spec.Template.Spec.Containers[0]
-		Expect(container.Resources.Limits).To(HaveKeyWithValue(corev1.ResourceName("nvidia.com/gpu"), resource.MustParse("1")))
-	})
-
 	It("should have VariantAutoscaling resource created", func() {
 		By("verifying VariantAutoscaling resource exists")
 		variantAutoscaling := &v1alpha1.VariantAutoscaling{}
@@ -308,9 +290,8 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get VariantAutoscaling: %s", deployName))
 
 		By("verifying VariantAutoscaling spec")
-		Expect(variantAutoscaling.Spec.ModelID).To(Equal("default/default"))
-		Expect(variantAutoscaling.Spec.SLOClassRef.Name).To(Equal("premium"))
-		Expect(variantAutoscaling.Spec.ModelProfile.Accelerators).To(HaveLen(3))
+		Expect(variantAutoscaling.Spec.ModelID).To(Equal(modelName))
+		Expect(variantAutoscaling.Name).To(Equal(deployName))
 	})
 
 	It("should have VariantAutoscaling with correct ownerReference to Deployment", func() {
@@ -352,7 +333,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 			g.Expect(ownerRef.UID).To(Equal(deployment.UID), fmt.Sprintf("ownerReference should have the correct UID for: %s", deployName))
 			g.Expect(ownerRef.Controller).NotTo(BeNil(), fmt.Sprintf("ownerReference should have Controller field set for: %s", deployName))
 			g.Expect(*ownerRef.Controller).To(BeTrue(), fmt.Sprintf("ownerReference Controller should be true for: %s", deployName))
-		}, 4*time.Minute, 2*time.Second).Should(Succeed())
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
 	})
 
 	It("should scale out when load increases", func() {
@@ -376,23 +357,12 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		}, initialVA)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", deployName))
 
-		By("getting the service endpoint for load generation")
-		// Port-forward the vllme service to send requests to it
-		By("setting up port-forward to the vllme service")
-		portForwardCmd = utils.SetUpPortForward(k8sClient, ctx, gatewayName, namespace, port, 80)
-		defer func() {
-			err = utils.StopCmd(portForwardCmd)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop port-forwarding for: %s", gatewayName))
-		}()
-
-		By("waiting for port-forward to be ready")
-		err = utils.VerifyPortForwardReadiness(ctx, port, fmt.Sprintf("http://localhost:%d/v1", port))
-		Expect(err).NotTo(HaveOccurred(), "Port-forward should be ready within timeout")
-
 		By("starting load generation to create traffic")
-		loadGenCmd = utils.StartLoadGenerator(loadRate, 100, port, modelName)
+		loadGenJob, err = utils.CreateLoadGeneratorJob(GuidellmImage, namespace, fmt.Sprintf("http://%s:%d", gatewayName, 80), modelName, loadRate, maxExecutionTimeSec, inputTokens, outputTokens, k8sClient, ctx)
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to start load generator sending requests to: %s", deployName))
 		defer func() {
-			err = utils.StopCmd(loadGenCmd)
+			By("stopping load generation job")
+			err = utils.StopJob(namespace, loadGenJob, k8sClient, ctx)
 			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", deployName))
 		}()
 
@@ -430,6 +400,13 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", desiredReplicasProm),
 				fmt.Sprintf("Desired replicas %d for VA %s should be the same as Prometheus result: %.2f", va.Status.DesiredOptimizedAlloc.NumReplicas, deployName, desiredReplicasProm))
 
+			observedLoad, err := strconv.ParseFloat(va.Status.CurrentAlloc.Load.ArrivalRate, 64)
+			g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to convert CurrentAlloc Load ArrivalRate to float for VA: %s", va.Name))
+
+			// Verify that the observed load approximately matches the generated load
+			g.Expect(observedLoad).To(BeNumerically("~", loadRate*60, loadRateTolerance),
+				fmt.Sprintf("Current load arrival rate for VA %s should approximately match the actual load: %d - observed: %.2f", va.Name, loadRate*60, observedLoad))
+
 		}, 5*time.Minute, 10*time.Second).Should(Succeed())
 
 		By("verifying that the controller has updated the status")
@@ -454,20 +431,11 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		err := utils.VerifyPortForwardReadiness(ctx, 9090, fmt.Sprintf("https://localhost:%d/api/v1/query?query=up", 9090))
 		Expect(err).NotTo(HaveOccurred(), "Prometheus port-forward should be ready within timeout")
 
-		By("setting up port-forward to the vllme service")
-		portForwardCmd := utils.SetUpPortForward(k8sClient, ctx, gatewayName, namespace, port, 80)
-		defer func() {
-			err = utils.StopCmd(portForwardCmd)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop port-forwarding for: %s", gatewayName))
-		}()
-		By("waiting for port-forward to be ready")
-		err = utils.VerifyPortForwardReadiness(ctx, port, fmt.Sprintf("http://localhost:%d/v1", port))
-		Expect(err).NotTo(HaveOccurred(), "Port-forward should be ready within timeout")
-
 		By("restarting load generation at the same rate")
-		loadGenCmd = utils.StartLoadGenerator(loadRate, 100, port, modelName)
+		loadGenJob, err = utils.CreateLoadGeneratorJob(GuidellmImage, namespace, fmt.Sprintf("http://%s:%d", gatewayName, 80), modelName, loadRate, maxExecutionTimeSec, inputTokens, outputTokens, k8sClient, ctx)
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create load generator job for: %s", deployName))
 		defer func() {
-			err = utils.StopCmd(loadGenCmd)
+			err = utils.StopJob(namespace, loadGenJob, k8sClient, ctx)
 			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", deployName))
 		}()
 
@@ -480,6 +448,32 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		}, va)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", deployName))
 		initialDesiredReplicas = va.Status.DesiredOptimizedAlloc.NumReplicas
+
+		// Since the previous Job has just finished and a new Job has started, there is an interval in which
+		// higher load is being generated. During this time, the controller may decide to scale up further.
+		// To avoid false negatives, we first wait for the load to stabilize, then we verify that
+		// the number of replicas remains constant over a period of time.
+		By("waiting for the load generator to stabilize the load")
+		Consistently(func(g Gomega) {
+			Eventually(func(g Gomega) {
+				va := &v1alpha1.VariantAutoscaling{}
+				err = crClient.Get(ctx, client.ObjectKey{
+					Namespace: namespace,
+					Name:      deployName,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", deployName))
+
+				observedLoad, err := strconv.ParseFloat(va.Status.CurrentAlloc.Load.ArrivalRate, 64)
+				g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to convert CurrentAlloc Load ArrivalRate to float for VA: %s", va.Name))
+
+				fmt.Printf("Current load arrival rate for VA %s - expected: %d, observed: %.2f\n", va.Name, loadRate*60, observedLoad)
+
+				// Verify that the observed load approximately matches the generated load
+				g.Expect(observedLoad).To(BeNumerically("~", loadRate*60, loadRateTolerance),
+					fmt.Sprintf("Current load arrival rate for VA %s should approximately match the actual load: %d - observed: %.2f", va.Name, loadRate*60, observedLoad))
+
+			}, 2*time.Minute, 10*time.Second).Should(Succeed())
+		}, 2*time.Minute, 10*time.Second).Should(Succeed())
 
 		var desiredReplicasProm float64
 		By("verifying that the number of replicas remains constant over several minutes with constant load")
@@ -503,7 +497,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", desiredReplicasProm),
 				fmt.Sprintf("Desired replicas %d for VA %s should be the same as Prometheus result: %.2f", va.Status.DesiredOptimizedAlloc.NumReplicas, deployName, desiredReplicasProm))
 
-		}, 2*time.Minute, 10*time.Second).Should(Succeed())
+		}, 1*time.Minute, 10*time.Second).Should(Succeed())
 
 		By("verifying that the controller has updated the status")
 		err = utils.LogVariantAutoscalingStatus(ctx, deployName, namespace, crClient)
@@ -537,7 +531,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 			}, va)
 			g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", deployName))
 
-			// Verify that the number of replicas has scaled down to 0
+			// Verify that the number of replicas has scaled down to MinimumReplicas
 			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", MinimumReplicas),
 				fmt.Sprintf("No load should trigger scale-down to %d recommendation for: %s", MinimumReplicas, va.Name))
 
@@ -672,20 +666,15 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 		err = client.IgnoreNotFound(err)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete ServiceMonitor: %s", serviceMonName))
 
-		By("deleting vllme service")
+		By("deleting llm-d-sim service")
 		err = k8sClient.CoreV1().Services(namespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
 		err = client.IgnoreNotFound(err)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete Service: %s", serviceName))
 
-		By("deleting vllme deployment")
+		By("deleting llm-d-sim deployment")
 		err = k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deployName, metav1.DeleteOptions{})
 		err = client.IgnoreNotFound(err)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete Deployment: %s", deployName))
-
-		By("deleting InferenceModel")
-		err = crClient.Delete(ctx, inferenceModel)
-		err = client.IgnoreNotFound(err)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete InferenceModel: %s", modelName))
 
 		By("waiting for all pods to be deleted")
 		Eventually(func(g Gomega) {
@@ -698,8 +687,10 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - singl
 	})
 })
 
-var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multiple VAs - critical requests", Ordered, func() {
+var _ = Describe("Test workload-variant-autoscaler in emulated environment - multiple VariantAutoscalings", Ordered, func() {
 	var (
+		firstName                string
+		secondName               string
 		namespace                string
 		firstDeployName          string
 		secondDeployName         string
@@ -711,10 +702,9 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		secondServiceMonitorName string
 		firstModelName           string
 		secondModelName          string
-		firstInferenceModel      *unstructured.Unstructured
-		secondInferenceModel     *unstructured.Unstructured
-
-		ctx context.Context
+		port                     int
+		loadRate                 int
+		ctx                      context.Context
 	)
 
 	BeforeAll(func() {
@@ -725,67 +715,87 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		initializeK8sClient()
 
 		ctx = context.Background()
+		port = 8000
+		firstName = "llm-d-sim-1"
 		namespace = llmDNamespace
-		firstDeployName = "vllme-deployment-1"
-		firstAppLabel = "vllme-1"
-		firstServiceName = "vllme-service-1"
-		firstServiceMonitorName = "vllme-servicemonitor-1"
-		secondDeployName = "vllme-deployment-2"
-		secondServiceName = "vllme-service-2"
-		secondServiceMonitorName = "vllme-servicemonitor-2"
-		secondAppLabel = "vllme-2"
-		firstModelName = defaultModelId
+		firstDeployName = firstName + "-deployment"
+		firstAppLabel = firstName
+		firstServiceName = firstName + "-service"
+		firstServiceMonitorName = firstName + "-servicemonitor"
+		secondName = "llm-d-sim-2"
+		secondDeployName = secondName + "-deployment"
+		secondServiceName = secondName + "-service"
+		secondServiceMonitorName = secondName + "-servicemonitor"
+		secondAppLabel = secondName
+		firstModelName = llamaModelId
 		secondModelName = llamaModelId
+		loadRate = 5 // requests per second
 
 		By("ensuring unique app labels for deployment and service")
 		utils.ValidateAppLabelUniqueness(namespace, firstAppLabel, k8sClient, crClient)
 		utils.ValidateAppLabelUniqueness(namespace, secondAppLabel, k8sClient, crClient)
-		utils.ValidateVariantAutoscalingUniqueness(namespace, defaultModelId, a100Acc, crClient)
 		utils.ValidateVariantAutoscalingUniqueness(namespace, llamaModelId, a100Acc, crClient)
+		utils.ValidateVariantAutoscalingUniqueness(namespace, llamaModelId, h100Acc, crClient)
 
 		By("creating resources for the first deployment")
-		firstDeployment := utils.CreateVllmeDeployment(namespace, firstDeployName, firstModelName, firstAppLabel)
+		firstDeployment := utils.CreateLlmdSimDeployment(namespace, firstDeployName, firstModelName, firstAppLabel, fmt.Sprintf("%d", port))
 		_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, firstDeployment, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create first Deployment: %s", firstDeployName))
 
-		firstService := utils.CreateVllmeService(namespace, firstServiceName, firstAppLabel, 30000)
+		firstService := utils.CreateLlmdSimService(namespace, firstServiceName, firstAppLabel, 30000, port)
 		_, err = k8sClient.CoreV1().Services(namespace).Create(ctx, firstService, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create first Service: %s", firstServiceName))
 
-		firstServiceMonitor := utils.CreateVllmeServiceMonitor(firstServiceMonitorName, controllerMonitoringNamespace, firstAppLabel)
+		firstServiceMonitor := utils.CreateLlmdSimServiceMonitor(firstServiceMonitorName, controllerMonitoringNamespace, llmDNamespace, firstAppLabel)
 		err = crClient.Create(ctx, firstServiceMonitor)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create first ServiceMonitor: %s", firstServiceMonitorName))
+
+		By("pod should be running before creating VariantAutoscaling resource")
+		Eventually(func(g Gomega) {
+			podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: "app=" + firstAppLabel,
+			})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(podList.Items).To(HaveLen(1))
+
+			pod := podList.Items[0]
+			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning), fmt.Sprintf("Pod %s is not running", pod.Name))
+
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 		variantAutoscaling := utils.CreateVariantAutoscalingResource(namespace, firstDeployName, firstModelName, a100Acc)
 		err = crClient.Create(ctx, variantAutoscaling)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create first VariantAutoscaling for: %s", firstDeployName))
 
-		By("adding an InferenceModel for the first deployment")
-		firstInferenceModel = utils.CreateInferenceModel(firstDeployName, namespace, firstModelName)
-		err = crClient.Create(ctx, firstInferenceModel)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create first InferenceModel: %s", firstModelName))
-
 		By("creating resources for the second deployment")
-		secondDeployment := utils.CreateVllmeDeployment(namespace, secondDeployName, secondModelName, secondAppLabel)
+		secondDeployment := utils.CreateLlmdSimDeployment(namespace, secondDeployName, secondModelName, secondAppLabel, fmt.Sprintf("%d", port))
 		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, secondDeployment, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create second Deployment: %s", secondDeployName))
 
-		secondVariantAutoscaling := utils.CreateVariantAutoscalingResource(namespace, secondDeployName, secondModelName, a100Acc)
+		By("pod should be running before creating VariantAutoscaling resource")
+		Eventually(func(g Gomega) {
+			podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: "app=" + secondAppLabel,
+			})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(podList.Items).To(HaveLen(1))
+
+			pod := podList.Items[0]
+			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning), fmt.Sprintf("Pod %s is not running", pod.Name))
+
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+		secondVariantAutoscaling := utils.CreateVariantAutoscalingResource(namespace, secondDeployName, secondModelName, h100Acc)
 		err = crClient.Create(ctx, secondVariantAutoscaling)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create second VariantAutoscaling for: %s", secondDeployName))
 
-		secondService := utils.CreateVllmeService(namespace, secondServiceName, secondAppLabel, 30001)
+		secondService := utils.CreateLlmdSimService(namespace, secondServiceName, secondAppLabel, 30001, port)
 		_, err = k8sClient.CoreV1().Services(namespace).Create(ctx, secondService, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create second Service: %s", secondServiceName))
 
-		secondServiceMonitor := utils.CreateVllmeServiceMonitor(secondServiceMonitorName, controllerMonitoringNamespace, secondAppLabel)
+		secondServiceMonitor := utils.CreateLlmdSimServiceMonitor(secondServiceMonitorName, controllerMonitoringNamespace, llmDNamespace, secondAppLabel)
 		err = crClient.Create(ctx, secondServiceMonitor)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create second ServiceMonitor: %s", secondServiceMonitorName))
-
-		By("adding an InferenceModel for the second deployment")
-		secondInferenceModel = utils.CreateInferenceModel(secondDeployName, namespace, secondModelName)
-		err = crClient.Create(ctx, secondInferenceModel)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create second InferenceModel: %s", secondModelName))
 
 		logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 	})
@@ -852,30 +862,12 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		err = utils.VerifyPortForwardReadiness(ctx, 9090, fmt.Sprintf("https://localhost:%d/api/v1/query?query=up", 9090))
 		Expect(err).NotTo(HaveOccurred(), "Prometheus port-forward should be ready within timeout")
 
-		By("getting the gateway service endpoint for load generation")
-		port := 8000
-		portForwardCmd := utils.SetUpPortForward(k8sClient, ctx, gatewayName, namespace, port, 80)
-		defer func() {
-			err = utils.StopCmd(portForwardCmd)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop port-forwarding for Service: %s", gatewayName))
-		}()
-
-		By("waiting for port-forwards to be ready")
-		err = utils.VerifyPortForwardReadiness(ctx, port, fmt.Sprintf("http://localhost:%d/v1", port))
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Port-forward should be ready within timeout for Service: %s", gatewayName))
-
 		By("starting load generation to create traffic for both deployments")
-		loadRate1 := 30
-		loadGenCmd1 := utils.StartLoadGenerator(loadRate1, 100, port, firstModelName)
+		loadGenJob1, err := utils.CreateLoadGeneratorJob(GuidellmImage, namespace, fmt.Sprintf("http://%s:%d", gatewayName, 80), firstModelName, loadRate, maxExecutionTimeSec, inputTokens, outputTokens, k8sClient, ctx)
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to start load generator sending requests to: %s", firstDeployName))
 		defer func() {
-			err = utils.StopCmd(loadGenCmd1)
+			err = utils.StopJob(namespace, loadGenJob1, k8sClient, ctx)
 			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", firstServiceName))
-		}()
-		loadRate2 := 30
-		loadGenCmd2 := utils.StartLoadGenerator(loadRate2, 100, port, secondModelName)
-		defer func() {
-			err = utils.StopCmd(loadGenCmd2)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", secondServiceName))
 		}()
 
 		var desiredReplicas1, desiredReplicas2 float64
@@ -898,7 +890,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 
 			// Verify that the desired number of replicas has same value as Prometheus result
 			g.Expect(va1.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", desiredReplicas1),
-				fmt.Sprintf("Current replicas for VA %s should stay at %d with no load", va1.Name, int(desiredReplicas1)))
+				fmt.Sprintf("Current desired replicas for VA status %s should be equal to %d", va1.Name, int(desiredReplicas1)))
 
 			va2 := &v1alpha1.VariantAutoscaling{}
 			err = crClient.Get(ctx, client.ObjectKey{
@@ -917,8 +909,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 
 			// Verify that the desired number of replicas has same value as Prometheus result
 			g.Expect(va2.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", desiredReplicas2),
-				fmt.Sprintf("Current replicas for VA %s should stay at %.2f with no load", va2.Name, desiredReplicas2))
-
+				fmt.Sprintf("Current desired replicas for VA status %s should be equal to %d", va2.Name, int(desiredReplicas2)))
 		}, 6*time.Minute, 10*time.Second).Should(Succeed())
 
 		By("verifying that the controller has updated the status")
@@ -937,7 +928,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 			int(desiredReplicas2))
 	})
 
-	It("should further scale out if load further increases (even over cluster limits)", func() {
+	It("should further scale out if load further increases", func() {
 		By("verifying initial state of VariantAutoscaling")
 		initialVA1 := &v1alpha1.VariantAutoscaling{}
 		err := crClient.Get(ctx, client.ObjectKey{
@@ -968,32 +959,13 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		err = utils.VerifyPortForwardReadiness(ctx, 9090, fmt.Sprintf("https://localhost:%d/api/v1/query?query=up", 9090))
 		Expect(err).NotTo(HaveOccurred(), "Prometheus port-forward should be ready within timeout")
 
-		By("getting the gateway service endpoint for load generation")
-		// Port-forward the gateway service to send requests to it
-		By("setting up port-forward to the gateway service")
-		port := 8000
-		portForwardCmd := utils.SetUpPortForward(k8sClient, ctx, gatewayName, namespace, port, 80)
-		defer func() {
-			err = utils.StopCmd(portForwardCmd)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop port-forwarding for: %s", gatewayName))
-		}()
-
-		By("waiting for port-forwards to be ready")
-		err = utils.VerifyPortForwardReadiness(ctx, port, fmt.Sprintf("http://localhost:%d/v1", port))
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Port-forward should be ready within timeout for: %s", firstServiceName))
-
 		By("starting load generation to create traffic for both deployments")
-		loadRate1 := 60
-		loadGenCmd1 := utils.StartLoadGenerator(loadRate1, 100, port, firstModelName)
+		loadRate = 10
+		loadGenJob1, err := utils.CreateLoadGeneratorJob(GuidellmImage, namespace, fmt.Sprintf("http://%s:%d", gatewayName, 80), firstModelName, loadRate, maxExecutionTimeSec, inputTokens, outputTokens, k8sClient, ctx)
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to start load generator sending requests to: %s", firstDeployName))
 		defer func() {
-			err = utils.StopCmd(loadGenCmd1)
+			err = utils.StopJob(namespace, loadGenJob1, k8sClient, ctx)
 			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", firstDeployName))
-		}()
-		loadRate2 := 60
-		loadGenCmd2 := utils.StartLoadGenerator(loadRate2, 100, port, secondModelName)
-		defer func() {
-			err = utils.StopCmd(loadGenCmd2)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to stop load generator sending requests to: %s", secondDeployName))
 		}()
 
 		var desiredReplicas1, desiredReplicas2 float64
@@ -1039,7 +1011,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 
 		}, 6*time.Minute, 10*time.Second).Should(Succeed())
 
-		By("showing the status of VAs and deployments, including the number of pods in pending state")
+		By("showing the status of VAs")
 		err = utils.LogVariantAutoscalingStatus(ctx, firstDeployName, namespace, crClient)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to log VariantAutoscaling status for: %s", firstDeployName))
 
@@ -1078,7 +1050,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 			}, va1)
 			g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", firstDeployName))
 
-			// Verify that the number of replicas has scaled down to 0
+			// Verify that the number of replicas has scaled down to MinimumReplicas
 			g.Expect(va1.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", MinimumReplicas),
 				fmt.Sprintf("No load should trigger scale-down recommendation to %d for VA: %s - actual replicas: %d", MinimumReplicas, firstDeployName, va1.Status.CurrentAlloc.NumReplicas))
 
@@ -1097,7 +1069,7 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 			}, va2)
 			g.Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to fetch VariantAutoscaling for: %s", secondDeployName))
 
-			// Verify that the number of replicas has scaled down to 0
+			// Verify that the number of replicas has scaled down to MinimumReplicas
 			g.Expect(va2.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically("==", MinimumReplicas),
 				fmt.Sprintf("High load should trigger scale-up recommendation to %d for VA: %s - actual replicas: %d", MinimumReplicas, secondDeployName, va2.Status.CurrentAlloc.NumReplicas))
 
@@ -1160,10 +1132,6 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		err = client.IgnoreNotFound(err)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete Deployment: %s", firstDeployName))
 
-		err = crClient.Delete(ctx, firstInferenceModel)
-		err = client.IgnoreNotFound(err)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete InferenceModel: %s", firstModelName))
-
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=" + firstAppLabel})
 			if err != nil {
@@ -1202,10 +1170,6 @@ var _ = Describe("Test workload-variant-autoscaler with vllme deployment - multi
 		err = k8sClient.AppsV1().Deployments(namespace).Delete(ctx, secondDeployName, metav1.DeleteOptions{})
 		err = client.IgnoreNotFound(err)
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete Deployment: %s", secondDeployName))
-
-		err = crClient.Delete(ctx, secondInferenceModel)
-		err = client.IgnoreNotFound(err)
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to delete InferenceModel: %s", secondModelName))
 
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=" + secondAppLabel})

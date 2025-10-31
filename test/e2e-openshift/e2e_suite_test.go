@@ -42,7 +42,7 @@ import (
 var (
 	controllerNamespace = getEnvString("CONTROLLER_NAMESPACE", "workload-variant-autoscaler-system")
 	monitoringNamespace = getEnvString("MONITORING_NAMESPACE", "openshift-user-workload-monitoring")
-	llmDNamespace       = getEnvString("LLMD_NAMESPACE", "llm-d-inference-scheduling")
+	llmDNamespace       = getEnvString("LLMD_NAMESPACE", "llm-d-inference-scheduler")
 	gatewayName         = getEnvString("GATEWAY_NAME", "infra-inference-scheduling-inference-gateway")
 	modelID             = getEnvString("MODEL_ID", "unsloth/Meta-Llama-3.1-8B")
 	deployment          = getEnvString("DEPLOYMENT", "ms-inference-scheduling-llm-d-modelservice-decode")

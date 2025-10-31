@@ -7,8 +7,10 @@ wva:
   replicaCount: 1
   image:
     repository: ghcr.io/llm-d/workload-variant-autoscaler
-    tag: v0.0.1
+    tag: latest
   imagePullPolicy: Always
+
+  reconcileInterval: 30s
 
   modelName: ms-inference-scheduling-llm-d-modelservice
 
@@ -27,10 +29,10 @@ wva:
     tls:
       insecureSkipVerify: true   # Development: true, Production: false
       caCertPath: "/etc/ssl/certs/prometheus-ca.crt"
-    # caCert: |  # Uncomment and provide your CA certificate
-    #   -----BEGIN CERTIFICATE-----
-    #   YOUR_CA_CERTIFICATE_HERE
-    #   -----END CERTIFICATE-----
+    caCert: |  # Uncomment and provide your CA certificate
+      -----BEGIN CERTIFICATE-----
+      YOUR_CA_CERTIFICATE_HERE
+      -----END CERTIFICATE-----
 
 llmd:
   namespace: llm-d-inference-scheduling

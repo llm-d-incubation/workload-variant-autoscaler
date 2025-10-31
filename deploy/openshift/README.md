@@ -97,7 +97,7 @@ That's it! The script will:
 | `BENCHMARK_MODE` | Deploying using benchmark configuration for Istio | `true` |
 | `INSTALL_GATEWAY_CTRLPLANE` | Need to install Gateway Control Plane | `false` |
 
-*Note*: when `true`, the `BENCHMARK_MODE` will **override** any `GATEWAY_PROVIDER` previously set to use the benchmark configuration for Istio.
+*Note*: when `true`, the `BENCHMARK_MODE` will **override** any `GATEWAY_PROVIDER` previously set, using the benchmark configuration for Istio.
 
 ### Deployment Flags
 

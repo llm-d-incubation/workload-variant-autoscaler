@@ -27,7 +27,7 @@ data:
   # PROMETHEUS_TOKEN_PATH: "/path/to/token/file"        # Path to bearer token file (production with mounted secrets)
   
   # Optimization configuration
-  GLOBAL_OPT_INTERVAL: "60s"
+  GLOBAL_OPT_INTERVAL: {{ .Values.wva.reconcileInterval | quote }}
 
-  # Option to scale variants to zero replicas (default: true)
+  # Option to scale variants to zero replicas (default: false)
   WVA_SCALE_TO_ZERO: "false"

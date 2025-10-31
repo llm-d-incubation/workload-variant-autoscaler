@@ -5,6 +5,10 @@ package constants
 // These metric names are used to query VLLM (vLLM inference engine) metrics from Prometheus.
 // The metrics are emitted by VLLM servers and consumed by the collector to make scaling decisions.
 const (
+	// VLLMNumRequestRunning tracks the current number of running requests.
+	// Used to validate metrics availability.
+	VLLMNumRequestRunning = "vllm:num_requests_running"
+
 	// VLLMRequestSuccessTotal tracks the total number of successful requests.
 	// Used to calculate arrival rate.
 	VLLMRequestSuccessTotal = "vllm:request_success_total"

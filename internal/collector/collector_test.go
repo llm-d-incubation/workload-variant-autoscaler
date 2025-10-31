@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d-incubation/workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d-incubation/workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d-incubation/workload-variant-autoscaler/internal/logger"
 	"github.com/llm-d-incubation/workload-variant-autoscaler/test/utils"
 )
@@ -425,7 +426,7 @@ var _ = Describe("Collector", func() {
 
 		It("should return available when metrics are found with namespace label", func() {
 			// Setup mock response with namespace label
-			query := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
+			query := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
 			mockProm.QueryResults[query] = model.Vector{
 				&model.Sample{
 					Value:     model.SampleValue(100.0),
@@ -442,8 +443,8 @@ var _ = Describe("Collector", func() {
 
 		It("should fallback to query without namespace label when first query returns empty", func() {
 			// Setup mock responses - first query empty, fallback has results
-			queryWithNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
-			queryWithoutNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s"}`, modelName)
+			queryWithNamespace := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
+			queryWithoutNamespace := fmt.Sprintf(`%s{%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName)
 
 			mockProm.QueryResults[queryWithNamespace] = model.Vector{}
 			mockProm.QueryResults[queryWithoutNamespace] = model.Vector{
@@ -461,7 +462,7 @@ var _ = Describe("Collector", func() {
 
 		It("should return unavailable when Prometheus query fails", func() {
 			// Setup error for query
-			query := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
+			query := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
 			mockProm.QueryErrors[query] = fmt.Errorf("prometheus connection error")
 
 			result := ValidateMetricsAvailability(ctx, mockProm, modelName, testNamespace)
@@ -473,8 +474,8 @@ var _ = Describe("Collector", func() {
 
 		It("should return unavailable when no metrics found", func() {
 			// Setup empty responses for both queries
-			queryWithNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
-			queryWithoutNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s"}`, modelName)
+			queryWithNamespace := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
+			queryWithoutNamespace := fmt.Sprintf(`%s{%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName)
 
 			mockProm.QueryResults[queryWithNamespace] = model.Vector{}
 			mockProm.QueryResults[queryWithoutNamespace] = model.Vector{}
@@ -489,7 +490,7 @@ var _ = Describe("Collector", func() {
 
 		It("should return unavailable when metrics are stale", func() {
 			// Setup mock response with stale timestamp (older than 5 minutes)
-			query := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
+			query := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
 			staleTime := time.Now().Add(-10 * time.Minute)
 			mockProm.QueryResults[query] = model.Vector{
 				&model.Sample{
@@ -507,8 +508,8 @@ var _ = Describe("Collector", func() {
 
 		It("should handle fallback query errors", func() {
 			// Setup empty first query and error on fallback
-			queryWithNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
-			queryWithoutNamespace := fmt.Sprintf(`vllm:request_success_total{model_name="%s"}`, modelName)
+			queryWithNamespace := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
+			queryWithoutNamespace := fmt.Sprintf(`%s{%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName)
 
 			mockProm.QueryResults[queryWithNamespace] = model.Vector{}
 			mockProm.QueryErrors[queryWithoutNamespace] = fmt.Errorf("fallback query failed")
@@ -522,7 +523,7 @@ var _ = Describe("Collector", func() {
 
 		It("should accept fresh metrics within the 5 minute window", func() {
 			// Setup mock response with recent timestamp
-			query := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, testNamespace)
+			query := fmt.Sprintf(`%s{%s="%s",%s="%s"}`, constants.VLLMNumRequestRunning, constants.LabelModelName, modelName, constants.LabelNamespace, testNamespace)
 			freshTime := time.Now().Add(-2 * time.Minute)
 			mockProm.QueryResults[query] = model.Vector{
 				&model.Sample{

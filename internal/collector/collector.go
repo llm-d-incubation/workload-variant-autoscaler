@@ -87,7 +87,7 @@ type MetricsValidationResult struct {
 func ValidateMetricsAvailability(ctx context.Context, promAPI promv1.API, modelName, namespace string) MetricsValidationResult {
 	// Query for basic vLLM metric to validate scraping is working
 	// Try with namespace label first (real vLLM), fall back to just model_name (vllme emulator)
-	testQuery := fmt.Sprintf(`vllm:request_success_total{model_name="%s",namespace="%s"}`, modelName, namespace)
+	testQuery := fmt.Sprintf(`%s{model_name="%s",namespace="%s"}`, constants.VLLMNumRequestRunning, modelName, namespace)
 
 	val, _, err := promAPI.Query(ctx, testQuery, time.Now())
 	if err != nil {
@@ -112,7 +112,7 @@ func ValidateMetricsAvailability(ctx context.Context, promAPI promv1.API, modelN
 	vec := val.(model.Vector)
 	// If no results with namespace label, try without it (for vllme emulator compatibility)
 	if len(vec) == 0 {
-		testQueryFallback := fmt.Sprintf(`vllm:request_success_total{model_name="%s"}`, modelName)
+		testQueryFallback := fmt.Sprintf(`%s{model_name="%s"}`, constants.VLLMNumRequestRunning, modelName)
 		val, _, err = promAPI.Query(ctx, testQueryFallback, time.Now())
 		if err != nil {
 			return MetricsValidationResult{
