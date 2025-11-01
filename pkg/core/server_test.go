@@ -473,7 +473,7 @@ func TestServer_Calculate(t *testing.T) {
 			servers:          make(map[string]*Server),
 			models:           make(map[string]*Model),
 			serviceClasses:   make(map[string]*ServiceClass),
-			capacity:         make(map[string]int),
+			capacity:         make(map[string]int32),
 			allocationByType: make(map[string]*AllocationByType),
 		}
 

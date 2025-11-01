@@ -36,11 +36,110 @@ jobs:
 
       # - name: Run precommit checks
       #   run: make precommit
-      
+
+      - name: Install Kind
+        run: |
+          echo "Installing Kind..."
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Install kubectl
+        run: |
+          echo "Installing kubectl..."
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Verify CRD YAML Schema (Pre-E2E)
+        run: |
+          echo "========== Verifying CRD YAML file before E2E tests =========="
+          echo ""
+          echo "Checking config/crd/bases/llmd.ai_variantautoscalings.yaml for required fields..."
+          echo ""
+
+          CRD_FILE="config/crd/bases/llmd.ai_variantautoscalings.yaml"
+
+          if [ ! -f "$CRD_FILE" ]; then
+            echo "❌ ERROR: CRD file not found at $CRD_FILE"
+            exit 1
+          fi
+
+          # Extract desiredOptimizedAlloc section
+          DESIRED_ALLOC_SCHEMA=$(grep -A 30 "desiredOptimizedAlloc:" "$CRD_FILE")
+
+          # Check for required fields
+          HAS_REASON=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "reason:" || true)
+          HAS_LASTUPDATE=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "lastUpdate:" || true)
+          HAS_NUMREPLICAS=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "numReplicas:" || true)
+          HAS_LASTRUNTIME=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "lastRunTime:" || true)
+
+          echo "Field verification results:"
+          echo "  numReplicas: $([ $HAS_NUMREPLICAS -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING')"
+          echo "  lastRunTime: $([ $HAS_LASTRUNTIME -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING')"
+          echo "  reason: $([ $HAS_REASON -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING')"
+          echo "  lastUpdate: $([ $HAS_LASTUPDATE -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING')"
+          echo ""
+
+          # Report to GitHub Actions Summary
+          echo "## 🔍 CRD YAML Pre-Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Verified CRD file **before** E2E tests:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`numReplicas\` | $([ $HAS_NUMREPLICAS -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING') |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`lastRunTime\` | $([ $HAS_LASTRUNTIME -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING') |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`reason\` | $([ $HAS_REASON -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING') |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`lastUpdate\` | $([ $HAS_LASTUPDATE -gt 0 ] && echo '✅ FOUND' || echo '❌ MISSING') |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fail fast if critical fields are missing
+          if [ $HAS_REASON -eq 0 ] || [ $HAS_LASTUPDATE -eq 0 ]; then
+            echo "❌ CRITICAL: CRD YAML is missing required fields!"
+            echo "   E2E tests will fail because these fields will be dropped by the API server."
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **CRD YAML missing required fields!** Run \`make manifests\` to regenerate." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ All required fields present in CRD YAML"
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All required fields present in CRD YAML**" >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Run make test-e2e
         shell: bash
+        timeout-minutes: 35
         run: |
           make test-e2e
+
+      - name: Verify CRD Schema (Diagnostic)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "========== Checking deployed CRD schema =========="
+
+          if ! kubectl get crd variantautoscalings.llmd.ai >/dev/null 2>&1; then
+            echo "⚠️ WARNING: CRD not found (cluster may not be running)"
+            exit 0
+          fi
+
+          DESIRED_ALLOC_SCHEMA=$(kubectl get crd variantautoscalings.llmd.ai -o yaml | grep -A 30 "desiredOptimizedAlloc:")
+
+          HAS_REASON=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "reason:" || true)
+          HAS_LASTUPDATE=$(echo "$DESIRED_ALLOC_SCHEMA" | grep -c "lastUpdate:" || true)
+
+          echo "## 🔍 CRD Schema Check" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`reason\` | $([ $HAS_REASON -gt 0 ] && echo '✅' || echo '❌') |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`lastUpdate\` | $([ $HAS_LASTUPDATE -gt 0 ] && echo '✅' || echo '❌') |" >> $GITHUB_STEP_SUMMARY
+
+          if [ $HAS_REASON -eq 0 ] || [ $HAS_LASTUPDATE -eq 0 ]; then
+            echo "⚠️ **CRD missing required fields!** See manual trigger workflow for details." >> $GITHUB_STEP_SUMMARY
+          fi
           
       - name: Run make build
         shell: bash

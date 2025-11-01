@@ -12,7 +12,7 @@ import (
 // Allocation details of an accelerator to a server
 type Allocation struct {
 	accelerator string  // name of accelerator
-	numReplicas int     // number of server replicas
+	numReplicas int32   // number of server replicas
 	batchSize   int     // max batch size
 	cost        float32 // cost of this allocation
 	value       float32 // value of this allocation
@@ -137,8 +137,8 @@ func CreateAllocation(serverName string, gName string) *Allocation {
 	} else {
 		totalRate = target.TPS / float32(K)
 	}
-	numReplicas := int(math.Ceil(float64(totalRate) / float64(rateStar)))
-	numReplicas = max(numReplicas, server.minNumReplicas)
+	numReplicas := int32(math.Ceil(float64(totalRate) / float64(rateStar)))
+	numReplicas = max(numReplicas, int32(server.minNumReplicas))
 
 	// calculate cost
 	totalNumInstances := model.NumInstances(gName) * numReplicas
@@ -162,7 +162,7 @@ func CreateAllocation(serverName string, gName string) *Allocation {
 	return alloc
 }
 
-func (a *Allocation) Scale(serverName string) (alloc *Allocation, inc int) {
+func (a *Allocation) Scale(serverName string) (alloc *Allocation, inc int32) {
 	var (
 		acc    *Accelerator
 		server *Server
@@ -210,11 +210,11 @@ func (a *Allocation) Accelerator() string {
 	return a.accelerator
 }
 
-func (a *Allocation) NumReplicas() int {
+func (a *Allocation) NumReplicas() int32 {
 	return a.numReplicas
 }
 
-func (a *Allocation) SetNumReplicas(n int) {
+func (a *Allocation) SetNumReplicas(n int32) {
 	a.numReplicas = n
 }
 
@@ -258,7 +258,7 @@ func (a *Allocation) Saturated(totalRate float32) bool {
 // Allocation in case of zero load
 func zeroLoadAllocation(server *Server, model *Model, acc *Accelerator, perf *config.ModelAcceleratorPerfData) *Allocation {
 
-	numReplicas := server.minNumReplicas
+	numReplicas := int32(server.minNumReplicas)
 	gName := acc.Name()
 	if numReplicas == 0 {
 		alloc := &Allocation{accelerator: "", numReplicas: 0, batchSize: 0,
@@ -345,8 +345,8 @@ func (a *Allocation) String() string {
 type AllocationDiff struct {
 	oldAccelerator string
 	newAccelerator string
-	oldNumReplicas int
-	newNumReplicas int
+	oldNumReplicas int32
+	newNumReplicas int32
 	costDiff       float32
 }
 
@@ -356,8 +356,8 @@ func CreateAllocationDiff(a *Allocation, b *Allocation) *AllocationDiff {
 	}
 	oldAccelerator := "none"
 	newAccelerator := "none"
-	oldNumReplicas := 0
-	newNumReplicas := 0
+	oldNumReplicas := int32(0)
+	newNumReplicas := int32(0)
 	oldCost := float32(0)
 	newCost := float32(0)
 	if a != nil {

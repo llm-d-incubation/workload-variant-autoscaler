@@ -12,7 +12,7 @@ data:
   # - OpenShift: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
   # - KIND cluster: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
   #PROMETHEUS_BASE_URL: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
-  PROMETHEUS_BASE_URL: {{ .Values.prometheus.baseURL | quote }}
+  PROMETHEUS_BASE_URL: {{ .Values.wva.prometheus.baseURL | quote }}
 
   # TLS Configuration (TLS is always enabled for HTTPS-only support)
   # PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "true"  # Skip certificate verification (development/testing only)

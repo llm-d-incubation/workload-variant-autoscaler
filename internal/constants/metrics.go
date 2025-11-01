@@ -9,6 +9,14 @@ const (
 	// Used to calculate arrival rate.
 	VLLMRequestSuccessTotal = "vllm:request_success_total"
 
+	// VLLMRequestPromptTokensSum tracks the sum of prompt tokens across all requests.
+	// Used with VLLMRequestPromptTokensCount to calculate average output tokens.
+	VLLMRequestPromptTokensSum = "vllm:request_prompt_tokens_sum"
+
+	// VLLMRequestPromptTokensCount tracks the count of requests for token generation.
+	// Used with VLLMRequestPromptTokensSum to calculate average output tokens.
+	VLLMRequestPromptTokensCount = "vllm:request_prompt_tokens_count"
+
 	// VLLMRequestGenerationTokensSum tracks the sum of generated tokens across all requests.
 	// Used with VLLMRequestGenerationTokensCount to calculate average output tokens.
 	VLLMRequestGenerationTokensSum = "vllm:request_generation_tokens_sum"
@@ -17,13 +25,13 @@ const (
 	// Used with VLLMRequestGenerationTokensSum to calculate average output tokens.
 	VLLMRequestGenerationTokensCount = "vllm:request_generation_tokens_count"
 
-	// VLLMRequestQueueTimeSecondsSum tracks the sum of queue time across all requests.
-	// Used with VLLMRequestQueueTimeSecondsCount to calculate TTFT (Time To First Token).
-	VLLMRequestQueueTimeSecondsSum = "vllm:request_queue_time_seconds_sum"
+	// VLLMTimeToFirstTokenSecondsSum tracks the sum of TTFT (Time To First Token) across all requests.
+	// Used with VLLMTimeToFirstTokenSecondsCount to calculate TTFT.
+	VLLMTimeToFirstTokenSecondsSum = "vllm:time_to_first_token_seconds_sum"
 
-	// VLLMRequestQueueTimeSecondsCount tracks the count of requests for queue time.
-	// Used with VLLMRequestQueueTimeSecondsSum to calculate TTFT (Time To First Token).
-	VLLMRequestQueueTimeSecondsCount = "vllm:request_queue_time_seconds_count"
+	// VLLMTimeToFirstTokenSecondsCount tracks the count of requests for TTFT.
+	// Used with VLLMTimeToFirstTokenSecondsSum to calculate TTFT.
+	VLLMTimeToFirstTokenSecondsCount = "vllm:time_to_first_token_seconds_count"
 
 	// VLLMTimePerOutputTokenSecondsSum tracks the sum of time per output token across all requests.
 	// Used with VLLMTimePerOutputTokenSecondsCount to calculate ITL (Inter-Token Latency).
@@ -53,6 +61,14 @@ const (
 	// InfernoDesiredRatio is a gauge that tracks the ratio of desired to current replicas.
 	// Labels: variant_name, namespace, accelerator_type
 	InfernoDesiredRatio = "inferno_desired_ratio"
+
+	// InfernoPredictedTTFT is a gauge that tracks the predicted Time To First Token from ModelAnalyzer.
+	// Labels: model_name, variant_name, variant_id, namespace, accelerator_type
+	InfernoPredictedTTFT = "inferno_predicted_ttft_seconds"
+
+	// InfernoPredictedITL is a gauge that tracks the predicted Inter-Token Latency from ModelAnalyzer.
+	// Labels: model_name, variant_name, variant_id, namespace, accelerator_type
+	InfernoPredictedITL = "inferno_predicted_itl_seconds"
 )
 
 // Metric Label Names
@@ -61,6 +77,7 @@ const (
 	LabelModelName       = "model_name"
 	LabelNamespace       = "namespace"
 	LabelVariantName     = "variant_name"
+	LabelVariantID       = "variant_id"
 	LabelDirection       = "direction"
 	LabelReason          = "reason"
 	LabelAcceleratorType = "accelerator_type"

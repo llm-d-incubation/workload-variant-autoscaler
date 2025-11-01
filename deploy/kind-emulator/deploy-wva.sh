@@ -54,6 +54,9 @@ echo "Creating monitoring namespace ${MONITORING_NAMESPACE}"
 _kubectl create ns ${MONITORING_NAMESPACE} 2>/dev/null || true
 
 echo "Installing inferno CRD"
+# Delete old CRDs to ensure clean installation (handles field renames like modelProfile -> variantProfile)
+_kubectl delete crd variantautoscalings.llmd.ai --ignore-not-found=true
+_kubectl delete crd inferencemodels.llmd.ai --ignore-not-found=true
 make install
 sleep 10
 
@@ -73,8 +76,5 @@ deploy/examples/vllm-emulator/deploy.sh
 echo "Deploying Inferno controller-manager"
 make deploy-emulated
 echo "Inferno controller-manager Installed"
-
-# Deploy using the existing manager configuration which now has Kind-specific settings
-kustomize build config/manager | _kubectl apply -f -
 
 echo "Inferno Deployment complete"

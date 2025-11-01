@@ -41,6 +41,7 @@ Understanding how WVA works:
 Contributing to WVA:
 
 - **[Development Setup](developer-guide/development.md)** - Setting up your dev environment
+- **[Metrics Caching](developer-guide/metrics-caching.md)** - Model metrics cache architecture and usage
 - **[Testing Guide](developer-guide/testing.md)** - Writing and running tests
 - **[Contributing](../CONTRIBUTING.md)** - How to contribute to the project
 

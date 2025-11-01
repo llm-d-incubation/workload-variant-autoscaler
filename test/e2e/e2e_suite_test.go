@@ -35,11 +35,15 @@ import (
 var (
 	// Optional Environment Variables:
 	// - CERT_MANAGER_INSTALL_SKIP=true: Skips CertManager installation during test setup.
-	// These variables are useful if CertManager is already installed, avoiding
+	// - KEDA_INSTALL_SKIP=true: Skips KEDA installation during test setup.
+	// These variables are useful if CertManager/KEDA is already installed, avoiding
 	// re-installation and conflicts.
 	skipCertManagerInstall = os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true"
+	skipKEDAInstall        = os.Getenv("KEDA_INSTALL_SKIP") == "true"
 	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
 	isCertManagerAlreadyInstalled = false
+	// isKEDAAlreadyInstalled will be set true when KEDA CRDs be found on the cluster
+	isKEDAAlreadyInstalled = false
 
 	// projectImage is the name of the image which will be build and loaded
 	// with the code source changes to be tested.
@@ -57,7 +61,7 @@ const (
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
 // temporary environment to validate project changes with the purposed to be used in CI jobs.
 // The default setup requires Kind, builds/loads the Manager Docker image locally, and installs
-// CertManager.
+// CertManager and KEDA.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting workload-variant-autoscaler integration test suite\n")
@@ -70,39 +74,14 @@ var _ = BeforeSuite(func() {
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
 
+	By("exporting environment variables for deployment")
+	utils.SetupTestEnvironment(projectImage, numNodes, maximumAvailableGPUs, gpuTypes)
+
 	// Deploy llm-d and workload-variant-autoscaler on the Kind cluster
-	By("deploying llm-d and workload-variant-autoscaler on Kind")
-	launchCmd := exec.Command("make", "deploy-llm-d-wva-emulated-on-kind", fmt.Sprintf("KIND_ARGS=-n %d -g %d -t %s", numNodes, maximumAvailableGPUs, gpuTypes), fmt.Sprintf("IMG=%s", projectImage))
+	launchCmd := exec.Command("make", "deploy-llm-d-wva-emulated-on-kind", fmt.Sprintf("IMG=%s", projectImage))
 	_, err = utils.Run(launchCmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install llm-d and workload-variant-autoscaler")
-
-	// The script automatically applies a vLLM-e deployment
-	// We want to start tests with a clean slate
-	By("deleting automatically created deployments")
-	cmd = exec.Command("kubectl", "delete", "deployments", "vllme-deployment", "-n", llmDNamespace)
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to delete vLLM-e deployment")
-
-	By("deleting automatically created service")
-	cmd = exec.Command("kubectl", "delete", "svc", "vllme-service", "-n", llmDNamespace)
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to delete vLLM-e service")
-
-	By("deleting automatically created ServiceMonitors")
-	cmd = exec.Command("kubectl", "delete", "servicemonitor", "vllme-servicemonitor", "-n", controllerMonitoringNamespace)
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to delete vLLM-e ServiceMonitor")
-
 	initializeK8sClient()
-
-	By("waiting for all vLLM-e pods to be deleted")
-	Eventually(func(g Gomega) {
-		podList, err := k8sClient.CoreV1().Pods(llmDNamespace).List(context.Background(), metav1.ListOptions{LabelSelector: "app=vllme"})
-		if err != nil {
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list Pods")
-		}
-		g.Expect(podList.Items).To(BeEmpty(), fmt.Sprintf("All Pods labelled: \"vLLM-e\" should be deleted. Found: %v", podList.Items))
-	}, 1*time.Minute, 1*time.Second).Should(Succeed())
 
 	// Waiting for the workload-variant-autoscaler pods to be ready and for leader election
 	By("waiting for the controller-manager pods to be ready")
@@ -153,9 +132,27 @@ var _ = BeforeSuite(func() {
 			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: CertManager is already installed. Skipping installation...\n")
 		}
 	}
+
+	// Setup KEDA before the suite if not skipped and if not already installed
+	if !skipKEDAInstall {
+		By("checking if KEDA is installed already")
+		isKEDAAlreadyInstalled = utils.IsKEDAInstalled()
+		if !isKEDAAlreadyInstalled {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Installing KEDA...\n")
+			Expect(utils.InstallKEDA()).To(Succeed(), "Failed to install KEDA")
+		} else {
+			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: KEDA is already installed. Skipping installation...\n")
+		}
+	}
 })
 
 var _ = AfterSuite(func() {
+	// Teardown KEDA after the suite if not skipped and if it was not already installed
+	if !skipKEDAInstall && !isKEDAAlreadyInstalled {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling KEDA...\n")
+		utils.UninstallKEDA()
+	}
+
 	// Teardown CertManager after the suite if not skipped and if it was not already installed
 	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling CertManager...\n")

@@ -1,18 +1,27 @@
 {{- if .Values.wva.va.enabled }}
+{{- range .Values.variantAutoscaling.variants }}
+---
 apiVersion: llmd.ai/v1alpha1
 # Optimizing a variant, create only when the model is deployed and serving traffic
 # this is for the collector the collect existing (previous) running metrics of the variant.
+# NOTE: In the new architecture, each accelerator type requires a separate VariantAutoscaling resource
 kind: VariantAutoscaling
 metadata:
-  # Unique name of the variant
-  name: {{ printf "%s-decode" .Values.wva.modelName }}
-  namespace: {{ .Values.llmd.namespace }}
+  # Unique name of the variant - includes accelerator type for uniqueness
+  name: {{ printf "%s-%s" $.Values.wva.modelName .accelerator | lower }}
+  namespace: {{ $.Values.llmd.namespace }}
   labels:
-    inference.optimization/acceleratorName: {{ .Values.variantAutoscaling.accelerator }}
+    inference.optimization/acceleratorName: {{ .accelerator }}
 # This is essentially static input to the optimizer
 spec:
   # OpenAI API compatible name of the model
-  modelID: {{ .Values.variantAutoscaling.modelID | quote }}
+  modelID: {{ $.Values.variantAutoscaling.modelID | quote }}
+  # Unique identifier for this variant: modelID-accelerator-accCount
+  variantID: {{ printf "%s-%s-%d" $.Values.variantAutoscaling.modelID .accelerator (int (.acceleratorCount | default 1)) }}
+  # Accelerator type for this variant
+  accelerator: {{ .accelerator }}
+  # Number of accelerators per replica
+  acceleratorCount: {{ int (.acceleratorCount | default 1) }}
   # Add SLOs in configmap, add reference to this per model data
   # to avoid duplication and Move to ISOs when available
   sloClassRef:
@@ -21,29 +30,17 @@ spec:
     name: premium-slo
     # Key (modelID) present inside configmap
     key: opt-125m
-  # Static profiled benchmarked data for a variant running on different accelerators
-  modelProfile:
-    accelerators:
-      - acc: "L40S"
-        accCount: 1
-        perfParms: 
-          decodeParms:
-            alpha: "22.619"
-            beta: "0.181"
-          prefillParms:
-            gamma: "226.19"
-            delta: "0.018"
-        maxBatchSize: 512
-      - acc: "H100"
-        accCount: 1
-        perfParms: 
-          decodeParms:
-            # Decode parameters for ITL equation: itl = alpha + beta * maxBatchSize
-            alpha: "6.958"
-            beta: "0.042"
-          # Prefill parameters for TTFT equation: ttft = gamma + delta * tokens * maxBatchSize  
-          prefillParms:
-            gamma: "5.2"
-            delta: "0.1"
-        maxBatchSize: 512
+  # Static profiled benchmarked data for this variant
+  variantProfile:
+    perfParms:
+      decodeParms:
+        # Decode parameters for ITL equation: itl = alpha + beta * maxBatchSize
+        alpha: {{ .perfParms.decodeParms.alpha | quote }}
+        beta: {{ .perfParms.decodeParms.beta | quote }}
+      # Prefill parameters for TTFT equation: ttft = gamma + delta * tokens * maxBatchSize
+      prefillParms:
+        gamma: {{ .perfParms.prefillParms.gamma | quote }}
+        delta: {{ .perfParms.prefillParms.delta | quote }}
+    maxBatchSize: {{ int (.maxBatchSize | default 512) }}
+{{- end }}
 {{- end }}

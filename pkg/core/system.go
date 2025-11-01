@@ -40,7 +40,7 @@ func GetServers() map[string]*Server {
 	return TheSystem.servers
 }
 
-func GetCapacities() map[string]int {
+func GetCapacities() map[string]int32 {
 	return TheSystem.capacity
 }
 
@@ -51,7 +51,7 @@ type System struct {
 	serviceClasses map[string]*ServiceClass
 	servers        map[string]*Server
 
-	capacity           map[string]int               // available count of accelerator types
+	capacity           map[string]int32             // available count of accelerator types
 	allocationByType   map[string]*AllocationByType // number of allocated accelerator types
 	allocationSolution *config.AllocationSolution
 }
@@ -59,8 +59,8 @@ type System struct {
 // Allocation data about an accelerator type
 type AllocationByType struct {
 	name  string  // name of accelerator type
-	count int     // total number of this type
-	limit int     // maximum number of this type
+	count int32   // total number of this type
+	limit int32   // maximum number of this type
 	cost  float32 // total cost of this type
 }
 
@@ -72,7 +72,7 @@ func NewSystem() *System {
 		serviceClasses: make(map[string]*ServiceClass),
 		servers:        make(map[string]*Server),
 
-		capacity:           make(map[string]int),
+		capacity:           make(map[string]int32),
 		allocationByType:   make(map[string]*AllocationByType),
 		allocationSolution: nil,
 	}
@@ -118,7 +118,7 @@ func (s *System) SetCapacityFromSpec(d *config.CapacityData) {
 
 // Set capacity count for an accelerator type
 func (s *System) SetCountFromSpec(spec config.AcceleratorCount) {
-	s.capacity[spec.Type] = spec.Count
+	s.capacity[spec.Type] = int32(spec.Count)
 }
 
 // Set models from spec
@@ -232,12 +232,12 @@ func (s *System) Server(name string) *Server {
 }
 
 // Get capacities of accelerator types
-func (s *System) Capacities() map[string]int {
+func (s *System) Capacities() map[string]int32 {
 	return s.capacity
 }
 
 // Get capacity of an accelerator type
-func (s *System) Capacity(name string) (int, bool) {
+func (s *System) Capacity(name string) (int32, bool) {
 	if cap, exists := s.capacity[name]; !exists {
 		return 0, false
 	} else {

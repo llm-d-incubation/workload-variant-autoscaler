@@ -4,7 +4,7 @@ apiVersion: llmd.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   # Unique name of the variant
-  name: vllme-deployment 
+  name: vllme-deployment
   namespace: llm-d-sim
   labels:
     inference.optimization/acceleratorName: A100
@@ -12,6 +12,12 @@ metadata:
 spec:
   # OpenAI API compatible name of the model
   modelID: default/default
+  # Unique identifier for this variant: modelID-accelerator-accCount
+  variantID: default-default-A100-1
+  # Accelerator type for this variant
+  accelerator: "A100"
+  # Number of accelerators per replica
+  acceleratorCount: 1
   # Add SLOs in configmap, add reference to this per model data
   # to avoid duplication and Move to ISOs when available
   sloClassRef:
@@ -20,18 +26,15 @@ spec:
     name: premium
     # Key (modelID) present inside configmap
     key: opt-125m
-  # Static profiled benchmarked data for a variant running on different accelerators
-  modelProfile:
-    accelerators:
-      - acc: "A100"
-        accCount: 1
-        perfParms: 
-          decodeParms:
-            # Decode parameters for ITL equation: itl = alpha + beta * maxBatchSize
-            alpha: "20.58"
-            beta: "0.41"
-          # Prefill parameters for TTFT equation: ttft = gamma + delta * tokens * maxBatchSize  
-          prefillParms:
-            gamma: "5.2"
-            delta: "0.1"
-        maxBatchSize: 4
+  # Static profiled benchmarked data for this variant
+  variantProfile:
+    perfParms:
+      decodeParms:
+        # Decode parameters for ITL equation: itl = alpha + beta * maxBatchSize
+        alpha: "20.58"
+        beta: "0.41"
+      # Prefill parameters for TTFT equation: ttft = gamma + delta * tokens * maxBatchSize
+      prefillParms:
+        gamma: "5.2"
+        delta: "0.1"
+    maxBatchSize: 4

@@ -14,14 +14,14 @@ type Model struct {
 	perfData map[string]*config.ModelAcceleratorPerfData
 
 	// number of accelerator instances needed to fit a model on a given accelerator
-	numInstances map[string]int
+	numInstances map[string]int32
 }
 
 func NewModel(name string) *Model {
 	return &Model{
 		name:         name,
 		perfData:     make(map[string]*config.ModelAcceleratorPerfData),
-		numInstances: make(map[string]int),
+		numInstances: make(map[string]int32),
 	}
 }
 
@@ -34,7 +34,7 @@ func (m *Model) Name() string {
 	return m.name
 }
 
-func (m *Model) NumInstances(acceleratorName string) int {
+func (m *Model) NumInstances(acceleratorName string) int32 {
 	return m.numInstances[acceleratorName]
 }
 
@@ -45,8 +45,8 @@ func (m *Model) PerfData(acceleratorName string) *config.ModelAcceleratorPerfDat
 func (m *Model) AddPerfDataFromSpec(spec *config.ModelAcceleratorPerfData) {
 	if spec.Name == m.name {
 		m.perfData[spec.Acc] = spec
-		var count int
-		if count = spec.AccCount; count <= 0 {
+		var count int32
+		if count = int32(spec.AccCount); count <= 0 {
 			count = 1
 		}
 		m.numInstances[spec.Acc] = count

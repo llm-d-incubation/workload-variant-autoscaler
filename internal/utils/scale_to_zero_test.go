@@ -903,4 +903,3 @@ func TestScaleToZeroIntegration(t *testing.T) {
 		assert.Equal(t, 0, minReplicas)
 	})
 }
-

@@ -5,15 +5,15 @@ metadata:
   name: vllm-service
   namespace: {{ .Values.llmd.namespace }}
   labels:
-    llm-d.ai/model: {{ .Values.wva.modelName }}
+    llm-d.ai/model: {{ .Values.llmd.modelName }}
 spec:
   selector:
-    llm-d.ai/model: {{ .Values.wva.modelName }}
+    llm-d.ai/model: {{ .Values.llmd.modelName }}
   ports:
     - name: vllm
       port: 8200
       protocol: TCP
       targetPort: 8200
-      nodePort: {{ .Values.vllmService.nodePort }}
+      nodePort: {{ int .Values.vllmService.nodePort }}
   type: NodePort
 {{- end }}

@@ -35,7 +35,7 @@ type ServerEntriesOrder func(a, b *serverEntry) int
 func (s *Solver) SolveGreedy() {
 
 	// make a copy of count of available accelerator types
-	available := make(map[string]int)
+	available := make(map[string]int32)
 	maps.Copy(available, core.GetCapacities())
 
 	// create entries for all servers, sorting candidate allocations per server
@@ -105,7 +105,7 @@ func (s *Solver) SolveGreedy() {
 
 // allocate, satisfying SLO requirements, returning servers that did not receive any allocation
 func allocate(entries []*serverEntry,
-	available map[string]int,
+	available map[string]int32,
 	orderFunc ServerEntriesOrder) (unallocatedEntries []*serverEntry) {
 
 	unallocatedEntries = make([]*serverEntry, 0)
@@ -136,7 +136,7 @@ func allocate(entries []*serverEntry,
 			continue
 		}
 		tName := acc.Type()
-		unitsPerReplica := model.NumInstances(gName) * acc.Spec().Multiplicity
+		unitsPerReplica := model.NumInstances(gName) * acc.Multiplicity()
 		count := alloc.NumReplicas() * unitsPerReplica
 
 		// check if accelerator type of current allocation is available, allocate
@@ -166,7 +166,7 @@ func allocate(entries []*serverEntry,
 }
 
 // give best effort allocation to unallocated servers according to saturation policy
-func bestEffort(unallocatedServers []*serverEntry, available map[string]int, policy string) {
+func bestEffort(unallocatedServers []*serverEntry, available map[string]int32, policy string) {
 	switch config.SaturatedAllocationPolicyEnum(policy) {
 
 	// allocate exhaustively to servers in priority ordering
@@ -191,7 +191,7 @@ func bestEffort(unallocatedServers []*serverEntry, available map[string]int, pol
 
 // Allocate remaining accelerators among unallocated servers
 //   - priority ordering: one server at a time exhaustively, until no resources to satisfy requirements
-func allocateMaximally(serverEntries []*serverEntry, available map[string]int) {
+func allocateMaximally(serverEntries []*serverEntry, available map[string]int32) {
 	// fmt.Println("Unallocated server entries: ", serverEntries)
 	for _, entry := range serverEntries {
 		for _, alloc := range entry.allocations {
@@ -200,7 +200,7 @@ func allocateMaximally(serverEntries []*serverEntry, available map[string]int) {
 			server := core.GetServer(serverName)
 			model := core.GetModel(server.ModelName())
 			if acc := core.GetAccelerator(accName); acc != nil && model != nil && server != nil {
-				if unitsPerReplica := model.NumInstances(accName) * acc.Spec().Multiplicity; unitsPerReplica > 0 {
+				if unitsPerReplica := model.NumInstances(accName) * acc.Multiplicity(); unitsPerReplica > 0 {
 					maxReplicas := available[acc.Type()] / unitsPerReplica
 					if maxReplicas = min(maxReplicas, alloc.NumReplicas()); maxReplicas > 0 {
 						curNumReplicas := alloc.NumReplicas()
@@ -229,14 +229,14 @@ type serverAllocationTicket struct {
 	model  *core.Model
 
 	accType         string // type of accelerator allocated to server
-	unitsPerReplica int
-	numReplicas     int
+	unitsPerReplica int32
+	numReplicas     int32
 	finalAlloc      *core.Allocation
 }
 
 // Allocate remaining accelerators among a group of unallocated servers
 //   - round-robin allocation to members in group until no resources to satisfy requirements
-func allocateEqually(serverEntries []*serverEntry, available map[string]int) {
+func allocateEqually(serverEntries []*serverEntry, available map[string]int32) {
 	// fmt.Println("Unallocated server entries: ", serverEntries)
 
 	// create allocation tickets for all valid members in group
@@ -270,7 +270,7 @@ func allocateEqually(serverEntries []*serverEntry, available map[string]int) {
 				for _, alloc := range serverEntry.allocations {
 					accName := alloc.Accelerator()
 					if acc := core.GetAccelerator(accName); acc != nil {
-						unitsPerReplica := ticket.model.NumInstances(accName) * acc.Spec().Multiplicity
+						unitsPerReplica := ticket.model.NumInstances(accName) * acc.Multiplicity()
 						if unitsPerReplica > 0 && available[acc.Type()] >= unitsPerReplica {
 							ticket.active = true
 							ticket.accType = acc.Type()

@@ -39,7 +39,7 @@ LLMD_NS=${LLMD_NS:-"llm-d-$WELL_LIT_PATH_NAME"}
 MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"openshift-user-workload-monitoring"}
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 WVA_IMAGE_REPO=${WVA_IMAGE_REPO:-"ghcr.io/llm-d/workload-variant-autoscaler"}
-WVA_IMAGE_TAG=${WVA_IMAGE_TAG:-"v0.0.1"}
+WVA_IMAGE_TAG=${WVA_IMAGE_TAG:-"v0.0.2"}
 LLM_D_OWNER=${LLM_D_OWNER:-"llm-d"}
 LLM_D_RELEASE=${LLM_D_RELEASE:-"v0.3.0"}
 LLM_D_MODELSERVICE_NAME=${LLM_D_MODELSERVICE_NAME:-"ms-$WELL_LIT_PATH_NAME-llm-d-modelservice-decode"}
@@ -205,13 +205,13 @@ deploy_wva_controller() {
     # TODO: update to use Helm repo
     helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
     -n $WVA_NS \
-    --set-file prometheus.caCert=$PROM_CA_CERT_PATH \
+    --set-file wva.prometheus.caCert=$PROM_CA_CERT_PATH \
     --set wva.image.repository=$WVA_IMAGE_REPO \
     --set wva.image.tag=$WVA_IMAGE_TAG \
-    --set variantAutoscaling.accelerator=$ACCELERATOR_TYPE \
-    --set variantAutoscaling.modelID=$MODEL_ID \
-    --set variantAutoscaling.sloTpot=$SLO_TPOT \
-    --set variantAutoscaling.sloTtft=$SLO_TTFT \
+    --set va.accelerator=$ACCELERATOR_TYPE \
+    --set llmd.modelID=$MODEL_ID \
+    --set va.sloTpot=$SLO_TPOT \
+    --set va.sloTtft=$SLO_TTFT \
     --set vllmService.enabled=$VLLM_SVC_ENABLED \
     --set vllmService.nodePort=$VLLM_SVC_NODEPORT
 
@@ -279,7 +279,7 @@ deploy_llm_d_infrastructure() {
     cd $EXAMPLE_DIR
     sed -i.bak "s/llm-d-inference-scheduler/$LLMD_NS/g" helmfile.yaml.gotmpl
 
-    if [ $MODEL_ID != $DEFAULT_MODEL_ID ]; then
+    if [ "$MODEL_ID" != "$DEFAULT_MODEL_ID" ]; then
         log_info "Updating deployment to use model: $MODEL_ID"
         yq eval "(.. | select(. == \"$DEFAULT_MODEL_ID\")) = \"$MODEL_ID\" | (.. | select(. == \"hf://$DEFAULT_MODEL_ID\")) = \"hf://$MODEL_ID\"" -i ms-$WELL_LIT_PATH_NAME/values.yaml
 

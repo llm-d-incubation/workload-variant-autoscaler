@@ -123,7 +123,7 @@ type ServerSpec struct {
 // Data about a server allocation
 type AllocationData struct {
 	Accelerator string         `json:"accelerator"` // accelerator name
-	NumReplicas int            `json:"numReplicas"` // number of replicas
+	NumReplicas int32          `json:"numReplicas"` // number of replicas
 	MaxBatch    int            `json:"maxBatch"`    // max batch size
 	Cost        float32        `json:"cost"`        // cost of allocation
 	ITLAverage  float32        `json:"itlAverage"`  // average ITL

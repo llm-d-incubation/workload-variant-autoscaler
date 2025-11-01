@@ -54,11 +54,11 @@ spec:
           - --leader-elect=true
           - --health-probe-bind-address=:8081
           {{- if .Values.wva.metrics.enabled }}
-          - --metrics-bind-address=:{{ .Values.wva.metrics.port }}
+          - --metrics-bind-address=:{{ int .Values.wva.metrics.port }}
           - --metrics-secure={{ .Values.wva.metrics.secure }}
           {{- end }}
         image: "{{ .Values.wva.image.repository }}:{{ .Values.wva.image.tag }}"
-        imagePullPolicy: Always
+        imagePullPolicy: "{{ .Values.wva.imagePullPolicy }}"
         env:
           - name: LOG_LEVEL
             value: "debug"  # or "info", "warn", "error"
@@ -86,7 +86,7 @@ spec:
             protocol: TCP
           {{- if .Values.wva.metrics.enabled }}
           - name: https
-            containerPort: {{ .Values.wva.metrics.port }}
+            containerPort: {{ int .Values.wva.metrics.port }}
             protocol: TCP
           {{- end }}
         securityContext:

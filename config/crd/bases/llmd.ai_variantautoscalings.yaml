@@ -20,7 +20,10 @@ spec:
     - jsonPath: .spec.modelID
       name: Model
       type: string
-    - jsonPath: .status.currentAlloc.accelerator
+    - jsonPath: .spec.variantID
+      name: VariantID
+      type: string
+    - jsonPath: .spec.accelerator
       name: Accelerator
       type: string
     - jsonPath: .status.currentAlloc.numReplicas
@@ -28,7 +31,7 @@ spec:
       type: integer
     - jsonPath: .status.desiredOptimizedAlloc.numReplicas
       name: Optimized
-      type: string
+      type: integer
     - jsonPath: .status.conditions[?(@.type=='MetricsAvailable')].status
       name: MetricsReady
       type: string
@@ -63,73 +66,40 @@ spec:
             description: Spec defines the desired state for autoscaling the model
               variant.
             properties:
+              accelerator:
+                description: Accelerator specifies the accelerator type for this variant
+                  (e.g., "A100", "L40S").
+                minLength: 1
+                type: string
+              acceleratorCount:
+                description: AcceleratorCount specifies the number of accelerator
+                  units per replica.
+                minimum: 1
+                type: integer
+              maxReplicas:
+                description: |-
+                  MaxReplicas specifies the maximum number of replicas for this variant.
+                  The optimizer will never scale above this value.
+                  If not specified, no upper bound is enforced (unlimited scaling).
+                format: int32
+                minimum: 1
+                type: integer
+              minReplicas:
+                default: 0
+                description: |-
+                  MinReplicas specifies the minimum number of replicas for this variant.
+                  The optimizer will never scale below this value.
+                  If not specified, defaults to 0.
+                  Warning: Setting minReplicas > 0 for multiple variants may lead to unnecessary GPU utilization.
+                  Warning: Setting minReplicas > 0 prevents the model from scaling to zero even if scaleToZero is enabled.
+                format: int32
+                minimum: 0
+                type: integer
               modelID:
                 description: ModelID specifies the unique identifier of the model
                   to be autoscaled.
                 minLength: 1
                 type: string
-              modelProfile:
-                description: ModelProfile provides resource and performance characteristics
-                  for the model variant.
-                properties:
-                  accelerators:
-                    description: Accelerators is a list of accelerator profiles for
-                      the model variant.
-                    items:
-                      description: |-
-                        AcceleratorProfile defines the configuration for an accelerator used in autoscaling.
-                        It specifies the type and count of accelerator, as well as parameters for scaling behavior.
-                      properties:
-                        acc:
-                          description: Acc specifies the type or name of the accelerator
-                            (e.g., GPU type).
-                          minLength: 1
-                          type: string
-                        accCount:
-                          description: AccCount specifies the number of accelerator
-                            units to be used.
-                          minimum: 1
-                          type: integer
-                        maxBatchSize:
-                          description: MaxBatchSize is the maximum batch size supported
-                            by the accelerator.
-                          minimum: 1
-                          type: integer
-                        perfParms:
-                          description: PerParms specifies the prefill and decode parameters
-                            for ttft and itl models
-                          properties:
-                            decodeParms:
-                              additionalProperties:
-                                type: string
-                              description: |-
-                                DecodeParms contains parameters for the decode phase (ITL calculation)
-                                Expected keys: "alpha", "beta" for equation: itl = alpha + beta * maxBatchSize
-                              minProperties: 1
-                              type: object
-                            prefillParms:
-                              additionalProperties:
-                                type: string
-                              description: |-
-                                PrefillParms contains parameters for the prefill phase (TTFT calculation)
-                                Expected keys: "gamma", "delta" for equation: ttft = gamma + delta * tokens * maxBatchSize
-                              minProperties: 1
-                              type: object
-                          required:
-                          - decodeParms
-                          - prefillParms
-                          type: object
-                      required:
-                      - acc
-                      - accCount
-                      - maxBatchSize
-                      - perfParms
-                      type: object
-                    minItems: 1
-                    type: array
-                required:
-                - accelerators
-                type: object
               sloClassRef:
                 description: SLOClassRef references the ConfigMap key containing Service
                   Level Objective (SLO) configuration.
@@ -146,10 +116,81 @@ spec:
                 - key
                 - name
                 type: object
+              variantCost:
+                default: "10"
+                description: |-
+                  VariantCost specifies the cost per replica for this variant configuration.
+                  This is a static characteristic of the variant (cost rate), not runtime cost.
+                  Total cost can be calculated as: VariantCost * NumReplicas
+                  If not specified, defaults to "10".
+                  Note: When running multiple variants with different costs, it is recommended to explicitly
+                  set this field for accurate cost comparisons. A warning will be logged if the default is used.
+                pattern: ^\d+(\.\d+)?$
+                type: string
+              variantID:
+                description: |-
+                  VariantID uniquely identifies this variant (model + accelerator + acceleratorCount combination).
+                  This is a business identifier that may contain slashes, dots, and mixed case.
+                  Format: {modelID}-{accelerator}-{acceleratorCount}
+                  Example: "meta/llama-3.1-8b-A100-4" or "model-H100-SXM4-80GB-2"
+
+                  The accelerator portion supports alphanumeric characters, hyphens, and underscores
+                  to accommodate complex GPU names like "H100-SXM", "A100_80GB", etc.
+
+                  Note: VariantID (variant_id) is distinct from the VariantAutoscaling resource name (variant_name):
+                    - variant_id (this field): Business identifier, may contain non-K8s-compliant characters
+                    - variant_name (resource.Name): Kubernetes resource name (DNS-1123 compliant)
+
+                  Both identifiers are exposed as Prometheus labels for flexible querying:
+                    - Use variant_name to query by Kubernetes resource (typically matches Deployment name)
+                    - Use variant_id to query by business identifier (model/variant naming)
+                minLength: 1
+                pattern: ^.+-[A-Za-z0-9_-]+-[1-9][0-9]*$
+                type: string
+              variantProfile:
+                description: VariantProfile provides performance characteristics for
+                  this variant.
+                properties:
+                  maxBatchSize:
+                    description: MaxBatchSize is the maximum batch size supported
+                      by this variant.
+                    minimum: 1
+                    type: integer
+                  perfParms:
+                    description: PerfParms specifies the prefill and decode parameters
+                      for TTFT and ITL models.
+                    properties:
+                      decodeParms:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          DecodeParms contains parameters for the decode phase (ITL calculation).
+                          Expected keys: "alpha", "beta" for equation: itl = alpha + beta * maxBatchSize
+                        minProperties: 1
+                        type: object
+                      prefillParms:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          PrefillParms contains parameters for the prefill phase (TTFT calculation).
+                          Expected keys: "gamma", "delta" for equation: ttft = gamma + delta * tokens * maxBatchSize
+                        minProperties: 1
+                        type: object
+                    required:
+                    - decodeParms
+                    - prefillParms
+                    type: object
+                required:
+                - maxBatchSize
+                - perfParms
+                type: object
             required:
+            - accelerator
+            - acceleratorCount
             - modelID
-            - modelProfile
             - sloClassRef
+            - variantID
+            - variantProfile
             type: object
           status:
             description: Status represents the current status of autoscaling for the
@@ -229,87 +270,48 @@ spec:
                 x-kubernetes-list-type: map
               currentAlloc:
                 description: CurrentAlloc specifies the current resource allocation
-                  for the variant.
+                  for this variant.
                 properties:
-                  accelerator:
-                    description: Accelerator is the type of accelerator currently
-                      allocated.
-                    minLength: 1
-                    type: string
-                  itlAverage:
-                    description: ITLAverage is the average inter token latency for
-                      the current allocation.
-                    pattern: ^\d+(\.\d+)?$
-                    type: string
-                  load:
-                    description: Load describes the workload characteristics for the
-                      current allocation.
-                    properties:
-                      arrivalRate:
-                        description: ArrivalRate is the rate of incoming requests
-                          in inference server.
-                        type: string
-                      avgInputTokens:
-                        description: AvgInputTokens is the average number of input(prefill)
-                          tokens per request in inference server.
-                        type: string
-                      avgOutputTokens:
-                        description: AvgOutputTokens is the average number of output(decode)
-                          tokens per request in inference server.
-                        type: string
-                    required:
-                    - arrivalRate
-                    - avgInputTokens
-                    - avgOutputTokens
-                    type: object
-                  maxBatch:
-                    description: MaxBatch is the maximum batch size currently allocated.
-                    minimum: 0
-                    type: integer
                   numReplicas:
                     description: NumReplicas is the number of replicas currently allocated.
+                    format: int32
                     minimum: 0
                     type: integer
-                  ttftAverage:
-                    description: TTFTAverage is the average time to first token for
-                      the current allocation
-                    pattern: ^\d+(\.\d+)?$
-                    type: string
-                  variantCost:
-                    description: VariantCost is the cost associated with the current
-                      variant allocation.
-                    pattern: ^\d+(\.\d+)?$
-                    type: string
                 required:
-                - accelerator
-                - itlAverage
-                - load
-                - maxBatch
                 - numReplicas
-                - ttftAverage
-                - variantCost
                 type: object
               desiredOptimizedAlloc:
                 description: DesiredOptimizedAlloc indicates the target optimized
                   allocation based on autoscaling logic.
                 properties:
-                  accelerator:
-                    description: Accelerator is the type of accelerator for the optimized
-                      allocation.
-                    minLength: 2
-                    type: string
                   lastRunTime:
                     description: LastRunTime is the timestamp of the last optimization
                       run.
                     format: date-time
                     type: string
+                  lastUpdate:
+                    description: |-
+                      LastUpdate is the timestamp when NumReplicas or Reason changed from the previous state.
+                      This field tracks when the allocation decision actually changed, which may be
+                      different from LastRunTime (which is updated on every reconciliation).
+                    format: date-time
+                    type: string
                   numReplicas:
                     description: NumReplicas is the number of replicas for the optimized
                       allocation.
+                    format: int32
                     minimum: 0
                     type: integer
+                  reason:
+                    description: |-
+                      Reason provides a human-readable explanation for the allocation decision.
+                      This field indicates whether the allocation came from the optimizer,
+                      fallback logic, scale-to-zero enforcement, or bounds clamping.
+                      Examples: "Optimizer solution: cost-optimal allocation",
+                      "Fallback: metrics unavailable, using max(minReplicas=2, current=3)",
+                      "Scale-to-zero: no load detected"
+                    type: string
                 required:
-                - accelerator
                 - numReplicas
                 type: object
             type: object

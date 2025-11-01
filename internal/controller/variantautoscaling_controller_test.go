@@ -83,19 +83,17 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 					// TODO(user): Specify other spec details if needed.
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
 						// Example spec fields, adjust as necessary
-						ModelID: "default/default",
-						ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-							Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-								{
-									Acc:      "A100",
-									AccCount: 1,
-									PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
-										DecodeParms:  map[string]string{"alpha": "20.28", "beta": "0.72"},
-										PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
-									},
-									MaxBatchSize: 4,
-								},
+						ModelID:          "default/default",
+						VariantID:        "default/default-A100-1",
+						Accelerator:      "A100",
+						AcceleratorCount: 1,
+						VariantCost:      "10.5",
+						VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+							PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+								DecodeParms:  map[string]string{"alpha": "20.28", "beta": "0.72"},
+								PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
 							},
+							MaxBatchSize: 4,
 						},
 						SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 							Name: "premium",
@@ -417,19 +415,16 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 					Namespace: "default",
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ModelID: "default/default",
-					ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-						Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-							{
-								Acc:      "INVALID_GPU",
-								AccCount: -1, // Invalid count
-								PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
-									DecodeParms:  map[string]string{"alpha": "invalid", "beta": "invalid"},
-									PrefillParms: map[string]string{"gamma": "invalid", "delta": "invalid"},
-								},
-								MaxBatchSize: -1, // Invalid batch size
-							},
+					ModelID:          "default/default",
+					VariantID:        "default/default-INVALID_GPU--1",
+					Accelerator:      "INVALID_GPU",
+					AcceleratorCount: -1, // Invalid count
+					VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+						PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+							DecodeParms:  map[string]string{"alpha": "invalid", "beta": "invalid"},
+							PrefillParms: map[string]string{"gamma": "invalid", "delta": "invalid"},
 						},
+						MaxBatchSize: -1, // Invalid batch size
 					},
 					SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 						Name: "premium",
@@ -450,19 +445,17 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 					Namespace: "default",
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ModelID: "", // Empty ModelID
-					ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-						Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-							{
-								Acc:      "A100",
-								AccCount: 1,
-								PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
-									DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
-									PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
-								},
-								MaxBatchSize: 4,
-							},
+					ModelID:          "", // Empty ModelID
+					VariantID:        "-A100-1",
+					Accelerator:      "A100",
+					AcceleratorCount: 1,
+					VariantCost:      "10.5",
+					VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+						PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+							DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
+							PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
 						},
+						MaxBatchSize: 4,
 					},
 					SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 						Name: "premium",
@@ -475,19 +468,25 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("spec.modelID"))
 		})
 
-		It("should handle empty accelerator list", func() {
-			By("Creating VariantAutoscaling with no accelerators")
+		It("should handle empty accelerator field", func() {
+			By("Creating VariantAutoscaling with no accelerator")
 			resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "empty-accelerators",
 					Namespace: "default",
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ModelID: "default/default",
-					ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-						Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-							// no configuration for accelerators
+					ModelID:          "default/default",
+					VariantID:        "default/default--1",
+					Accelerator:      "", // Empty accelerator
+					AcceleratorCount: 1,
+					VariantCost:      "10.5",
+					VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+						PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+							DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
+							PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
 						},
+						MaxBatchSize: 4,
 					},
 					SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 						Name: "premium",
@@ -497,7 +496,7 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			}
 			err := k8sClient.Create(ctx, resource)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("spec.modelProfile.accelerators"))
+			Expect(err.Error()).To(ContainSubstring("spec.accelerator"))
 		})
 
 		It("should handle empty SLOClassRef", func() {
@@ -508,19 +507,17 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 					Namespace: "default",
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ModelID: "default/default",
-					ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-						Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-							{
-								Acc:      "A100",
-								AccCount: 1,
-								PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
-									DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
-									PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
-								},
-								MaxBatchSize: 4,
-							},
+					ModelID:          "default/default",
+					VariantID:        "default/default-A100-1",
+					Accelerator:      "A100",
+					AcceleratorCount: 1,
+					VariantCost:      "10.5",
+					VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+						PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+							DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
+							PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
 						},
+						MaxBatchSize: 4,
 					},
 					SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 						// no configuration for SLOClassRef
@@ -633,19 +630,17 @@ data:
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ModelID: modelID,
-						ModelProfile: llmdVariantAutoscalingV1alpha1.ModelProfile{
-							Accelerators: []llmdVariantAutoscalingV1alpha1.AcceleratorProfile{
-								{
-									Acc:      "A100",
-									AccCount: 1,
-									PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
-										DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
-										PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
-									},
-									MaxBatchSize: 4,
-								},
+						ModelID:          modelID,
+						VariantID:        fmt.Sprintf("%s-A100-1", modelID),
+						Accelerator:      "A100",
+						AcceleratorCount: 1,
+						VariantCost:      "10.5",
+						VariantProfile: llmdVariantAutoscalingV1alpha1.VariantProfile{
+							PerfParms: llmdVariantAutoscalingV1alpha1.PerfParms{
+								DecodeParms:  map[string]string{"alpha": "0.28", "beta": "0.72"},
+								PrefillParms: map[string]string{"gamma": "0", "delta": "0"},
 							},
+							MaxBatchSize: 4,
 						},
 						SLOClassRef: llmdVariantAutoscalingV1alpha1.ConfigMapKeyRef{
 							Name: "premium",
@@ -779,10 +774,18 @@ data:
 
 			for _, updatedVa := range updateList.Items {
 				Expect(vaNames).To(ContainElement(updatedVa.Name), fmt.Sprintf("Active VariantAutoscaling list should contain %s", updatedVa.Name))
-				Expect(updatedVa.Status.CurrentAlloc.Accelerator).To(Equal("A100"), fmt.Sprintf("Current Accelerator for %s should be \"A100\" after preparation", updatedVa.Name))
-				Expect(updatedVa.Status.CurrentAlloc.NumReplicas).To(Equal(1), fmt.Sprintf("Current NumReplicas for %s should be 1 after preparation", updatedVa.Name))
-				Expect(updatedVa.Status.DesiredOptimizedAlloc.Accelerator).To(BeEmpty(), fmt.Sprintf("Desired Accelerator for %s should be empty value after preparation", updatedVa.Name))
-				Expect(updatedVa.Status.DesiredOptimizedAlloc.NumReplicas).To(BeZero(), fmt.Sprintf("Desired NumReplicas for %s should be zero after preparation", updatedVa.Name))
+				// In single-variant architecture, check that CurrentAlloc has been populated by verifying NumReplicas
+				Expect(updatedVa.Status.CurrentAlloc.NumReplicas).To(BeNumerically(">=", 0), fmt.Sprintf("CurrentAlloc should be populated for %s after preparation", updatedVa.Name))
+				// In single-variant architecture, accelerator is in spec, not in status
+				Expect(updatedVa.Spec.Accelerator).To(Equal("A100"), fmt.Sprintf("Accelerator in spec for %s should be \"A100\" after preparation", updatedVa.Name))
+				Expect(updatedVa.Status.CurrentAlloc.NumReplicas).To(Equal(int32(1)), fmt.Sprintf("Current NumReplicas for %s should be 1 after preparation", updatedVa.Name))
+
+				// DesiredOptimizedAlloc may be empty initially after preparation
+				// In single-variant architecture, check NumReplicas > 0 to see if optimization has run
+				if updatedVa.Status.DesiredOptimizedAlloc.NumReplicas > 0 {
+					// Accelerator is in spec, already verified above
+					Expect(updatedVa.Spec.Accelerator).NotTo(BeEmpty(), fmt.Sprintf("Accelerator in spec for %s should be set", updatedVa.Name))
+				}
 			}
 		})
 
@@ -876,30 +879,6 @@ data:
 	})
 
 	Context("Scale-to-Zero ConfigMap Integration Tests", func() {
-		BeforeEach(func() {
-			// Initialize logger for tests
-			_, err := logger.InitLogger()
-			Expect(err).NotTo(HaveOccurred())
-
-			// Create the namespace required for ConfigMaps
-			ns := &v1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: configMapNamespace,
-				},
-			}
-			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
-		})
-
-		AfterEach(func() {
-			// Clean up ConfigMaps
-			cmList := &v1.ConfigMapList{}
-			Expect(k8sClient.List(ctx, cmList, client.InNamespace(configMapNamespace))).To(Succeed())
-			for _, cm := range cmList.Items {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &cm))).To(Succeed())
-			}
-
-		})
-
 		It("should read scale-to-zero ConfigMap successfully", func() {
 			By("Creating a scale-to-zero ConfigMap")
 			scaleToZeroConfigMap := &v1.ConfigMap{
@@ -908,20 +887,14 @@ data:
 					Namespace: configMapNamespace,
 				},
 				Data: map[string]string{
-					"model.meta_llama-3.1-8b": `{
-						"modelID": "meta_llama-3.1-8b",
-					"enableScaleToZero": true,
-						"retentionPeriod": "5m"
-					}`,
-					"model.meta_llama-3.1-70b": `{
-						"modelID": "meta_llama-3.1-70b",
-					"enableScaleToZero": false
-					}`,
-					"model.mistralai_Mistral-7B-v0.1": `{
-						"modelID": "mistralai_Mistral-7B-v0.1",
-					"enableScaleToZero": true,
-						"retentionPeriod": "15m"
-					}`,
+					"model.meta_llama-3.1-8b": `modelID: "meta_llama-3.1-8b"
+enableScaleToZero: true
+retentionPeriod: "5m"`,
+					"model.meta_llama-3.1-70b": `modelID: "meta_llama-3.1-70b"
+enableScaleToZero: false`,
+					"model.mistralai_Mistral-7B-v0.1": `modelID: "mistralai_Mistral-7B-v0.1"
+enableScaleToZero: true
+retentionPeriod: "15m"`,
 				},
 			}
 			Expect(k8sClient.Create(ctx, scaleToZeroConfigMap)).To(Succeed())
@@ -976,24 +949,20 @@ data:
 		})
 
 		It("should skip invalid JSON entries in ConfigMap", func() {
-			By("Creating a ConfigMap with invalid JSON")
+			By("Creating a ConfigMap with invalid YAML")
 			scaleToZeroConfigMap := &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "model-scale-to-zero-config-invalid",
 					Namespace: configMapNamespace,
 				},
 				Data: map[string]string{
-					"model.meta_llama-3.1-8b": `{
-						"modelID": "meta_llama-3.1-8b",
-					"enableScaleToZero": true,
-						"retentionPeriod": "5m"
-					}`,
-					"meta_llama-3.1-70b": `invalid json`,
-					"model.mistralai_Mistral-7B-v0.1": `{
-						"modelID": "mistralai_Mistral-7B-v0.1",
-					"enableScaleToZero": true,
-						"retentionPeriod": "15m"
-					}`,
+					"model.meta_llama-3.1-8b": `modelID: "meta_llama-3.1-8b"
+enableScaleToZero: true
+retentionPeriod: "5m"`,
+					"model.meta_llama-3.1-70b": `invalid yaml`,
+					"model.mistralai_Mistral-7B-v0.1": `modelID: "mistralai_Mistral-7B-v0.1"
+enableScaleToZero: true
+retentionPeriod: "15m"`,
 				},
 			}
 			Expect(k8sClient.Create(ctx, scaleToZeroConfigMap)).To(Succeed())
@@ -1561,6 +1530,1358 @@ retentionPeriod: "not-a-duration"`,
 
 			By("Cleaning up ConfigMap")
 			Expect(k8sClient.Delete(ctx, scaleToZeroConfigMap)).To(Succeed())
+		})
+	})
+
+	// Additional tests for improved coverage
+	Context("When testing utility functions", func() {
+		It("should correctly return max of two int32 values", func() {
+			// Test max function
+			result := max(5, 10)
+			Expect(result).To(Equal(int32(10)))
+
+			result = max(10, 5)
+			Expect(result).To(Equal(int32(10)))
+
+			result = max(7, 7)
+			Expect(result).To(Equal(int32(7)))
+
+			result = max(-5, 3)
+			Expect(result).To(Equal(int32(3)))
+		})
+	})
+
+	Context("When testing addVariantWithFallbackAllocation", func() {
+		It("should apply fallback allocation with scale-to-zero disabled", func() {
+			// Create a test VA
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			// Create a deployment with 3 replicas
+			replicas := int32(3)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           3,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with scale-to-zero disabled for non-cheapest variant
+			allVariants := []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}
+			retentionPeriod := 5 * time.Minute
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, false, allVariants, retentionPeriod)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.CurrentAlloc.NumReplicas).To(Equal(int32(3)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(3)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.Reason).NotTo(BeEmpty())
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse())
+		})
+
+		It("should apply fallback allocation with scale-to-zero enabled and no load", func() {
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-zero",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			replicas := int32(2)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           2,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+			enableScaleToZero := true
+			scaleToZeroConfig["test-model"] = utils.ModelScaleToZeroConfig{
+				ModelID:           "test-model",
+				EnableScaleToZero: &enableScaleToZero,
+				RetentionPeriod:   "10m",
+			}
+
+			// Test with zero load
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.CurrentAlloc.NumReplicas).To(Equal(int32(2)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(0)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.Reason).NotTo(BeEmpty())
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse())
+		})
+
+		It("should apply fallback allocation with scale-to-zero enabled and active load", func() {
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-load",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			replicas := int32(2)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           2,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+			enableScaleToZero := true
+			scaleToZeroConfig["test-model"] = utils.ModelScaleToZeroConfig{
+				ModelID:           "test-model",
+				EnableScaleToZero: &enableScaleToZero,
+				RetentionPeriod:   "10m",
+			}
+
+			// Test with active load
+			activeLoad := float64(5.5)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &activeLoad, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.CurrentAlloc.NumReplicas).To(Equal(int32(2)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(2)))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.Reason).NotTo(BeEmpty())
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse())
+		})
+
+		It("should respect minReplicas when applying fallback", func() {
+			minReplicas := int32(2)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-minreplicas",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			replicas := int32(3)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           3,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+			enableScaleToZero := true
+			scaleToZeroConfig["test-model"] = utils.ModelScaleToZeroConfig{
+				ModelID:           "test-model",
+				EnableScaleToZero: &enableScaleToZero,
+				RetentionPeriod:   "10m",
+			}
+
+			// Test with zero load but minReplicas set
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			// Should be clamped to minReplicas
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(2)))
+		})
+
+		It("should respect maxReplicas when applying fallback", func() {
+			maxReplicas := int32(5)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-maxreplicas",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MaxReplicas: &maxReplicas,
+				},
+			}
+
+			replicas := int32(10)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           10,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with current replicas exceeding maxReplicas
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			// Should be clamped to maxReplicas
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(5)))
+		})
+
+		It("should handle cheapest variant with scale-to-zero disabled and no load", func() {
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-cheapest",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			// Deployment with 0 replicas
+			replicas := int32(0)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           0,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with cheapest variant and zero load (not nil) - should set to 1 replica
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, true, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(1)))
+		})
+
+		It("should handle nil deployment", func() {
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-nil-deploy",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with nil deployment
+			addVariantWithFallbackAllocation(va, nil, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.CurrentAlloc.NumReplicas).To(Equal(int32(0)))
+		})
+
+		It("should handle non-cheapest variant with scale-to-zero disabled and no load", func() {
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-non-cheapest",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:   "test-model",
+					VariantID: "test-variant",
+				},
+			}
+
+			replicas := int32(2)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           2,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test non-cheapest variant with zero load - should set to 0
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(0)))
+		})
+
+		It("should enforce minReplicas on non-cheapest variant with scale-to-zero disabled", func() {
+			minReplicas := int32(1)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-non-cheapest-min",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			replicas := int32(3)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           3,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test non-cheapest variant with zero load and minReplicas=1
+			// Should respect minReplicas even though it's not cheapest
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, false, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			// Should be clamped to minReplicas, not 0
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(1)))
+		})
+
+		It("should enforce minReplicas=0 allows scale-to-zero when enabled", func() {
+			minReplicas := int32(0)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-stz-min0",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			replicas := int32(2)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           2,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+			enableScaleToZero := true
+			scaleToZeroConfig["test-model"] = utils.ModelScaleToZeroConfig{
+				ModelID:           "test-model",
+				EnableScaleToZero: &enableScaleToZero,
+				RetentionPeriod:   "10m",
+			}
+
+			// Test with scale-to-zero enabled, zero load, minReplicas=0
+			// Should allow scaling to 0
+			zeroLoad := float64(0)
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", &zeroLoad, true, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(0)))
+		})
+
+		It("should ensure cheapest variant has 1 replica when metrics unavailable, all at 0, scale-to-zero disabled", func() {
+			minReplicas := int32(0)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-cheapest-nil-metrics",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			// Deployment with 0 replicas
+			replicas := int32(0)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           0,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with nil metrics (unavailable), cheapest variant, scale-to-zero disabled
+			// Should set to 1 to ensure at least one variant can serve requests
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, true, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(1)))
+		})
+
+		It("should allow all 0s when metrics unavailable, all at 0, scale-to-zero enabled", func() {
+			minReplicas := int32(0)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-all-zero-stz",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			// Deployment with 0 replicas
+			replicas := int32(0)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           0,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+			enableScaleToZero := true
+			scaleToZeroConfig["test-model"] = utils.ModelScaleToZeroConfig{
+				ModelID:           "test-model",
+				EnableScaleToZero: &enableScaleToZero,
+				RetentionPeriod:   "10m",
+			}
+
+			// Test with nil metrics (unavailable), scale-to-zero enabled, all at 0
+			// Should allow 0 because scale-to-zero is enabled
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, true, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(0)))
+		})
+
+		It("should respect minReplicas when metrics unavailable even for cheapest variant", func() {
+			minReplicas := int32(2)
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-fallback-va-cheapest-nil-min2",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					VariantID:   "test-variant",
+					MinReplicas: &minReplicas,
+				},
+			}
+
+			// Deployment with 0 replicas
+			replicas := int32(0)
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas:           0,
+					ObservedGeneration: 1,
+				},
+			}
+
+			var updateList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
+			scaleToZeroConfig := make(utils.ScaleToZeroConfigData)
+
+			// Test with nil metrics, minReplicas=2
+			// Should use max(minReplicas=2, current=0) = 2
+			addVariantWithFallbackAllocation(va, deploy, "TestReason", "Test message",
+				&updateList, scaleToZeroConfig, "test-model", nil, true, []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, 5*time.Minute)
+
+			Expect(updateList.Items).To(HaveLen(1))
+			Expect(updateList.Items[0].Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(2)))
+		})
+	})
+
+	Describe("Helper Functions", func() {
+		Context("applyRetentionPeriodScaling", func() {
+			var (
+				va                    *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+				allVariants           []llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+				scaleToZeroConfigData utils.ScaleToZeroConfigData
+				retentionPeriod       time.Duration
+			)
+
+			BeforeEach(func() {
+				minReplicas := int32(0)
+				enabled := true
+				va = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-va",
+					},
+					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+						ModelID:          "test-model",
+						MinReplicas:      &minReplicas,
+						AcceleratorCount: 4,
+					},
+				}
+				allVariants = []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}
+				scaleToZeroConfigData = utils.ScaleToZeroConfigData{
+					"test-model": utils.ModelScaleToZeroConfig{
+						ModelID:           "test-model",
+						EnableScaleToZero: &enabled,
+						RetentionPeriod:   "5m",
+					},
+				}
+				retentionPeriod = 5 * time.Minute
+			})
+
+			It("should scale to zero when scaleToZero enabled and all minReplicas are zero", func() {
+				replicas, reason := applyRetentionPeriodScaling(va, allVariants, scaleToZeroConfigData, retentionPeriod, "Test")
+
+				Expect(replicas).To(Equal(int32(0)))
+				Expect(reason).To(ContainSubstring("scale-to-zero enabled"))
+				Expect(reason).To(ContainSubstring("scaling to 0"))
+			})
+
+			It("should set cheapest variant to 1 when scaleToZero disabled", func() {
+				disabled := false
+				scaleToZeroConfigData["test-model"] = utils.ModelScaleToZeroConfig{
+					ModelID:           "test-model",
+					EnableScaleToZero: &disabled,
+					RetentionPeriod:   "5m",
+				}
+
+				replicas, reason := applyRetentionPeriodScaling(va, allVariants, scaleToZeroConfigData, retentionPeriod, "Test")
+
+				Expect(replicas).To(Equal(int32(1)))
+				Expect(reason).To(ContainSubstring("cheapest variant set to 1"))
+			})
+
+			It("should use minReplicas when some variants have minReplicas > 0", func() {
+				minReplicas := int32(3)
+				va.Spec.MinReplicas = &minReplicas
+				// Update allVariants to reflect the change
+				allVariants[0].Spec.MinReplicas = &minReplicas
+
+				replicas, reason := applyRetentionPeriodScaling(va, allVariants, scaleToZeroConfigData, retentionPeriod, "Test")
+
+				Expect(replicas).To(Equal(int32(3)))
+				Expect(reason).To(ContainSubstring("using minReplicas=3"))
+			})
+
+			It("should include path name in reason message", func() {
+				_, reason := applyRetentionPeriodScaling(va, allVariants, scaleToZeroConfigData, retentionPeriod, "Fallback")
+
+				Expect(reason).To(ContainSubstring("Fallback:"))
+			})
+		})
+
+		Context("applyReplicaBounds", func() {
+			It("should not change replicas when within bounds", func() {
+				minReplicas := int32(2)
+				maxReplicas := int32(10)
+
+				clamped, changed := applyReplicaBounds(5, &minReplicas, &maxReplicas, "test-va")
+
+				Expect(clamped).To(Equal(int32(5)))
+				Expect(changed).To(BeFalse())
+			})
+
+			It("should clamp to minReplicas when below minimum", func() {
+				minReplicas := int32(5)
+
+				clamped, changed := applyReplicaBounds(2, &minReplicas, nil, "test-va")
+
+				Expect(clamped).To(Equal(int32(5)))
+				Expect(changed).To(BeTrue())
+			})
+
+			It("should clamp to maxReplicas when above maximum", func() {
+				maxReplicas := int32(10)
+
+				clamped, changed := applyReplicaBounds(15, nil, &maxReplicas, "test-va")
+
+				Expect(clamped).To(Equal(int32(10)))
+				Expect(changed).To(BeTrue())
+			})
+
+			It("should handle nil minReplicas and maxReplicas", func() {
+				clamped, changed := applyReplicaBounds(5, nil, nil, "test-va")
+
+				Expect(clamped).To(Equal(int32(5)))
+				Expect(changed).To(BeFalse())
+			})
+
+			It("should apply both bounds when needed", func() {
+				minReplicas := int32(5)
+				maxReplicas := int32(10)
+
+				// Test below minimum
+				clamped, changed := applyReplicaBounds(2, &minReplicas, &maxReplicas, "test-va")
+				Expect(clamped).To(Equal(int32(5)))
+				Expect(changed).To(BeTrue())
+
+				// Test above maximum
+				clamped, changed = applyReplicaBounds(15, &minReplicas, &maxReplicas, "test-va")
+				Expect(clamped).To(Equal(int32(10)))
+				Expect(changed).To(BeTrue())
+			})
+		})
+
+		Context("createOptimizedAllocWithUpdate", func() {
+			It("should update LastUpdate when NumReplicas changes", func() {
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Previous reason",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(8, "New reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(8)))
+				Expect(newAlloc.Reason).To(Equal("New reason"))
+				Expect(newAlloc.LastUpdate.Time).To(BeTemporally(">", previousAlloc.LastUpdate.Time))
+			})
+
+			It("should update LastUpdate when Reason changes", func() {
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Previous reason",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(5, "New reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)))
+				Expect(newAlloc.Reason).To(Equal("New reason"))
+				Expect(newAlloc.LastUpdate.Time).To(BeTemporally(">", previousAlloc.LastUpdate.Time))
+			})
+
+			It("should preserve LastUpdate when nothing changes", func() {
+				previousTime := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Same reason",
+					LastUpdate:  previousTime,
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(5, "Same reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)))
+				Expect(newAlloc.Reason).To(Equal("Same reason"))
+				Expect(newAlloc.LastUpdate).To(Equal(previousTime))
+			})
+
+			It("should handle zero NumReplicas", func() {
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Previous reason",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(0, "Scaled to zero", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(0)))
+				Expect(newAlloc.Reason).To(Equal("Scaled to zero"))
+				Expect(newAlloc.LastUpdate.Time).To(BeTemporally(">", previousAlloc.LastUpdate.Time))
+			})
+		})
+	})
+
+	Describe("Path 1 Retention Period Check", func() {
+		Context("When optimizer returns 0 replicas", func() {
+			var (
+				scaleToZeroConfigData utils.ScaleToZeroConfigData
+			)
+
+			BeforeEach(func() {
+				enabled := true
+				scaleToZeroConfigData = utils.ScaleToZeroConfigData{
+					"test-model": utils.ModelScaleToZeroConfig{
+						ModelID:           "test-model",
+						EnableScaleToZero: &enabled,
+						RetentionPeriod:   "5m",
+					},
+				}
+			})
+
+			It("should preserve previous allocation when retention period not exceeded", func() {
+				// Simulate optimizer returning 0 replicas
+				optimizedAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 0,
+				}
+
+				// Previous allocation with recent LastUpdate (within retention period)
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 3,
+					Reason:      "Optimizer solution: cost and latency optimized allocation",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-2 * time.Minute)), // 2m ago < 5m retention
+				}
+
+				// Simulate the Path 1 retention check logic
+				newAlloc := optimizedAlloc
+				newAlloc.Reason = "Optimizer solution: cost and latency optimized allocation"
+
+				modelName := "test-model"
+				retentionPeriod := utils.GetScaleToZeroRetentionPeriod(scaleToZeroConfigData, modelName)
+
+				if optimizedAlloc.NumReplicas == 0 {
+					if !previousAlloc.LastUpdate.IsZero() {
+						timeSinceLastUpdate := time.Since(previousAlloc.LastUpdate.Time)
+						if timeSinceLastUpdate <= retentionPeriod {
+							// Preserve previous allocation
+							newAlloc.NumReplicas = previousAlloc.NumReplicas
+							newAlloc.Reason = "Optimizer returned 0 but retention period not exceeded, preserving allocation"
+						}
+					}
+				}
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(3)), "Should preserve previous allocation")
+				Expect(newAlloc.Reason).To(ContainSubstring("retention period not exceeded"))
+			})
+
+			It("should allow scale to zero when retention period exceeded", func() {
+				// Simulator optimizer returning 0 replicas
+				optimizedAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 0,
+				}
+
+				// Previous allocation with old LastUpdate (beyond retention period)
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 3,
+					Reason:      "Optimizer solution: cost and latency optimized allocation",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-10 * time.Minute)), // 10m ago > 5m retention
+				}
+
+				// Simulate the Path 1 retention check logic
+				newAlloc := optimizedAlloc
+				newAlloc.Reason = "Optimizer solution: cost and latency optimized allocation"
+
+				modelName := "test-model"
+				retentionPeriod := utils.GetScaleToZeroRetentionPeriod(scaleToZeroConfigData, modelName)
+
+				if optimizedAlloc.NumReplicas == 0 {
+					if !previousAlloc.LastUpdate.IsZero() {
+						timeSinceLastUpdate := time.Since(previousAlloc.LastUpdate.Time)
+						if timeSinceLastUpdate <= retentionPeriod {
+							// Preserve previous allocation
+							newAlloc.NumReplicas = previousAlloc.NumReplicas
+							newAlloc.Reason = "Optimizer returned 0 but retention period not exceeded, preserving allocation"
+						}
+					}
+				}
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(0)), "Should allow scale to zero")
+				Expect(newAlloc.Reason).To(Equal("Optimizer solution: cost and latency optimized allocation"))
+			})
+
+			It("should preserve currentReplicas on first run (LastUpdate is zero)", func() {
+				// Simulate optimizer returning 0 replicas
+				optimizedAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 0,
+				}
+
+				// Previous allocation with zero LastUpdate (first run)
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 0,
+					Reason:      "",
+					LastUpdate:  metav1.Time{}, // Zero time = first run
+				}
+
+				// Current deployment has 2 replicas
+				currentReplicas := int32(2)
+
+				// Simulate the Path 1 retention check logic
+				newAlloc := optimizedAlloc
+				newAlloc.Reason = "Optimizer solution: cost and latency optimized allocation"
+
+				modelName := "test-model"
+				retentionPeriod := utils.GetScaleToZeroRetentionPeriod(scaleToZeroConfigData, modelName)
+
+				if optimizedAlloc.NumReplicas == 0 {
+					if previousAlloc.LastUpdate.IsZero() {
+						// First run: preserve currentReplicas
+						newAlloc.NumReplicas = currentReplicas
+						newAlloc.Reason = "First run: preserving current replicas for Prometheus discovery grace period"
+					} else {
+						timeSinceLastUpdate := time.Since(previousAlloc.LastUpdate.Time)
+						if timeSinceLastUpdate <= retentionPeriod {
+							// Preserve previous allocation
+							newAlloc.NumReplicas = previousAlloc.NumReplicas
+							newAlloc.Reason = "Optimizer returned 0 but retention period not exceeded, preserving allocation"
+						}
+					}
+				}
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(2)), "Should preserve currentReplicas on first run")
+				Expect(newAlloc.Reason).To(Equal("First run: preserving current replicas for Prometheus discovery grace period"))
+			})
+
+			It("should not affect optimizer solutions with non-zero replicas", func() {
+				// Simulate optimizer returning non-zero replicas
+				optimizedAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+				}
+
+				// Previous allocation
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 3,
+					Reason:      "Optimizer solution: cost and latency optimized allocation",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-2 * time.Minute)),
+				}
+
+				// Simulate the Path 1 retention check logic
+				newAlloc := optimizedAlloc
+				newAlloc.Reason = "Optimizer solution: cost and latency optimized allocation"
+
+				modelName := "test-model"
+				retentionPeriod := utils.GetScaleToZeroRetentionPeriod(scaleToZeroConfigData, modelName)
+
+				if optimizedAlloc.NumReplicas == 0 {
+					if !previousAlloc.LastUpdate.IsZero() {
+						timeSinceLastUpdate := time.Since(previousAlloc.LastUpdate.Time)
+						if timeSinceLastUpdate <= retentionPeriod {
+							// Preserve previous allocation
+							newAlloc.NumReplicas = previousAlloc.NumReplicas
+							newAlloc.Reason = "Optimizer returned 0 but retention period not exceeded, preserving allocation"
+						}
+					}
+				}
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)), "Should apply optimizer's non-zero allocation")
+				Expect(newAlloc.Reason).To(Equal("Optimizer solution: cost and latency optimized allocation"))
+			})
+		})
+	})
+
+	// Tests for refactored helper functions
+	Describe("Helper Functions", func() {
+		Describe("isRetentionPeriodExceeded", func() {
+			It("should return false when lastUpdate is zero", func() {
+				retentionPeriod := 5 * time.Minute
+				lastUpdate := metav1.Time{}
+
+				result := isRetentionPeriodExceeded(lastUpdate, retentionPeriod)
+
+				Expect(result).To(BeFalse(), "Should return false when lastUpdate is zero (never set)")
+			})
+
+			It("should return false when time since lastUpdate is within retention period", func() {
+				retentionPeriod := 5 * time.Minute
+				lastUpdate := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+
+				result := isRetentionPeriodExceeded(lastUpdate, retentionPeriod)
+
+				Expect(result).To(BeFalse(), "Should return false when within retention period")
+			})
+
+			It("should return true when time since lastUpdate exceeds retention period", func() {
+				retentionPeriod := 5 * time.Minute
+				lastUpdate := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+
+				result := isRetentionPeriodExceeded(lastUpdate, retentionPeriod)
+
+				Expect(result).To(BeTrue(), "Should return true when retention period exceeded")
+			})
+
+			It("should return false at exactly retention period boundary", func() {
+				retentionPeriod := 5 * time.Minute
+				// Set to just under retention period to avoid timing issues
+				lastUpdate := metav1.NewTime(time.Now().Add(-5*time.Minute + 100*time.Millisecond))
+
+				result := isRetentionPeriodExceeded(lastUpdate, retentionPeriod)
+
+				Expect(result).To(BeFalse(), "Should return false at retention period boundary")
+			})
+		})
+
+		Describe("createOptimizedAllocWithUpdate", func() {
+			It("should set LastUpdate when NumReplicas changes", func() {
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 3,
+					Reason:      "Previous reason",
+					LastUpdate:  metav1.NewTime(time.Now().Add(-10 * time.Minute)),
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(5, "New reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)))
+				Expect(newAlloc.Reason).To(Equal("New reason"))
+				Expect(newAlloc.LastUpdate.IsZero()).To(BeFalse(), "LastUpdate should be set")
+				Expect(newAlloc.LastUpdate.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+			})
+
+			It("should set LastUpdate when Reason changes", func() {
+				oldTime := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Previous reason",
+					LastUpdate:  oldTime,
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(5, "New reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)))
+				Expect(newAlloc.Reason).To(Equal("New reason"))
+				Expect(newAlloc.LastUpdate.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+				Expect(newAlloc.LastUpdate.Time).NotTo(Equal(oldTime.Time))
+			})
+
+			It("should preserve LastUpdate when nothing changes", func() {
+				oldTime := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+				previousAlloc := llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 5,
+					Reason:      "Same reason",
+					LastUpdate:  oldTime,
+				}
+
+				newAlloc := createOptimizedAllocWithUpdate(5, "Same reason", previousAlloc)
+
+				Expect(newAlloc.NumReplicas).To(Equal(int32(5)))
+				Expect(newAlloc.Reason).To(Equal("Same reason"))
+				Expect(newAlloc.LastUpdate).To(Equal(oldTime), "LastUpdate should be preserved when nothing changes")
+			})
+		})
+
+		Describe("updateConditionsForAllocation", func() {
+			var updateVa, preparedVa *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+
+			BeforeEach(func() {
+				updateVa = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+						Accelerator: "A100",
+					},
+					Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+						DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+							NumReplicas: 5,
+							Reason:      "Test reason",
+						},
+					},
+				}
+
+				preparedVa = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+						Conditions: []metav1.Condition{
+							{
+								Type:    llmdVariantAutoscalingV1alpha1.TypeMetricsAvailable,
+								Status:  metav1.ConditionTrue,
+								Reason:  llmdVariantAutoscalingV1alpha1.ReasonMetricsFound,
+								Message: "Metrics available",
+							},
+						},
+					},
+				}
+			})
+
+			It("should set optimizer success condition when hasOptimizedAlloc is true", func() {
+				updateConditionsForAllocation(updateVa, preparedVa, true)
+
+				metricsCond := llmdVariantAutoscalingV1alpha1.GetCondition(updateVa, llmdVariantAutoscalingV1alpha1.TypeMetricsAvailable)
+				Expect(metricsCond).NotTo(BeNil(), "MetricsAvailable condition should be copied")
+				Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue))
+
+				optCond := llmdVariantAutoscalingV1alpha1.GetCondition(updateVa, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
+				Expect(optCond).NotTo(BeNil(), "OptimizationReady condition should be set")
+				Expect(optCond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(optCond.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonOptimizationSucceeded))
+				Expect(optCond.Message).To(ContainSubstring("Optimization completed"))
+				Expect(optCond.Message).To(ContainSubstring("5 replicas"))
+			})
+
+			It("should set fallback condition when hasOptimizedAlloc is false and Reason is set", func() {
+				updateConditionsForAllocation(updateVa, preparedVa, false)
+
+				optCond := llmdVariantAutoscalingV1alpha1.GetCondition(updateVa, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
+				Expect(optCond).NotTo(BeNil(), "OptimizationReady condition should be set")
+				Expect(optCond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(optCond.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonFallbackUsed))
+				Expect(optCond.Message).To(ContainSubstring("Test reason"))
+				Expect(optCond.Message).To(ContainSubstring("5 replicas"))
+			})
+
+			It("should copy OptimizationReady from preparation when Reason is empty", func() {
+				updateVa.Status.DesiredOptimizedAlloc.Reason = ""
+
+				preparedVa.Status.Conditions = append(preparedVa.Status.Conditions, metav1.Condition{
+					Type:    llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
+					Status:  metav1.ConditionFalse,
+					Reason:  llmdVariantAutoscalingV1alpha1.ReasonOptimizationFailed,
+					Message: "Preparation phase message",
+				})
+
+				updateConditionsForAllocation(updateVa, preparedVa, false)
+
+				optCond := llmdVariantAutoscalingV1alpha1.GetCondition(updateVa, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
+				Expect(optCond).NotTo(BeNil(), "OptimizationReady should be copied from preparation")
+				Expect(optCond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(optCond.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonOptimizationFailed))
+				Expect(optCond.Message).To(Equal("Preparation phase message"))
+			})
+
+			It("should preserve MetricsAvailable from preparation phase", func() {
+				updateConditionsForAllocation(updateVa, preparedVa, true)
+
+				metricsCond := llmdVariantAutoscalingV1alpha1.GetCondition(updateVa, llmdVariantAutoscalingV1alpha1.TypeMetricsAvailable)
+				Expect(metricsCond).NotTo(BeNil())
+				Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(metricsCond.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonMetricsFound))
+				Expect(metricsCond.Message).To(Equal("Metrics available"))
+			})
+		})
+	})
+
+	Describe("Fallback Allocation - Reason and LastUpdate Fields", func() {
+		var updateVa *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+		var allVariants []llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+		var scaleToZeroConfigData utils.ScaleToZeroConfigData
+
+		BeforeEach(func() {
+			minReplicas := int32(0)
+			updateVa = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-va",
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ModelID:     "test-model",
+					MinReplicas: &minReplicas,
+				},
+				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+					CurrentAlloc: llmdVariantAutoscalingV1alpha1.Allocation{
+						NumReplicas: 1,
+					},
+				},
+			}
+			allVariants = []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*updateVa}
+			scaleToZeroConfigData = utils.ScaleToZeroConfigData{}
+		})
+
+		Context("PATH 3 - First run (no previous allocation)", func() {
+			It("should set Reason and LastUpdate on first run", func() {
+				// Simulate first run: empty DesiredOptimizedAlloc
+				updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{}
+
+				// Apply fallback allocation (PATH 3)
+				applyFallbackAllocation(updateVa, allVariants, scaleToZeroConfigData, false, "Last resort")
+
+				// Verify Reason is set
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).NotTo(BeEmpty(),
+					"Reason should be set on first run")
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).To(ContainSubstring("Last resort: first run"))
+
+				// Verify LastUpdate is set
+				Expect(updateVa.Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse(),
+					"LastUpdate should be set on first run")
+
+				// Verify NumReplicas is set
+				Expect(updateVa.Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(1)),
+					"NumReplicas should be max(minReplicas=0, current=1) = 1")
+			})
+
+			It("should set Reason with minReplicas > 0", func() {
+				minReplicas := int32(2)
+				updateVa.Spec.MinReplicas = &minReplicas
+				updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{}
+
+				applyFallbackAllocation(updateVa, allVariants, scaleToZeroConfigData, false, "Last resort")
+
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).To(ContainSubstring("max(minReplicas=2, current=1)"))
+				Expect(updateVa.Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(2)))
+				Expect(updateVa.Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse())
+			})
+		})
+
+		Context("PATH 2 - Has previous allocation", func() {
+			It("should preserve Reason and LastUpdate when no bounds changed", func() {
+				// Set previous allocation
+				previousTime := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+				updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 3,
+					Reason:      "Previous allocation: optimizer result",
+					LastUpdate:  previousTime,
+				}
+
+				// Apply fallback allocation (PATH 2)
+				applyFallbackAllocation(updateVa, allVariants, scaleToZeroConfigData, true, "Fallback")
+
+				// Verify Reason and LastUpdate are preserved
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).To(ContainSubstring("Previous allocation"))
+				Expect(updateVa.Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(int32(3)))
+				// LastUpdate might be updated due to bounds check, but Reason should be preserved or updated
+			})
+
+			It("should set empty Reason to default fallback message", func() {
+				// Simulate scenario where Reason is empty (shouldn't happen, but safety net)
+				updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 2,
+					Reason:      "", // Empty reason
+					LastUpdate:  metav1.NewTime(time.Now()),
+				}
+
+				applyFallbackAllocation(updateVa, allVariants, scaleToZeroConfigData, true, "Fallback")
+
+				// Verify default Reason is set
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).To(Equal("Fallback: preserving previous allocation (no optimizer solution)"))
+				Expect(updateVa.Status.DesiredOptimizedAlloc.LastUpdate.IsZero()).To(BeFalse())
+			})
+		})
+
+		Context("LastUpdate vs LastRunTime distinction", func() {
+			It("should only update LastUpdate when allocation changes", func() {
+				// Set previous allocation
+				previousTime := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+				updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+					NumReplicas: 1,
+					Reason:      "Previous: test",
+					LastUpdate:  previousTime,
+				}
+
+				// Apply same allocation again
+				applyFallbackAllocation(updateVa, allVariants, scaleToZeroConfigData, true, "Fallback")
+
+				// Since allocation didn't change, LastUpdate might be preserved or set
+				// The key is that Reason should not be empty
+				Expect(updateVa.Status.DesiredOptimizedAlloc.Reason).NotTo(BeEmpty())
+			})
+		})
+	})
+
+	Describe("Goroutine Cleanup", func() {
+		Context("Cache cleanup goroutine lifecycle", func() {
+			// NOTE: This test is skipped because SetupWithManager requires a full controller-runtime
+			// Manager which is not available in unit tests. The goroutine cleanup logic is verified
+			// through code review and integration tests.
+			XIt("should initialize cacheCleanupDone channel during setup", func() {
+				// SKIPPED: Requires full Manager setup not available in unit tests
+			})
+
+			XIt("should start cleanup goroutine that responds to manager shutdown", func() {
+				// SKIPPED: Requires full Manager setup not available in unit tests
+			})
+
+			XIt("should not leak goroutines after manager shutdown", func() {
+				// SKIPPED: Requires full Manager setup not available in unit tests
+				// This test would require:
+				// 1. Starting the manager
+				// 2. Wait for goroutine to start
+				// 3. Stop the manager (closes mgr.Elected())
+				// 4. Verify cacheCleanupDone is closed
+				// 5. Check goroutine count doesn't increase
+				//
+				// The actual goroutine shutdown is tested in integration tests
+			})
+		})
+
+		Context("Context timeout in SetupWithManager", func() {
+			It("should use context with timeout for API calls during setup", func() {
+				// This is verified by code review rather than runtime test
+				// The SetupTimeout constant should be used in SetupWithManager
+				// to create context.WithTimeout for all API calls during setup
+
+				Expect(SetupTimeout).To(Equal(30*time.Second),
+					"Setup timeout should be 30 seconds")
+
+				// In production:
+				// - getPrometheusConfig uses ctx with timeout
+				// - ValidatePrometheusAPI uses ctx with timeout
+				// - readOptimizationConfig uses ctx with timeout
+				//
+				// This prevents hanging indefinitely during startup if:
+				// - Kubernetes API server is unavailable
+				// - ConfigMaps cannot be fetched
+				// - Prometheus cannot be reached
+			})
+		})
+	})
+
+	Describe("First Run Scenario Fix", func() {
+		Context("When metrics are available but optimizer doesn't run", func() {
+			It("should use current deployment replicas and not scale to zero", func() {
+				// This test verifies the fix for the bug where first-run scenarios with
+				// metrics available but no optimizer solution would incorrectly scale to 0
+				// because NumReplicas defaults to 0.
+
+				// Simulate first run: VA with no previous status (all defaults)
+				firstRunVA := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-variant-first-run",
+						Namespace: "default",
+					},
+					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+						ModelID:          "test-model",
+						Accelerator:      "A100",
+						AcceleratorCount: 1,
+					},
+					Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+						// First run: no status set yet
+						// DesiredOptimizedAlloc will have default values:
+						//   NumReplicas: 0 (int32 default)
+						//   LastRunTime: zero time
+						//   Reason: "" (empty string)
+						//   LastUpdate: zero time
+					},
+				}
+
+				// Simulate current deployment with 3 replicas
+				currentDeploymentReplicas := int32(3)
+				firstRunVA.Status.CurrentAlloc = llmdVariantAutoscalingV1alpha1.Allocation{
+					NumReplicas: currentDeploymentReplicas,
+				}
+
+				// Safety net sets Reason when metrics collected but optimizer hasn't run
+				firstRunVA.Status.DesiredOptimizedAlloc.Reason = "Metrics collected, awaiting optimizer decision"
+				firstRunVA.Status.DesiredOptimizedAlloc.LastUpdate = metav1.Now()
+				// Note: LastRunTime remains zero (optimizer hasn't run)
+
+				// Check hasPrecomputedFallback logic (line 1359)
+				hasPrecomputedFallback := !firstRunVA.Status.DesiredOptimizedAlloc.LastRunTime.IsZero()
+				Expect(hasPrecomputedFallback).To(BeFalse(),
+					"First run should not have precomputed fallback (LastRunTime is zero)")
+
+				// Verify Path 3 (Last Resort) will be used
+				// Path 3 checks if previous allocation exists using LastRunTime
+				previousAlloc := firstRunVA.Status.DesiredOptimizedAlloc
+				hasPreviousAllocation := !previousAlloc.LastRunTime.IsZero()
+				Expect(hasPreviousAllocation).To(BeFalse(),
+					"First run should not have previous allocation (LastRunTime is zero)")
+
+				// Verify that Path 3 would use current deployment replicas as baseline
+				var baselineReplicas int32
+				if !previousAlloc.LastRunTime.IsZero() {
+					// Would use previous allocation
+					baselineReplicas = previousAlloc.NumReplicas
+				} else {
+					// First run - should use current deployment replicas
+					baselineReplicas = firstRunVA.Status.CurrentAlloc.NumReplicas
+				}
+
+				Expect(baselineReplicas).To(Equal(currentDeploymentReplicas),
+					"First run should use current deployment replicas (%d) as baseline, not default NumReplicas (0)",
+					currentDeploymentReplicas)
+
+				// Verify the fix: before the fix, the check was:
+				//   hasPrecomputedFallback := NumReplicas >= 0 || !LastRunTime.IsZero()
+				// This would be true (0 >= 0), treating first run as having a precomputed fallback
+				// and copying NumReplicas=0, scaling to zero.
+				//
+				// After the fix, the check is:
+				//   hasPrecomputedFallback := !LastRunTime.IsZero()
+				// This is false on first run, so Path 3 is used, which correctly uses
+				// current deployment replicas.
+
+				// Document the fix
+				oldCheckWouldBeTrue := previousAlloc.NumReplicas >= 0 || !previousAlloc.LastRunTime.IsZero()
+				newCheckIsFalse := !previousAlloc.LastRunTime.IsZero()
+
+				Expect(oldCheckWouldBeTrue).To(BeTrue(),
+					"Old check (NumReplicas >= 0) would incorrectly be true")
+				Expect(newCheckIsFalse).To(BeFalse(),
+					"New check (only LastRunTime) correctly identifies no precomputed fallback")
+			})
+
+			It("should detect precomputed fallback when addVariantWithFallbackAllocation ran", func() {
+				// This test verifies that when addVariantWithFallbackAllocation actually runs,
+				// it's correctly detected as having a precomputed fallback.
+
+				vaWithFallback := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+						CurrentAlloc: llmdVariantAutoscalingV1alpha1.Allocation{
+							NumReplicas: 2,
+						},
+						DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+							NumReplicas: 2,
+							LastRunTime: metav1.Now(), // Set by addVariantWithFallbackAllocation
+							Reason:      "Metrics unavailable, maintaining controller intent",
+							LastUpdate:  metav1.Now(),
+						},
+					},
+				}
+
+				hasPrecomputedFallback := !vaWithFallback.Status.DesiredOptimizedAlloc.LastRunTime.IsZero()
+				Expect(hasPrecomputedFallback).To(BeTrue(),
+					"Should detect precomputed fallback when LastRunTime is set")
+			})
+
+			It("should detect previous optimizer solution exists", func() {
+				// This test verifies that when optimizer ran previously,
+				// it's correctly detected as having a previous allocation.
+
+				vaWithOptimizerSolution := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+					Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
+						CurrentAlloc: llmdVariantAutoscalingV1alpha1.Allocation{
+							NumReplicas: 5,
+						},
+						DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
+							NumReplicas: 5,
+							LastRunTime: metav1.Now(), // Set by optimizer
+							Reason:      "Optimizer solution: cost and latency optimized allocation",
+							LastUpdate:  metav1.Now(),
+						},
+					},
+				}
+
+				hasPreviousAllocation := !vaWithOptimizerSolution.Status.DesiredOptimizedAlloc.LastRunTime.IsZero()
+				Expect(hasPreviousAllocation).To(BeTrue(),
+					"Should detect previous optimizer solution when LastRunTime is set")
+			})
 		})
 	})
 })

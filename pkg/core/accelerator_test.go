@@ -96,7 +96,7 @@ func TestAccelerator_Fields(t *testing.T) {
 	if acc.Cost() != spec.Cost {
 		t.Errorf("Accelerator.Cost() = %v, want %v", acc.Cost(), spec.Cost)
 	}
-	if acc.Multiplicity() != spec.Multiplicity {
+	if acc.Multiplicity() != int32(spec.Multiplicity) {
 		t.Errorf("Accelerator.Multiplicity() = %v, want %v", acc.Multiplicity(), spec.Multiplicity)
 	}
 	if acc.MemSize() != spec.MemSize {

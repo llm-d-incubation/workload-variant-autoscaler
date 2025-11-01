@@ -17,11 +17,26 @@ limitations under the License.
 package collector
 
 import (
+	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/llm-d-incubation/workload-variant-autoscaler/internal/logger"
 )
+
+func TestMain(m *testing.M) {
+	// Initialize logger for all collector tests (both standard and Ginkgo)
+	_, err := logger.InitLogger()
+	if err != nil {
+		panic("Failed to initialize logger: " + err.Error())
+	}
+
+	// Run all tests
+	code := m.Run()
+	os.Exit(code)
+}
 
 func TestCollector(t *testing.T) {
 	RegisterFailHandler(Fail)

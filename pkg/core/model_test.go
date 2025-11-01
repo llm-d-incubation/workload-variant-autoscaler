@@ -47,7 +47,7 @@ func TestModel_AddAndRemovePerfDataFromSpec(t *testing.T) {
 		name      string
 		modelName string
 		spec      *config.ModelAcceleratorPerfData
-		wantCount int
+		wantCount int32
 	}{
 		{
 			name:      "valid perf data",

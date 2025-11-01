@@ -44,31 +44,31 @@ This script automates the complete deployment process on kubernetes cluster incl
 export HF_TOKEN="your-hf-token-here"
 
 # Optional: Customize deployment
-export BASE_NAME="inference-scheduling"                          # Default
-export MODEL_ID="unsloth/Meta-Llama-3.1-8B"                     # Default
-export WVA_IMAGE="ghcr.io/llm-d/workload-variant-autoscaler:v0.0.1"  # Default
-export ACCELERATOR_TYPE="A100"                                  # Auto-detected or default
+export WELL_LIT_PATH_NAME="inference-scheduling"                          # Default
+export MODEL_ID="unsloth/Meta-Llama-3.1-8B"                               # Default
+export WVA_IMAGE_REPO="ghcr.io/llm-d/workload-variant-autoscaler"         # Default
+export WVA_IMAGE_TAG="v0.0.1"                                             # Default
+export ACCELERATOR_TYPE="A100"                                            # Auto-detected or default
 ```
 
-### 2. Run the Deployment Script
+### 2. Run the Deployment Script using Make
 
 ```bash
-cd /path/to/workload-variant-autoscaler
-chmod +x deploy/kubernetes/install.sh
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 That's it! The script will:
+
 1. Check prerequisites
 2. Detect GPU types
-3. Create namespaces
-4. Deploy Prometheus stack
-5. Deploy WVA controller
-6. Deploy llm-d infrastructure
-7. Deploy Prometheus Adapter
-8. Create VariantAutoscaling resources
-9. Deploy HPA
-10. Verify the deployment
+3. Create namespaces  (by default)
+4. Deploy Prometheus stack  (by default)
+5. Deploy WVA controller  (by default)
+6. Deploy llm-d infrastructure  (by default)
+7. Deploy the Prometheus Adapter (by default)
+8. Create the VariantAutoscaling resource for the vLLM deployment  (by default)
+9. Deploy HPA  (by default)
+10. Verify the deployment process
 11. Print a summary with next steps
 
 ## Configuration Options
@@ -78,14 +78,23 @@ That's it! The script will:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `HF_TOKEN` | HuggingFace token (required) | - |
-| `BASE_NAME` | Base name for resources | `inference-scheduling` |
-| `NAMESPACE` | llm-d namespace | `llm-d-$BASE_NAME` |
-| `WVA_NAMESPACE` | WVA controller namespace | `workload-variant-autoscaler-system` |
-| `MONITORING_NAMESPACE` | Prometheus monitoring namespace | `workload-variant-autoscaler-monitoring` |
+| `WELL_LIT_PATH_NAME` | Name of the deployed well-lit path | `inference-scheduling` |
+| `LLMD_NS` | llm-d namespace | `llm-d-$WELL_LIT_PATH_NAME` |
+| `MONITORING_NAMESPACE` | Prometheus monitoring namespace | `openshift-user-workload-monitoring` |
 | `MODEL_ID` | Model to deploy | `unsloth/Meta-Llama-3.1-8B` |
 | `ACCELERATOR_TYPE` | GPU type (auto-detected) | `A100` |
-| `WVA_IMAGE` | WVA controller image | `ghcr.io/llm-d/workload-variant-autoscaler:v0.0.1 |
-| `LLM_D_RELEASE` | llm-d-infra release version | `v1.3.1` |
+| `SLO_TPOT` | Time per Output Token SLO target for the deployed model and GPU type | `9` |
+| `SLO_TTFT` | Time to First Token SLO target for the deployed model and GPU type | `1000` |
+| `WVA_IMAGE_REPO` | WVA controller image base repository | `ghcr.io/llm-d/workload-variant-autoscaler` |
+| `WVA_IMAGE_TAG` | WVA controller image tag | `v0.0.1` |
+| `LLM_D_RELEASE` | llm-d release version | `v0.3.0` |
+| `LLM_D_MODELSERVICE_NAME` | Name of the ModelService deployed by llm-d | `ms-$WELL_LIT_PATH_NAME-llm-d-modelservice-decode` |
+| `PROM_CA_CERT_PATH` | Path for the Prometheus certificate | `/tmp/prometheus-ca.crt` |
+| `VLLM_SVC_ENABLED` | Flag to enable deployment of the Service exposing vLLM Deployment | `true` |
+| `VLLM_SVC_NODEPORT` | Port used as NodePort by the Service | `ms-$WELL_LIT_PATH_NAME-llm-d-modelservice-decode` |
+| `GATEWAY_PROVIDER` | Deployed Gateway API implementation | `istio` |
+| `BENCHMARK_MODE` | Deploying using benchmark configuration for Istio | `true` |
+| `INSTALL_GATEWAY_CTRLPLANE` | Need to install Gateway Control Plane | `false` |
 
 ### Deployment Flags
 
@@ -98,7 +107,7 @@ export DEPLOY_WVA=true                # Deploy WVA controller
 export DEPLOY_LLM_D=true              # Deploy llm-d infrastructure
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
 export DEPLOY_HPA=true                # Deploy HPA
-export USE_VLLM_EMULATOR=false        # Use emulator if no GPUs (auto-detected)
+export DEPLOY_VLLM_EMULATOR=false     # Use emulator if no GPUs (auto-detected)
 export SKIP_CHECKS=false              # Skip prerequisite checks
 ```
 
@@ -108,7 +117,7 @@ export SKIP_CHECKS=false              # Skip prerequisite checks
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Example 2: Custom Model and Namespace
@@ -117,7 +126,7 @@ export HF_TOKEN="hf_xxxxx"
 export HF_TOKEN="hf_xxxxx"
 export BASE_NAME="my-inference"
 export MODEL_ID="meta-llama/Llama-2-7b-hf"
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Example 3: Deploy Only WVA (llm-d Already Deployed)
@@ -125,10 +134,11 @@ export MODEL_ID="meta-llama/Llama-2-7b-hf"
 ```bash
 export DEPLOY_WVA=true
 export DEPLOY_LLM_D=false
-export DEPLOY_PROMETHEUS=false
+export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
+export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
 export DEPLOY_HPA=false
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Example 4: Demo Mode (No GPUs Available)
@@ -136,15 +146,15 @@ export DEPLOY_HPA=false
 ```bash
 export HF_TOKEN="hf_xxxxx"
 export USE_VLLM_EMULATOR=true
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Example 5: Deploy with Different WVA Image
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-export WVA_IMAGE="ghcr.io/yourorg/workload-variant-autoscaler:latest"
-./deploy/kubernetes/install.sh
+export IMG="ghcr.io/yourorg/workload-variant-autoscaler:latest"
+make deploy-wva-on-k8s
 ```
 
 ## Script Features
@@ -172,6 +182,7 @@ export WVA_IMAGE="ghcr.io/yourorg/workload-variant-autoscaler:latest"
 ### Deployment Verification
 
 After deployment, the script verifies:
+
 - WVA controller is running
 - Prometheus stack is deployed
 - llm-d infrastructure is deployed
@@ -182,6 +193,7 @@ After deployment, the script verifies:
 ### Summary Report
 
 Displays:
+
 - All deployed components
 - Resource names and namespaces
 - Next steps and useful commands
@@ -269,6 +281,7 @@ Displays:
 ```
 
 **Solution**: Install missing tools:
+
 ```bash
 # Using package manager
 sudo apt-get install helm kubectl  # Debian/Ubuntu
@@ -284,6 +297,7 @@ brew install helm kubectl          # macOS
 ```
 
 **Solution**: Check kubectl configuration:
+
 ```bash
 kubectl cluster-info
 kubectl get nodes
@@ -296,6 +310,7 @@ kubectl get nodes
 ```
 
 **Solution**: Set your HuggingFace token:
+
 ```bash
 export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
 ```
@@ -303,6 +318,7 @@ export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
 ### GPUs Not Visible to Kubernetes
 
 **Symptoms**:
+
 ```bash
 [WARNING] No GPUs visible to Kubernetes
 vLLM pods: Pending
@@ -310,6 +326,7 @@ Reason: Insufficient nvidia.com/gpu
 ```
 
 **Diagnosis**:
+
 ```bash
 # Check if GPUs exist on host
 nvidia-smi
@@ -321,6 +338,7 @@ kubectl get nodes -o json | jq '.items[].status.allocatable["nvidia.com/gpu"]'
 **Solution**:
 
 **Option 1**: Install NVIDIA GPU Operator
+
 ```bash
 helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
 helm repo update
@@ -330,14 +348,16 @@ helm install --wait --generate-name \
 ```
 
 **Option 2**: Install NVIDIA Device Plugin
+
 ```bash
 kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
 ```
 
 **Option 3**: Use Emulator Mode (for demo/testing)
+
 ```bash
 export USE_VLLM_EMULATOR=true
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 **Note for KIND clusters**: KIND (Kubernetes IN Docker) requires special configuration for GPU passthrough. Consider using a real Kubernetes cluster or emulator mode.
@@ -345,12 +365,14 @@ export USE_VLLM_EMULATOR=true
 ### Metrics Not Available After Deployment
 
 **Wait 1-2 minutes** for:
+
 - vLLM pods to start
 - Prometheus to scrape metrics
 - Prometheus Adapter to process them
 - External metrics API to update
 
 **Check metrics availability**:
+
 ```bash
 # Check WVA logs
 kubectl logs -n workload-variant-autoscaler-system -l control-plane=controller-manager --tail=50
@@ -366,12 +388,14 @@ curl http://localhost:8200/metrics | grep vllm:
 ### vLLM Pods Not Starting
 
 **Check logs**:
+
 ```bash
 kubectl logs -n llm-d-inference-scheduling deployment/ms-inference-scheduling-llm-d-modelservice-decode
 kubectl describe pod -n llm-d-inference-scheduling -l llm-d.ai/model
 ```
 
 **Common issues**:
+
 - Insufficient GPU resources
 - HuggingFace token invalid/expired
 - Model download timeout
@@ -380,17 +404,20 @@ kubectl describe pod -n llm-d-inference-scheduling -l llm-d.ai/model
 ### ServiceMonitor Not Scraping
 
 **Verify ServiceMonitor exists**:
+
 ```bash
 kubectl get servicemonitor -n workload-variant-autoscaler-monitoring
 ```
 
 **Check Prometheus targets**:
+
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-prometheus 9090:9090
 # Visit http://localhost:9090/targets
 ```
 
 **Verify service selector matches**:
+
 ```bash
 kubectl get servicemonitor vllm-servicemonitor -n workload-variant-autoscaler-monitoring -o yaml
 kubectl get svc -n llm-d-inference-scheduling --show-labels
@@ -491,6 +518,7 @@ EOF
 ```
 
 Watch the autoscaling:
+
 ```bash
 # Watch VariantAutoscaling status update
 kubectl get variantautoscaling -n llm-d-inference-scheduling -w
@@ -507,7 +535,7 @@ kubectl get pods -n llm-d-inference-scheduling -w
 To remove all deployed components:
 
 ```bash
-./deploy/kubernetes/install.sh cleanup
+make undeploy-wva-on-k8s
 ```
 
 Or manually:
@@ -555,8 +583,6 @@ kubectl get variantautoscaling -n llm-d-inference-scheduling
 # Example output:
 # NAME        MODEL           ACCELERATOR  CURRENT  OPTIMIZED  METRICSREADY  AGE
 # my-variant  llama-3-8b      A100         2        3          True          5m
-#                                                               ^^^^
-#                                                          NEW COLUMN!
 ```
 
 ### Viewing Detailed Conditions
@@ -592,6 +618,7 @@ When metrics are unavailable, you'll see structured logs like:
 ```
 
 This means:
+
 - WVA is working correctly
 - Detecting no metrics available
 - Skipping optimization gracefully
@@ -680,14 +707,14 @@ vLLM Pods:           llm-d-inference-scheduling
 # Use existing Prometheus
 export DEPLOY_PROMETHEUS=false
 export PROMETHEUS_URL="https://my-prometheus.monitoring.svc:9090"
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Deploy to Specific Cluster Context
 
 ```bash
 kubectl config use-context my-cluster
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ### Debug Mode
@@ -705,7 +732,7 @@ kubectl set env deployment/workload-variant-autoscaler-controller-manager \
 export WVA_IMAGE="ghcr.io/yourorg/workload-variant-autoscaler:custom-tag"
 export DEPLOY_LLM_D=false  # Don't redeploy llm-d
 export DEPLOY_PROMETHEUS=false  # Don't redeploy Prometheus
-./deploy/kubernetes/install.sh
+make deploy-wva-on-k8s
 ```
 
 ## Performance Tuning
@@ -765,4 +792,3 @@ For issues or questions:
 2. Check WVA and llm-d logs
 3. Review `docs/metrics-health-monitoring.md` for metrics issues
 4. Open an issue on GitHub
-

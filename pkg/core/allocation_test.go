@@ -14,7 +14,7 @@ func setupCompleteTestSystem() {
 		servers:          make(map[string]*Server),
 		models:           make(map[string]*Model),
 		serviceClasses:   make(map[string]*ServiceClass),
-		capacity:         make(map[string]int),
+		capacity:         make(map[string]int32),
 		allocationByType: make(map[string]*AllocationByType),
 	}
 
@@ -100,7 +100,7 @@ func TestAllocation_Getters(t *testing.T) {
 		{
 			name:     "NumReplicas",
 			getter:   func() any { return alloc.NumReplicas() },
-			expected: 1,
+			expected: int32(1),
 		},
 		{
 			name:     "MaxBatchSize",
@@ -157,7 +157,7 @@ func TestAllocation_Setters(t *testing.T) {
 			name:     "SetNumReplicas",
 			setter:   func() { alloc.SetNumReplicas(5) },
 			getter:   func() any { return alloc.NumReplicas() },
-			expected: 5,
+			expected: int32(5),
 		},
 		{
 			name:     "SetMaxBatchSize",
@@ -534,8 +534,8 @@ func TestAllocationDiff_NilHandling(t *testing.T) {
 		b               *Allocation
 		wantOldAcc      string
 		wantNewAcc      string
-		wantOldReplicas int
-		wantNewReplicas int
+		wantOldReplicas int32
+		wantNewReplicas int32
 	}{
 		{
 			name:            "nil to allocation",
@@ -788,7 +788,7 @@ func TestAllocation_Scale(t *testing.T) {
 		serverName string
 		setupFunc  func() // Custom setup for scaling scenarios
 		wantAlloc  bool
-		wantInc    int
+		wantInc    int32
 	}{
 		{
 			name:       "nonexistent server",
@@ -976,7 +976,7 @@ func TestZeroLoadAllocation(t *testing.T) {
 		acc           *Accelerator
 		perf          *config.ModelAcceleratorPerfData
 		wantAccel     string
-		wantReplicas  int
+		wantReplicas  int32
 		wantBatchSize int
 		wantCost      float32
 	}{
@@ -988,7 +988,7 @@ func TestZeroLoadAllocation(t *testing.T) {
 			},
 			model: &Model{
 				name:         "test-model",
-				numInstances: map[string]int{},
+				numInstances: map[string]int32{},
 			},
 			acc: &Accelerator{
 				name: "test-gpu",
@@ -1020,7 +1020,7 @@ func TestZeroLoadAllocation(t *testing.T) {
 			},
 			model: &Model{
 				name: "test-model",
-				numInstances: map[string]int{
+				numInstances: map[string]int32{
 					"test-gpu": 1,
 				},
 			},
@@ -1054,7 +1054,7 @@ func TestZeroLoadAllocation(t *testing.T) {
 			},
 			model: &Model{
 				name: "test-model",
-				numInstances: map[string]int{
+				numInstances: map[string]int32{
 					"test-gpu": 2,
 				},
 			},
@@ -1151,7 +1151,7 @@ func TestZeroLoadAllocation_EdgeCases(t *testing.T) {
 				minNumReplicas: 1,
 			},
 			model: &Model{
-				numInstances: make(map[string]int),
+				numInstances: make(map[string]int32),
 			},
 			acc: &Accelerator{
 				name: "test-gpu",

@@ -14,26 +14,6 @@ Package v1alpha1 contains API Schema definitions for the llmd v1alpha1 API group
 
 
 
-#### AcceleratorProfile
-
-
-
-AcceleratorProfile defines the configuration for an accelerator used in autoscaling.
-It specifies the type and count of accelerator, as well as parameters for scaling behavior.
-
-
-
-_Appears in:_
-- [ModelProfile](#modelprofile)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `acc` _string_ | Acc specifies the type or name of the accelerator (e.g., GPU type). |  | MinLength: 1 <br /> |
-| `accCount` _integer_ | AccCount specifies the number of accelerator units to be used. |  | Minimum: 1 <br /> |
-| `perfParms` _[PerfParms](#perfparms)_ | PerParms specifies the prefill and decode parameters for ttft and itl models |  |  |
-| `maxBatchSize` _integer_ | MaxBatchSize is the maximum batch size supported by the accelerator. |  | Minimum: 1 <br /> |
-
-
 #### ActuationStatus
 
 
@@ -54,7 +34,9 @@ _Appears in:_
 
 
 
-Allocation describes the current resource allocation for a model variant.
+Allocation describes the current resource allocation for this variant.
+Note: In single-variant architecture, variantID, accelerator, maxBatch, and variantCost
+are not needed here as they are already defined in the parent VariantAutoscaling spec.
 
 
 
@@ -63,13 +45,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `accelerator` _string_ | Accelerator is the type of accelerator currently allocated. |  | MinLength: 1 <br /> |
 | `numReplicas` _integer_ | NumReplicas is the number of replicas currently allocated. |  | Minimum: 0 <br /> |
-| `maxBatch` _integer_ | MaxBatch is the maximum batch size currently allocated. |  | Minimum: 0 <br /> |
-| `variantCost` _string_ | VariantCost is the cost associated with the current variant allocation. |  | Pattern: `^\d+(\.\d+)?$` <br /> |
-| `itlAverage` _string_ | ITLAverage is the average inter token latency for the current allocation. |  | Pattern: `^\d+(\.\d+)?$` <br /> |
-| `ttftAverage` _string_ | TTFTAverage is the average time to first token for the current allocation |  | Pattern: `^\d+(\.\d+)?$` <br /> |
-| `load` _[LoadProfile](#loadprofile)_ | Load describes the workload characteristics for the current allocation. |  |  |
 
 
 #### ConfigMapKeyRef
@@ -89,48 +65,13 @@ _Appears in:_
 | `key` _string_ | Key is the key within the ConfigMap. |  | MinLength: 1 <br /> |
 
 
-#### LoadProfile
-
-
-
-LoadProfile represents the configuration for workload characteristics,
-including the rate of incoming requests (ArrivalRate) and the average
-length of each request (AvgLength). Both fields are specified as strings
-to allow flexible input formats.
-
-
-
-_Appears in:_
-- [Allocation](#allocation)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `arrivalRate` _string_ | ArrivalRate is the rate of incoming requests in inference server. |  |  |
-| `avgInputTokens` _string_ | AvgInputTokens is the average number of input(prefill) tokens per request in inference server. |  |  |
-| `avgOutputTokens` _string_ | AvgOutputTokens is the average number of output(decode) tokens per request in inference server. |  |  |
-
-
-#### ModelProfile
-
-
-
-ModelProfile provides resource and performance characteristics for the model variant.
-
-
-
-_Appears in:_
-- [VariantAutoscalingSpec](#variantautoscalingspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `accelerators` _[AcceleratorProfile](#acceleratorprofile) array_ | Accelerators is a list of accelerator profiles for the model variant. |  | MinItems: 1 <br /> |
-
-
 #### OptimizedAlloc
 
 
 
 OptimizedAlloc describes the target optimized allocation for a model variant.
+Note: In single-variant architecture, variantID and accelerator are not needed here
+as they are already defined in the parent VariantAutoscaling spec.
 
 
 
@@ -140,7 +81,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `lastRunTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#time-v1-meta)_ | LastRunTime is the timestamp of the last optimization run. |  |  |
-| `accelerator` _string_ | Accelerator is the type of accelerator for the optimized allocation. |  | MinLength: 2 <br /> |
 | `numReplicas` _integer_ | NumReplicas is the number of replicas for the optimized allocation. |  | Minimum: 0 <br /> |
 
 
@@ -148,17 +88,17 @@ _Appears in:_
 
 
 
-
+PerfParms contains performance parameters for the variant.
 
 
 
 _Appears in:_
-- [AcceleratorProfile](#acceleratorprofile)
+- [VariantProfile](#variantprofile)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `decodeParms` _object (keys:string, values:string)_ | DecodeParms contains parameters for the decode phase (ITL calculation)<br />Expected keys: "alpha", "beta" for equation: itl = alpha + beta * maxBatchSize |  | MinProperties: 1 <br /> |
-| `prefillParms` _object (keys:string, values:string)_ | PrefillParms contains parameters for the prefill phase (TTFT calculation)<br />Expected keys: "gamma", "delta" for equation: ttft = gamma + delta * tokens * maxBatchSize |  | MinProperties: 1 <br /> |
+| `decodeParms` _object (keys:string, values:string)_ | DecodeParms contains parameters for the decode phase (ITL calculation).<br />Expected keys: "alpha", "beta" for equation: itl = alpha + beta * maxBatchSize |  | MinProperties: 1 <br /> |
+| `prefillParms` _object (keys:string, values:string)_ | PrefillParms contains parameters for the prefill phase (TTFT calculation).<br />Expected keys: "gamma", "delta" for equation: ttft = gamma + delta * tokens * maxBatchSize |  | MinProperties: 1 <br /> |
 
 
 #### VariantAutoscaling
@@ -218,48 +158,23 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `modelID` _string_ | ModelID specifies the unique identifier of the model to be autoscaled. |  | MinLength: 1 <br />Required: \{\} <br /> |
+| `variantID` _string_ | VariantID uniquely identifies this variant (model + accelerator + acceleratorCount combination).<br />This is a business identifier that may contain slashes, dots, and mixed case.<br />Format: \{modelID\}-\{accelerator\}-\{acceleratorCount\}<br />Example: "meta/llama-3.1-8b-A100-4" or "model-H100-SXM4-80GB-2"<br />The accelerator portion supports alphanumeric characters, hyphens, and underscores<br />to accommodate complex GPU names like "H100-SXM", "A100_80GB", etc.<br />Note: VariantID (variant_id) is distinct from the VariantAutoscaling resource name (variant_name):<br />  - variant_id (this field): Business identifier, may contain non-K8s-compliant characters<br />  - variant_name (resource.Name): Kubernetes resource name (DNS-1123 compliant)<br />Both identifiers are exposed as Prometheus labels for flexible querying:<br />  - Use variant_name to query by Kubernetes resource (typically matches Deployment name)<br />  - Use variant_id to query by business identifier (model/variant naming) |  | MinLength: 1 <br />Pattern: `^.+-[A-Za-z0-9_-]+-[1-9][0-9]*$` <br />Required: \{\} <br /> |
+| `accelerator` _string_ | Accelerator specifies the accelerator type for this variant (e.g., "A100", "L40S"). |  | MinLength: 1 <br />Required: \{\} <br /> |
+| `acceleratorCount` _integer_ | AcceleratorCount specifies the number of accelerator units per replica. |  | Minimum: 1 <br />Required: \{\} <br /> |
 | `sloClassRef` _[ConfigMapKeyRef](#configmapkeyref)_ | SLOClassRef references the ConfigMap key containing Service Level Objective (SLO) configuration. |  | Required: \{\} <br /> |
-| `modelProfile` _[ModelProfile](#modelprofile)_ | ModelProfile provides resource and performance characteristics for the model variant. |  | Required: \{\} <br /> |
-
-**Scale-to-Zero Configuration:**
-
-Scale-to-zero configuration is managed per-model using a ConfigMap named `model-scale-to-zero-config` in the `workload-variant-autoscaler-system` namespace. This allows multiple variants with different accelerators for the same model to share the same scale-to-zero behavior.
-
-Configure scale-to-zero with the following structure:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: model-scale-to-zero-config
-  namespace: workload-variant-autoscaler-system
-data:
-  # Global defaults for all models (recommended)
-  "__defaults__": '{"enableScaleToZero": true, "retentionPeriod": "15m"}'
-
-  # Per-model overrides
-  "model-id": '{"enableScaleToZero": true, "retentionPeriod": "5m"}'
-```
-
-Configuration fields:
-- **enableScaleToZero** (boolean): Enables scale-to-zero for this model
-- **retentionPeriod** (string, optional): Duration to wait after the last request before scaling to zero (e.g., "5m", "1h", "30s"). Defaults to 10 minutes if not specified.
-
-Configuration priority (highest to lowest):
-1. Per-model configuration (specific modelID)
-2. Global defaults (`"__defaults__"` key in ConfigMap)
-3. `WVA_SCALE_TO_ZERO` environment variable
-4. System default (disabled, 10-minute retention)
-
-See `config/samples/model-scale-to-zero-config.yaml` for a complete example.
+| `variantProfile` _[VariantProfile](#variantprofile)_ | VariantProfile provides performance characteristics for this variant. |  | Required: \{\} <br /> |
+| `variantCost` _string_ | VariantCost specifies the cost per replica for this variant configuration.<br />This is a static characteristic of the variant (cost rate), not runtime cost.<br />Total cost can be calculated as: VariantCost * NumReplicas<br />If not specified, defaults to "10".<br />Note: When running multiple variants with different costs, it is recommended to explicitly<br />set this field for accurate cost comparisons. A warning will be logged if the default is used. | 10 | Pattern: `^\d+(\.\d+)?$` <br /> |
+| `minReplicas` _integer_ | MinReplicas specifies the minimum number of replicas for this variant.<br />The optimizer will never scale below this value.<br />If not specified, defaults to 0.<br />Warning: Setting minReplicas > 0 for multiple variants may lead to unnecessary GPU utilization.<br />Warning: Setting minReplicas > 0 prevents the model from scaling to zero even if scaleToZero is enabled. | 0 | Minimum: 0 <br /> |
+| `maxReplicas` _integer_ | MaxReplicas specifies the maximum number of replicas for this variant.<br />The optimizer will never scale above this value.<br />If not specified, no upper bound is enforced (unlimited scaling). |  | Minimum: 1 <br /> |
 
 
 #### VariantAutoscalingStatus
 
 
 
-VariantAutoscalingStatus represents the current status of autoscaling for a variant,
-including the current allocation, desired optimized allocation, and actuation status.
+VariantAutoscalingStatus represents the current status of autoscaling for this specific variant.
+Since each VariantAutoscaling CR represents a single variant, status contains singular allocation
+fields rather than arrays.
 
 
 
@@ -268,9 +183,26 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `currentAlloc` _[Allocation](#allocation)_ | CurrentAlloc specifies the current resource allocation for the variant. |  |  |
+| `currentAlloc` _[Allocation](#allocation)_ | CurrentAlloc specifies the current resource allocation for this variant. |  |  |
 | `desiredOptimizedAlloc` _[OptimizedAlloc](#optimizedalloc)_ | DesiredOptimizedAlloc indicates the target optimized allocation based on autoscaling logic. |  |  |
 | `actuation` _[ActuationStatus](#actuationstatus)_ | Actuation provides details about the actuation process and its current status. |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#condition-v1-meta) array_ | Conditions represent the latest available observations of the VariantAutoscaling's state |  |  |
+
+
+#### VariantProfile
+
+
+
+VariantProfile provides performance characteristics for a specific variant.
+
+
+
+_Appears in:_
+- [VariantAutoscalingSpec](#variantautoscalingspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `perfParms` _[PerfParms](#perfparms)_ | PerfParms specifies the prefill and decode parameters for TTFT and ITL models. |  | Required: \{\} <br /> |
+| `maxBatchSize` _integer_ | MaxBatchSize is the maximum batch size supported by this variant. |  | Minimum: 1 <br />Required: \{\} <br /> |
 
 

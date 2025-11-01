@@ -298,10 +298,13 @@ spec:
       serverAddress: https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090
       
       # Use inferno_desired_replicas as the scaling metric
+      # IMPORTANT: Query must include all 4 labels that the controller emits
       query: |
         inferno_desired_replicas{
           variant_name="vllme-deployment",
-          exported_namespace="llm-d-sim"
+          exported_namespace="llm-d-sim",
+          accelerator_type="A100",
+          variant_id="default/default-A100-1"
         }
 
       # Scaling configuration for inferno_desired_replicas metric (integer values)

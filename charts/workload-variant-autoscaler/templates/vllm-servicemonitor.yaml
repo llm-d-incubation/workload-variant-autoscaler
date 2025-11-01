@@ -3,13 +3,13 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: vllm-servicemonitor
-  namespace: {{ .Values.wva.monitoringNamespace }}
+  namespace: {{ .Values.wva.prometheus.monitoringNamespace }}
   labels:
-    llm-d.ai/model: {{ .Values.wva.modelName }}
+    llm-d.ai/model: {{ .Values.llmd.modelName }}
 spec:
   selector:
     matchLabels:
-      llm-d.ai/model: {{ .Values.wva.modelName }}
+      llm-d.ai/model: {{ .Values.llmd.modelName }}
   endpoints:
   - port: vllm
     path: /metrics

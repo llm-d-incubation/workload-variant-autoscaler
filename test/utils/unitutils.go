@@ -14,13 +14,23 @@ import (
 
 // The following utility functions are used to create Prometheus queries for testing
 func CreateArrivalQuery(modelID, namespace string) string {
-	return fmt.Sprintf(`sum(rate(%s{%s="%s",%s="%s"}[1m])) * 60`,
+	return fmt.Sprintf(`sum(rate(%s{%s="%s",%s="%s"}[1m]))`,
 		constants.VLLMRequestSuccessTotal,
 		constants.LabelModelName, modelID,
 		constants.LabelNamespace, namespace)
 }
 
-func CreateTokenQuery(modelID, namespace string) string {
+func CreatePromptToksQuery(modelID, namespace string) string {
+	return fmt.Sprintf(`sum(rate(%s{%s="%s",%s="%s"}[1m]))/sum(rate(%s{%s="%s",%s="%s"}[1m]))`,
+		constants.VLLMRequestPromptTokensSum,
+		constants.LabelModelName, modelID,
+		constants.LabelNamespace, namespace,
+		constants.VLLMRequestPromptTokensCount,
+		constants.LabelModelName, modelID,
+		constants.LabelNamespace, namespace)
+}
+
+func CreateDecToksQuery(modelID, namespace string) string {
 	return fmt.Sprintf(`sum(rate(%s{%s="%s",%s="%s"}[1m]))/sum(rate(%s{%s="%s",%s="%s"}[1m]))`,
 		constants.VLLMRequestGenerationTokensSum,
 		constants.LabelModelName, modelID,
@@ -30,12 +40,12 @@ func CreateTokenQuery(modelID, namespace string) string {
 		constants.LabelNamespace, namespace)
 }
 
-func CreateWaitQuery(modelID, namespace string) string {
+func CreateTTFTQuery(modelID, namespace string) string {
 	return fmt.Sprintf(`sum(rate(%s{%s="%s",%s="%s"}[1m]))/sum(rate(%s{%s="%s",%s="%s"}[1m]))`,
-		constants.VLLMRequestQueueTimeSecondsSum,
+		constants.VLLMTimeToFirstTokenSecondsSum,
 		constants.LabelModelName, modelID,
 		constants.LabelNamespace, namespace,
-		constants.VLLMRequestQueueTimeSecondsCount,
+		constants.VLLMTimeToFirstTokenSecondsCount,
 		constants.LabelModelName, modelID,
 		constants.LabelNamespace, namespace)
 }
@@ -119,6 +129,7 @@ func CreateVariantAutoscalingConfigMap(cmName, controllerNamespace string) *core
 			"GLOBAL_OPT_INTERVAL": "60s",
 			"GLOBAL_OPT_TRIGGER":  "false",
 			"WVA_SCALE_TO_ZERO":   "false",
+			"DISABLING_TTFT":      "false", // TODO: this will be removed in future releases once llm-d-sim supports TTFT metrics
 		},
 	}
 }

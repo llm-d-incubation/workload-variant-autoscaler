@@ -49,9 +49,9 @@ EOF
 cd $WVA_PROJECT/charts
 helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
   -n $WVA_NS \
-  --set-file prometheus.caCert=/tmp/prometheus-ca.crt \
-  --set variantAutoscaling.accelerator=L40S \
-  --set variantAutoscaling.modelID=unsloth/Meta-Llama-3.1-8B \
+  --set-file wva.prometheus.caCert=/tmp/prometheus-ca.crt \
+  --set va.accelerator=L40S \
+  --set llmd.modelID=unsloth/Meta-Llama-3.1-8B \
   --set vllmService.enabled=true \
   --set vllmService.nodePort=30000
 ```

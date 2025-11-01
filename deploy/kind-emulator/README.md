@@ -7,7 +7,7 @@ Quick start guide for local development using Kind (Kubernetes in Docker) with e
 - Docker
 - Kind
 - kubectl
-- Helm (optional, but recommended)
+- Helm
 
 ## Quick Start
 
@@ -17,19 +17,47 @@ Deploy WVA with full llm-d infrastructure:
 
 ```bash
 # From project root
-make deploy-llm-d-inferno-emulated-on-kind
+make deploy-llm-d-wva-emulated-on-kind
 ```
 
 This creates:
+
 - Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
 - WVA controller
 - llm-d infrastructure (simulation mode)
 - Prometheus monitoring
 - vLLM emulator
 
+## Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HF_TOKEN` | HuggingFace token (required) | - |
+| `WELL_LIT_PATH_NAME` | Name of the deployed well-lit path | `inference-scheduling` |
+| `LLMD_NS` | llm-d namespace | `llm-d-$WELL_LIT_PATH_NAME` |
+| `MONITORING_NAMESPACE` | Prometheus monitoring namespace | `openshift-user-workload-monitoring` |
+| `MODEL_ID` | Model to deploy | `unsloth/Meta-Llama-3.1-8B` |
+| `ACCELERATOR_TYPE` | GPU type (auto-detected) | `H100` |
+| `SLO_TPOT` | Time per Output Token SLO target for the deployed model and GPU type | `9` |
+| `SLO_TTFT` | Time to First Token SLO target for the deployed model and GPU type | `1000` |
+| `WVA_IMAGE_REPO` | WVA controller image base repository | `ghcr.io/llm-d/workload-variant-autoscaler` |
+| `WVA_IMAGE_TAG` | WVA controller image tag | `v0.0.1` |
+| `LLM_D_RELEASE` | llm-d release version | `v0.3.0` |
+| `LLM_D_MODELSERVICE_NAME` | Name of the ModelService deployed by llm-d | `ms-$WELL_LIT_PATH_NAME-llm-d-modelservice-decode` |
+| `PROM_CA_CERT_PATH` | Path for the Prometheus certificate | `/tmp/prometheus-ca.crt` |
+| `VLLM_SVC_ENABLED` | Flag to enable deployment of the Service exposing vLLM Deployment | `true` |
+| `VLLM_SVC_NODEPORT` | Port used as NodePort by the Service | `ms-$WELL_LIT_PATH_NAME-llm-d-modelservice-decode` |
+| `GATEWAY_PROVIDER` | Deployed Gateway API implementation | `kgateway` |
+| `INSTALL_GATEWAY_CTRLPLANE` | Need to install Gateway Control Plane | `false` |
+
+*Note*: the emulated environment currently uses the `llm-d-infra v1.3.1` release, using kgateway, for retrocompatibility with vLLM-emulator. This will change once the `llm-d-inference-sim` implements the required metrics needed for scaling with WVA. For more information, see this [issue](https://github.com/llm-d/llm-d-inference-sim/issues/211).
+
 ### Step-by-Step Setup
 
 **1. Create Kind cluster:**
+
 ```bash
 make create-kind-cluster
 
@@ -41,11 +69,19 @@ make create-kind-cluster KIND_ARGS="-t mix -n 4 -g 2"
 ```
 
 **2. Deploy WVA only:**
+
 ```bash
-make deploy-wva-emulated-on-kind
+export DEPLOY_WVA=true
+export DEPLOY_LLM_D=false
+export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
+export VLLM_SVC_ENABLED=true
+export DEPLOY_PROMETHEUS_ADAPTER=false
+export DEPLOY_HPA=false
+make deploy-llm-d-wva-emulated-on-kind
 ```
 
-**3. Deploy with llm-d:**
+**3. Deploy with llm-d (by default):**
+
 ```bash
 make deploy-llm-d-wva-emulated-on-kind
 ```
@@ -61,6 +97,7 @@ Creates Kind cluster with emulated GPU support.
 ```
 
 **Options:**
+
 - `-t`: Vendor type (nvidia|amd|intel|mix) - default: mix
 - `-n`: Number of nodes - default: 3
 - `-g`: GPUs per node - default: 2
@@ -114,32 +151,37 @@ nodes:
 ```
 
 GPUs are emulated using extended resources:
+
 - `nvidia.com/gpu`
 - `amd.com/gpu`
 - `intel.com/gpu`
 
 ## Testing Locally
 
-### 1. Access Services
+### 1. Access metrics, Services and Pods
 
 **Port-forward WVA metrics:**
+
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-system \
   svc/workload-variant-autoscaler-controller-manager-metrics 8080:8080
 ```
 
 **Port-forward Prometheus:**
+
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-monitoring \
   svc/prometheus-operated 9090:9090
 ```
 
 **Port-forward vLLM emulator:**
+
 ```bash
 kubectl port-forward -n llm-d-sim svc/vllme-service 8000:80
 ```
 
 **Port-forward Inference Gateway:**
+
 ```bash
 kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80
 ```
@@ -187,7 +229,7 @@ kubectl logs -n workload-variant-autoscaler-system \
 
 ```bash
 # Clean up and retry
-kind delete cluster --name kind-inferno-gpu-cluster
+kind delete cluster --name kind-wva-gpu-cluster
 make create-kind-cluster
 ```
 
@@ -228,20 +270,27 @@ kubectl get pods -n <namespace>
 
 1. **Make code changes**
 2. **Build new image:**
+
    ```bash
    make docker-build IMG=localhost:5000/wva:dev
    ```
+
 3. **Load image to Kind:**
+
    ```bash
    kind load docker-image localhost:5000/wva:dev --name kind-inferno-gpu-cluster
    ```
+
 4. **Update deployment:**
+
    ```bash
    kubectl set image deployment/workload-variant-autoscaler-controller-manager \
      -n workload-variant-autoscaler-system \
      manager=localhost:5000/wva:dev
    ```
+
 5. **Verify changes:**
+
    ```bash
    kubectl logs -n workload-variant-autoscaler-system \
      deployment/workload-variant-autoscaler-controller-manager -f
@@ -250,16 +299,25 @@ kubectl get pods -n <namespace>
 ## Clean Up
 
 **Remove deployments:**
+
 ```bash
-make undeploy-llm-d-inferno-emulated-on-kind
+make undeploy-llm-d-wva-emulated-on-kind
+```
+
+**Remove deployments and delete the Kind cluster:**
+
+```bash
+make undeploy-llm-d-wva-emulated-on-kind-delete-cluster
 ```
 
 **Destroy cluster:**
+
 ```bash
 make destroy-kind-cluster
 ```
 
 **Or use scripts directly:**
+
 ```bash
 ./undeploy-llm-d.sh
 ./teardown.sh
@@ -270,4 +328,3 @@ make destroy-kind-cluster
 - [Run E2E tests](../../docs/developer-guide/testing.md#e2e-tests)
 - [Development Guide](../../docs/developer-guide/development.md)
 - [Testing Guide](../../docs/developer-guide/testing.md)
-

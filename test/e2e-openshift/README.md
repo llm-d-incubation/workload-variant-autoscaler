@@ -103,13 +103,52 @@ The `sharegpt_scaleup_test.go` test performs the following steps:
 
 ### Run All OpenShift E2E Tests
 
+##### Default Arguments:
+
+
+```bash
+CONTROLLER_NAMESPACE = workload-variant-autoscaler-system
+MONITORING_NAMESPACE = openshift-user-workload-monitoring
+LLMD_NAMESPACE       = llm-d-inference-scheduling
+GATEWAY_NAME         = infra-inference-scheduling-inference-gateway
+MODEL_ID             = unsloth/Meta-Llama-3.1-8B
+DEPLOYMENT           = ms-inference-scheduling-llm-d-modelservice-decode
+REQUEST_RATE         = 20
+NUM_PROMPTS          = 3000
+```
+
+
+#### Example 1: Using Default Arguments
+
+
 ```bash
 make test-e2e-openshift
 ```
 
-or
+
+#### Example 2: Using Custom Arguments
 
 ```bash
+make test-e2e-openshift \
+LLMD_NAMESPACE=llmd-stack \
+DEPLOYMENT=unsloth--00171c6f-a-3-1-8b-decode \
+GATEWAY_NAME=infra-llmd-inference-gateway \
+REQUEST_RATE=20 \
+NUM_PROMPTS=3000
+```
+
+#### Example 3: Using GO Directly Using Default Arguments
+```bash
+go test ./test/e2e-openshift/... -v -ginkgo.v -timeout 30m
+```
+
+#### Example 4: Using GO Directly Using Custom Arguments
+```bash
+export LLMD_NAMESPACE=llmd-stack
+export DEPLOYMENT=unsloth--00171c6f-a-3-1-8b-decode
+export GATEWAY_NAME=infra-llmd-inference-gateway
+export REQUEST_RATE=8
+export NUM_PROMPTS=2000
 go test ./test/e2e-openshift/... -v -ginkgo.v -timeout 30m
 ```
 

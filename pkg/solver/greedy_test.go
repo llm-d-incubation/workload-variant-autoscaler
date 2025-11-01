@@ -307,7 +307,7 @@ func TestSolver_SolveGreedy_BasicAllocation(t *testing.T) {
 
 func TestBestEffort_None(t *testing.T) {
 	entries := []*serverEntry{}
-	available := map[string]int{"GPU_A100": 4}
+	available := map[string]int32{"GPU_A100": 4}
 
 	bestEffort(entries, available, "None")
 
@@ -319,7 +319,7 @@ func TestBestEffort_None(t *testing.T) {
 
 func TestAllocateEqually_EmptyEntries(t *testing.T) {
 	entries := []*serverEntry{}
-	available := map[string]int{"GPU_A100": 4}
+	available := map[string]int32{"GPU_A100": 4}
 
 	allocateEqually(entries, available)
 
@@ -981,7 +981,7 @@ func TestAllocateMaximally_EdgeCases(t *testing.T) {
 
 	// Test with empty server entries
 	t.Run("EmptyServerEntries", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -996,7 +996,7 @@ func TestAllocateMaximally_EdgeCases(t *testing.T) {
 
 	// Test with server entries but no valid allocations
 	t.Run("InvalidAllocations", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1020,7 +1020,7 @@ func TestAllocateMaximally_EdgeCases(t *testing.T) {
 
 	// Test with valid server but no accelerator resources
 	t.Run("NoAvailableResources", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 0, // No resources available
 			"GPU_H100": 0,
 		}
@@ -1057,7 +1057,7 @@ func TestAllocateMaximally_EdgeCases(t *testing.T) {
 
 	// Test maximal allocation scenario
 	t.Run("MaximalAllocation", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 8, // Plenty of resources
 			"GPU_H100": 4,
 		}
@@ -1086,7 +1086,7 @@ func TestAllocateMaximally_EdgeCases(t *testing.T) {
 			},
 		}
 
-		initialAvailable := map[string]int{}
+		initialAvailable := map[string]int32{}
 		for k, v := range available {
 			initialAvailable[k] = v
 		}
@@ -1117,7 +1117,7 @@ func TestAllocateEqually_EdgeCases(t *testing.T) {
 
 	// Test with empty server entries
 	t.Run("EmptyServerEntries", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1132,7 +1132,7 @@ func TestAllocateEqually_EdgeCases(t *testing.T) {
 
 	// Test with server entries but no allocations
 	t.Run("ServerWithNoAllocations", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1154,7 +1154,7 @@ func TestAllocateEqually_EdgeCases(t *testing.T) {
 		}
 	}) // Test round-robin allocation behavior with limited resources
 	t.Run("RoundRobinWithLimitedResources", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 2, // Limited resources to test round-robin behavior
 			"GPU_H100": 1,
 		}
@@ -1242,7 +1242,7 @@ func TestAllocateEqually_EdgeCases(t *testing.T) {
 
 	// Test allocation with multiple rounds of round-robin
 	t.Run("MultipleRoundRobinRounds", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 6, // Enough for multiple rounds
 			"GPU_H100": 3,
 		}
@@ -1311,7 +1311,7 @@ func TestAllocateEqually_TicketManagement(t *testing.T) {
 
 	// Test that tickets are properly managed throughout the allocation process
 	t.Run("TicketLifecycle", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1367,7 +1367,7 @@ func TestAllocateEqually_TicketManagement(t *testing.T) {
 
 	// Test ticket removal when no resources available
 	t.Run("TicketRemovalOnResourceExhaustion", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 0, // No resources
 			"GPU_H100": 0,
 		}
@@ -1410,7 +1410,7 @@ func TestBestEffort(t *testing.T) {
 
 	// Test bestEffort function with various conditions to improve its coverage
 	t.Run("BestEffortWithMultipleEntries", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 3,
 			"GPU_H100": 2,
 		}
@@ -1471,7 +1471,7 @@ func TestBestEffort(t *testing.T) {
 
 		for _, policy := range policies {
 			t.Run(policy, func(t *testing.T) {
-				available := map[string]int{
+				available := map[string]int32{
 					"GPU_A100": 2,
 					"GPU_H100": 1,
 				}
@@ -1532,7 +1532,7 @@ func TestAllocate_ComprehensiveCoverage(t *testing.T) {
 
 	// Test allocate with empty entries
 	t.Run("EmptyEntries", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1545,7 +1545,7 @@ func TestAllocate_ComprehensiveCoverage(t *testing.T) {
 
 	// Test allocate with entries that have no allocations
 	t.Run("EntriesWithNoAllocations", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1569,7 +1569,7 @@ func TestAllocate_ComprehensiveCoverage(t *testing.T) {
 
 	// Test allocate with nonexistent server (tests server == nil branch)
 	t.Run("NonexistentServerAndInvalidRefs", func(t *testing.T) {
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 4,
 			"GPU_H100": 2,
 		}
@@ -1605,7 +1605,7 @@ func TestAllocate_ComprehensiveCoverage(t *testing.T) {
 		// Since system setup is complex, we'll test higher-level behavior
 		// The allocate function requires valid servers, models, accelerators to work
 		// For now, let's focus on testing the resource depletion logic with empty entries
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 10,
 			"GPU_H100": 10,
 		}
@@ -1628,7 +1628,7 @@ func TestAllocate_ComprehensiveCoverage(t *testing.T) {
 	t.Run("ResourceExhaustionWithReordering", func(t *testing.T) {
 		setupTestSystemForGreedy()
 
-		available := map[string]int{
+		available := map[string]int32{
 			"GPU_A100": 0, // No resources available to force else branch
 			"GPU_H100": 0,
 		}

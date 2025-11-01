@@ -12,4 +12,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: prometheus-adapter
-    namespace: {{ .Values.wva.monitoringNamespace }}
+    namespace: {{ .Values.wva.prometheus.monitoringNamespace }}

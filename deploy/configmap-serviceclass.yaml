@@ -11,6 +11,9 @@ data:
       - model: default/default
         slo-tpot: 24
         slo-ttft: 500
+      - model: test-scale-to-zero-model
+        slo-tpot: 24
+        slo-ttft: 500
       - model: meta/llama0-70b
         slo-tpot: 80
         slo-ttft: 500

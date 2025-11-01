@@ -10,7 +10,7 @@ roleRef:
   name: workload-variant-autoscaler-metrics-auth-role
 subjects:
 # Bind the Prometheus service account to the metrics auth role
-# This allows Prometheus to access Inferno's secure HTTPS metrics endpoint
+# This allows Prometheus to access WVA's secure HTTPS metrics endpoint
 - kind: ServiceAccount
   name: kube-prometheus-stack-prometheus
-  namespace: workload-variant-autoscaler-monitoring 
+  namespace: {{ .Values.wva.prometheus.monitoringNamespace }}

@@ -56,8 +56,8 @@ func (g *Accelerator) Cost() float32 {
 	return g.spec.Cost
 }
 
-func (g *Accelerator) Multiplicity() int {
-	return g.spec.Multiplicity
+func (g *Accelerator) Multiplicity() int32 {
+	return int32(g.spec.Multiplicity)
 }
 
 func (g *Accelerator) MemSize() int {

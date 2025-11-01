@@ -23,25 +23,63 @@ NC='\033[0m' # No Color
 
 # Configuration
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
-BASE_NAME=${BASE_NAME:-"inference-scheduling"}
-NAMESPACE=${NAMESPACE:-"llm-d-$BASE_NAME"}
+WELL_LIT_PATH_NAME=${WELL_LIT_PATH_NAME:-"inference-scheduling"}
+
+# Namespaces
+LLMD_NS=${LLMD_NS:-"llm-d-$WELL_LIT_PATH_NAME"}
 MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"workload-variant-autoscaler-monitoring"}
-WVA_NAMESPACE=${WVA_NAMESPACE:-"workload-variant-autoscaler-system"}
-WVA_IMAGE=${WVA_IMAGE:-"ghcr.io/llm-d/workload-variant-autoscaler:v0.0.1"}
-LLM_D_OWNER=${LLM_D_OWNER:-"llm-d-incubation"}
-LLM_D_PROJECT=${LLM_D_PROJECT:-"llm-d-infra"}
-LLM_D_RELEASE=${LLM_D_RELEASE:-"v1.3.1"}
-MODEL_ID=${MODEL_ID:-"unsloth/Meta-Llama-3.1-8B"}  # Use unsloth version to avoid gated model issues
+WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
+
+# WVA Configuration
+WVA_IMAGE_REPO=${WVA_IMAGE_REPO:-"ghcr.io/llm-d/workload-variant-autoscaler"}
+WVA_IMAGE_TAG=${WVA_IMAGE_TAG:-"v0.0.2"}
+WVA_IMAGE_PULL_POLICY=${WVA_IMAGE_PULL_POLICY:-"Always"}
+VLLM_SVC_ENABLED=${VLLM_SVC_ENABLED:-true}
+VLLM_SVC_NODEPORT=${VLLM_SVC_NODEPORT:-30000}
+
+# llm-d Configuration
+LLM_D_OWNER=${LLM_D_OWNER:-"llm-d"}
+LLM_D_PROJECT=${LLM_D_PROJECT:-"llm-d"}
+LLM_D_RELEASE=${LLM_D_RELEASE:-"v0.3.0"}
+LLM_D_MODELSERVICE_NAME=${LLM_D_MODELSERVICE_NAME:-"ms-$WELL_LIT_PATH_NAME-llm-d-modelservice"}
+VLLM_EMULATOR_NAME=${VLLM_EMULATOR_NAME:-"vllm-emulator"}
+CLIENT_PREREQ_DIR=${CLIENT_PREREQ_DIR:-"$WVA_PROJECT/$LLM_D_PROJECT/guides/prereq/client-setup"}
+GATEWAY_PREREQ_DIR=${GATEWAY_PREREQ_DIR:-"$WVA_PROJECT/$LLM_D_PROJECT/guides/prereq/gateway-provider"}
+EXAMPLE_DIR=${EXAMPLE_DIR:-"$WVA_PROJECT/$LLM_D_PROJECT/guides/$WELL_LIT_PATH_NAME"}
+
+# Gateway Configuration
+GATEWAY_PROVIDER=${GATEWAY_PROVIDER:-"kgateway"} # Options: kgateway, istio
+BENCHMARK_MODE=${BENCHMARK_MODE:-"false"} # if true, updates to Istio config for benchmark
+INSTALL_GATEWAY_CTRLPLANE=${INSTALL_GATEWAY_CTRLPLANE:-"true"} # if true, installs gateway control plane providers - defaults to true for emulated clusters
+
+# Model and SLO Configuration
+DEFAULT_MODEL_ID=${DEFAULT_MODEL_ID:-"Qwen/Qwen3-0.6B"}
+MODEL_ID=${MODEL_ID:-"unsloth/Meta-Llama-3.1-8B"}
 ACCELERATOR_TYPE=${ACCELERATOR_TYPE:-"A100"}
+SLO_TPOT=${SLO_TPOT:-10}  # Target time-per-output-token SLO (in ms)
+SLO_TTFT=${SLO_TTFT:-1000}  # Target time-to-first-token SLO (in ms)
+
+# Prometheus Configuration
+PROM_CA_CERT_PATH=${PROM_CA_CERT_PATH:-"/tmp/prometheus-ca.crt"}
+PROMETHEUS_BASE_URL=${PROMETHEUS_BASE_URL:-"https://kube-prometheus-stack-prometheus.$MONITORING_NAMESPACE.svc.cluster.local"}
+PROMETHEUS_PORT=${PROMETHEUS_PORT:-"9090"}
+PROMETHEUS_URL=${PROMETHEUS_URL:-"$PROMETHEUS_BASE_URL:$PROMETHEUS_PORT"}
+PROMETHEUS_SECRET_NAME=${PROMETHEUS_SECRET_NAME:-"prometheus-web-tls"}
 
 # Flags for deployment steps
 DEPLOY_PROMETHEUS=${DEPLOY_PROMETHEUS:-true}
 DEPLOY_WVA=${DEPLOY_WVA:-true}
 DEPLOY_LLM_D=${DEPLOY_LLM_D:-true}
 DEPLOY_PROMETHEUS_ADAPTER=${DEPLOY_PROMETHEUS_ADAPTER:-true}
+DEPLOY_VA=${DEPLOY_VA:-true}
 DEPLOY_HPA=${DEPLOY_HPA:-true}
-USE_VLLM_EMULATOR=${USE_VLLM_EMULATOR:-false}  # Set to true if no GPUs available
+DEPLOY_VLLM_EMULATOR=${DEPLOY_VLLM_EMULATOR:-false}  # Set to true if no GPUs available
+APPLY_VLLM_EMULATOR_FIXES=${APPLY_VLLM_EMULATOR_FIXES:-false}
 SKIP_CHECKS=${SKIP_CHECKS:-false}
+
+# Undeployment flags
+UNDEPLOY=${UNDEPLOY:-false}
+DELETE_NAMESPACES=${DELETE_NAMESPACES:-false}
 
 # Helper functions
 log_info() {
@@ -58,6 +96,90 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+    exit 1
+}
+
+print_help() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+This script deploys the complete Workload-Variant-Autoscaler stack on a
+Kubernetes cluster with real GPUs.
+
+Options:
+  -i, --wva-image IMAGE        Container image to use for the WVA (default: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG)
+  -m, --model MODEL            Model ID to use (default: $MODEL_ID)
+  -a, --accelerator TYPE       Accelerator type: A100, H100, L40S, etc. (default: $ACCELERATOR_TYPE)
+  -u, --undeploy               Undeploy all components
+  -d, --delete-namespaces      Delete namespaces after undeployment
+  -h, --help                   Show this help and exit
+
+Environment Variables:
+  IMG                          Container image to use for the WVA (alternative to -i flag)
+  HF_TOKEN                     HuggingFace token for model access (required for llm-d deployment)
+  DEPLOY_PROMETHEUS            Deploy Prometheus stack (default: true)
+  DEPLOY_WVA                   Deploy WVA controller (default: true)
+  DEPLOY_LLM_D                 Deploy llm-d infrastructure (default: true)
+  DEPLOY_PROMETHEUS_ADAPTER    Deploy Prometheus Adapter (default: true)
+  DEPLOY_VA                    Deploy VariantAutoscaling (default: true)
+  DEPLOY_HPA                   Deploy HPA (default: true)
+  DEPLOY_VLLM_EMULATOR            Use vLLM emulator instead of real vLLM (default: false)
+  UNDEPLOY                     Undeploy mode (default: false)
+  DELETE_NAMESPACES            Delete namespaces after undeploy (default: false)
+
+Examples:
+  # Deploy with default values
+  $(basename "$0")
+
+  # Deploy with custom WVA image
+  IMG=<your_registry>/workload-variant-autoscaler:tag $(basename "$0")
+  
+  # Deploy with custom model and accelerator
+  $(basename "$0") -m unsloth/Meta-Llama-3.1-8B -a A100
+  
+  # Deploy with vLLM emulator (no GPU required)
+  DEPLOY_VLLM_EMULATOR=true $(basename "$0")
+  
+  # Undeploy all components (keep namespaces)
+  $(basename "$0") --undeploy
+  
+  # Undeploy all components and delete namespaces
+  $(basename "$0") --undeploy --delete-namespaces
+EOF
+}
+
+parse_args() {
+  # Check for IMG environment variable (used by Make)
+  if [[ -n "$IMG" ]]; then
+    log_info "Detected IMG environment variable: $IMG"
+    # Split image into repo and tag
+    if [[ "$IMG" == *":"* ]]; then
+      IFS=':' read -r WVA_IMAGE_REPO WVA_IMAGE_TAG <<< "$IMG"
+    else
+      log_warning "IMG has wrong format, using default image"
+    fi
+  fi
+  
+  # Parse command-line arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -i|--wva-image)
+        # Split image into repo and tag - overrides IMG env var
+        if [[ "$2" == *":"* ]]; then
+          IFS=':' read -r WVA_IMAGE_REPO WVA_IMAGE_TAG <<< "$2"
+        else
+          WVA_IMAGE_REPO="$2"
+        fi
+        shift 2
+        ;;
+      -m|--model)             MODEL_ID="$2"; shift 2 ;;
+      -a|--accelerator)       ACCELERATOR_TYPE="$2"; shift 2 ;;
+      -u|--undeploy)          UNDEPLOY=true; shift ;;
+      -d|--delete-namespaces) DELETE_NAMESPACES=true; shift ;;
+      -h|--help)              print_help; exit 0 ;;
+      *)                      log_error "Unknown option: $1"; print_help; exit 1 ;;
+    esac
+  done
 }
 
 check_prerequisites() {
@@ -102,11 +224,11 @@ detect_gpu_type() {
         if nvidia-smi &> /dev/null; then
             log_info "nvidia-smi detected GPUs on host:"
             nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -5
-            log_warning "Install NVIDIA GPU Operator or set USE_VLLM_EMULATOR=true for demo"
+            log_warning "Install NVIDIA GPU Operator or set DEPLOY_VLLM_EMULATOR=true for demo"
         else
             log_warning "No GPUs detected on host either"
-            log_info "Setting USE_VLLM_EMULATOR=true for demo mode"
-            USE_VLLM_EMULATOR=true
+            log_info "Setting DEPLOY_VLLM_EMULATOR=true for demo mode"
+            DEPLOY_VLLM_EMULATOR=true
         fi
     else
         log_success "GPUs visible to Kubernetes: $gpu_count GPU(s) per node"
@@ -136,17 +258,17 @@ detect_gpu_type() {
     fi
     
     export ACCELERATOR_TYPE
-    export USE_VLLM_EMULATOR
-    log_info "Using accelerator type: $ACCELERATOR_TYPE"
-    log_info "Emulator mode: $USE_VLLM_EMULATOR"
+    export DEPLOY_VLLM_EMULATOR
+    log_info "Using detected accelerator type: $ACCELERATOR_TYPE"
+    log_info "Emulator mode: $DEPLOY_VLLM_EMULATOR"
 }
 
 create_namespaces() {
     log_info "Creating namespaces..."
     
-    for ns in $WVA_NAMESPACE $MONITORING_NAMESPACE $NAMESPACE; do
+    for ns in $WVA_NS $MONITORING_NAMESPACE $LLMD_NS; do
         if kubectl get namespace $ns &> /dev/null; then
-            log_warning "Namespace $ns already exists"
+            log_info "Namespace $ns already exists"
         else
             kubectl create namespace $ns
             log_success "Namespace $ns created"
@@ -173,7 +295,7 @@ deploy_prometheus_stack() {
     
     # Create Kubernetes secret with TLS certificate
     log_info "Creating Kubernetes secret for Prometheus TLS"
-    kubectl create secret tls prometheus-web-tls \
+    kubectl create secret tls $PROMETHEUS_SECRET_NAME \
         --cert=/tmp/prometheus-tls.crt \
         --key=/tmp/prometheus-tls.key \
         -n $MONITORING_NAMESPACE \
@@ -189,298 +311,333 @@ deploy_prometheus_stack() {
         --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
         --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
         --set prometheus.service.type=ClusterIP \
-        --set prometheus.service.port=9090 \
-        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.name=prometheus-web-tls \
+        --set prometheus.service.port=$PROMETHEUS_PORT \
+        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.name=$PROMETHEUS_SECRET_NAME \
         --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.key=tls.crt \
-        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.name=prometheus-web-tls \
+        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.name=$PROMETHEUS_SECRET_NAME \
         --set prometheus.prometheusSpec.web.tlsConfig.keySecret.key=tls.key \
         --timeout=5m \
         --wait
     
-    export PROMETHEUS_URL="https://kube-prometheus-stack-prometheus.$MONITORING_NAMESPACE.svc.cluster.local:9090"
     log_success "kube-prometheus-stack deployed with TLS"
     log_info "Prometheus URL: $PROMETHEUS_URL"
 }
 
 deploy_wva_controller() {
     log_info "Deploying Workload-Variant-Autoscaler..."
+    log_info "Using image: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
     
-    # Deploy ConfigMaps
-    log_info "Deploying service classes and accelerator cost ConfigMaps"
-    kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: service-classes-config
-  namespace: $WVA_NAMESPACE
-data:
-  premium.yaml: |
-    name: Premium
-    priority: 1
-    data:
-      - model: $MODEL_ID
-        slo-tpot: 9
-        slo-ttft: 1000
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: accelerator-unit-costs
-  namespace: $WVA_NAMESPACE
-data:
-  $ACCELERATOR_TYPE: |
-    {
-    "device": "NVIDIA-$ACCELERATOR_TYPE-PCIE-40GB",
-    "cost": "40.00"
-    }
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: workload-variant-autoscaler-variantautoscaling-config
-  namespace: $WVA_NAMESPACE
-data:
-  PROMETHEUS_BASE_URL: "$PROMETHEUS_URL"
-  PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "true"
-  GLOBAL_OPT_INTERVAL: "60s"
-  WVA_SCALE_TO_ZERO: "false"
-EOF
+    # Extract Prometheus CA certificate
+    log_info "Extracting Prometheus TLS certificate"
+    kubectl get secret $PROMETHEUS_SECRET_NAME -n $MONITORING_NAMESPACE -o jsonpath='{.data.tls\.crt}' | base64 -d > $PROM_CA_CERT_PATH
+
+    # Deploy WVA using Helm chart
+    log_info "Installing Workload-Variant-Autoscaler via Helm chart"
+    cd "$WVA_PROJECT/charts"
     
-    # Deploy WVA using kustomize with custom image
-    log_info "Deploying WVA controller with image: $WVA_IMAGE"
-    cd $WVA_PROJECT
+    helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
+        -n $WVA_NS \
+        --set-file wva.prometheus.caCert=$PROM_CA_CERT_PATH \
+        --set wva.image.repository=$WVA_IMAGE_REPO \
+        --set wva.image.tag=$WVA_IMAGE_TAG \
+        --set wva.imagePullPolicy=$WVA_IMAGE_PULL_POLICY \
+        --set wva.baseName=$WELL_LIT_PATH_NAME \
+        --set wva.modelName=$LLM_D_MODELSERVICE_NAME \
+        --set va.enabled=$DEPLOY_VA \
+        --set va.accelerator=$ACCELERATOR_TYPE \
+        --set llmd.modelID=$MODEL_ID \
+        --set va.sloTpot=$SLO_TPOT \
+        --set va.sloTtft=$SLO_TTFT \
+        --set hpa.enabled=$DEPLOY_HPA \
+        --set llmd.namespace=$LLMD_NS \
+        --set wva.prometheus.baseURL=$PROMETHEUS_URL \
+        --set wva.prometheus.monitoringNamespace=$MONITORING_NAMESPACE \
+        --set vllmService.enabled=$VLLM_SVC_ENABLED \
+        --set vllmService.nodePort=$VLLM_SVC_NODEPORT
     
-    # Update image in kustomization
-    cd config/manager
-    kustomize edit set image controller=$WVA_IMAGE
-    cd ../..
-    
-    # Deploy
-    kubectl apply -k config/default
-    
-    # Deploy ServiceMonitor for WVA
-    log_info "Deploying ServiceMonitor for WVA"
-    kubectl apply -f - <<EOF
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  labels:
-    app.kubernetes.io/name: workload-variant-autoscaler
-    control-plane: controller-manager
-  name: workload-variant-autoscaler-controller-manager-metrics-monitor
-  namespace: $MONITORING_NAMESPACE
-spec:
-  endpoints:
-  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-    interval: 10s
-    path: /metrics
-    port: https
-    scheme: https
-    tlsConfig:
-      insecureSkipVerify: true
-  namespaceSelector:
-    matchNames:
-    - $WVA_NAMESPACE
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: workload-variant-autoscaler
-      control-plane: controller-manager
-EOF
+    cd "$WVA_PROJECT"
     
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
-    kubectl wait --for=condition=Ready pod -l control-plane=controller-manager -n $WVA_NAMESPACE --timeout=120s || true
+    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=workload-variant-autoscaler -n $WVA_NS --timeout=60s || \
+        log_warning "WVA controller is not ready yet - check 'kubectl get pods -n $WVA_NS'"
     
     log_success "WVA deployment complete"
 }
 
 deploy_llm_d_infrastructure() {
     log_info "Deploying llm-d infrastructure..."
-    
-    # Check for HF_TOKEN
-    if [ -z "$HF_TOKEN" ]; then
-        log_error "HF_TOKEN environment variable is not set"
-        log_info "Please set your HuggingFace token: export HF_TOKEN='your-token-here'"
-        exit 1
+
+     # Clone llm-d repo if not exists
+    if [ ! -d "$LLM_D_PROJECT" ]; then
+        log_info "Cloning $LLM_D_PROJECT repository (release: $LLM_D_RELEASE)"
+        git clone -b $LLM_D_RELEASE -- https://github.com/$LLM_D_OWNER/$LLM_D_PROJECT.git $LLM_D_PROJECT
+    else
+        log_warning "$LLM_D_PROJECT directory already exists, skipping clone"
     fi
+    
+    # Check for HF_TOKEN (use dummy for emulator)
+    export HF_TOKEN=${HF_TOKEN:-"dummy-token"}
     
     # Create HF token secret
     log_info "Creating HuggingFace token secret"
     kubectl create secret generic llm-d-hf-token \
         --from-literal="HF_TOKEN=${HF_TOKEN}" \
-        --namespace "${NAMESPACE}" \
+        --namespace "${LLMD_NS}" \
         --dry-run=client -o yaml | kubectl apply -f -
-    
-    # Clone llm-d-infra if not exists
-    cd $(dirname $WVA_PROJECT)
-    if [ ! -d "$LLM_D_PROJECT" ]; then
-        log_info "Cloning llm-d-infra repository (release: $LLM_D_RELEASE)"
-        git clone -b $LLM_D_RELEASE -- https://github.com/$LLM_D_OWNER/$LLM_D_PROJECT.git $LLM_D_PROJECT
-    else
-        log_warning "llm-d-infra directory already exists, using existing"
-    fi
     
     # Install dependencies
     log_info "Installing llm-d dependencies"
-    cd $LLM_D_PROJECT/quickstart
-    bash dependencies/install-deps.sh
-    bash gateway-control-plane-providers/install-gateway-provider-dependencies.sh
-    
-    # Install Gateway provider (kgateway v2.0.3)
-    log_info "Installing kgateway v2.0.3"
-    if command -v yq &> /dev/null; then
-        yq eval '.releases[].version = "v2.0.3"' -i "gateway-control-plane-providers/kgateway.helmfile.yaml"
+    bash $CLIENT_PREREQ_DIR/install-deps.sh
+    bash $GATEWAY_PREREQ_DIR/install-gateway-provider-dependencies.sh
+
+    # Install Gateway provider (if kgateway, use v2.0.3)
+    if [ "$GATEWAY_PROVIDER" == "kgateway" ]; then
+        log_info "Installing $GATEWAY_PROVIDER v2.0.3"
+        yq eval '.releases[].version = "v2.0.3"' -i "$GATEWAY_PREREQ_DIR/$GATEWAY_PROVIDER.helmfile.yaml"
     fi
-    helmfile apply -f "gateway-control-plane-providers/kgateway.helmfile.yaml"
-    
-    # Configure llm-d for Kubernetes
+
+    # Install Gateway control plane if enabled
+    if [[ "$INSTALL_GATEWAY_CTRLPLANE" == "true" ]]; then
+        log_info "Installing Gateway control plane ($GATEWAY_PROVIDER)"
+        helmfile apply -f "$GATEWAY_PREREQ_DIR/$GATEWAY_PROVIDER.helmfile.yaml"
+    else
+        log_info "Skipping Gateway control plane installation (INSTALL_GATEWAY_CTRLPLANE=false)"
+    fi
+
+    # Configure benchmark mode for Istio if enabled
+    if [[ "$BENCHMARK_MODE" == "true" ]]; then
+      log_info "Benchmark mode enabled - using benchmark configuration for Istio"
+      GATEWAY_PROVIDER="istioBench"
+    fi
+
+    # Configure llm-d infrastructure
     log_info "Configuring llm-d infrastructure"
-    if command -v yq &> /dev/null; then
-        yq eval '.gateway.service.type = "ClusterIP"' -i ../charts/llm-d-infra/values.yaml
-    fi
     
-    export EXAMPLES_DIR="../quickstart/examples/$BASE_NAME"
-    cd $EXAMPLES_DIR
-    sed -i.bak "s/llm-d-inference-scheduler/$NAMESPACE/g" helmfile.yaml.gotmpl
-    
-    # Update model in values.yaml to use unsloth version (avoids gated model issues)
-    if command -v yq &> /dev/null; then
-        yq eval "(.. | select(. == \"Qwen/Qwen3-0.6B\")) = \"$MODEL_ID\" | (.. | select(. == \"hf://Qwen/Qwen3-0.6B\")) = \"hf://$MODEL_ID\"" -i ms-$BASE_NAME/values.yaml
-    else
-        # Fallback to sed if yq is not available
-        sed -i 's|Qwen/Qwen3-0.6B|'"$MODEL_ID"'|g' ms-$BASE_NAME/values.yaml
-        sed -i 's|hf://Qwen/Qwen3-0.6B|hf://'"$MODEL_ID"'|g' ms-$BASE_NAME/values.yaml
-    fi
-    
-    # Also remove modelName from routing section to avoid schema validation errors
-    if command -v yq &> /dev/null; then
-        yq eval 'del(.routing.modelName)' -i ms-$BASE_NAME/values.yaml
-    else
-        sed -i '/^routing:/,/^[^ ]/{/modelName:/d;}' ms-$BASE_NAME/values.yaml
-    fi
-    
+    cd $EXAMPLE_DIR
+
     # Deploy llm-d core components
     log_info "Deploying llm-d core components"
-    helmfile apply -e kgateway
+    helmfile apply -e $GATEWAY_PROVIDER -n ${LLMD_NS}
+    kubectl apply -f httproute.yaml -n ${LLMD_NS}
+
+    log_info "Configuring llm-d infrastructure"
     
-    # Deploy vLLM Service
-    log_info "Deploying vLLM Service"
-    kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllm-service
-  namespace: $NAMESPACE
-  labels:
-    llm-d.ai/model: ms-$BASE_NAME-llm-d-modelservice
-spec:
-  selector:
-    llm-d.ai/model: ms-$BASE_NAME-llm-d-modelservice
-  ports:
-    - name: vllm
-      port: 8200
-      protocol: TCP
-      targetPort: 8200
-  type: ClusterIP
-EOF
+    cd $EXAMPLE_DIR
+    sed -i.bak "s/llm-d-inference-scheduler/$LLMD_NS/g" helmfile.yaml.gotmpl
+
+    if [ "$MODEL_ID" != "$DEFAULT_MODEL_ID" ]; then
+        log_info "Updating deployment to use model: $MODEL_ID"
+        yq eval "(.. | select(. == \"$DEFAULT_MODEL_ID\")) = \"$MODEL_ID\" | (.. | select(. == \"hf://$DEFAULT_MODEL_ID\")) = \"hf://$MODEL_ID\"" -i ms-$WELL_LIT_PATH_NAME/values.yaml
+
+        # Increase model-storage volume size
+        log_info "Increasing model-storage volume size for model: $MODEL_ID"
+        yq eval '.modelArtifacts.size = "30Gi"' -i ms-$WELL_LIT_PATH_NAME/values.yaml
+    fi
+
+    # Deploy llm-d core components
+    log_info "Deploying llm-d core components"
+    helmfile apply -e $GATEWAY_PROVIDER -n ${LLMD_NS}
+    kubectl apply -f httproute.yaml -n ${LLMD_NS}
+
+    if [ "$GATEWAY_PROVIDER" == "kgateway" ]; then
+        log_info "Patching kgateway service to NodePort"
+        export GATEWAY_NAME="infra-inference-scheduling-inference-gateway"
+        kubectl patch gatewayparameters.gateway.kgateway.dev $GATEWAY_NAME \
+        -n $LLMD_NS \
+        --type='merge' \
+        -p '{"spec":{"kube":{"service":{"type":"NodePort"}}}}'
+    fi
+
+    # Edit GAIE image for ARM64 architecture if needed
+    # TODO: remove once multi-arch image is available in llm-d
+    if [ "$ARCH" == "aarch64" ] || [ "$ARCH" == "arm64" ]; then
+        log_info "Patching EPP image for ARM64 architecture"
+        kubectl patch deployment gaie-$WELL_LIT_PATH_NAME-epp \
+            -n $LLMD_NS \
+            --type='json' \
+            -p="[{'op':'replace','path':'/spec/template/spec/containers/0/image','value':'$GAIE_IMAGE_ARM64'}]"
+    fi
     
-    # Deploy ServiceMonitor for vLLM
-    log_info "Deploying ServiceMonitor for vLLM"
-    kubectl apply -f - <<EOF
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: vllm-servicemonitor
-  namespace: $MONITORING_NAMESPACE
-  labels:
-    llm-d.ai/model: ms-$BASE_NAME-llm-d-modelservice
-spec:
-  selector:
-    matchLabels:
-      llm-d.ai/model: ms-$BASE_NAME-llm-d-modelservice
-  endpoints:
-  - port: vllm
-    path: /metrics
-    interval: 15s
-  namespaceSelector:
-    any: true
-EOF
+    log_info "Waiting for llm-d components to initialize..."
+    kubectl wait --for=condition=Available deployment --all -n $LLMD_NS --timeout=60s || \
+        log_warning "llm-d components are not ready yet - check 'kubectl get pods -n $LLMD_NS'"
     
-    # Apply EPP ConfigMap fix (disable prefix-cache-scorer)
-    log_info "Applying EPP ConfigMap fix"
-    kubectl apply -f - <<EOF
-apiVersion: v1
-data:
-  default-plugins.yaml: |
-    apiVersion: inference.networking.x-k8s.io/v1alpha1
-    kind: EndpointPickerConfig
-    plugins:
-    - type: low-queue-filter
-      parameters:
-        threshold: 128
-    - type: lora-affinity-filter
-      parameters:
-        threshold: 0.999
-    - type: least-queue-filter
-    - type: least-kv-cache-filter
-    - type: random-picker
-      parameters:
-        maxNumOfEndpoints: 1
-    - type: single-profile-handler
-    schedulingProfiles:
-    - name: default
-      plugins:
-      - pluginRef: low-queue-filter
-      - pluginRef: least-queue-filter
-      - pluginRef: random-picker
-  plugins-v2.yaml: |
-    apiVersion: inference.networking.x-k8s.io/v1alpha1
-    kind: EndpointPickerConfig
-    plugins:
-    - type: queue-scorer
-    - type: kv-cache-scorer
-    - type: max-score-picker
-      parameters:
-        maxNumOfEndpoints: 1
-    - type: single-profile-handler
-    schedulingProfiles:
-    - name: default
-      plugins:
-      - pluginRef: queue-scorer
-        weight: 1
-      - pluginRef: kv-cache-scorer
-        weight: 1
-      - pluginRef: max-score-picker
-kind: ConfigMap
-metadata:
-  annotations:
-    meta.helm.sh/release-name: gaie-$BASE_NAME
-    meta.helm.sh/release-namespace: $NAMESPACE
-  labels:
-    app.kubernetes.io/managed-by: Helm
-  name: gaie-$BASE_NAME-epp
-  namespace: $NAMESPACE
-EOF
-    
-    # Restart EPP deployment
-    kubectl rollout restart deployment gaie-$BASE_NAME-epp -n $NAMESPACE 2>/dev/null || true
-    
-    cd $WVA_PROJECT
+    cd "$WVA_PROJECT"
     log_success "llm-d infrastructure deployment complete"
 }
 
 deploy_vllm_emulator() {
     log_info "Deploying vLLM Metrics Emulator (No GPU required)..."
+
+    if [ "$VLLM_SVC_ENABLED" == "true" ]; then
+        log_info "Deleting default vLLM Service and ServiceMonitor to avoid conflicts..."
+        kubectl delete vllm-service -n "$LLMD_NS" || \
+            log_warning "Failed to delete default vLLM Service"
+        kubectl delete servicemonitor -n "$MONITORING_NAMESPACE" || \
+            log_warning "Failed to delete default vLLM ServiceMonitor"
+    fi
     
-    kubectl apply -f $WVA_PROJECT/deploy/examples/vllm-emulator/vllme-setup/vllme-deployment-with-service-and-servicemon.yaml
+    # Create vLLM emulator deployment
+    log_info "Creating vLLM emulator deployment..."
+    kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $VLLM_EMULATOR_NAME-decode
+  namespace: $LLMD_NS
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: $VLLM_EMULATOR_NAME
+      llm-d.ai/inferenceServing: "true"
+      llm-d.ai/model: $LLM_D_MODELSERVICE_NAME
+  template:
+    metadata:
+      labels:
+        app: $VLLM_EMULATOR_NAME
+        llm-d.ai/inferenceServing: "true"
+        llm-d.ai/model: $LLM_D_MODELSERVICE_NAME
+    spec:
+      containers:
+      - name: $VLLM_EMULATOR_NAME
+        image: quay.io/infernoautoscaler/vllme:0.2.3-multi-arch
+        imagePullPolicy: Always
+        env: 
+        - name: MODEL_NAME
+          value: "$MODEL_ID"
+        - name: DECODE_TIME
+          value: "20"        # In milliseconds, e.g., 20ms per token decode
+        - name: PREFILL_TIME
+          value: "20"        # In milliseconds, e.g., 20ms for prefill
+        - name: MODEL_SIZE
+          value: "25000"     # In MB, e.g., 25GB model size
+        - name: KVC_PER_TOKEN
+          value: "2"         # In MB, e.g., 2MB per token for KV cache
+        - name: MAX_SEQ_LEN
+          value: "2048"      # Max sequence length
+        - name: MEM_SIZE
+          value: "80000"     # Total device memory in MB, e.g., 80GB
+        - name: AVG_TOKENS
+          value: "128"       # Average generated tokens
+        - name: TOKENS_DISTRIBUTION
+          value: "deterministic"   # "uniform", "normal", "deterministic"
+        - name: MAX_BATCH_SIZE
+          value: "8"         # Max concurrent requests in a batch 
+        - name: REALTIME
+          value: "True"      # Boolean: "True" or "False"
+        - name: MUTE_PRINT
+          value: "False"     # Boolean: "True" or "False"
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: 500m
+            memory: 1Gi
+            nvidia.com/gpu: "1"  # Limit to 1 GPU (emulated)
+          requests:
+            cpu: 100m
+            memory: 500Mi
+            nvidia.com/gpu: "1"  # Request 1 GPU (emulated)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: $VLLM_EMULATOR_NAME-service
+  namespace: $LLMD_NS
+  labels:
+    app: $VLLM_EMULATOR_NAME
+    llm-d.ai/inferenceServing: "true"
+spec:
+  selector:
+    app: $VLLM_EMULATOR_NAME
+    llm-d.ai/inferenceServing: "true"
+  ports:
+    - name: $VLLM_EMULATOR_NAME
+      port: 80
+      protocol: TCP
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: $VLLM_EMULATOR_NAME-servicemonitor
+  namespace: $MONITORING_NAMESPACE
+  labels:
+    app: $VLLM_EMULATOR_NAME
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: $VLLM_EMULATOR_NAME
+  endpoints:
+  - port: $VLLM_EMULATOR_NAME
+    path: /metrics
+    interval: 15s
+  namespaceSelector:
+    matchNames:
+    - $LLMD_NS
+EOF
     
-    # Update the deployment to match our model and namespace
-    kubectl patch deployment -n $NAMESPACE -l llm-d.ai/model=ms-$BASE_NAME-llm-d-modelservice \
-        --type json \
-        -p '[{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name":"MODEL_NAME","value":"'$MODEL_ID'"}}]' \
-        2>/dev/null || log_warning "Could not patch vLLM emulator deployment"
+    log_info "Waiting for vLLM emulator to be ready..."
+    kubectl wait --for=condition=available deployment/$VLLM_EMULATOR_NAME-decode -n "$LLMD_NS" --timeout=120s || \
+        log_warning "vLLM emulator deployment may still be starting"
     
     log_success "vLLM Emulator deployment complete"
+}
+
+# TODO: remove once we move to llm-d-inference-simulator
+apply_vllm_emulator_fixes() {
+    log_info "Applying vLLM emulator integration fixes..."
+        
+    # Patch InferencePool to target vLLM emulator port
+    kubectl get inferencepool "gaie-$WELL_LIT_PATH_NAME" -n "$LLMD_NS" &> /dev/null || \
+        log_warning "InferencePool 'gaie-$WELL_LIT_PATH_NAME' not found"
+
+    log_info "Patching InferencePool to target vLLM emulator port 80..."
+    kubectl patch inferencepool "gaie-$WELL_LIT_PATH_NAME" -n "$LLMD_NS" --type='merge' \
+        -p '{"spec":{"targetPortNumber":80}}' || log_warning "Failed to patch InferencePool"
+    
+    log_success "InferencePool patched successfully"
+    
+    # Delete default ModelService deployments - using vLLM emulator
+    log_info "Deleting default ModelService deployments..."
+    kubectl delete deployments.apps \
+        $LLM_D_MODELSERVICE_NAME-decode \
+        $LLM_D_MODELSERVICE_NAME-prefill \
+        --ignore-not-found -n "$LLMD_NS"
+    
+    # Restart EPP deployment to pick up ConfigMap changes
+    log_info "Restarting EPP deployment..."
+    kubectl rollout restart deployment gaie-$WELL_LIT_PATH_NAME-epp -n $LLMD_NS 2>/dev/null || \
+        log_warning "Could not restart EPP deployment"
+
+    if [ "$DEPLOY_INFERENCE_MODEL" == "true" ]; then
+      log_info "Creating InferenceModel for vLLM emulator..."
+      kubectl apply -f - <<EOF
+apiVersion: inference.networking.x-k8s.io/v1alpha2
+kind: InferenceModel
+metadata:
+  name: $VLLM_EMULATOR_NAME
+  namespace: $LLMD_NS
+spec:
+  modelName: $MODEL_ID
+  criticality: Critical  
+  poolRef:
+    name: gaie-$WELL_LIT_PATH_NAME
+  targetModels:
+    - name: $MODEL_ID
+      weight: 100
+EOF
+    log_success "InferenceModel created successfully"
+
+    else
+        log_info "Skipping InferenceModel creation (DEPLOY_INFERENCE_MODEL=false)"
+    fi
+    
+    log_success "vLLM emulator integration fixes applied"
 }
 
 deploy_prometheus_adapter() {
@@ -493,7 +650,7 @@ deploy_prometheus_adapter() {
     
     # Extract Prometheus CA certificate and create ConfigMap
     log_info "Creating prometheus-ca ConfigMap for TLS verification"
-    kubectl get secret prometheus-web-tls -n $MONITORING_NAMESPACE -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
+    kubectl get secret $PROMETHEUS_SECRET_NAME -n $MONITORING_NAMESPACE -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
     
     # Create or update prometheus-ca ConfigMap
     kubectl create configmap prometheus-ca --from-file=ca.crt=/tmp/prometheus-ca.crt -n $MONITORING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
@@ -501,10 +658,10 @@ deploy_prometheus_adapter() {
     log_success "prometheus-ca ConfigMap created/updated"
     
     # Create prometheus-adapter values for Kubernetes
-    cat > /tmp/prometheus-adapter-values-k8s.yaml <<'YAML'
+    cat > /tmp/prometheus-adapter-values-k8s.yaml <<EOF
 prometheus:
-  url: https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local
-  port: 9090
+  url: $PROMETHEUS_BASE_URL
+  port: $PROMETHEUS_PORT
 
 rules:
   external:
@@ -549,10 +706,7 @@ securityContext:
   runAsUser: null
   seccompProfile:
     type: RuntimeDefault
-YAML
-    
-    # Update with actual monitoring namespace
-    sed -i "s/workload-variant-autoscaler-monitoring/$MONITORING_NAMESPACE/g" /tmp/prometheus-adapter-values-k8s.yaml
+EOF
     
     # Deploy Prometheus Adapter
     log_info "Installing Prometheus Adapter via Helm"
@@ -570,84 +724,6 @@ YAML
     log_success "Prometheus Adapter deployment initiated (may still be starting)"
 }
 
-create_variant_autoscaling() {
-    log_info "Creating VariantAutoscaling resource..."
-    
-    kubectl apply -f - <<EOF
-apiVersion: llmd.ai/v1alpha1
-kind: VariantAutoscaling
-metadata:
-  name: ms-$BASE_NAME-llm-d-modelservice-decode 
-  namespace: $NAMESPACE
-  labels:
-    inference.optimization/acceleratorName: $ACCELERATOR_TYPE
-spec:
-  modelID: "$MODEL_ID"
-  sloClassRef:
-    name: service-classes-config
-    key: premium.yaml
-  modelProfile:
-    accelerators:
-      - acc: "$ACCELERATOR_TYPE"
-        accCount: 1
-        perfParms: 
-          decodeParms:
-            alpha: "6.958"
-            beta: "0.042"
-          prefillParms:
-            gamma: "5.2"
-            delta: "0.1"
-        maxBatchSize: 512
-EOF
-    
-    log_success "VariantAutoscaling resource created"
-}
-
-deploy_hpa() {
-    log_info "Deploying HorizontalPodAutoscaler..."
-    
-    kubectl apply -f - <<EOF
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: vllm-deployment-hpa
-  namespace: $NAMESPACE
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: ms-$BASE_NAME-llm-d-modelservice-decode
-  maxReplicas: 10
-  minReplicas: 1
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 0
-      policies:
-      - type: Pods
-        value: 10
-        periodSeconds: 15
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-      - type: Pods
-        value: 1
-        periodSeconds: 60
-  metrics:
-  - type: External
-    external:
-      metric:
-        name: inferno_desired_replicas
-        selector:
-          matchLabels:
-            variant_name: ms-$BASE_NAME-llm-d-modelservice-decode
-      target:
-        type: AverageValue
-        averageValue: "1"
-EOF
-    
-    log_success "HPA deployment complete"
-}
-
 verify_deployment() {
     log_info "Verifying deployment..."
     
@@ -656,67 +732,71 @@ verify_deployment() {
     # Check WVA pods
     log_info "Checking WVA controller pods..."
     sleep 10
-    if kubectl get pods -n $WVA_NAMESPACE -l control-plane=controller-manager 2>/dev/null | grep -q Running; then
+    if kubectl get pods -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler 2>/dev/null | grep -q Running; then
         log_success "WVA controller is running"
     else
-        log_error "WVA controller is not running"
+        log_warning "WVA controller may still be starting"
         all_good=false
     fi
     
     # Check Prometheus
-    log_info "Checking Prometheus..."
-    if kubectl get pods -n $MONITORING_NAMESPACE -l app.kubernetes.io/name=prometheus 2>/dev/null | grep -q Running; then
-        log_success "Prometheus is running"
-    else
-        log_warning "Prometheus may still be starting"
+    if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
+        log_info "Checking Prometheus..."
+        if kubectl get pods -n $MONITORING_NAMESPACE -l app.kubernetes.io/name=prometheus 2>/dev/null | grep -q Running; then
+            log_success "Prometheus is running"
+        else
+            log_warning "Prometheus may still be starting"
+        fi
     fi
     
     # Check llm-d infrastructure
     if [ "$DEPLOY_LLM_D" = "true" ]; then
         log_info "Checking llm-d infrastructure..."
-        if kubectl get deployment -n $NAMESPACE 2>/dev/null | grep -q gaie; then
+        if kubectl get deployment -n $LLMD_NS 2>/dev/null | grep -q gaie; then
             log_success "llm-d infrastructure deployed"
         else
             log_warning "llm-d infrastructure may still be deploying"
         fi
-    fi
-    
-    # Check VariantAutoscaling
-    log_info "Checking VariantAutoscaling resource..."
-    if kubectl get variantautoscaling ms-$BASE_NAME-llm-d-modelservice-decode -n $NAMESPACE &> /dev/null; then
-        log_success "VariantAutoscaling resource exists"
         
-        # Show the status with new MetricsReady column
-        log_info "VariantAutoscaling Status:"
-        kubectl get variantautoscaling -n $NAMESPACE -o wide
-    else
-        log_error "VariantAutoscaling resource not found"
-        all_good=false
-    fi
-    
-    # Check HPA
-    if [ "$DEPLOY_HPA" = "true" ]; then
-        log_info "Checking HPA..."
-        if kubectl get hpa vllm-deployment-hpa -n $NAMESPACE &> /dev/null; then
-            log_success "HPA exists"
-        else
-            log_warning "HPA not found"
+        # Check for vLLM emulator if enabled
+        if [ "$DEPLOY_VLLM_EMULATOR" = "true" ]; then
+            if kubectl get deployment $LLM_D_MODELSERVICE_NAME-decode -n $LLMD_NS &> /dev/null; then
+                log_success "vLLM emulator deployment exists"
+            else
+                log_warning "vLLM emulator deployment not found"
+                all_good=false
+            fi
         fi
     fi
     
-    # Check ServiceMonitors
-    log_info "Checking ServiceMonitors..."
-    local sm_count=$(kubectl get servicemonitor -n $MONITORING_NAMESPACE 2>/dev/null | grep -E "(vllm|workload-variant)" | wc -l)
-    if [ "$sm_count" -gt 0 ]; then
-        log_success "ServiceMonitors deployed in $MONITORING_NAMESPACE"
-    else
-        log_warning "ServiceMonitors not found"
+    # Check VariantAutoscaling deployed by WVA Helm chart
+    if [ "$DEPLOY_VA" = "true" ]; then
+        log_info "Checking VariantAutoscaling resource..."
+        if kubectl get variantautoscaling -n $LLMD_NS &> /dev/null; then
+            local va_count=$(kubectl get variantautoscaling -n $LLMD_NS --no-headers 2>/dev/null | wc -l)
+            if [ "$va_count" -gt 0 ]; then
+                log_success "VariantAutoscaling resource(s) found"
+                kubectl get variantautoscaling -n $LLMD_NS -o wide
+            fi
+        else
+            log_info "No VariantAutoscaling resources deployed yet (will be created by Helm chart)"
+        fi
+    fi
+    
+    # Check Prometheus Adapter
+    if [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
+        log_info "Checking Prometheus Adapter..."
+        if kubectl get pods -n $MONITORING_NAMESPACE -l app.kubernetes.io/name=prometheus-adapter 2>/dev/null | grep -q Running; then
+            log_success "Prometheus Adapter is running"
+        else
+            log_warning "Prometheus Adapter may still be starting"
+        fi
     fi
     
     if [ "$all_good" = true ]; then
         log_success "All components verified successfully!"
     else
-        log_warning "Some components failed verification. Check the logs above."
+        log_warning "Some components may still be starting. Check the logs above."
     fi
 }
 
@@ -726,126 +806,280 @@ print_summary() {
     echo " Deployment Summary"
     echo "=========================================="
     echo ""
-    echo "WVA Namespace:          $WVA_NAMESPACE"
-    echo "LLMD Namespace:         $NAMESPACE"
+    echo "WVA Namespace:          $WVA_NS"
+    echo "LLMD Namespace:         $LLMD_NS"
     echo "Monitoring Namespace:   $MONITORING_NAMESPACE"
     echo "Model:                  $MODEL_ID"
     echo "Accelerator:            $ACCELERATOR_TYPE"
-    echo "WVA Image:              $WVA_IMAGE"
-    echo "Emulator Mode:          $USE_VLLM_EMULATOR"
+    echo "WVA Image:              $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
+    echo "Emulator Mode:          $DEPLOY_VLLM_EMULATOR"
+    echo "SLO (TPOT):             $SLO_TPOT ms"
+    echo "SLO (TTFT):             $SLO_TTFT ms"
     echo ""
     echo "Deployed Components:"
     echo "===================="
-    echo "✓ kube-prometheus-stack (Prometheus + Grafana)"
-    echo "✓ WVA Controller (with metrics validation)"
-    echo "✓ llm-d Infrastructure (Gateway, GAIE, ModelService)"
+    if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
+        echo "✓ kube-prometheus-stack (Prometheus + Grafana)"
+    fi
+    if [ "$DEPLOY_WVA" = "true" ]; then
+        echo "✓ WVA Controller (via Helm chart)"
+    fi
+    if [ "$DEPLOY_LLM_D" = "true" ]; then
+        echo "✓ llm-d Infrastructure (Gateway, GAIE, ModelService)"
+        if [ "$DEPLOY_VLLM_EMULATOR" = "true" ]; then
+            echo "✓ vLLM Emulator (no GPU required)"
+        fi
+        
+        if [ "$APPLY_VLLM_EMULATOR_FIXES" = "true" ]; then
+            log_info " Applied vLLM emulator integration fixes"
+        fi
+    fi
     if [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
         echo "✓ Prometheus Adapter (external metrics API)"
     fi
-    if [ "$DEPLOY_HPA" = "true" ]; then
-        echo "✓ HPA (HorizontalPodAutoscaler)"
+    if [ "$DEPLOY_VA" = "true" ]; then
+        echo "✓ VariantAutoscaling CR (via Helm chart)"
     fi
-    echo "✓ ServiceMonitors (in $MONITORING_NAMESPACE)"
-    echo "✓ VariantAutoscaling CR"
+    if [ "$DEPLOY_HPA" = "true" ]; then
+        echo "✓ HPA (via Helm chart)"
+    fi
     echo ""
     echo "Next Steps:"
     echo "==========="
     echo ""
-    echo "1. Check VariantAutoscaling status (NEW MetricsReady column!):"
-    echo "   kubectl get variantautoscaling -n $NAMESPACE -o wide"
+    echo "1. Check VariantAutoscaling status:"
+    echo "   kubectl get variantautoscaling -n $LLMD_NS"
     echo ""
     echo "2. View detailed status with conditions:"
-    echo "   kubectl describe variantautoscaling ms-$BASE_NAME-llm-d-modelservice-decode -n $NAMESPACE"
+    echo "   kubectl describe variantautoscaling $LLM_D_MODELSERVICE_NAME-decode -n $LLMD_NS"
     echo ""
-    echo "3. View WVA logs (see metrics validation in action):"
-    echo "   kubectl logs -n $WVA_NAMESPACE -l control-plane=controller-manager -f"
+    echo "3. View WVA logs:"
+    echo "   kubectl logs -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler -f"
     echo ""
     echo "4. Check external metrics API:"
-    echo "   kubectl get --raw \"/apis/external.metrics.k8s.io/v1beta1/namespaces/$NAMESPACE/inferno_desired_replicas\" | jq"
+    echo "   kubectl get --raw \"/apis/external.metrics.k8s.io/v1beta1/namespaces/$LLMD_NS/inferno_desired_replicas\" | jq"
     echo ""
-    echo "5. Generate load (if vLLM is running):"
-    echo "   kubectl apply -f $WVA_PROJECT/charts/workload-variant-autoscaler/templates/guidellm-job.yaml"
+    echo "5. Port-forward Prometheus to view metrics:"
+    echo "   kubectl port-forward -n $MONITORING_NAMESPACE svc/kube-prometheus-stack-prometheus 9090:9090"
+    echo "   # Then visit https://localhost:9090 (accept self-signed cert)"
     echo ""
     echo "Important Notes:"
     echo "================"
     echo ""
-    echo "• GPU Requirements:"
-    echo "  - GPUs must be visible to Kubernetes (check: kubectl get nodes -o json | jq '.items[].status.allocatable[\"nvidia.com/gpu\"]')"
-    echo "  - If using KIND cluster, GPUs need special configuration (or use USE_VLLM_EMULATOR=true)"
-    echo "  - NVIDIA Device Plugin or GPU Operator must be installed for GPU passthrough"
-    echo ""
-    echo "• Model Loading:"
-    echo "  - Using unsloth/Meta-Llama-3.1-8B (avoids gated model access issues)"
-    echo "  - Model loading takes 2-3 minutes on A100 GPUs"
-    echo "  - Metrics will appear once model is fully loaded"
-    echo "  - WVA will automatically detect metrics and start optimization"
-    echo ""
-    echo "• Metrics Validation:"
-    echo "  - WVA validates vLLM metrics before optimization"
-    echo "  - 'Metrics unavailable' warnings are NORMAL during model loading"
-    echo "  - System gracefully skips optimization until metrics are available"
-    echo "  - Check logs: kubectl logs -n $WVA_NAMESPACE -l control-plane=controller-manager | grep Metrics"
+    if [ "$DEPLOY_VLLM_EMULATOR" = "true" ]; then
+        echo "• This deployment uses vLLM EMULATOR (no real GPUs or models)"
+        echo "• vLLM emulator generates synthetic metrics for testing"
+        echo "• Perfect for development and testing without GPU hardware"
+    else
+        echo "• Model Loading:"
+        echo "  - Using $MODEL_ID"
+        echo "  - Model loading takes 2-3 minutes on $ACCELERATOR_TYPE GPUs"
+        echo "  - Metrics will appear once model is fully loaded"
+        echo "  - WVA will automatically detect metrics and start optimization"
+    fi
     echo ""
     echo "Troubleshooting:"
     echo "================"
     echo ""
-    echo "• Check WVA controller logs (structured JSON format):"
-    echo "  kubectl logs -n $WVA_NAMESPACE -l control-plane=controller-manager --tail=50"
+    echo "• Check WVA controller logs:"
+    echo "  kubectl logs -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler"
     echo ""
-    echo "• Check vLLM model loading progress:"
-    echo "  kubectl logs -n $NAMESPACE -l llm-d.ai/model=ms-$BASE_NAME-llm-d-modelservice -c vllm --tail=30"
+    echo "• Check all pods in llm-d namespace:"
+    echo "  kubectl get pods -n $LLMD_NS"
     echo ""
     echo "• Check if metrics are being scraped by Prometheus:"
     echo "  kubectl port-forward -n $MONITORING_NAMESPACE svc/kube-prometheus-stack-prometheus 9090:9090"
-    echo "  # Then visit http://localhost:9090 and query: vllm:request_success_total"
+    echo "  # Then visit https://localhost:9090 and query: vllm:request_success_total"
     echo ""
-    echo "• Check metrics endpoint directly (once model loaded):"
-    echo "  POD=\$(kubectl get pod -n $NAMESPACE -l llm-d.ai/model=ms-$BASE_NAME-llm-d-modelservice -o jsonpath='{.items[0].metadata.name}')"
-    echo "  kubectl exec -n $NAMESPACE \$POD -c vllm -- curl -s http://localhost:8200/metrics | grep vllm:"
-    echo ""
-    echo "• View Grafana dashboards:"
-    echo "  kubectl port-forward -n $MONITORING_NAMESPACE svc/kube-prometheus-stack-grafana 3000:80"
-    echo "  # Username: admin, Password: prom-operator"
+    echo "• Check Prometheus Adapter logs:"
+    echo "  kubectl logs -n $MONITORING_NAMESPACE deployment/prometheus-adapter"
     echo ""
     echo "=========================================="
 }
 
-cleanup() {
-    log_warning "Cleaning up deployment..."
+# Undeployment functions
+undeploy_prometheus_adapter() {
+    log_info "Uninstalling Prometheus Adapter..."
+    helm uninstall prometheus-adapter -n $MONITORING_NAMESPACE 2>/dev/null || \
+        log_warning "Prometheus Adapter not found or already uninstalled"
     
-    # Delete HPA
-    kubectl delete hpa vllm-deployment-hpa -n $NAMESPACE 2>/dev/null || true
+    kubectl delete configmap prometheus-ca -n $MONITORING_NAMESPACE --ignore-not-found
+    rm -f /tmp/prometheus-adapter-values-k8s.yaml
     
-    # Delete VariantAutoscaling
-    kubectl delete variantautoscaling ms-$BASE_NAME-llm-d-modelservice-decode -n $NAMESPACE 2>/dev/null || true
+    log_success "Prometheus Adapter uninstalled"
+}
+
+undeploy_vllm_emulator() {
+    log_info "Removing vLLM Emulator..."
     
-    # Delete llm-d infrastructure
-    if [ "$DEPLOY_LLM_D" = "true" ]; then
-        cd $(dirname $WVA_PROJECT)/$LLM_D_PROJECT/quickstart/examples/$BASE_NAME
-        helmfile destroy -e kgateway 2>/dev/null || true
-        cd -
+    kubectl delete deployment $VLLM_EMULATOR_NAME-decode -n $LLMD_NS --ignore-not-found
+    kubectl delete service $VLLM_EMULATOR_NAME-service -n $LLMD_NS --ignore-not-found
+    kubectl delete servicemonitor $VLLM_EMULATOR_NAME-servicemonitor -n $MONITORING_NAMESPACE --ignore-not-found
+    
+    log_success "vLLM Emulator removed"
+}
+
+undeploy_llm_d_infrastructure() {
+    log_info "Undeploying the llm-d infrastructure..."
+    
+    if [ ! -d "$EXAMPLE_DIR" ]; then
+        log_warning "llm-d example directory not found, skipping cleanup"
+    else
+        cd "$EXAMPLE_DIR"
+        
+        log_info "Removing llm-d core components..."
+
+        helm uninstall infra-$WELL_LIT_PATH_NAME -n ${LLMD_NS} 2>/dev/null || \
+            log_warning "llm-d infra components not found or already uninstalled"
+        helm uninstall gaie-$WELL_LIT_PATH_NAME -n ${LLMD_NS} 2>/dev/null || \
+            log_warning "llm-d inference-scheduler components not found or already uninstalled"
+        helm uninstall ms-$WELL_LIT_PATH_NAME -n ${LLMD_NS} 2>/dev/null || \
+            log_warning "llm-d ModelService components not found or already uninstalled"
+
+        cd "$WVA_PROJECT"
     fi
     
-    # Delete Prometheus Adapter
-    helm uninstall prometheus-adapter -n $MONITORING_NAMESPACE 2>/dev/null || true
+    # Remove HF token secret
+    kubectl delete secret llm-d-hf-token -n "${LLMD_NS}" --ignore-not-found
     
-    # Delete kube-prometheus-stack
-    helm uninstall kube-prometheus-stack -n $MONITORING_NAMESPACE 2>/dev/null || true
+    # Remove Gateway provider if installed by the script
+    if [[ "$INSTALL_GATEWAY_CTRLPLANE" == true ]]; then
+        log_info "Removing Gateway provider..."
+        helmfile destroy -f "$GATEWAY_PREREQ_DIR/$GATEWAY_PROVIDER.helmfile.yaml" 2>/dev/null || \
+            log_warning "Gateway provider cleanup incomplete"
+        kubectl delete namespace ${GATEWAY_PROVIDER}-system --ignore-not-found 2>/dev/null || true
+
+    fi
+
+    log_info "Deleting llm-d cloned repository..."
+    if [ ! -d "$(dirname $WVA_PROJECT)/$LLM_D_PROJECT" ]; then
+        log_warning "llm-d repository directory not found, skipping deletion"
+    else
+        rm -rf "$(dirname $WVA_PROJECT)/$LLM_D_PROJECT" 2>/dev/null || \
+            log_warning "Failed to delete llm-d repository directory"
+    fi
+
+    log_success "llm-d infrastructure removed"
+}
+
+undeploy_wva_controller() {
+    log_info "Uninstalling Workload-Variant-Autoscaler..."
     
-    # Delete WVA
-    cd $WVA_PROJECT
-    kubectl delete -k config/default 2>/dev/null || true
+    cd "$WVA_PROJECT/charts"
+    helm uninstall workload-variant-autoscaler -n $WVA_NS 2>/dev/null || \
+        log_warning "Workload-Variant-Autoscaler not found or already uninstalled"
+    cd "$WVA_PROJECT"
     
-    # Delete namespaces
-    kubectl delete namespace $NAMESPACE 2>/dev/null || true
-    kubectl delete namespace $WVA_NAMESPACE 2>/dev/null || true
-    kubectl delete namespace $MONITORING_NAMESPACE 2>/dev/null || true
+    rm -f "$PROM_CA_CERT_PATH"
     
-    log_success "Cleanup complete"
+    log_success "WVA uninstalled"
+}
+
+undeploy_prometheus_stack() {
+    log_info "Uninstalling kube-prometheus-stack..."
+    
+    helm uninstall kube-prometheus-stack -n $MONITORING_NAMESPACE 2>/dev/null || \
+        log_warning "Prometheus stack not found or already uninstalled"
+
+    kubectl delete secret $PROMETHEUS_SECRET_NAME -n $MONITORING_NAMESPACE --ignore-not-found
+
+    log_success "Prometheus stack uninstalled"
+}
+
+delete_namespaces() {
+    log_info "Deleting namespaces..."
+    
+    for ns in $LLMD_NS $WVA_NS $MONITORING_NAMESPACE; do
+        if kubectl get namespace $ns &> /dev/null; then
+            log_info "Deleting namespace $ns..."
+            kubectl delete namespace $ns 2>/dev/null || \
+                log_warning "Failed to delete namespace $ns"
+        fi
+    done
+    
+    log_success "Namespaces deleted"
+}
+
+cleanup() {
+    log_info "Starting undeployment process..."
+    log_info "======================================"
+    echo ""
+    
+    # Undeploy in reverse order
+    if [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
+        undeploy_prometheus_adapter
+    fi
+    
+    if [ "$DEPLOY_VLLM_EMULATOR" = "true" ]; then
+        undeploy_vllm_emulator
+    fi
+    
+    if [ "$DEPLOY_LLM_D" = "true" ]; then
+        undeploy_llm_d_infrastructure
+    fi
+    
+    if [ "$DEPLOY_WVA" = "true" ]; then
+        undeploy_wva_controller
+    fi
+    
+    if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
+        undeploy_prometheus_stack
+    fi
+    
+    # Delete namespaces if requested
+    if [ "$DELETE_NAMESPACES" = "true" ]; then
+        delete_namespaces
+    else
+        log_info "Keeping namespaces (use --delete-namespaces or set DELETE_NAMESPACES=true to remove)"
+    fi
+    
+    # Remove llm-d repository
+    if [ -d "$(dirname $WVA_PROJECT)/$LLM_D_PROJECT" ]; then
+        log_info "llm-d repository at $(dirname $WVA_PROJECT)/$LLM_D_PROJECT preserved (manual cleanup if needed)"
+    fi
+    
+    echo ""
+    log_success "Undeployment complete!"
+    echo ""
+    echo "=========================================="
+    echo " Undeployment Summary"
+    echo "=========================================="
+    echo ""
+    echo "Removed components:"
+    [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ] && echo "✓ Prometheus Adapter"
+    [ "$DEPLOY_VLLM_EMULATOR" = "true" ] && echo "✓ vLLM Emulator"
+    [ "$DEPLOY_LLM_D" = "true" ] && echo "✓ llm-d Infrastructure"
+    [ "$DEPLOY_WVA" = "true" ] && echo "✓ WVA Controller"
+    [ "$DEPLOY_PROMETHEUS" = "true" ] && echo "✓ Prometheus Stack"
+    
+    if [ "$DELETE_NAMESPACES" = "true" ]; then
+        echo "✓ Namespaces"
+    else
+        echo ""
+        echo "Namespaces preserved:"
+        echo "  - $LLMD_NS"
+        echo "  - $WVA_NS"
+        echo "  - $MONITORING_NAMESPACE"
+    fi
+    echo ""
+    echo "=========================================="
 }
 
 # Main deployment flow
 main() {
+    # Parse command line arguments first
+    parse_args "$@"
+
+    # Undeploy mode
+    if [ "$UNDEPLOY" = "true" ]; then
+        log_info "Starting Workload-Variant-Autoscaler Kubernetes Undeployment"
+        log_info "============================================================="
+        echo ""
+        cleanup
+        exit 0
+    fi
+
+    # Normal deployment flow
     log_info "Starting Workload-Variant-Autoscaler Kubernetes Deployment"
     log_info "==========================================================="
     echo ""
@@ -858,6 +1092,17 @@ main() {
     # Detect GPU type
     detect_gpu_type
     
+    # Display configuration
+    log_info "Using configuration:"
+    echo "    WVA Image:            $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
+    echo "    WVA Namespace:        $WVA_NS"
+    echo "    LLMD Namespace:       $LLMD_NS"
+    echo "    Monitoring Namespace: $MONITORING_NAMESPACE"
+    echo "    Model:                $MODEL_ID"
+    echo "    Accelerator:          $ACCELERATOR_TYPE"
+    echo "    Emulator Mode:        $DEPLOY_VLLM_EMULATOR"
+    echo ""
+    
     # Create namespaces
     create_namespaces
     
@@ -866,7 +1111,6 @@ main() {
         deploy_prometheus_stack
     else
         log_info "Skipping Prometheus deployment (DEPLOY_PROMETHEUS=false)"
-        PROMETHEUS_URL="https://kube-prometheus-stack-prometheus.$MONITORING_NAMESPACE.svc.cluster.local:9090"
     fi
     
     # Deploy WVA
@@ -879,13 +1123,23 @@ main() {
     # Deploy llm-d
     if [ "$DEPLOY_LLM_D" = "true" ]; then
         deploy_llm_d_infrastructure
+        
+        # Deploy vLLM Emulator if needed
+        if [ "$DEPLOY_VLLM_EMULATOR" = "true" ]; then
+            log_info "vLLM Emulator deployment enabled (DEPLOY_VLLM_EMULATOR=true)"
+            deploy_vllm_emulator
+
+            if [ "$APPLY_VLLM_EMULATOR_FIXES" = "true" ]; then
+                log_info "Applying vLLM emulator integration fixes (APPLY_VLLM_EMULATOR_FIXES=true)"
+            
+                # Apply vLLM emulator-specific fixes
+                apply_vllm_emulator_fixes
+            fi
+        else
+            log_info "vLLM Emulator deployment disabled (DEPLOY_VLLM_EMULATOR=false), skipping"
+        fi
     else
         log_info "Skipping llm-d deployment (DEPLOY_LLM_D=false)"
-    fi
-    
-    # Deploy vLLM Emulator if needed
-    if [ "$USE_VLLM_EMULATOR" = "true" ]; then
-        deploy_vllm_emulator
     fi
     
     # Deploy Prometheus Adapter
@@ -893,16 +1147,6 @@ main() {
         deploy_prometheus_adapter
     else
         log_info "Skipping Prometheus Adapter deployment (DEPLOY_PROMETHEUS_ADAPTER=false)"
-    fi
-    
-    # Create VariantAutoscaling
-    create_variant_autoscaling
-    
-    # Deploy HPA
-    if [ "$DEPLOY_HPA" = "true" ]; then
-        deploy_hpa
-    else
-        log_info "Skipping HPA deployment (DEPLOY_HPA=false)"
     fi
     
     # Verify deployment
@@ -913,12 +1157,6 @@ main() {
     
     log_success "Deployment complete!"
 }
-
-# Handle cleanup if script is called with 'cleanup' argument
-if [ "$1" == "cleanup" ]; then
-    cleanup
-    exit 0
-fi
 
 # Run main function
 main "$@"

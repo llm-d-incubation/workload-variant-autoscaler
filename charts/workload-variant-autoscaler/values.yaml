@@ -7,8 +7,6 @@ wva:
   replicaCount: 1
   modelName: ms-inference-scheduling-llm-d-modelservice
 
-  monitoringNamespace: openshift-user-workload-monitoring
-
   metrics:
     enabled: true
     port: 8443
@@ -20,19 +18,56 @@ wva:
   va:
     enabled: true
 
+  prometheus:
+    monitoringNamespace: openshift-user-workload-monitoring
+    baseURL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
+    caCert: |
+      -----BEGIN CERTIFICATE-----
+      placeholder...
+      -----END CERTIFICATE-----
+
 prometheusAdapter:
   enabled: true
   namespaceOverride: openshift-user-workload-monitoring
 
 llmd:
   namespace: llm-d-inference-scheduling
+  modelID: "unsloth/Meta-Llama-3.1-8B"
+
+va:
+  enabled: true
+  accelerator: H100
+  sloTpot: 10
+  sloTtft: 1000
 
 variantAutoscaling:
   enabled: true
-  accelerator: H100
   modelID: "unsloth/Meta-Llama-3.1-8B"
   sloTpot: 9
   sloTtft: 1000
+  # Define multiple variants - one for each accelerator type
+  # Each variant will create a separate VariantAutoscaling resource
+  variants:
+    - accelerator: "L40S"
+      acceleratorCount: 1
+      maxBatchSize: 512
+      perfParms:
+        decodeParms:
+          alpha: "22.619"
+          beta: "0.181"
+        prefillParms:
+          gamma: "226.19"
+          delta: "0.018"
+    - accelerator: "H100"
+      acceleratorCount: 1
+      maxBatchSize: 512
+      perfParms:
+        decodeParms:
+          alpha: "6.958"
+          beta: "0.042"
+        prefillParms:
+          gamma: "5.2"
+          delta: "0.1"
 
 hpa:
   maxReplicas: 10
@@ -48,10 +83,4 @@ vllmService:
   enabled: true
   nodePort: 30000
   interval: 15s
-
-prometheus:
-  baseURL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
-  caCert: |
-    -----BEGIN CERTIFICATE-----
-    placeholder...
-    -----END CERTIFICATE-----
+  scheme: http  # vLLM emulator runs on HTTP

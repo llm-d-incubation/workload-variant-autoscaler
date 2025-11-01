@@ -80,7 +80,7 @@ That's it! The script will:
 |----------|-------------|---------|
 | `HF_TOKEN` | HuggingFace token (required) | - |
 | `WELL_LIT_PATH_NAME` | Name of the deployed well-lit path | `inference-scheduling` |
-| `NAMESPACE` | Kubernetes namespace | `llm-d-$WELL_LIT_PATH_NAME` |
+| `LLMD_NS` | llm-d namespace | `llm-d-$WELL_LIT_PATH_NAME` |
 | `MONITORING_NAMESPACE` | Prometheus monitoring namespace | `openshift-user-workload-monitoring` |
 | `MODEL_ID` | Model to deploy | `unsloth/Meta-Llama-3.1-8B` |
 | `ACCELERATOR_TYPE` | GPU type (auto-detected) | `H100` |

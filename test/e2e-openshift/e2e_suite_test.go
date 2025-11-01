@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -38,16 +39,15 @@ import (
 	v1alpha1 "github.com/llm-d-incubation/workload-variant-autoscaler/api/v1alpha1"
 )
 
-const (
-	controllerNamespace = "workload-variant-autoscaler-system"
-	monitoringNamespace = "openshift-user-workload-monitoring"
-	llmDNamespace       = "llm-d-inference-scheduling"
-	gatewayName         = "infra-inference-scheduling-inference-gateway-istio"
-)
-
-const (
-	modelID    = "unsloth/Meta-Llama-3.1-8B"
-	deployment = "ms-inference-scheduling-llm-d-modelservice-decode"
+var (
+	controllerNamespace = getEnvString("CONTROLLER_NAMESPACE", "workload-variant-autoscaler-system")
+	monitoringNamespace = getEnvString("MONITORING_NAMESPACE", "openshift-user-workload-monitoring")
+	llmDNamespace       = getEnvString("LLMD_NAMESPACE", "llm-d-inference-scheduling")
+	gatewayName         = getEnvString("GATEWAY_NAME", "infra-inference-scheduling-inference-gateway")
+	modelID             = getEnvString("MODEL_ID", "unsloth/Meta-Llama-3.1-8B")
+	deployment          = getEnvString("DEPLOYMENT", "ms-inference-scheduling-llm-d-modelservice-decode")
+	requestRate         = getEnvInt("REQUEST_RATE", 20)
+	numPrompts          = getEnvInt("NUM_PROMPTS", 3000)
 )
 
 var (
@@ -59,6 +59,25 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
+}
+
+func getEnvString(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "Failed to parse env variable, using fallback")
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "Failed to parse env variable as int, using fallback")
+		return fallback
+	}
+	return fallback
 }
 
 // TestE2EOpenShift runs the end-to-end (e2e) test suite for OpenShift deployments.
@@ -102,6 +121,18 @@ var _ = BeforeSuite(func() {
 	if os.Getenv("KUBECONFIG") == "" {
 		Skip("KUBECONFIG is not set; skipping OpenShift e2e test")
 	}
+
+	_, _ = fmt.Fprintf(GinkgoWriter, "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Using the following configuration:\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "CONTROLLER_NAMESPACE=%s\n", controllerNamespace)
+	_, _ = fmt.Fprintf(GinkgoWriter, "MONITORING_NAMESPACE=%s\n", monitoringNamespace)
+	_, _ = fmt.Fprintf(GinkgoWriter, "LLMD_NAMESPACE=%s\n", llmDNamespace)
+	_, _ = fmt.Fprintf(GinkgoWriter, "GATEWAY_NAME=%s\n", gatewayName)
+	_, _ = fmt.Fprintf(GinkgoWriter, "MODEL_ID=%s\n", modelID)
+	_, _ = fmt.Fprintf(GinkgoWriter, "DEPLOYMENT=%s\n", deployment)
+	_, _ = fmt.Fprintf(GinkgoWriter, "REQUEST_RATE=%d\n", requestRate)
+	_, _ = fmt.Fprintf(GinkgoWriter, "NUM_PROMPTS=%d\n", numPrompts)
 
 	initializeK8sClient()
 
