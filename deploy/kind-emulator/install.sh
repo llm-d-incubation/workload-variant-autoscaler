@@ -163,19 +163,31 @@ create_kind_cluster() {
 load_image() {
     log_info "Loading WVA image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' into KIND cluster..."
     
-    # Try to pull the image, or use local image if pull fails
-    if ! docker pull "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"; then
-        log_warning "Failed to pull image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' from registry"
-        log_info "Attempting to use local image..."
+    # If WVA_IMAGE_PULL_POLICY is IfNotPresent, skip pulling and use local image only
+    if [ "$WVA_IMAGE_PULL_POLICY" = "IfNotPresent" ]; then
+        log_info "Using local image only (WVA_IMAGE_PULL_POLICY=IfNotPresent)"
         
         # Check if the image exists locally
         if ! docker image inspect "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG" >/dev/null 2>&1; then
-            log_error "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' not found locally either - Please build the image or check the registry"
+            log_error "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' not found locally - Please build the image first (e.g., 'make docker-build IMG=$WVA_IMAGE_REPO:$WVA_IMAGE_TAG')"
         else
-            log_info "Using local image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG'"
+            log_success "Found local image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG'"
         fi
     else
-        log_success "Successfully pulled image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' from registry"
+        # Try to pull the image, or use local image if pull fails
+        if ! docker pull "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"; then
+            log_warning "Failed to pull image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' from registry"
+            log_info "Attempting to use local image..."
+            
+            # Check if the image exists locally
+            if ! docker image inspect "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG" >/dev/null 2>&1; then
+                log_error "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' not found locally either - Please build the image or check the registry"
+            else
+                log_info "Using local image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG'"
+            fi
+        else
+            log_success "Successfully pulled image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' from registry"
+        fi
     fi
     
     # Load the image into the KIND cluster

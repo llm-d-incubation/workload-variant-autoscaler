@@ -49,9 +49,12 @@ import (
 )
 
 // Constants for MetricsAvailable condition
+// Note: Reasons should match api/v1alpha1 constants for consistency
 const (
-	MetricsReasonAvailable    = "MetricsAvailable"
-	MetricsReasonUnavailable  = "MetricsUnavailable"
+	// MetricsReasonAvailable uses ReasonMetricsFound from API for consistency
+	MetricsReasonAvailable = llmdVariantAutoscalingV1alpha1.ReasonMetricsFound
+	// MetricsReasonUnavailable uses ReasonMetricsMissing from API for consistency
+	MetricsReasonUnavailable  = llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
 	MetricsMessageAvailable   = "Saturation metrics data is available for scaling decisions"
 	MetricsMessageUnavailable = "No saturation metrics available - pods may not be ready or metrics not yet scraped"
 )
@@ -783,7 +786,10 @@ func (e *Engine) RunSaturationAnalysis(
 		"modelID", modelID,
 		"totalReplicas", saturationAnalysis.TotalReplicas,
 		"nonSaturated", saturationAnalysis.NonSaturatedCount,
+		"avgSpareKv", saturationAnalysis.AvgSpareKvCapacity,
+		"avgSpareQueue", saturationAnalysis.AvgSpareQueueLength,
 		"shouldScaleUp", saturationAnalysis.ShouldScaleUp,
+		"scaleUpReason", saturationAnalysis.ScaleUpReason,
 		"scaleDownSafe", saturationAnalysis.ScaleDownSafe)
 
 	saturationTargets := saturationAnalyzer.CalculateSaturationTargets(ctx, saturationAnalysis, data.variantStates)

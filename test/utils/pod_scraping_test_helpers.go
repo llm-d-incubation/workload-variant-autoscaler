@@ -184,7 +184,7 @@ func TestPodScrapingPodDiscovery(ctx context.Context, config PodScrapingTestConf
 
 // TestPodScrapingMetricsCollection tests that PodScrapingSource can scrape metrics from pods.
 func TestPodScrapingMetricsCollection(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment == "kind" {
+	if config.Environment == "kind" || config.Environment == "kind-emulator" {
 		ginkgo.Skip("Skipping metrics collection test on Kind - tests run from outside cluster where pod IPs are not accessible. Use in-cluster scraping tests instead.")
 	}
 
@@ -373,7 +373,7 @@ func TestPodScrapingAuthentication(ctx context.Context, config PodScrapingTestCo
 
 // TestPodScrapingCaching tests that PodScrapingSource caches results
 func TestPodScrapingCaching(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment == "kind" {
+	if config.Environment == "kind" || config.Environment == "kind-emulator" {
 		ginkgo.Skip("Skipping caching test on Kind - tests run from outside cluster where pod IPs are not accessible. Use in-cluster scraping tests instead.")
 	}
 
@@ -413,7 +413,7 @@ func TestPodScrapingCaching(ctx context.Context, config PodScrapingTestConfig, g
 
 // TestPodScrapingFromController verifies that PodScrapingSource can scrape metrics when running inside the cluster.
 func TestPodScrapingFromController(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment != "kind" {
+	if config.Environment != "kind" && config.Environment != "kind-emulator" {
 		ginkgo.Skip("Skipping controller verification test - only needed for Kind")
 	}
 

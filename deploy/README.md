@@ -239,6 +239,34 @@ export VLLM_MAX_NUM_SEQS=64         # Match desired max batch size
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
 make deploy-wva-on-k8s
 ```
+
+##### Example 7: Infra-only mode for e2e testing
+
+Deploy only the llm-d infrastructure and WVA controller without creating VariantAutoscaling or HPA resources. This is useful for e2e testing where tests dynamically create their own VA/HPA resources.
+
+```bash
+# Using command-line flag
+export HF_TOKEN="hf_xxxxx"
+./deploy/install.sh --infra-only
+
+# Using environment variable
+export HF_TOKEN="hf_xxxxx"
+export INFRA_ONLY=true
+make deploy-wva-emulated-on-kind
+
+# Verify: Only WVA controller + llm-d infrastructure should exist
+kubectl get variantautoscaling --all-namespaces  # Should be empty
+kubectl get hpa --all-namespaces | grep -v kube-system  # Should be empty (except system HPAs)
+```
+
+**What gets deployed in infra-only mode:**
+- ✅ Prometheus stack (metrics collection)
+- ✅ WVA controller
+- ✅ llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
+- ✅ Prometheus Adapter (external metrics API)
+- ❌ VariantAutoscaling CRs (tests create these)
+- ❌ HPA resources (tests create these)
+- ❌ Model services (tests create these)
 ```
 
 ### Method 2: Helm Chart
@@ -620,6 +648,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter | `true` |
 | `DEPLOY_VA` | Deploy VariantAutoscaling CR | `true` |
 | `DEPLOY_HPA` | Deploy HPA | `true` |
+| `INFRA_ONLY` | Deploy only infrastructure (skip VA/HPA) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
 
 #### HPA Configuration

@@ -1,10 +1,44 @@
 name: CI - PR Checks
 
+# Cancel previous runs on the same PR when new commits are pushed
+# Only group by PR number for legitimate triggers (pull_request, workflow_dispatch, /trigger-e2e-full comments)
+# Regular comments get a unique group (run_id) so they don't cancel in-progress test runs
+#
+# Logic:
+# - Regular comments (not /trigger-e2e-full): unique group prevents cancellation of real tests
+# - Valid triggers: group 'ci-pr-checks-{pr_number}' (can cancel previous runs for same PR)
+# - Fallback chain for ID: pull_request.number -> issue.number -> run_id
+#
+# NOTE: Valid command list (/trigger-e2e-full) must stay in sync with check-full-tests job validation
+concurrency:
+  group: >-
+    ${{
+      github.event_name == 'issue_comment' &&
+      !contains(github.event.comment.body, '/trigger-e2e-full')
+      && format('comment-isolated-{0}', github.run_id)
+      || format('ci-pr-checks-{0}',
+           github.event.pull_request.number
+           || github.event.issue.number
+           || github.run_id)
+    }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     branches:
       - main
       - dev
+  # Allow manual triggering of full e2e tests
+  workflow_dispatch:
+    inputs:
+      run_full_tests:
+        description: 'Run full e2e test suite on Kind (default: smoke tests only)'
+        required: false
+        default: false
+        type: boolean
+  # Allow triggering via PR comments
+  issue_comment:
+    types: [created]
 
 jobs:
   # Check if PR contains code changes (not just docs/metadata)
@@ -12,15 +46,41 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read  # For reading PR details when triggered via issue_comment
     outputs:
-      has_code_changes: ${{ steps.filter.outputs.code }}
+      has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
     steps:
+      - name: Get PR number for issue_comment events
+        id: pr-info
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue.pull_request) {
+              core.setOutput('pr_number', '');
+              return;
+            }
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: issue.number
+            });
+            core.setOutput('pr_number', issue.number.toString());
+            core.setOutput('pr_head_sha', pr.head.sha);
+
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          # For issue_comment events, checkout the PR head SHA
+          ref: ${{ github.event_name == 'issue_comment' && steps.pr-info.outputs.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
+          # For pull_request events, fetch the PR head
+          fetch-depth: 0
       
       - name: Check for code changes
         uses: dorny/paths-filter@v3
         id: filter
+        continue-on-error: true  # Don't fail if paths-filter can't determine changes (e.g., issue_comment without PR context)
         with:
           filters: |
             code:
@@ -30,6 +90,20 @@ jobs:
               - '!LICENSE'
               - '!OWNERS'
               - '!PROJECT'
+      
+      - name: Set output with default
+        id: set-output
+        run: |
+          # Use filter output if available, otherwise default to 'true' for issue_comment events
+          # This ensures /trigger-e2e-full works even if PR context is unclear
+          FILTER_OUTPUT="${{ steps.filter.outputs.code }}"
+          if [ "${{ github.event_name }}" == "issue_comment" ] && [ -z "$FILTER_OUTPUT" ]; then
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          elif [ -n "$FILTER_OUTPUT" ]; then
+            echo "has_code_changes=$FILTER_OUTPUT" >> $GITHUB_OUTPUT
+          else
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          fi
 
   lint-and-test:
     runs-on: ubuntu-latest
@@ -68,28 +142,115 @@ jobs:
         run: |
           make test
 
-  # E2E tests run in parallel with different configurations:
-  # - HPAScaleToZero feature gate settings (true/false)
-  # - GPU types (nvidia/amd) for limiter tests
-  # Skip e2e tests if PR only contains docs/metadata changes
+  # Check if full e2e tests should run (via workflow_dispatch or comment trigger)
+  check-full-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # For posting comments and reactions on PRs
+    outputs:
+      run_full: ${{ steps.check.outputs.run_full }}
+    steps:
+      - name: Check if full tests requested
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Helper to check if user has write access
+            async function hasWriteAccess(username) {
+              try {
+                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: username
+                });
+                const privilegedRoles = ['admin', 'maintain', 'write'];
+                return privilegedRoles.includes(permission.permission);
+              } catch (e) {
+                console.log(`Could not get permissions for ${username}: ${e.message}`);
+                return false;
+              }
+            }
+
+            // Check workflow_dispatch input
+            const workflowInput = '${{ github.event.inputs.run_full_tests }}';
+            // Handle both boolean and string inputs
+            if (workflowInput === 'true' || workflowInput === true || workflowInput === 'True') {
+              core.setOutput('run_full', 'true');
+              return;
+            }
+            
+            // Check for /trigger-e2e-full comment trigger
+            if (context.eventName === 'issue_comment') {
+              const comment = context.payload.comment.body.trim();
+              const issue = context.payload.issue;
+
+              // Only process /trigger-e2e-full comments on PRs
+              if (!issue.pull_request) {
+                console.log('Comment is not on a PR, skipping');
+                core.setOutput('run_full', 'false');
+                return;
+              }
+
+              // Strict command matching (case-sensitive, exact match)
+              const validCommands = ['/trigger-e2e-full'];
+              if (!validCommands.includes(comment)) {
+                console.log(`Comment "${comment}" is not a valid trigger command, skipping`);
+                core.setOutput('run_full', 'false');
+                return;
+              }
+
+              // Check if commenter has write access
+              const commenter = context.payload.comment.user.login;
+              const hasAccess = await hasWriteAccess(commenter);
+              if (!hasAccess) {
+                console.log(`User ${commenter} does not have write access, ignoring ${comment}`);
+                core.setOutput('run_full', 'false');
+                return;
+              }
+
+              // Get PR details
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: issue.number
+              });
+
+              console.log(`${comment} approved by ${commenter} for PR #${issue.number}`);
+              console.log(`PR head SHA: ${pr.head.sha}`);
+
+              // Add reaction to acknowledge
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'rocket'
+              });
+
+              // Post comment with link to the workflow run
+              const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🚀 **Full E2E tests triggered by ${comment}**\n\n[View the Kind E2E workflow run](${runUrl})`
+              });
+
+              core.setOutput('run_full', 'true');
+              return;
+            }
+            
+            core.setOutput('run_full', 'false');
+
+  # E2E tests - smoke tests run automatically, full tests on approval
+  # Skip e2e tests if PR only contains docs/metadata changes (unless explicitly triggered via /trigger-e2e-full)
   e2e-tests:
     runs-on: ubuntu-latest
-    needs: [lint-and-test, check-code-changes]
-    if: needs.check-code-changes.outputs.has_code_changes == 'true'
+    needs: [lint-and-test, check-code-changes, check-full-tests]
+    if: always() && (needs.check-full-tests.outputs.run_full == 'true' || (needs.check-code-changes.result == 'success' && needs.check-code-changes.outputs.has_code_changes == 'true'))
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # NVIDIA-focused: H100, A100, AMD MI300X heterogeneous for limiter tests
-          - gpu_type: nvidia-mix
-            scale_to_zero: true
-            e2e_gpu_type: nvidia
-          # AMD-focused: MI300X, MI250, NVIDIA A100 heterogeneous for limiter tests
-          # - gpu_type: amd-mix
-          #   scale_to_zero: false
-          #   e2e_gpu_type: amd
-    name: e2e-tests (gpu=${{ matrix.gpu_type }}, scale-to-zero=${{ matrix.scale_to_zero }})
+    permissions:
+      contents: read
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -119,12 +280,55 @@ jobs:
           sudo mv ./kind /usr/local/bin/kind
           kind version
 
-      - name: Run e2e tests
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build WVA image locally
+        id: build-image
+        run: |
+          # Generate unique image tag for this PR run (local image, no registry needed)
+          IMAGE_NAME="llm-d-workload-variant-autoscaler"
+          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${GITHUB_SHA:0:7}"
+          # Use localhost prefix for local-only image (Kind will load it directly)
+          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
+          
+          echo "Building local image: $FULL_IMAGE"
+          echo "Image will be loaded into Kind cluster (no push needed)"
+          
+          # Build image locally (no push needed for Kind)
+          make docker-build IMG="$FULL_IMAGE"
+          
+          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image built locally: $FULL_IMAGE"
+
+      - name: Determine test type
+        id: test-type
+        run: |
+          if [ "${{ needs.check-full-tests.outputs.run_full }}" == "true" ]; then
+            echo "test_target=test-e2e-full-with-setup" >> $GITHUB_OUTPUT
+            echo "test_name=full" >> $GITHUB_OUTPUT
+            echo "scale_to_zero=true" >> $GITHUB_OUTPUT
+            echo "delete_cluster=false" >> $GITHUB_OUTPUT
+          else
+            echo "test_target=test-e2e-smoke-with-setup" >> $GITHUB_OUTPUT
+            echo "test_name=smoke" >> $GITHUB_OUTPUT
+            echo "scale_to_zero=false" >> $GITHUB_OUTPUT
+            echo "delete_cluster=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run e2e tests (${{ steps.test-type.outputs.test_name }})
         shell: bash
         env:
-          ENABLE_SCALE_TO_ZERO: ${{ matrix.scale_to_zero }}
-          CLUSTER_GPU_TYPE: ${{ matrix.gpu_type }}
-          E2E_GPU_TYPE: ${{ matrix.e2e_gpu_type }}
-          MULTI_MODEL_TESTING: "false"
+          ENVIRONMENT: kind-emulator
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: ${{ steps.test-type.outputs.scale_to_zero }}
+          CREATE_CLUSTER: "true"
+          INSTALL_GATEWAY_CTRLPLANE: "true"
+          E2E_TESTS_ENABLED: "true"
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          PROMETHEUS_ADAPTER_WAIT: "false"
+          DELETE_CLUSTER: ${{ steps.test-type.outputs.delete_cluster }}
         run: |
-          make test-e2e
+          make ${{ steps.test-type.outputs.test_target }}

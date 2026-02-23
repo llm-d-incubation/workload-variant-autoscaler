@@ -104,6 +104,10 @@ VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-""}
 # Decode replicas override (useful for e2e testing with limited GPUs)
 DECODE_REPLICAS=${DECODE_REPLICAS:-""}
 
+# Infra-only mode: Deploy only llm-d infrastructure and WVA controller (skip VA/HPA)
+# Useful for e2e testing where tests create their own VA/HPA resources
+INFRA_ONLY=${INFRA_ONLY:-false}
+
 # Environment-related variables
 SCRIPT_DIR=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
 ENVIRONMENT=${ENVIRONMENT:-"kubernetes"}
@@ -200,6 +204,7 @@ Options:
   -m, --model MODEL            Model ID to use (default: $MODEL_ID)
   -a, --accelerator TYPE       Accelerator type: A100, H100, L40S, etc. (default: $ACCELERATOR_TYPE)
   -r, --release-name NAME      Helm release name for WVA (default: $WVA_RELEASE_NAME)
+  --infra-only                 Deploy only llm-d infrastructure and WVA controller (skip VA/HPA, for e2e testing)
   -u, --undeploy               Undeploy all components
   -e, --environment            Specify deployment environment: kubernetes, openshift, kind-emulated (default: kubernetes)
   -h, --help                   Show this help and exit
@@ -217,6 +222,7 @@ Environment Variables:
   DEPLOY_HPA                   Deploy HPA (default: true)
   HPA_STABILIZATION_SECONDS    HPA stabilization window in seconds (default: 240)
   HPA_MIN_REPLICAS             HPA minReplicas (default: 1, set to 0 for scale-to-zero)
+  INFRA_ONLY                   Deploy only infrastructure (default: false, same as --infra-only flag)
   UNDEPLOY                     Undeploy mode (default: false)
   DELETE_NAMESPACES            Delete namespaces after undeploy (default: false)
   CONTROLLER_INSTANCE          Controller instance label for multi-controller isolation (optional)
@@ -233,6 +239,11 @@ Examples:
 
   # Deploy with custom release name (for multi-install support)
   $(basename "$0") -r my-wva-release
+
+  # Deploy infra-only mode (for e2e testing)
+  $(basename "$0") --infra-only
+  # Or with environment variable
+  INFRA_ONLY=true $(basename "$0")
 EOF
 }
 
@@ -271,6 +282,7 @@ parse_args() {
       -m|--model)             MODEL_ID="$2"; shift 2 ;;
       -a|--accelerator)       ACCELERATOR_TYPE="$2"; shift 2 ;;
       -r|--release-name)      WVA_RELEASE_NAME="$2"; shift 2 ;;
+      --infra-only)           INFRA_ONLY=true; shift ;;
       -u|--undeploy)          UNDEPLOY=true; shift ;;
       -e|--environment)
         ENVIRONMENT="$2" ; shift 2
@@ -1028,20 +1040,64 @@ deploy_prometheus_adapter() {
 
     # Deploy Prometheus Adapter using existing values file and override URL/port
     log_info "Installing Prometheus Adapter via Helm"
-    helm upgrade -i prometheus-adapter prometheus-community/prometheus-adapter \
+    
+    # In CI/E2E mode, skip --wait to avoid hanging, then verify separately
+    # For local dev, use --wait for immediate feedback
+    local wait_flag=""
+    if [ "${PROMETHEUS_ADAPTER_WAIT:-true}" = "true" ]; then
+        wait_flag="--wait"
+        log_info "Using --wait flag (will wait for Prometheus Adapter to be ready)"
+    else
+        log_info "Skipping --wait flag (will verify status separately)"
+    fi
+    
+    if ! helm upgrade -i prometheus-adapter prometheus-community/prometheus-adapter \
         -n $MONITORING_NAMESPACE \
         -f "$values_file" \
         --set prometheus.url="$PROMETHEUS_BASE_URL" \
         --set prometheus.port="$PROMETHEUS_PORT" \
         --timeout=3m \
-        --wait || {
-            log_warning "Prometheus Adapter deployment timed out or failed, but continuing..."
+        $wait_flag; then
+        if [ "$E2E_TESTS_ENABLED" = "true" ]; then
+            log_error "Prometheus Adapter Helm installation failed - required for E2E tests"
+        else
+            log_warning "Prometheus Adapter Helm installation failed, but continuing..."
             log_warning "HPA may not work until adapter is healthy"
             log_info "Check adapter status: kubectl get pods -n $MONITORING_NAMESPACE | grep prometheus-adapter"
             log_info "Check adapter logs: kubectl logs -n $MONITORING_NAMESPACE deployment/prometheus-adapter"
-        }
+        fi
+    fi
 
-    log_success "Prometheus Adapter deployment initiated (may still be starting)"
+    # If we skipped --wait (e.g., in CI), verify Prometheus Adapter is actually running
+    if [ "${PROMETHEUS_ADAPTER_WAIT:-true}" != "true" ]; then
+        log_info "Verifying Prometheus Adapter is running (skipped --wait, checking status)..."
+        local max_attempts=12
+        local attempt=1
+        local adapter_ready=false
+        
+        while [ $attempt -le $max_attempts ]; do
+            if kubectl get pods -n $MONITORING_NAMESPACE -l app.kubernetes.io/name=prometheus-adapter 2>/dev/null | grep -q Running; then
+                adapter_ready=true
+                break
+            fi
+            log_info "Waiting for Prometheus Adapter to be ready (attempt $attempt/$max_attempts)..."
+            sleep 10
+            attempt=$((attempt + 1))
+        done
+        
+        if [ "$adapter_ready" = "true" ]; then
+            log_success "Prometheus Adapter is running"
+        else
+            if [ "$E2E_TESTS_ENABLED" = "true" ]; then
+                log_error "Prometheus Adapter failed to become ready after ${max_attempts} attempts - required for E2E tests"
+            else
+                log_warning "Prometheus Adapter may still be starting (not ready after ${max_attempts} attempts)"
+                log_info "Check adapter status: kubectl get pods -n $MONITORING_NAMESPACE | grep prometheus-adapter"
+            fi
+        fi
+    else
+        log_success "Prometheus Adapter deployment completed"
+    fi
 
     # On clusters with KEDA, the v1beta1.external.metrics.k8s.io APIService may
     # point to KEDA's metrics server instead of Prometheus Adapter. KEDA's server
@@ -1383,6 +1439,13 @@ cleanup() {
 main() {
     # Parse command line arguments first
     parse_args "$@"
+
+    # Handle infra-only mode: skip VA and HPA deployment
+    if [ "$INFRA_ONLY" = "true" ]; then
+        log_info "Infra-only mode enabled: Skipping VA and HPA deployment"
+        DEPLOY_VA=false
+        DEPLOY_HPA=false
+    fi
 
     # Undeploy mode
     if [ "$UNDEPLOY" = "true" ]; then

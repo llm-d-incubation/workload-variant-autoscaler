@@ -919,18 +919,31 @@ jobs:
 
       - name: Run OpenShift E2E tests
         env:
-          CONTROLLER_NAMESPACE: ${{ env.WVA_NAMESPACE }}
+          # Consolidated e2e test environment variables
+          ENVIRONMENT: openshift
+          USE_SIMULATOR: "false"
+          SCALE_TO_ZERO_ENABLED: "true"
+          WVA_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           LLMD_NAMESPACE: ${{ env.LLMD_NAMESPACE }}
+          # Legacy variables for backward compatibility (if needed by tests)
+          CONTROLLER_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           # Multi-model testing: secondary namespace for Model B
           LLMD_NAMESPACE_B: ${{ env.LLMD_NAMESPACE_B }}
           GATEWAY_NAME: infra-inference-scheduling-inference-gateway-istio
           DEPLOYMENT: ms-inference-scheduling-llm-d-modelservice-decode
           # Pass WVA_RELEASE_NAME so test can filter for current run's resources
           WVA_RELEASE_NAME: ${{ env.WVA_RELEASE_NAME }}
+          MODEL_ID: ${{ env.MODEL_ID }}
+          REQUEST_RATE: ${{ env.REQUEST_RATE }}
+          NUM_PROMPTS: ${{ env.NUM_PROMPTS }}
         run: |
-          echo "Running OpenShift E2E tests with configuration:"
-          echo "  CONTROLLER_NAMESPACE: $CONTROLLER_NAMESPACE"
+          echo "Running consolidated E2E tests on OpenShift with configuration:"
+          echo "  ENVIRONMENT: $ENVIRONMENT"
+          echo "  USE_SIMULATOR: $USE_SIMULATOR"
+          echo "  SCALE_TO_ZERO_ENABLED: $SCALE_TO_ZERO_ENABLED"
+          echo "  WVA_NAMESPACE: $WVA_NAMESPACE"
+          echo "  MONITORING_NAMESPACE: $MONITORING_NAMESPACE"
           echo "  LLMD_NAMESPACE: $LLMD_NAMESPACE"
           echo "  LLMD_NAMESPACE_B: $LLMD_NAMESPACE_B (multi-model)"
           echo "  DEPLOYMENT: $DEPLOYMENT"
@@ -939,7 +952,7 @@ jobs:
           echo "  REQUEST_RATE: $REQUEST_RATE"
           echo "  NUM_PROMPTS: $NUM_PROMPTS"
           echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
-          make test-e2e-openshift
+          make test-e2e-full
 
       - name: Cleanup infrastructure
         # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
