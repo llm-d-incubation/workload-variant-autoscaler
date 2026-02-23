@@ -209,7 +209,7 @@ helm install workload-variant-autoscaler ./workload-variant-autoscaler \
 
 ### Multi-Controller Isolation
 
-When running multiple WVA controllers in the same cluster (e.g., for parallel e2e tests or multi-tenant environments), use the `controllerInstance` configuration to prevent metrics conflicts between controllers. See [Multi-Controller Isolation](../../docs/user-guide/multi-controller-isolation.md) for details configuration.
+When running multiple WVA controllers in the same cluster (e.g., for parallel e2e tests or multi-tenant environments), use the `controllerInstance` configuration to prevent metrics conflicts between controllers. See [Multi-Controller Isolation](../../docs/user-guide/multi-controller-isolation.md) for detailed configuration.
 
 #### E2E Testing Example
 
