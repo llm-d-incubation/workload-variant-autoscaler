@@ -11,87 +11,8 @@ This guide covers installing Workload-Variant-Autoscaler (WVA) on your Kubernete
 
 ## Installation Methods
 
-### Option 1: Helm Installation (Recommended, on OpenShift)
-Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler` and `prometheus-adapter`. To list all helm charts installed in the cluster run `helm ls -A`.
-
-
-#### Step 1: Setup Variables, Secret, Helm repo
-```
-export OWNER="llm-d"
-export WVA_PROJECT="llm-d-workload-variant-autoscaler"
-export WVA_RELEASE="v0.5.0"
-export WVA_NS="workload-variant-autoscaler-system"
-export MON_NS="openshift-user-workload-monitoring"
-
-kubectl get secret thanos-querier-tls -n openshift-monitoring -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
-
-git clone -b $WVA_RELEASE -- https://github.com/$OWNER/$WVA_PROJECT.git $WVA_PROJECT
-cd $WVA_PROJECT
-export WVA_PROJECT=$PWD
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-```
-
-#### Step 2: Update prometheus-adapter To Export WVA Metrics
-**Important:** The following helm upgrade command updates the global `prometheus-adapter` 
-configmap. If this is a shared cluster then you might want to get the current
-settings, manually append the values in `config/samples/prometheus-adapter-values-ocp.yaml`
-then run helm upgrade with the appended values. Here's an example how to get the current
-values: `kubectl get configmap prometheus-adapter -n $MON_NS -o yaml`
-
-```
-helm upgrade -i prometheus-adapter prometheus-community/prometheus-adapter \
-  -n $MON_NS \
-  -f config/samples/prometheus-adapter-values-ocp.yaml
-```
-
-#### Step 3: Install WVA Controller Into a Namespace
-```
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: $WVA_NS
-  labels:
-    app.kubernetes.io/name: workload-variant-autoscaler
-    control-plane: controller-manager
-    openshift.io/user-monitoring: "true"
-EOF
-
-cd $WVA_PROJECT/charts
-helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
-  -n $WVA_NS \
-  --set-file wva.prometheus.caCert=/tmp/prometheus-ca.crt \
-  --set controller.enabled=true \
-  --set va.enabled=false \
-  --set hpa.enabled=false \
-  --set vllmService.enabled=false
-```
-
-#### Step 4: Add A Model To WVA Controller
-After a WVA controller has been installed,
-you can add one or more models running in LLMD namespaces as scale targets to the WVA controller. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` LLMD namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace.
-```
-helm upgrade -i wva-model-a ./workload-variant-autoscaler \
-  -n $WVA_NS \
-  --set controller.enabled=false \
-  --set va.enabled=true \
-  --set hpa.enabled=true \
-  --set llmd.namespace=team-a \
-  --set llmd.modelName=my-model-a \
-  --set llmd.modelID="meta-llama/Llama-3.1-8"
-```
-Here is an example to add another model to the same WVA controller:
-```
-helm upgrade -i wva-model-b ./workload-variant-autoscaler \
-  -n $WVA_NS \
-  --set controller.enabled=false \
-  --set va.enabled=true \
-  --set hpa.enabled=true \
-  --set llmd.namespace=team-a \
-  --set llmd.modelName=my-model-b \
-  --set llmd.modelID="Qwen/Qwen3-0.6B"
-```
+### Option 1: Helm Installation
+See the [Helm Installation](../../charts/workload-variant-autoscaler/README.md) for detailed instructions.
 
 **Verify the installation:**
 ```bash
@@ -110,34 +31,9 @@ make install
 make deploy IMG=quay.io/llm-d/workload-variant-autoscaler:latest
 ```
 
-### Option 3: Using Installation Scripts
+### Option 3: Local Development (Kind Emulator):
+See the [Kind Emulator](../../deploy/kind-emulator/README.md) for detailed instructions.
 
-For specific platforms:
-
-**Kubernetes:**
-```bash
-cd deploy/kubernetes
-./install.sh
-```
-
-**OpenShift:**
-```bash
-cd deploy/openshift
-./install.sh
-```
-
-### Option 4: Local Development (Kind Emulator):
-```bash
-# Deploy WVA with llm-d infrastructure on a local Kind cluster
-make deploy-wva-emulated-on-kind CREATE_CLUSTER=true DEPLOY_LLM_D=true
-
-# This creates a Kind cluster with emulated GPUs and deploys:
-# - WVA controller
-# - llm-d infrastructure (simulation mode)
-# - Prometheus and monitoring stack
-# - vLLM emulator for testing
-# See deploy/kind-emulator/README.md for detailed instructions
-```
 
 ## Configuration
 

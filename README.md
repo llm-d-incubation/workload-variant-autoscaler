@@ -16,23 +16,6 @@ The Workload Variant Autoscaler (WVA) is a Kubernetes-based global autoscaler fo
 - **Performance Modeling**: Uses queueing theory (M/M/1/k, M/G/1 models) for accurate latency and throughput prediction
 - **Multi-Model Support**: Manages multiple models with different service classes and priorities -->
 
-## Quick Start
-
-### Prerequisites
-
-- Kubernetes v1.31.0+ (or OpenShift 4.18+)
-- Helm 3.x
-- kubectl
-
-### Install with Helm (Recommended)
-See the [Helm Installation](docs/user-guide/installation.md#option-1-helm-installation-recommended-on-openshift) for detailed instructions.
-
-### Try it Locally with Kind (No GPU Required!)
-**Works on Mac (Apple Silicon/Intel) and Windows** - no physical GPUs needed!
-Perfect for development and testing with GPU emulation.
-
-See the [Kind Emulator](docs/user-guide/installation.md#option-4-local-development-kind-emulator) for detailed instructions.
-
 ## Documentation
 
 ### User Guide
@@ -64,10 +47,6 @@ See the [Kind Emulator](docs/user-guide/installation.md#option-4-local-developme
 - [Development Setup](docs/developer-guide/development.md)
 - [Contributing](CONTRIBUTING.md)
 -->
-### Deployment Options
-- [Kubernetes Deployment](deploy/kubernetes/README.md)
-- [OpenShift Deployment](deploy/openshift/README.md)
-- [Local Development (Kind Emulator)](deploy/kind-emulator/README.md)
 
 <!--
 
