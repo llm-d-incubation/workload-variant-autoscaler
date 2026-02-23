@@ -1,20 +1,23 @@
 name: CI - PR Checks
 
 # Cancel previous runs on the same PR when new commits are pushed
-# Only group by PR number for legitimate triggers (pull_request, workflow_dispatch, /trigger-e2e-full comments)
+# Only group by PR number for legitimate triggers (pull_request, workflow_dispatch, e2e trigger comments)
 # Regular comments get a unique group (run_id) so they don't cancel in-progress test runs
 #
 # Logic:
-# - Regular comments (not /trigger-e2e-full): unique group prevents cancellation of real tests
+# - Regular comments (not e2e trigger): unique group prevents cancellation of real tests
 # - Valid triggers: group 'ci-pr-checks-{pr_number}' (can cancel previous runs for same PR)
 # - Fallback chain for ID: pull_request.number -> issue.number -> run_id
 #
-# NOTE: Valid command list (/trigger-e2e-full) must stay in sync with check-full-tests job validation
+# NOTE: Accepted commands (/trigger-e2e-full, /test-e2e-full, /test-full) must stay in sync
+#       with check-full-tests job validation
 concurrency:
   group: >-
     ${{
       github.event_name == 'issue_comment' &&
-      !contains(github.event.comment.body, '/trigger-e2e-full')
+      !contains(github.event.comment.body, '/trigger-e2e-full') &&
+      !contains(github.event.comment.body, '/test-e2e-full') &&
+      !contains(github.event.comment.body, '/test-full')
       && format('comment-isolated-{0}', github.run_id)
       || format('ci-pr-checks-{0}',
            github.event.pull_request.number
@@ -192,8 +195,8 @@ jobs:
                 return;
               }
 
-              // Strict command matching (case-sensitive, exact match)
-              const validCommands = ['/trigger-e2e-full'];
+              // Accept multiple command variants (case-sensitive, exact match)
+              const validCommands = ['/trigger-e2e-full', '/test-e2e-full', '/test-full'];
               if (!validCommands.includes(comment)) {
                 console.log(`Comment "${comment}" is not a valid trigger command, skipping`);
                 core.setOutput('run_full', 'false');
