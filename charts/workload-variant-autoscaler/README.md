@@ -64,7 +64,7 @@ helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
 After a WVA controller has been installed,
 you can add one or more models running in LLMD namespaces as scale targets to the WVA controller. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` LLMD namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace.
 ```
-helm upgrade -i wva-model-a ./workload-variant-autoscaler \
+helm install -i wva-model-a ./workload-variant-autoscaler \
   -n $WVA_NS \
   --set controller.enabled=false \
   --set va.enabled=true \
@@ -75,7 +75,7 @@ helm upgrade -i wva-model-a ./workload-variant-autoscaler \
 ```
 Here is an example to add another model to the same WVA controller:
 ```
-helm upgrade -i wva-model-b ./workload-variant-autoscaler \
+helm install -i wva-model-b ./workload-variant-autoscaler \
   -n $WVA_NS \
   --set controller.enabled=false \
   --set va.enabled=true \
