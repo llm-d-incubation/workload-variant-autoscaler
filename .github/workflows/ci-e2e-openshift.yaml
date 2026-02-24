@@ -922,7 +922,7 @@ jobs:
           # Consolidated e2e test environment variables
           ENVIRONMENT: openshift
           USE_SIMULATOR: "false"
-          SCALE_TO_ZERO_ENABLED: "true"
+          SCALE_TO_ZERO_ENABLED: "false"  # OpenShift HPAScaleToZero feature gate not enabled on pok-prod-sa
           WVA_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           LLMD_NAMESPACE: ${{ env.LLMD_NAMESPACE }}
