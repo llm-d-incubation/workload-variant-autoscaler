@@ -943,6 +943,8 @@ jobs:
           DEPLOYMENT: ms-inference-scheduling-llm-d-modelservice-decode
           # Pass WVA_RELEASE_NAME so test can filter for current run's resources
           WVA_RELEASE_NAME: ${{ env.WVA_RELEASE_NAME }}
+          # Controller instance label must match what the controller was deployed with
+          CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
           MODEL_ID: ${{ env.MODEL_ID }}
           REQUEST_RATE: ${{ env.REQUEST_RATE }}
           NUM_PROMPTS: ${{ env.NUM_PROMPTS }}

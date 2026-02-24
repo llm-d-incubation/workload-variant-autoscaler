@@ -21,6 +21,7 @@ func CreateVariantAutoscaling(
 	crClient client.Client,
 	namespace, name, deploymentName, modelID, accelerator string,
 	cost float64,
+	controllerInstance string,
 ) error {
 	// Check if VA already exists and delete it to ensure clean state
 	existingVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
@@ -49,14 +50,19 @@ func CreateVariantAutoscaling(
 		return fmt.Errorf("failed to check for existing VA %s: %w", name, err)
 	}
 
+	labels := map[string]string{
+		"test-resource":                          "true",
+		"inference.optimization/acceleratorName": accelerator,
+	}
+	if controllerInstance != "" {
+		labels["wva.llmd.ai/controller-instance"] = controllerInstance
+	}
+
 	va := &variantautoscalingv1alpha1.VariantAutoscaling{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels: map[string]string{
-				"test-resource":                          "true",
-				"inference.optimization/acceleratorName": accelerator,
-			},
+			Labels:    labels,
 		},
 		Spec: variantautoscalingv1alpha1.VariantAutoscalingSpec{
 			ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
@@ -76,6 +82,7 @@ func CreateVariantAutoscalingWithDefaults(
 	ctx context.Context,
 	crClient client.Client,
 	namespace, name, deploymentName, modelID, accelerator string,
+	controllerInstance string,
 ) error {
-	return CreateVariantAutoscaling(ctx, crClient, namespace, name, deploymentName, modelID, accelerator, 30.0)
+	return CreateVariantAutoscaling(ctx, crClient, namespace, name, deploymentName, modelID, accelerator, 30.0, controllerInstance)
 }

@@ -130,6 +130,7 @@ var _ = Describe("VariantAutoscaling Target Condition", Label("smoke", "full"), 
 		err := fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, validVAName,
 			deployName, cfg.ModelID, cfg.AcceleratorType, 10.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
@@ -158,6 +159,7 @@ var _ = Describe("VariantAutoscaling Target Condition", Label("smoke", "full"), 
 		err := fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, invalidVAName,
 			nonExistentDeployName, cfg.ModelID, cfg.AcceleratorType, 10.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

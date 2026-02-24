@@ -41,6 +41,9 @@ type E2EConfig struct {
 	InputTokens  int    // Average input tokens
 	OutputTokens int    // Average output tokens
 
+	// Controller isolation
+	ControllerInstance string // Controller instance label for multi-controller filtering
+
 	// Timeouts
 	PodReadyTimeout int // Seconds to wait for pods to be ready
 	ScaleUpTimeout  int // Seconds to wait for scale-up
@@ -81,6 +84,9 @@ func LoadConfigFromEnv() E2EConfig {
 		NumPrompts:   getEnvInt("NUM_PROMPTS", 1000),
 		InputTokens:  getEnvInt("INPUT_TOKENS", 100),
 		OutputTokens: getEnvInt("OUTPUT_TOKENS", 50),
+
+		// Controller isolation
+		ControllerInstance: getEnv("CONTROLLER_INSTANCE", ""),
 
 		// Timeout defaults
 		PodReadyTimeout: getEnvInt("POD_READY_TIMEOUT", 300), // 5 minutes

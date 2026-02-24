@@ -152,6 +152,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			err = fixtures.CreateVariantAutoscalingWithDefaults(
 				ctx, crClient, cfg.LLMDNamespace, vaName,
 				deploymentName, cfg.ModelID, cfg.AcceleratorType,
+				cfg.ControllerInstance,
 			)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
@@ -861,6 +862,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			err = fixtures.CreateVariantAutoscalingWithDefaults(
 				ctx, crClient, cfg.LLMDNamespace, errorTestVAName,
 				deploymentName, cfg.ModelID, cfg.AcceleratorType,
+				cfg.ControllerInstance,
 			)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

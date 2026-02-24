@@ -235,6 +235,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 30.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

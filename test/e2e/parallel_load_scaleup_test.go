@@ -152,6 +152,7 @@ var _ = Describe("Parallel Load Scale-Up Test", Label("full"), Ordered, func() {
 		err = fixtures.CreateVariantAutoscalingWithDefaults(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			deploymentName, cfg.ModelID, cfg.AcceleratorType,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
