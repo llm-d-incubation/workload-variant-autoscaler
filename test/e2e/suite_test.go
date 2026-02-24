@@ -61,8 +61,14 @@ var _ = BeforeSuite(func() {
 
 	By("Initializing Kubernetes client")
 	var err error
-	restConfig, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
-	Expect(err).NotTo(HaveOccurred(), "Failed to load kubeconfig")
+	if _, statErr := os.Stat(cfg.Kubeconfig); statErr == nil {
+		restConfig, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
+		Expect(err).NotTo(HaveOccurred(), "Failed to load kubeconfig")
+	} else {
+		GinkgoWriter.Printf("Kubeconfig not found at %s, falling back to in-cluster config\n", cfg.Kubeconfig)
+		restConfig, err = rest.InClusterConfig()
+		Expect(err).NotTo(HaveOccurred(), "Failed to load in-cluster config (no kubeconfig file and not running in-cluster)")
+	}
 
 	k8sClient, err = kubernetes.NewForConfig(restConfig)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create Kubernetes clientset")
