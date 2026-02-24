@@ -87,6 +87,14 @@ func LoadConfigFromEnv() E2EConfig {
 		ScaleUpTimeout:  getEnvInt("SCALE_UP_TIMEOUT", 600),  // 10 minutes
 	}
 
+	// OpenShift clusters typically don't have the HPAScaleToZero feature gate
+	// enabled, so attempting to create HPAs with minReplicas=0 will fail with:
+	//   "spec.minReplicas: Invalid value: 0: must be greater than or equal to 1"
+	// Override the env var to prevent test failures on OpenShift.
+	if cfg.Environment == "openshift" && cfg.ScaleToZeroEnabled {
+		cfg.ScaleToZeroEnabled = false
+	}
+
 	return cfg
 }
 
