@@ -118,7 +118,7 @@ jobs:
       - name: Install Helm
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        uses: azure/setup-helm@v3
+        uses: azure/setup-helm@v4
 
       # -----------------------------------------
       # 8. Login to GHCR for chart publishing
