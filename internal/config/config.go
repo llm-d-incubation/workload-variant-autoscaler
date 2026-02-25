@@ -19,16 +19,11 @@ type Config struct {
 	infrastructure infrastructureConfig
 	tls            tlsConfig
 	prometheus     prometheusConfig
-	epp            eppConfig
-	features       featureFlagsConfig
-	saturation     saturationConfig  // namespace-aware
-	scaleToZero    scaleToZeroConfig // namespace-aware
 	otelConfig     otelConfig
 	//epp            eppConfig
 	features    featureFlagsConfig
 	saturation  saturationConfig  // namespace-aware
 	scaleToZero scaleToZeroConfig // namespace-aware
-
 }
 
 // configSyncState tracks configuration sync state used for startup/readiness checks.
