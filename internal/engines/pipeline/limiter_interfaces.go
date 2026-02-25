@@ -140,9 +140,18 @@ type ResourceAllocator interface {
 
 // ResourcePool represents available resources for one accelerator type.
 type ResourcePool struct {
-	Limit     int // total capacity (from cluster discovery)
-	Used      int // currently in use
-	Available int // Limit - Used
+	Limit int // total capacity (from cluster discovery)
+	Used  int // currently in use
+}
+
+// Available returns the number of allocatable resources (Limit - Used),
+// clamped to a minimum of 0.
+func (p ResourcePool) Available() int {
+	avail := p.Limit - p.Used
+	if avail < 0 {
+		return 0
+	}
+	return avail
 }
 
 // ResourceConstraints represents hard resource constraints from a single provider.
@@ -162,7 +171,7 @@ type ResourceConstraints struct {
 //   - ConstraintProvider: "Here are the limits" (hard facts)
 //   - ScalingOptimizer: "Here's what to do given those limits" (decision logic)
 type ConstraintProvider interface {
-	// Name returns provider identifier for logging/metrics.
+	// Name returns provider identifier, used as ProviderName in ResourceConstraints.
 	Name() string
 
 	// ComputeConstraints refreshes resource data and returns hard constraints.

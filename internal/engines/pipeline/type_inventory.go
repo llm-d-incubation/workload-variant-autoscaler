@@ -300,14 +300,9 @@ func (i *TypeInventory) GetResourcePools() map[string]ResourcePool {
 	pools := make(map[string]ResourcePool, len(i.limitByType))
 	for accType, limit := range i.limitByType {
 		used := i.usedByType[accType]
-		avail := limit - used
-		if avail < 0 {
-			avail = 0
-		}
 		pools[accType] = ResourcePool{
-			Limit:     limit,
-			Used:      used,
-			Available: avail,
+			Limit: limit,
+			Used:  used,
 		}
 	}
 	return pools

@@ -45,50 +45,6 @@ The ScaleFromZero engine continuously monitors inactive VariantAutoscaling resou
 - EndpointPicker (EPP) configured with flowcontrol enabled - required for queue metrics collection (set EPP env variable `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER`)
 
 
-## Configuration
-
-### Authentication Token Configuration
-
-The WVA controller requires a Bearer token to authenticate with the Prometheus metrics endpoint. You need to update the WVA ConfigMap with the authentication token extracted from the controller's service account secret.
-
-**Extract the Bearer token:**
-
-```bash
-TOKEN=$(kubectl -n workload-variant-autoscaler-system get secret workload-variant-autoscaler-controller-manager-token -o jsonpath='{.data.token}' | base64 --decode)
-```
-
-**Update the WVA ConfigMap:**
-
-```bash
-kubectl -n workload-variant-autoscaler-system patch configmap wva-variantautoscaling-config \
-  --type merge \
-  -p "{\"data\":{\"EPP_METRIC_READER_BEARER_TOKEN\":\"Bearer $TOKEN\"}}"
-```
-
-Or manually edit the ConfigMap:
-
-```bash
-kubectl -n workload-variant-autoscaler-system edit configmap wva-variantautoscaling-config
-```
-
-Add the token to the ConfigMap:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: wva-variantautoscaling-config
-  namespace: workload-variant-autoscaler-system
-data:
-  EPP_METRIC_READER_BEARER_TOKEN: "Bearer <your-token-here>"
-```
-
-**Note**: After updating the ConfigMap, restart the WVA controller for the changes to take effect:
-
-```bash
-kubectl -n workload-variant-autoscaler-system rollout restart deployment workload-variant-autoscaler-controller-manager
-```
-
 ## Usage
 
 ### Basic Setup

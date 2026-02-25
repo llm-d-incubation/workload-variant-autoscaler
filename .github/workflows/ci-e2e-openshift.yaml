@@ -261,6 +261,18 @@ jobs:
               }
             }
 
+      - name: Write workflow summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const shouldRun = '${{ steps.check.outputs.should_run }}';
+            if (shouldRun === 'true') {
+              core.summary.addRaw('**E2E tests will run** for this trigger.').write();
+            } else {
+              core.summary.addRaw('**E2E tests were skipped** (gate check did not pass for this trigger).').write();
+            }
+
   # Build the WVA controller image on GitHub-hosted runner (has proper Docker setup)
   # Note: Skip for fork PRs on pull_request event (no secrets access).
   # For fork PRs, build-image runs via issue_comment trigger (/ok-to-test).
@@ -345,13 +357,10 @@ jobs:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
 
-      - name: Extract Go version from go.mod
-        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "${{ env.GO_VERSION }}"
+          go-version: "1.24.x"
           cache-dependency-path: ./go.sum
 
       - name: Install tools (kubectl, oc, helm, make)
@@ -934,6 +943,8 @@ jobs:
           DEPLOYMENT: ms-inference-scheduling-llm-d-modelservice-decode
           # Pass WVA_RELEASE_NAME so test can filter for current run's resources
           WVA_RELEASE_NAME: ${{ env.WVA_RELEASE_NAME }}
+          # Controller instance label must match what the controller was deployed with
+          CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
           MODEL_ID: ${{ env.MODEL_ID }}
           REQUEST_RATE: ${{ env.REQUEST_RATE }}
           NUM_PROMPTS: ${{ env.NUM_PROMPTS }}
@@ -1014,6 +1025,34 @@ jobs:
 
           echo "Cleanup complete"
 
+      - name: Dump cluster state
+        if: always()
+        run: |
+          echo "=== Dumping cluster state for diagnostics ==="
+          echo ""
+          echo "=== VAs ==="
+          kubectl get va -n "$LLMD_NAMESPACE" 2>/dev/null || true
+          kubectl get va -n "$LLMD_NAMESPACE_B" 2>/dev/null || true
+          echo ""
+          echo "=== HPAs ==="
+          kubectl get hpa -n "$LLMD_NAMESPACE" 2>/dev/null || true
+          kubectl get hpa -n "$LLMD_NAMESPACE_B" 2>/dev/null || true
+          echo ""
+          echo "=== Controller pods ==="
+          kubectl get pods -n "$WVA_NAMESPACE" 2>/dev/null || true
+          echo ""
+          echo "=== All resources ==="
+          for ns in "$WVA_NAMESPACE" "$LLMD_NAMESPACE" "$LLMD_NAMESPACE_B"; do
+            if kubectl get namespace "$ns" &>/dev/null; then
+              echo "--- Namespace: $ns ---"
+              kubectl get all -n "$ns" 2>/dev/null || true
+              echo ""
+              echo "--- Events in $ns ---"
+              kubectl get events -n "$ns" --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
+              echo ""
+            fi
+          done
+
       - name: Scale down GPU workloads on failure
         # On failure, scale down decode deployments to free GPUs while preserving
         # other resources (VA, HPA, controller, gateway) for debugging
@@ -1034,20 +1073,6 @@ jobs:
               done
             fi
           done
-
-          echo ""
-          echo "GPU workloads scaled down. Remaining resources for debugging:"
-          echo ""
-          echo "=== VAs ==="
-          kubectl get va -n "$LLMD_NAMESPACE" 2>/dev/null || true
-          kubectl get va -n "$LLMD_NAMESPACE_B" 2>/dev/null || true
-          echo ""
-          echo "=== HPAs ==="
-          kubectl get hpa -n "$LLMD_NAMESPACE" 2>/dev/null || true
-          kubectl get hpa -n "$LLMD_NAMESPACE_B" 2>/dev/null || true
-          echo ""
-          echo "=== Controller pods ==="
-          kubectl get pods -n "$WVA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete

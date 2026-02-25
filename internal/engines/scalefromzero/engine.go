@@ -49,12 +49,11 @@ import (
 
 // Constants for condition
 const (
-	MetricsReasonAvailable            = "ScaleFromZero"
-	MetricsMessageAvailable           = "Scaled from zero due to pending requests"
-	reason                            = "scalefromzero mode: pending request - scale-up"
-	targetEPPMetricName               = "inference_extension_flow_control_queue_size"
-	targetEPPMetricLabel              = "target_model_name"
-	scaleFromZeroEngineMaxConcurrency = "SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY"
+	MetricsReasonAvailable  = "ScaleFromZero"
+	MetricsMessageAvailable = "Scaled from zero due to pending requests"
+	reason                  = "scalefromzero mode: pending request - scale-up"
+	targetEPPMetricName     = "inference_extension_flow_control_queue_size"
+	targetEPPMetricLabel    = "target_model_name"
 )
 
 type Engine struct {

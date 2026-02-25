@@ -70,11 +70,7 @@ func (m *mockInventory) GetResourcePools() map[string]ResourcePool {
 	pools := make(map[string]ResourcePool, len(m.limitByType))
 	for accType, limit := range m.limitByType {
 		used := m.usedByType[accType]
-		avail := limit - used
-		if avail < 0 {
-			avail = 0
-		}
-		pools[accType] = ResourcePool{Limit: limit, Used: used, Available: avail}
+		pools[accType] = ResourcePool{Limit: limit, Used: used}
 	}
 	return pools
 }

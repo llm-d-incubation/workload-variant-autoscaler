@@ -415,8 +415,8 @@ var _ = Describe("CostAwareOptimizer", func() {
 
 		It("mergeConstraints should take minimum available per type", func() {
 			constraints := []*ResourceConstraints{
-				{Pools: map[string]ResourcePool{"A100": {Available: 10}, "H100": {Available: 4}}},
-				{Pools: map[string]ResourcePool{"A100": {Available: 6}}},
+				{Pools: map[string]ResourcePool{"A100": {Limit: 10}, "H100": {Limit: 4}}},
+				{Pools: map[string]ResourcePool{"A100": {Limit: 6}}},
 			}
 
 			merged := mergeConstraints(constraints)

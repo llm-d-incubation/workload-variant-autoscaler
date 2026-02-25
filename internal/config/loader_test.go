@@ -315,7 +315,6 @@ func TestLoad_ConfigFromFile(t *testing.T) {
 PROMETHEUS_BASE_URL: "https://prometheus-file:9090"
 GLOBAL_OPT_INTERVAL: "120s"
 WVA_SCALE_TO_ZERO: "true"
-EPP_METRIC_READER_BEARER_TOKEN: "test-token"
 PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "true"
 PROMETHEUS_CA_CERT_PATH: "/custom/ca.crt"
 `)
@@ -333,9 +332,6 @@ PROMETHEUS_CA_CERT_PATH: "/custom/ca.crt"
 	}
 	if !cfg.ScaleToZeroEnabled() {
 		t.Error("Expected ScaleToZeroEnabled to be true from file")
-	}
-	if cfg.EPPMetricReaderBearerToken() != "test-token" {
-		t.Errorf("Expected EPP bearer token 'test-token', got %q", cfg.EPPMetricReaderBearerToken())
 	}
 	if !cfg.PrometheusInsecureSkipVerify() {
 		t.Error("Expected PrometheusInsecureSkipVerify to be true from file")

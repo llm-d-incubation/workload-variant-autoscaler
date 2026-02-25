@@ -20,12 +20,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/pod"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -33,6 +37,35 @@ var (
 	errPoolNotSynced = errors.New("EndpointPool not found in datastore")
 	errPoolIsNull    = errors.New("EndpointPool object is nil, does not exist")
 )
+
+// getEPPMetricsToken reads the EPP metrics token from the hardcoded path.
+// This token is used for authenticating with EPP pods when scraping metrics.
+// Returns empty string if the file cannot be read.
+func getEPPMetricsToken() string {
+	const tokenPath = "/var/run/secrets/epp-metrics/token"
+
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		// Log the error to make misconfiguration/permissions issues visible
+		ctrl.Log.Error(err, "Failed to read EPP metrics token - EPP authentication will be disabled",
+			"path", tokenPath)
+		return ""
+	}
+
+	// Trim whitespace and newlines from the token
+	token := strings.TrimSpace(string(tokenBytes))
+
+	// Log token info for debugging (without exposing the actual token)
+	if token == "" {
+		ctrl.Log.V(logging.DEBUG).Info("EPP metrics token file is empty", "path", tokenPath)
+	} else {
+		ctrl.Log.V(logging.DEBUG).Info("EPP metrics token loaded successfully",
+			"path", tokenPath,
+			"tokenLength", len(token))
+	}
+
+	return token
+}
 
 // The datastore is a local cache of relevant data for the given InferencePool (currently all pulled from k8s-api)
 // It also tracks namespaces that should be watched for ConfigMaps (namespaces with VariantAutoscaling or InferencePool resources).
@@ -85,16 +118,15 @@ func (ds *datastore) PoolSet(ctx context.Context, client client.Client, pool *po
 	}
 
 	if ds.registry.Get(pool.Name) == nil {
-		// Create pod source
-		var token string
-		if ds.config != nil {
-			token = ds.config.EPPMetricReaderBearerToken()
-		}
+		// Create pod source using the EPP metrics token read by getEPPMetricsToken()
+		// from the mounted token file at /var/run/secrets/epp-metrics/token. This token
+		// is mounted from the epp-metrics service account with minimal privileges and is
+		// used for authenticating with EPP pods when scraping metrics.
 		podConfig := pod.PodScrapingSourceConfig{
 			ServiceName:      pool.EndpointPicker.ServiceName,
 			ServiceNamespace: pool.EndpointPicker.Namespace,
 			MetricsPort:      pool.EndpointPicker.MetricsPortNumber,
-			BearerToken:      token,
+			BearerToken:      getEPPMetricsToken(),
 		}
 
 		podSource, err := pod.NewPodScrapingSource(ctx, client, podConfig)

@@ -490,7 +490,6 @@ The following table lists all static configuration parameters with their CLI fla
 | Scale to zero | — | `WVA_SCALE_TO_ZERO` | bool | `false` | Enable scale-to-zero feature |
 | Limited mode | — | `WVA_LIMITED_MODE` | bool | `false` | Enable limited mode |
 | Scale-from-zero concurrency | — | `SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY` | int | `10` | Max concurrent scale-from-zero operations |
-| EPP bearer token | — | `EPP_METRIC_READER_BEARER_TOKEN` | string | `""` | EPP metric reader bearer token |
 
 ### Fail-Fast Validation
 

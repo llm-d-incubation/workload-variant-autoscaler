@@ -128,6 +128,7 @@ var _ = Describe("Saturation Mode - Single VariantAutoscaling", Label("full"), O
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			deploymentName, cfg.ModelID, cfg.AcceleratorType, 30.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
@@ -332,11 +333,11 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 
 		By("Creating two VAs with different costs")
 		// VA A: Lower cost (should be preferred)
-		err = fixtures.CreateVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, vaA, modelServiceA+"-decode", cfg.ModelID, "A100", 30.0)
+		err = fixtures.CreateVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, vaA, modelServiceA+"-decode", cfg.ModelID, "A100", 30.0, cfg.ControllerInstance)
 		Expect(err).NotTo(HaveOccurred())
 
 		// VA B: Higher cost
-		err = fixtures.CreateVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, vaB, modelServiceB+"-decode", cfg.ModelID, "H100", 50.0)
+		err = fixtures.CreateVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, vaB, modelServiceB+"-decode", cfg.ModelID, "H100", 50.0, cfg.ControllerInstance)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Creating HPAs for both deployments")

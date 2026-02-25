@@ -19,6 +19,11 @@ resources:
 - metrics_auth_role_binding.yaml
 - prometheus_metrics_auth_role_binding.yaml
 - metrics_reader_role.yaml
+# EPP metrics reader service account with minimal privileges
+- epp_metrics_service_account.yaml
+- epp_metrics_reader_role.yaml
+- epp_metrics_reader_role_binding.yaml
+- epp_metrics_token_secret.yaml
 # For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines

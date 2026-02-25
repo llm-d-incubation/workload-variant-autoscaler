@@ -2,20 +2,18 @@ package e2e
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,7 +23,7 @@ import (
 
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
 // and scales up deployments from zero replicas when the HPAScaleToZero feature gate is enabled.
-var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -35,9 +33,9 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 
 	BeforeAll(func() {
 		// Skip if HPAScaleToZero is not enabled
-		if !cfg.ScaleToZeroEnabled {
-			Skip("HPAScaleToZero feature gate is not enabled; skipping scale-from-zero test")
-		}
+		// if !cfg.ScaleToZeroEnabled {
+		// 	Skip("HPAScaleToZero feature gate is not enabled; skipping scale-from-zero test")
+		// }
 
 		// Note: InferencePool should already exist from infra-only deployment
 		// We no longer create InferencePools in individual tests
@@ -81,111 +79,9 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 		// Additional delay to ensure the datastore is fully populated after EPP is ready
 		time.Sleep(5 * time.Second)
 
-		// Update scale-from-zero ConfigMap with BearerToken for EPP metrics collection
-		// This is required for the scale-from-zero engine to authenticate with EPP and query flow control queue metrics
-		By("Updating scale-from-zero ConfigMap with BearerToken for EPP metrics collection")
-		cmd := exec.Command("bash", "-c",
-			`kubectl -n workload-variant-autoscaler-system get secret workload-variant-autoscaler-controller-manager-token -o jsonpath='{.data.token}' | base64 --decode`)
-
-		output, err := cmd.CombinedOutput()
-		Expect(err).NotTo(HaveOccurred(), "Failed to get and decode token")
-
-		bearerToken := strings.TrimSpace(string(output))
-		Expect(bearerToken).NotTo(BeEmpty(), "Token should not be empty")
-
-		// Get the existing ConfigMap
-		scaleFromZeroConfigMapName := "workload-variant-autoscaler-variantautoscaling-config"
-		scaleFromZeroCM, err := k8sClient.CoreV1().ConfigMaps("workload-variant-autoscaler-system").Get(ctx, scaleFromZeroConfigMapName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get ConfigMap: %s", scaleFromZeroConfigMapName))
-
-		// Update the bearer token key
-		// Note: The token should NOT include "Bearer" prefix - the PodScrapingSource adds it automatically
-		if scaleFromZeroCM.Data == nil {
-			scaleFromZeroCM.Data = make(map[string]string)
-		}
-		scaleFromZeroCM.Data["EPP_METRIC_READER_BEARER_TOKEN"] = bearerToken
-		GinkgoWriter.Printf("Updated ConfigMap with bearer token (length: %d chars)\n", len(bearerToken))
-
-		// Update the ConfigMap
-		_, err = k8sClient.CoreV1().ConfigMaps("workload-variant-autoscaler-system").Update(ctx, scaleFromZeroCM, metav1.UpdateOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to update scale-from-zero ConfigMap: %s", scaleFromZeroConfigMapName))
-
-		// Restart controller pods to pick up the new config
-		By("Restarting controller pods to pick up new bearer token config")
-		cmd = exec.Command("kubectl", "delete", "pods",
-			"-n", "workload-variant-autoscaler-system",
-			"-l", "control-plane=controller-manager",
-			"--wait=false")
-		output, err = cmd.CombinedOutput()
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("kubectl delete failed: %s", string(output)))
-
-		// Wait for controller pods to be ready after restart
-		By("Waiting for controller pods to be ready after restart")
-		Eventually(func(g Gomega) {
-			podList, err := k8sClient.CoreV1().Pods("workload-variant-autoscaler-system").List(ctx, metav1.ListOptions{
-				LabelSelector: "control-plane=controller-manager",
-			})
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list controller pods")
-			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "Controller pods should exist")
-
-			// Check that at least one pod is ready
-			hasReadyPod := false
-			for _, pod := range podList.Items {
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-						hasReadyPod = true
-						break
-					}
-				}
-				if hasReadyPod {
-					break
-				}
-			}
-			g.Expect(hasReadyPod).To(BeTrue(), "At least one controller pod should be ready")
-		}, 5*time.Minute, 10*time.Second).Should(Succeed(), "Controller pods should be ready after restart")
-
-		// Force InferencePool reconciliation to ensure it's re-registered with the new bearer token
-		// After controller restart, the datastore is empty, so the InferencePool reconciler needs to run
-		// to re-register the pool. We trigger this by annotating the InferencePool resource, which will
-		// cause the reconciler to process it and call PoolSet, creating a new PodScrapingSource with
-		// the bearer token from the updated config.
-		By("Triggering InferencePool reconciliation to re-register with new bearer token")
-		Eventually(func(g Gomega) {
-			// Get the InferencePool resource
-			inferencePool := &unstructured.Unstructured{}
-			inferencePool.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   "inference.networking.k8s.io",
-				Version: "v1",
-				Kind:    "InferencePool",
-			})
-			err := crClient.Get(ctx, client.ObjectKey{
-				Namespace: cfg.LLMDNamespace,
-				Name:      "gaie-sim",
-			}, inferencePool)
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to get InferencePool")
-
-			// Add an annotation to trigger reconciliation
-			annotations := inferencePool.GetAnnotations()
-			if annotations == nil {
-				annotations = make(map[string]string)
-			}
-			annotations["test.llm-d.ai/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().Unix())
-			inferencePool.SetAnnotations(annotations)
-
-			// Update the InferencePool to trigger reconciliation
-			err = crClient.Update(ctx, inferencePool)
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to update InferencePool to trigger reconciliation")
-		}, 30*time.Second, 2*time.Second).Should(Succeed(), "Should trigger InferencePool reconciliation")
-
-		// Wait for InferencePool reconciler to process the update and re-register the pool
-		// The reconciler will call PoolSet, which will create a new PodScrapingSource with the
-		// bearer token from the updated config (loaded at startup after restart).
-		By("Waiting for InferencePool to be re-registered with new bearer token")
-		time.Sleep(30 * time.Second)
-
 		By("Creating model service deployment with 0 initial replicas")
 		// Create deployment with 0 replicas using the fixture
-		err = fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		// Immediately scale deployment to 0 (with retry to handle race conditions)
@@ -235,12 +131,9 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 30.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
-
-		By("Creating HPA with minReplicas=0")
-		err = fixtures.CreateHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 
 		// Wait for VA to be marked as inactive (replicas == 0) and for InferencePool to be available
 		// The scale-from-zero engine checks for inactive VAs, so we need to ensure:
@@ -278,6 +171,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 
 		// Delete deployment
 		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelServiceName+"-decode", metav1.DeleteOptions{})
+
 	})
 
 	Context("Initial state verification", func() {
@@ -308,23 +202,23 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 			GinkgoWriter.Println("Deployment verified at 0 replicas")
 		})
 
-		It("should have HPA configured with minReplicas=0", func() {
-			By("Verifying HPA allows scale-to-zero")
-			hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(hpa.Spec.MinReplicas).NotTo(BeNil(), "HPA should have MinReplicas set")
-			Expect(*hpa.Spec.MinReplicas).To(Equal(int32(0)), "HPA should allow scale-to-zero")
-
-			GinkgoWriter.Println("HPA verified with minReplicas=0")
-		})
 	})
 
 	Context("Scale-from-zero with pending requests", func() {
-		BeforeEach(func() {
-			Skip("Temporarily skipping entire context due to intermittent failures - needs investigation")
-		})
 		var triggerJobName string
+
+		AfterAll(func() {
+			if triggerJobName != "" {
+				By("Cleaning up trigger job")
+				propagation := metav1.DeletePropagationBackground
+				err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Delete(ctx, triggerJobName, metav1.DeleteOptions{
+					PropagationPolicy: &propagation,
+				})
+				if err != nil && !errors.IsNotFound(err) {
+					GinkgoWriter.Printf("Warning: failed to delete trigger job %s: %v\n", triggerJobName, err)
+				}
+			}
+		})
 
 		It("should detect pending requests and trigger scale-from-zero", func() {
 			By("Discovering inference gateway service")
@@ -436,15 +330,6 @@ var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 			GinkgoWriter.Println("Requests processed successfully after scale-from-zero")
 		})
 
-		AfterEach(func() {
-			if triggerJobName != "" {
-				By("Cleaning up trigger job")
-				propagation := metav1.DeletePropagationBackground
-				_ = k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Delete(ctx, triggerJobName, metav1.DeleteOptions{
-					PropagationPolicy: &propagation,
-				})
-			}
-		})
 	})
 })
 
@@ -459,26 +344,6 @@ func createScaleFromZeroTriggerJob(name, namespace, gatewayService, modelID stri
 echo "Scale-from-zero trigger job starting..."
 echo "Sending %d requests to gateway %s:80"
 echo "Model ID: %s"
-
-# Wait for gateway to be reachable
-MAX_RETRIES=30
-RETRY_DELAY=5
-CONNECTED=false
-
-for i in $(seq 1 $MAX_RETRIES); do
-  if curl -s -o /dev/null -w "%%{http_code}" http://%s:80/v1/models 2>/dev/null | grep -q 200; then
-    echo "Gateway is reachable on attempt $i"
-    CONNECTED=true
-    break
-  fi
-  echo "Attempt $i failed, retrying in ${RETRY_DELAY}s..."
-  sleep $RETRY_DELAY
-done
-
-if [ "$CONNECTED" != "true" ]; then
-  echo "ERROR: Cannot connect to gateway after $MAX_RETRIES attempts"
-  exit 1
-fi
 
 # Send requests with delays to allow scale-from-zero engine to detect them
 SENT=0
@@ -516,7 +381,7 @@ if [ $SUCCESS -gt 0 ]; then
 else
   exit 1
 fi
-`, numRequests, gatewayService, modelID, gatewayService, numRequests, numRequests, gatewayService, modelID)
+`, numRequests, gatewayService, modelID, numRequests, numRequests, gatewayService, modelID)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{

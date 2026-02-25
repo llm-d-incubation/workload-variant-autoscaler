@@ -36,9 +36,9 @@
 
 4. **No pending requests in queue**:
 
-   Extract the Bearer token:
+   Extract the Bearer token from the EPP metrics reader secret:
    ```bash
-   TOKEN=$(kubectl -n workload-variant-autoscaler-system get secret workload-variant-autoscaler-controller-manager-token -o jsonpath='{.data.token}' | base64 --decode)
+   TOKEN=$(kubectl -n workload-variant-autoscaler-system get secret workload-variant-autoscaler-epp-metrics-token -o jsonpath='{.data.token}' | base64 --decode)
    ```
 
    Port-forward the EPP metrics service to localhost:9090:

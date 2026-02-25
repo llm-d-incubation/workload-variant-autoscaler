@@ -107,6 +107,7 @@ var _ = Describe("Scale-To-Zero Feature", Label("full", "flaky"), Ordered, func(
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			deploymentName, cfg.ModelID, cfg.AcceleratorType, 30.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
@@ -353,6 +354,7 @@ enable_scale_to_zero: false`, cfg.ModelID),
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 10.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

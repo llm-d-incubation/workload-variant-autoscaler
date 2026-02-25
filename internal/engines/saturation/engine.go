@@ -89,8 +89,8 @@ type Engine struct {
 	capacityStore *saturation_v2.CapacityKnowledgeStore
 
 	// optimizer is the V2 scaling optimizer that produces VariantDecisions from
-	// AnalyzerResults. Selected at engine init: CostAwareOptimizer (unlimited)
-	// or GreedyBySaturationOptimizer (limited).
+	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
+	// CostAwareOptimizer (unlimited) or GreedyBySaturationOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
 }
 
@@ -116,17 +116,10 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
 
-	// Select optimizer at init time based on global config.
-	// CostAwareOptimizer (unlimited mode) is the default.
-	// When limited mode is enabled, a GPU-constrained optimizer will be used
-	// (GreedyBySaturationOptimizer, added in a follow-up).
-	var scalingOptimizer pipeline.ScalingOptimizer
-	if cfg.LimitedModeEnabled() {
-		// TODO: use GreedyBySaturationOptimizer when available
-		scalingOptimizer = pipeline.NewCostAwareOptimizer()
-	} else {
-		scalingOptimizer = pipeline.NewCostAwareOptimizer()
-	}
+	// Initialize with default optimizer. The actual optimizer is selected
+	// per-cycle in optimize() based on dynamic config (enableLimiter flag
+	// from ConfigMap), since config arrives after engine init.
+	var scalingOptimizer pipeline.ScalingOptimizer = pipeline.NewCostAwareOptimizer()
 
 	engine := Engine{
 		client:                  client,
@@ -239,9 +232,21 @@ func (e *Engine) optimize(ctx context.Context) error {
 	// empty/other values use the V1 percentage-based analyzer.
 	globalSatCfgMap := e.Config.SaturationConfig()
 	useV2 := false
+	enableLimiter := false
 	if cfg, ok := globalSatCfgMap["default"]; ok {
 		cfg.ApplyDefaults()
 		useV2 = cfg.AnalyzerName == "saturation"
+		enableLimiter = cfg.EnableLimiter
+	}
+
+	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
+	if useV2 {
+		if enableLimiter {
+			e.optimizer = pipeline.NewGreedyBySaturationOptimizer()
+		} else {
+			e.optimizer = pipeline.NewCostAwareOptimizer()
+		}
+		logger.V(logging.DEBUG).Info("V2 optimizer selected", "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
 	var allDecisions []interfaces.VariantDecision
@@ -462,31 +467,38 @@ func (e *Engine) optimizeV2(
 		return nil
 	}
 
-	// Stage 2: Call optimizer (no constraints for now — CostAwareOptimizer ignores them)
-	allDecisions := e.optimizer.Optimize(ctx, requests, nil)
+	// Stage 2: Compute GPU constraints and call optimizer
+	var constraints []*pipeline.ResourceConstraints
+	if _, ok := e.optimizer.(*pipeline.GreedyBySaturationOptimizer); ok {
+		currentUsage := computeCurrentGPUUsage(requests)
+		if limiter, ok := e.GPULimiter.(*pipeline.DefaultLimiter); ok {
+			constraint, err := limiter.ComputeConstraints(ctx, currentUsage)
+			if err != nil {
+				logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited")
+			} else {
+				constraints = append(constraints, constraint)
+			}
+		}
+	}
+	allDecisions := e.optimizer.Optimize(ctx, requests, constraints)
 
 	logger.Info("V2 optimizer produced decisions",
 		"optimizer", e.optimizer.Name(),
 		"decisionCount", len(allDecisions),
 		"modelCount", len(requests))
 
-	// Stage 3: Apply enforcer per-model (bridge from decisions to targets map)
+	// Stage 3: Apply enforcer per-model (directly on decisions)
 	for _, req := range requests {
 		scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(req.Namespace)
 
-		targets := extractTargetsFromDecisions(allDecisions, req.ModelID, req.Namespace)
-		variantAnalyses := buildVariantAnalysesFromDecisions(allDecisions, req.ModelID, req.Namespace)
-
-		enforcedTargets, scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicy(
+		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
 			ctx, req.ModelID, req.Namespace,
-			targets, variantAnalyses, scaleToZeroConfig,
+			allDecisions, scaleToZeroConfig, e.optimizer.Name(),
 		)
 		if scaledToZero {
 			logger.Info("Scale-to-zero enforcement applied (V2)",
-				"modelID", req.ModelID, "enforcedTargets", enforcedTargets)
+				"modelID", req.ModelID)
 		}
-
-		allDecisions = applyEnforcedTargetsToDecisions(allDecisions, enforcedTargets, req.ModelID, req.Namespace, e.optimizer.Name())
 	}
 
 	return allDecisions

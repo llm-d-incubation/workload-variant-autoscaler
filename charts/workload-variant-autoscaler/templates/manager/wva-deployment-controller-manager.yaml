@@ -105,6 +105,9 @@ spec:
           mountPath: /etc/ssl/certs/prometheus-ca.crt
           subPath: ca.crt
           readOnly: true
+        - name: epp-metrics-token
+          mountPath: /var/run/secrets/epp-metrics
+          readOnly: true
       volumes:
       - name: wva-config
         configMap:
@@ -113,6 +116,10 @@ spec:
         configMap:
           name: {{ include "workload-variant-autoscaler.fullname" . }}-prometheus-ca
           optional: true
+      - name: epp-metrics-token
+        secret:
+          secretName: {{ include "workload-variant-autoscaler.fullname" . }}-epp-metrics-token
+          defaultMode: 420
       serviceAccountName: {{ include "workload-variant-autoscaler.fullname" . }}-controller-manager
       terminationGracePeriodSeconds: 10
 {{- end }}

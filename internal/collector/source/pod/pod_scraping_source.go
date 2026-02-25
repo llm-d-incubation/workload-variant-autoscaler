@@ -310,9 +310,14 @@ func (p *PodScrapingSource) getAuthToken(ctx context.Context) (string, bool, err
 
 	// Try to read from secret
 	secret := &corev1.Secret{}
+	// Use the specified secret namespace, or fall back to service namespace
+	secretNamespace := p.config.MetricsReaderSecretNamespace
+	if secretNamespace == "" {
+		secretNamespace = p.config.ServiceNamespace
+	}
 	secretKey := types.NamespacedName{
 		Name:      p.config.MetricsReaderSecretName,
-		Namespace: p.config.ServiceNamespace,
+		Namespace: secretNamespace,
 	}
 
 	if err := p.k8sClient.Get(ctx, secretKey, secret); err != nil {

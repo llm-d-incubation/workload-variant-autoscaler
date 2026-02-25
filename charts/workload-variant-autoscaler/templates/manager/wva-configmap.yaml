@@ -26,10 +26,6 @@ data:
     # Whether to skip TLS certificate verification when connecting to Prometheus.
     PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: {{ if and .Values.wva.prometheus.tls (hasKey .Values.wva.prometheus.tls "insecureSkipVerify") }}{{ .Values.wva.prometheus.tls.insecureSkipVerify | quote }}{{ else }}"true"{{ end }}
 
-    # EPP Integration
-    # Bearer token used to authenticate metric reads from EPP.
-    EPP_METRIC_READER_BEARER_TOKEN: ""
-
     # Optimization
     # Global optimization loop interval for autoscaling decisions.
     GLOBAL_OPT_INTERVAL: {{ .Values.wva.reconcileInterval | quote }}

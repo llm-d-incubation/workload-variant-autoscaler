@@ -83,7 +83,6 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("WVA_SCALE_TO_ZERO", false)
 	v.SetDefault("WVA_LIMITED_MODE", false)
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
-	v.SetDefault("EPP_METRIC_READER_BEARER_TOKEN", "")
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
 	v.SetDefault("OTEL_TARGET_ENDPOINT_GRPC", "")
 	v.SetDefault("OTEL_TARGET_CA_CERT_PATH", "")
@@ -153,8 +152,6 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 
 	// Prometheus cache config from config file / env / defaults
 	cfg.prometheus.cache = parsePrometheusCacheConfigFromViper(v)
-
-	cfg.epp.metricReaderBearerToken = v.GetString("EPP_METRIC_READER_BEARER_TOKEN")
 
 	// Prometheus connection config from config file / env
 	promBaseURL := v.GetString("PROMETHEUS_BASE_URL")

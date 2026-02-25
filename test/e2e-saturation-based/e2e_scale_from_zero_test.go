@@ -21,9 +21,6 @@ import (
 	"fmt"
 	"time"
 
-	"os/exec"
-	"strings"
-
 	v1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils/resources"
@@ -43,8 +40,6 @@ const (
 	scaleFromZeroTestTimeout  = 15 * time.Minute
 	scaleUpFromZeroTimeout    = 5 * time.Minute
 	scaleFromZeroRequestCount = 10
-	// Uses Helm-generated name based on default release name
-	scaleFromZeroConfigMapName = "workload-variant-autoscaler-variantautoscaling-config"
 )
 
 // Test workload-variant-autoscaler - Scale-From-Zero Feature
@@ -66,7 +61,6 @@ var _ = Describe("Test workload-variant-autoscaler - Scale-From-Zero Feature", O
 	)
 
 	BeforeAll(func() {
-		Skip("Scale-from-zero test is currently disabled due to EPP_METRIC_READER_BEARER_TOKEN being in the main configmap. Must be loaded dynamically")
 		ctx = context.Background()
 		name = "llm-d-sim-sfz" // Scale-from-zero test
 		deployName = name + "-deployment"
@@ -95,44 +89,13 @@ var _ = Describe("Test workload-variant-autoscaler - Scale-From-Zero Feature", O
 			g.Expect(cm.Data).To(HaveKey("default"), "saturation ConfigMap should have 'default' configuration")
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
-		By("updating scale-from-zero ConfigMap with BearerToken for EPP metrics collection")
-		// Execute the exact shell command to get the token
-		cmd := exec.Command("bash", "-c",
-			`kubectl -n workload-variant-autoscaler-system get secret workload-variant-autoscaler-controller-manager-token -o jsonpath='{.data.token}' | base64 --decode`)
-
-		output, err := cmd.CombinedOutput()
-		Expect(err).NotTo(HaveOccurred(), "Failed to get and decode token")
-
-		bearerToken := strings.TrimSpace(string(output))
-		Expect(bearerToken).NotTo(BeEmpty(), "Token should not be empty")
-
-		// Get the existing ConfigMap
-		scaleFromZeroCM, err := k8sClient.CoreV1().ConfigMaps(controllerNamespace).Get(ctx, scaleFromZeroConfigMapName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to get ConfigMap: %s", scaleFromZeroConfigMapName))
-
-		// Update the bearer token key
-		scaleFromZeroCM.Data["EPP_METRIC_READER_BEARER_TOKEN"] = bearerToken
-
-		// Update the ConfigMap
-		_, err = k8sClient.CoreV1().ConfigMaps(controllerNamespace).Update(ctx, scaleFromZeroCM, metav1.UpdateOptions{})
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to update scale-from-zero ConfigMap: %s", scaleFromZeroConfigMapName))
-
-		// Start the scale-from-zero deployment
-		By("deleting pods using kubectl command")
-		cmd = exec.Command("kubectl", "delete", "pods",
-			"-n", controllerNamespace,
-			"-l", "control-plane=controller-manager",
-			"--wait=false")
-		output, err = cmd.CombinedOutput()
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("kubectl delete failed: %s", string(output)))
-
 		By("ensuring unique app label for deployment and service")
 		utils.ValidateAppLabelUniqueness(namespace, appLabel, k8sClient, crClient)
 		utils.ValidateVariantAutoscalingUniqueness(namespace, modelName, a100Acc, crClient)
 
 		By("creating llm-d-sim deployment with 0 replicas")
 		deployment := resources.CreateLlmdSimDeployment(namespace, deployName, modelName, appLabel, fmt.Sprintf("%d", port), avgTTFT, avgITL, initialReplicas)
-		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
+		_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Should be able to create Deployment: %s", deployName))
 
 		By("creating service to expose llm-d-sim deployment")

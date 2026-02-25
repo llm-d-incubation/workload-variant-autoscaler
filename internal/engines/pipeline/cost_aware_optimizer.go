@@ -41,7 +41,7 @@ func (o *CostAwareOptimizer) Optimize(
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
 ) []interfaces.VariantDecision {
-	logger := ctrl.LoggerFrom(ctx)
+	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	var allDecisions []interfaces.VariantDecision
 
 	for _, req := range requests {
@@ -59,7 +59,7 @@ func (o *CostAwareOptimizer) Optimize(
 			costAwareScaleDown(ctx, req.Result, targets)
 		}
 
-		decisions := buildDecisions(req, stateMap, vcMap, targets)
+		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "cost-aware")
 		logger.V(logging.DEBUG).Info("Cost-aware optimizer decisions",
 			"modelID", req.ModelID,
 			"decisions", len(decisions))
@@ -234,12 +234,14 @@ func costEfficiency(vc interfaces.VariantCapacity) float64 {
 	return vc.Cost / vc.PerReplicaCapacity
 }
 
-// buildDecisions converts targets map into VariantDecision slice.
-func buildDecisions(
+// buildDecisionsWithOptimizer converts targets map into VariantDecision slice.
+// optimizerName is included in reason strings for observability.
+func buildDecisionsWithOptimizer(
 	req ModelScalingRequest,
 	stateMap map[string]interfaces.VariantReplicaState,
 	vcMap map[string]interfaces.VariantCapacity,
 	targets map[string]int,
+	optimizerName string,
 ) []interfaces.VariantDecision {
 	decisions := make([]interfaces.VariantDecision, 0, len(targets))
 	for name, target := range targets {
@@ -251,10 +253,10 @@ func buildDecisions(
 		switch {
 		case target > state.CurrentReplicas:
 			action = interfaces.ActionScaleUp
-			reason = fmt.Sprintf("V2 scale-up (optimizer: cost-aware, required: %.0f)", req.Result.RequiredCapacity)
+			reason = fmt.Sprintf("V2 scale-up (optimizer: %s, required: %.0f)", optimizerName, req.Result.RequiredCapacity)
 		case target < state.CurrentReplicas:
 			action = interfaces.ActionScaleDown
-			reason = fmt.Sprintf("V2 scale-down (optimizer: cost-aware, spare: %.0f)", req.Result.SpareCapacity)
+			reason = fmt.Sprintf("V2 scale-down (optimizer: %s, spare: %.0f)", optimizerName, req.Result.SpareCapacity)
 		default:
 			action = interfaces.ActionNoChange
 			reason = "V2 steady state"
@@ -284,8 +286,8 @@ func mergeConstraints(constraints []*ResourceConstraints) map[string]int {
 			continue
 		}
 		for accType, pool := range c.Pools {
-			if existing, ok := merged[accType]; !ok || pool.Available < existing {
-				merged[accType] = pool.Available
+			if existing, ok := merged[accType]; !ok || pool.Available() < existing {
+				merged[accType] = pool.Available()
 			}
 		}
 	}

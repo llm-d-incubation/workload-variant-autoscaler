@@ -113,6 +113,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaA,
 			modelServiceA+"-decode", cfg.ModelID, "H100", 30.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VA A")
 
@@ -120,6 +121,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaB,
 			modelServiceB+"-decode", cfg.ModelID, "MI300X", 40.0,
+			cfg.ControllerInstance,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VA B")
 

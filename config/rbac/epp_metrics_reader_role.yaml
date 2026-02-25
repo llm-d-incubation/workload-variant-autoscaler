@@ -1,0 +1,15 @@
+# Minimal RBAC role for EPP metrics reader service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: epp-metrics-reader-role
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/component: epp-metrics
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- nonResourceURLs:
+  - /metrics
+  - /debug/pprof/*
+  verbs:
+  - get
