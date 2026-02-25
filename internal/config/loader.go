@@ -85,6 +85,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
 	v.SetDefault("EPP_METRIC_READER_BEARER_TOKEN", "")
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
+	v.SetDefault("OTEL_TARGET_ENDPOINT_GRPC", "")
+	v.SetDefault("OTEL_TARGET_CA_CERT_PATH", "")
 
 	// Load from config file (mounted in the container) — sits between env and defaults in precedence
 	if configFilePath != "" {
@@ -168,6 +170,10 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	cfg.prometheus.clientCertPath = v.GetString("PROMETHEUS_CLIENT_CERT_PATH")
 	cfg.prometheus.clientKeyPath = v.GetString("PROMETHEUS_CLIENT_KEY_PATH")
 	cfg.prometheus.serverName = v.GetString("PROMETHEUS_SERVER_NAME")
+
+	// Telemetry config
+	cfg.otelConfig.targetEndpointGrpc = v.GetString("OTEL_TARGET_ENDPOINT_GRPC")
+	cfg.otelConfig.caCertPath = v.GetString("OTEL_TARGET_CA_CERT_PATH")
 	return nil
 }
 

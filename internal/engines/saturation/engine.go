@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/telemetry"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
@@ -169,6 +171,9 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) error {
+	ctx, span := telemetry.Tracer.Start(ctx, "saturation-engine-optimize")
+	defer span.End()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Get optimization interval from Config (already a time.Duration)
@@ -961,12 +966,25 @@ func (e *Engine) applySaturationDecisions(
 			logger.Error(err, "Failed to emit metrics for external autoscalers",
 				"variant", updateVa.Name)
 		} else {
-			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
+			// Only log and trace detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
 			if hasDecision {
 				logger.Info("Successfully emitted metrics",
 					"variant", updateVa.Name,
 					"target", targetReplicas,
 					"accelerator", acceleratorName)
+
+				_, span := telemetry.Tracer.Start(ctx, "metric-emission-success")
+				defer span.End()
+				span.SetAttributes(attribute.String("variant", updateVa.Name))
+				span.SetAttributes(attribute.String("variant namespace", updateVa.Namespace))
+				span.SetAttributes(attribute.String("variant cost", updateVa.Spec.VariantCost))
+				span.SetAttributes(attribute.String("scale target", updateVa.Spec.ScaleTargetRef.Name))
+				span.SetAttributes(attribute.String("modelID", updateVa.Spec.ModelID))
+				span.SetAttributes(attribute.Int("currentReplicas", decision.CurrentReplicas))
+				span.SetAttributes(attribute.Int("targetReplicas", targetReplicas))
+				span.SetAttributes(attribute.String("accelerator", acceleratorName))
+				span.SetAttributes(attribute.String("action", string(decision.Action)))
+				span.SetAttributes(attribute.String("reason", reason))
 			}
 			updateVa.Status.Actuation.Applied = true
 		}

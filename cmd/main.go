@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	goflag "flag"
 	"fmt"
 	"net/http"
@@ -55,6 +56,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/scalefromzero"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/telemetry"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -334,6 +336,17 @@ func main() {
 		os.Exit(1)
 	}
 	setupLog.Info("Initial ConfigMap bootstrap completed")
+
+	// Set up OpenTelemetry
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, cfg)
+	if err != nil {
+		setupLog.Error(err, "failed to set up OpenTelemetry SDK")
+		os.Exit(1)
+	}
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
 
 	// Use Prometheus configuration from unified Config (already validated during Load())
 	if cfg.PrometheusBaseURL() == "" {

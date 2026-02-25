@@ -51,4 +51,9 @@ data:
     PROMETHEUS_METRICS_CACHE_STALE_THRESHOLD: {{ if and .Values.wva.prometheus .Values.wva.prometheus.metricsCache }}{{ .Values.wva.prometheus.metricsCache.staleThreshold | default "2m" | quote }}{{ else }}"2m"{{ end }}
     # Maximum age for metrics before they are considered unavailable.
     PROMETHEUS_METRICS_CACHE_UNAVAILABLE_THRESHOLD: {{ if and .Values.wva.prometheus .Values.wva.prometheus.metricsCache }}{{ .Values.wva.prometheus.metricsCache.unavailableThreshold | default "5m" | quote }}{{ else }}"5m"{{ end }}
+
+    # OpenTelemetry(OTEL) Configuration (Optional)
+    # OTEL grpc target endpoint (no scheme or path) e.g. example.com:4317
+    OTEL_TARGET_ENDPOINT_GRPC: {{ if and .Values.wva.otel .Values.wva.otel.targetEndpointGrpc }}{{ .Values.wva.otel.targetEndpointGrpc | quote }}{{ end }}
+    OTEL_TARGET_CA_CERT_PATH: {{ if and .Values.wva.otel .Values.wva.otel.targetCaCertPath }}{{ .Values.wva.otel.targetCaCertPath | quote }}{{ end }}
 {{- end }}

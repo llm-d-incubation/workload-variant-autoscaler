@@ -23,7 +23,7 @@ type Config struct {
 	features       featureFlagsConfig
 	saturation     saturationConfig  // namespace-aware
 	scaleToZero    scaleToZeroConfig // namespace-aware
-
+	otelConfig     otelConfig
 }
 
 // configSyncState tracks configuration sync state used for startup/readiness checks.

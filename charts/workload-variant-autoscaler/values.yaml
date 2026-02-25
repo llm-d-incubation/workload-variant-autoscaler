@@ -31,6 +31,12 @@ wva:
     # will require recreating the ConfigMap and restarting the controller).
     # Default: false (allows runtime updates for dynamic configuration)
     immutable: false
+
+  # OpenTelemetry(OTEL) Configuration (Optional)
+  # OTEL grpc target endpoint (no scheme or path) e.g. example.com:4317
+  otel:
+    #targetEndpointGrpc: "example.com:4317"
+    #targetCaCertPath: "/path/to/ca.cert"
     
   prometheus:
     monitoringNamespace: openshift-user-workload-monitoring

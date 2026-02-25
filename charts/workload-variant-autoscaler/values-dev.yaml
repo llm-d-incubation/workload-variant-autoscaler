@@ -21,6 +21,13 @@ wva:
   # Development logging configuration
   logging:
     level: debug  # Development: debug, Production: info
+
+  # OpenTelemetry(OTEL) Configuration (Optional)
+  # OTEL grpc target endpoint (no scheme or path) e.g. example.com:4317
+  otel:
+    targetEndpointGrpc: "localhost:4317"
+    #targetCaCertPath: "/path/to/ca.cert"
+
   prometheus:
     monitoringNamespace: openshift-user-workload-monitoring
     baseURL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"

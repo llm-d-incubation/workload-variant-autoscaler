@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/telemetry"
 )
 
 // Analyzer implements the V1 percentage-based saturation analyzer.
@@ -127,6 +129,16 @@ func (a *Analyzer) AnalyzeModelSaturation(
 		"shouldScaleUp", analysis.ShouldScaleUp,
 		"scaleDownSafe", analysis.ScaleDownSafe)
 
+	_, span := telemetry.Tracer.Start(ctx, "saturation-analysis-completed")
+	defer span.End()
+	span.SetAttributes(attribute.String("modelID", modelID))
+	span.SetAttributes(attribute.String("namespace", namespace))
+	span.SetAttributes(attribute.Int("analysis.TotalReplicas", analysis.TotalReplicas))
+	span.SetAttributes(attribute.Int("nonSaturatedReplicas", nonSaturatedCount))
+	span.SetAttributes(attribute.Float64("analysis.AvgSpareKvCapacity", analysis.AvgSpareKvCapacity))
+	span.SetAttributes(attribute.Float64("analysis.AvgSpareQueueLength", analysis.AvgSpareQueueLength))
+	span.SetAttributes(attribute.Bool("analysis.ShouldScaleUp", analysis.ShouldScaleUp))
+	span.SetAttributes(attribute.Bool("analysis.ScaleDownSafe", analysis.ScaleDownSafe))
 	return analysis, nil
 }
 
