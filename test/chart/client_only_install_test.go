@@ -26,8 +26,13 @@ import (
 const chartPath = "../../charts/workload-variant-autoscaler"
 
 // helmTemplate runs "helm template" with the given set values and returns the rendered output.
+// It skips the test if the helm binary is not found on $PATH.
 func helmTemplate(t *testing.T, releaseName string, setValues map[string]string) string {
 	t.Helper()
+
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed, skipping helm chart test")
+	}
 
 	args := []string{"template", releaseName, chartPath}
 	for k, v := range setValues {

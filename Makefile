@@ -90,6 +90,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
+	@command -v helm >/dev/null 2>&1 || echo "WARNING: helm is not installed. Helm chart tests will be skipped."
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Creates a multi-node Kind cluster
