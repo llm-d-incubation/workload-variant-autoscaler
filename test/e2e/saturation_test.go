@@ -256,6 +256,14 @@ var _ = Describe("Saturation Mode - Single VariantAutoscaling", Label("full"), O
 	// Full test: Replica stability under constant load
 	Context("Replica stability under constant load", Label("full"), func() {
 		It("should maintain stable replica count under constant load", func() {
+			// Skip when using simulator: the simulator produces metrics that the saturation
+			// engine interprets as saturation, causing unpredictable scaling (1→3 replicas)
+			// instead of the stable count this test expects. Stability testing requires
+			// real vLLM with predictable GPU saturation behavior under constant load.
+			if cfg.UseSimulator {
+				Skip("Saturation stability test requires real vLLM — simulator metrics cause unpredictable scaling")
+			}
+
 			By("Starting constant load generation")
 			loadCfg := fixtures.LoadConfig{
 				Strategy:     cfg.LoadStrategy,

@@ -33,6 +33,7 @@ type E2EConfig struct {
 	EPPMode          string            // "poolName" or "endpointSelector"
 	PoolName         string            // InferencePool name (if using poolName mode)
 	EndpointSelector map[string]string // Pod selector (if using endpointSelector)
+	EPPServiceName   string            // EPP service name (e.g., "gaie-inference-scheduling-epp")
 
 	// Model configuration
 	ModelID         string // e.g., "unsloth/Meta-Llama-3.1-8B"
@@ -81,6 +82,7 @@ func LoadConfigFromEnv() E2EConfig {
 		EPPMode:          getEnv("EPP_MODE", "poolName"),
 		PoolName:         getEnv("POOL_NAME", ""),
 		EndpointSelector: parseEndpointSelector(getEnv("ENDPOINT_SELECTOR", "")),
+		EPPServiceName:   getEnv("EPP_SERVICE_NAME", "gaie-inference-scheduling-epp"),
 
 		// Model defaults
 		ModelID:         getEnv("MODEL_ID", "unsloth/Meta-Llama-3.1-8B"),

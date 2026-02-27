@@ -561,7 +561,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 			// Use burst load pattern
 			// Burst pattern creates queue spikes that are more likely to trigger saturation detection
-			targetURL := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/chat/completions", modelServiceName, cfg.LLMDNamespace)
+			targetURL := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/completions", modelServiceName, cfg.LLMDNamespace)
 			err = fixtures.EnsureBurstLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "smoke-scaleup-load", targetURL, loadCfg)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create burst load generation job")
 

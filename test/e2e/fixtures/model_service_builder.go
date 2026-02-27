@@ -81,7 +81,7 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 
 func buildModelServiceDeployment(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) *appsv1.Deployment {
 	appLabel := name + "-decode"
-	image := "ghcr.io/llm-d/llm-d-inference-sim:v0.6.1"
+	image := "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
 	if !useSimulator {
 		image = "vllm/vllm-openai:latest"
 	}
@@ -146,18 +146,40 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 
 func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int) []string {
 	if useSimulator {
+		// Simulator is configured to be deliberately slow so that Prometheus
+		// can observe non-zero KV-cache and queue metrics between scrapes (every 15s).
+		// With TTFT=2000ms + ITL=100ms and ~250 output tokens, each request takes ~27s.
+		// With max-num-seqs=5, the 5 slots fill quickly and incoming requests queue,
+		// producing visible num_requests_waiting and kv_cache_usage_perc metrics.
+		//
+		// KV cache sizing is critical: the simulator uses reference-counted unique
+		// block hashes, so all requests with the same prompt share a single block.
+		// The burst load prompt (~8 tokens) with blockSize=8 produces exactly
+		// 1 block (8/8 = 1). With kv-cache-size=1 (max 1 block), usage = 1/1 = 100%,
+		// which exceeds the WVA saturation spare trigger threshold and fires scale-up.
+		// IMPORTANT: The load generator must use /v1/completions (text completion),
+		// NOT /v1/chat/completions — the simulator only tracks KV cache for the
+		// text completion API.
+		// Note: blockSize must be one of {8, 16, 32, 64, 128} per simulator validation.
+		const (
+			simulatorKVCacheSize = 1   // minimal cache: 1 unique block / 1 max block = 100% usage during load
+			simulatorBlockSize   = 8   // minimum valid block size; 8 tokens / 8 = 1 block per request
+			simulatorMaxModelLen = 512 // must exceed prompt tokens + max_tokens (burst load uses ~9 + 400 = 409)
+			simulatorTTFT        = "2000ms" // time-to-first-token (slow to hold KV cache)
+			simulatorITL         = "100ms"  // inter-token latency (slow to keep requests active)
+		)
 		return []string{
 			"--model", modelID,
 			"--port", "8000",
-			fmt.Sprintf("--time-to-first-token=%d", 100),
-			fmt.Sprintf("--inter-token-latency=%d", 20),
+			fmt.Sprintf("--time-to-first-token=%s", simulatorTTFT),
+			fmt.Sprintf("--inter-token-latency=%s", simulatorITL),
 			"--mode=random",
 			"--enable-kvcache",
-			"--kv-cache-size=1024",
-			"--block-size=16",
+			fmt.Sprintf("--kv-cache-size=%d", simulatorKVCacheSize),
+			fmt.Sprintf("--block-size=%d", simulatorBlockSize),
 			"--tokenizers-cache-dir=/tmp",
 			"--max-num-seqs", fmt.Sprintf("%d", maxNumSeqs),
-			"--max-model-len", "1024",
+			"--max-model-len", fmt.Sprintf("%d", simulatorMaxModelLen),
 		}
 	}
 	return []string{

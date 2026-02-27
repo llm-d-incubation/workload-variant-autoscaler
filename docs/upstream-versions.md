@@ -9,4 +9,4 @@
 
 | Dependency | Current Pin | Pin Type | File Location | Upstream Repo |
 |-----------|-------------|----------|---------------|---------------|
-<!-- | **example-lib** | `v1.2.3` | tag | `go.mod` line 10 | example-org/example-lib | -->
+| **llm-d-inference-sim** | `v0.7.1` | image tag | `test/e2e/fixtures/model_service_builder.go` line 84, `test/utils/resources/llmdsim.go` lines 43,102 | llm-d/llm-d-inference-sim |

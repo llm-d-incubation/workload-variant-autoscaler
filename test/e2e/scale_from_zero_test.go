@@ -24,7 +24,8 @@ import (
 
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
 // and scales up deployments from zero replicas when the HPAScaleToZero feature gate is enabled.
-var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
+// NOTE: Disabled — standard HPA rejects minReplicas=0; requires KEDA ScaledObject support.
+var _ = PDescribe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -47,16 +48,18 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 		// The InferencePool reconciler should have already reconciled it as part of infrastructure.
 		// check for EPP service by name and pods by inferencepool label.
 		By("Waiting for InferencePool to be reconciled (allows time for controller to register it in datastore)")
+		eppServiceName := cfg.EPPServiceName
+		GinkgoWriter.Printf("Looking for EPP service: %s in namespace: %s\n", eppServiceName, cfg.LLMDNamespace)
 		// Wait for the EPP service to exist
 		Eventually(func(g Gomega) {
-			_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, "gaie-sim-epp", metav1.GetOptions{})
+			_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, eppServiceName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
 		}, 2*time.Minute, 5*time.Second).Should(Succeed(), "EPP service should exist")
 
-		// Wait for EPP pods to be ready (using correct label: inferencepool=gaie-sim-epp)
+		// Wait for EPP pods to be ready
 		Eventually(func(g Gomega) {
 			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: "inferencepool=gaie-sim-epp",
+				LabelSelector: fmt.Sprintf("inferencepool=%s", eppServiceName),
 			})
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
 			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "EPP pods should exist")

@@ -243,6 +243,10 @@ jobs:
                     console.log('Note: Maintainer will need to manually comment /ok-to-test');
                   }
                 }
+
+                // Fail the gate to prevent deceptive green badge.
+                // E2E will run via the /ok-to-test comment trigger (issue_comment event).
+                core.setFailed('Fork PR — E2E cannot run on pull_request event (no secrets access). Auto-posted /ok-to-test to trigger via comment.');
                 return;
               }
               // Non-fork PR from maintainer - run directly
@@ -261,16 +265,30 @@ jobs:
               }
             }
 
+            // Fail the gate to prevent deceptive green badge.
+            // E2E requires a maintainer to comment /ok-to-test after reviewing the code.
+            core.setFailed('Fork PR from external contributor — awaiting /ok-to-test from a maintainer.');
+
       - name: Write workflow summary
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const shouldRun = '${{ steps.check.outputs.should_run }}';
+            const isFork = '${{ steps.check.outputs.is_fork_pr }}';
+            const eventName = '${{ github.event_name }}';
             if (shouldRun === 'true') {
-              core.summary.addRaw('**E2E tests will run** for this trigger.').write();
+              core.summary.addRaw('✅ **E2E tests will run** for this trigger.\n').write();
+            } else if (isFork === 'true' && eventName === 'pull_request') {
+              core.summary.addRaw([
+                '⏸️ **E2E tests skipped — fork PR**\n\n',
+                'Fork PRs cannot run E2E on `pull_request` events (no access to secrets/GPU runners).\n\n',
+                'A maintainer must comment `/ok-to-test` to trigger the E2E suite.\n\n',
+                '> **Why is this red?** To prevent a deceptive green badge. ',
+                'Green means E2E passed; this run did not execute E2E tests.\n',
+              ].join('')).write();
             } else {
-              core.summary.addRaw('**E2E tests were skipped** (gate check did not pass for this trigger).').write();
+              core.summary.addRaw('⏸️ **E2E tests were skipped** (gate check did not pass for this trigger).\n').write();
             }
 
   # Build the WVA controller image on GitHub-hosted runner (has proper Docker setup)
@@ -320,9 +338,10 @@ jobs:
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Image built and pushed: $FULL_IMAGE"
 
-  # Run e2e tests on OpenShift self-hosted runner
+  # Run e2e tests on OpenShift self-hosted runner (vllm-d cluster).
+  # pok-prod runners are reserved for nightly E2E only.
   e2e-openshift:
-    runs-on: [self-hosted, openshift]
+    runs-on: [self-hosted, openshift, vllm-d]
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
@@ -330,7 +349,7 @@ jobs:
       ACCELERATOR_TYPE: ${{ github.event.inputs.accelerator_type || 'A100' }}
       REQUEST_RATE: ${{ github.event.inputs.request_rate || '20' }}
       NUM_PROMPTS: ${{ github.event.inputs.num_prompts || '3000' }}
-      MAX_NUM_SEQS: ${{ github.event.inputs.max_num_seqs || '1' }}
+      MAX_NUM_SEQS: ${{ github.event.inputs.max_num_seqs || '5' }}
       HPA_STABILIZATION_SECONDS: ${{ github.event.inputs.hpa_stabilization_seconds || '240' }}
       SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
       # Use main branch of llm-d/llm-d for inferencepool chart v1.2.1 (GA API support)
@@ -390,6 +409,21 @@ jobs:
           echo "Verifying cluster access..."
           kubectl cluster-info
           kubectl get nodes
+
+      - name: Verify correct cluster (vllm-d, not pok-prod)
+        run: |
+          # PR E2E tests must run on the vllm-d cluster, not pok-prod-sa.
+          # pok-prod-sa is reserved for nightly E2E runs only.
+          # Runners with the 'pok-prod' label connect to pok-prod-sa;
+          # runners without it connect to vllm-d.
+          CLUSTER_API=$(kubectl cluster-info 2>/dev/null | head -1 | grep -oE 'https://[^ ]+')
+          echo "Cluster API: $CLUSTER_API"
+          if echo "$CLUSTER_API" | grep -q "pokprod"; then
+            echo "::error::This runner is connected to pok-prod-sa, but PR E2E tests must run on vllm-d."
+            echo "::error::The runner likely has the 'pok-prod' label. PR CI should only use vllm-d runners."
+            exit 1
+          fi
+          echo "Cluster verified: running on vllm-d"
 
       - name: Check GPU availability
         id: gpu-check
@@ -613,6 +647,12 @@ jobs:
           WVA_NS: ${{ env.WVA_NAMESPACE }}
           # Controller instance label for multi-controller isolation in parallel e2e tests
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
+          # Skip infra VA/HPA — the smoke test creates its own VA+HPA targeting
+          # its own deployment. The infra VA adds a second idle pod to the
+          # saturation analysis group, diluting KV cache metrics and preventing
+          # scale-up from triggering.
+          DEPLOY_VA: "false"
+          DEPLOY_HPA: "false"
           # vLLM max-num-seqs for e2e testing (lower = easier to saturate)
           VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
           # Decode replicas for e2e testing (start with 1 replica, let HPA scale)
@@ -623,6 +663,13 @@ jobs:
           # user-workload-monitoring cannot authenticate with the controller-manager
           # SA token. The endpoint is still only accessible within the cluster network.
           WVA_METRICS_SECURE: "false"
+          # Lower saturation thresholds for simulator mode — the simulator's
+          # KV-cache and queue metrics are modest, so default thresholds
+          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
+          # scale-up reliably. These values trigger when kvUsage > 0.30 or
+          # queueLength > 0.5, which the simulator produces under load.
+          KV_SPARE_TRIGGER: "0.5"
+          QUEUE_SPARE_TRIGGER: "4.5"
           # inference-scheduling guide has routing proxy disabled, so vLLM
           # serves directly on port 8000 (not 8200 behind proxy)
           VLLM_SVC_PORT: "8000"
@@ -637,6 +684,8 @@ jobs:
           echo "  CONTROLLER_INSTANCE: $CONTROLLER_INSTANCE"
           echo "  VLLM_MAX_NUM_SEQS: $VLLM_MAX_NUM_SEQS"
           echo "  DECODE_REPLICAS: $DECODE_REPLICAS"
+          echo "  KV_SPARE_TRIGGER: ${KV_SPARE_TRIGGER:-<default>}"
+          echo "  QUEUE_SPARE_TRIGGER: ${QUEUE_SPARE_TRIGGER:-<default>}"
           echo "  HF token configuration: ✓"
           ./deploy/install.sh --model "$MODEL_ID" --accelerator "$ACCELERATOR_TYPE" --release-name "$WVA_RELEASE_NAME" --environment openshift
 
@@ -930,7 +979,7 @@ jobs:
         env:
           # Consolidated e2e test environment variables
           ENVIRONMENT: openshift
-          USE_SIMULATOR: "false"
+          USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
           WVA_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring

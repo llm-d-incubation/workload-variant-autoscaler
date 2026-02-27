@@ -333,5 +333,12 @@ jobs:
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: ${{ steps.test-type.outputs.delete_cluster }}
+          # Lower saturation thresholds for simulator mode — the simulator's
+          # KV-cache and queue metrics are modest, so default thresholds
+          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
+          # scale-up reliably. These values trigger when kvUsage > 0.30 or
+          # queueLength > 0.5, which the simulator produces under load.
+          KV_SPARE_TRIGGER: "0.5"
+          QUEUE_SPARE_TRIGGER: "4.5"
         run: |
           make ${{ steps.test-type.outputs.test_target }}

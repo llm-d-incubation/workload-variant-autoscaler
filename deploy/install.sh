@@ -108,6 +108,13 @@ DECODE_REPLICAS=${DECODE_REPLICAS:-""}
 # Useful for e2e testing where tests create their own VA/HPA resources
 INFRA_ONLY=${INFRA_ONLY:-false}
 
+# Saturation threshold overrides (V1 analyzer)
+# kvSpareTrigger: scale-up fires when (kvCacheThreshold - avgKvUsage) < this value
+# queueSpareTrigger: scale-up fires when (queueLengthThreshold - avgQueueLength) < this value
+# Leave empty to use chart defaults (kvSpareTrigger=0.1, queueSpareTrigger=3)
+KV_SPARE_TRIGGER=${KV_SPARE_TRIGGER:-""}
+QUEUE_SPARE_TRIGGER=${QUEUE_SPARE_TRIGGER:-""}
+
 # Scaler backend for e2e: "prometheus-adapter" (default) or "keda"
 # When keda: do not deploy Prometheus Adapter; deploy KEDA instead (ScaledObjects, external metrics API)
 SCALER_BACKEND=${SCALER_BACKEND:-prometheus-adapter}
@@ -532,7 +539,9 @@ deploy_wva_controller() {
         --set wva.prometheus.tls.insecureSkipVerify=$SKIP_TLS_VERIFY \
         --set wva.namespaceScoped=$NAMESPACE_SCOPED \
         --set wva.metrics.secure=$WVA_METRICS_SECURE \
-        ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE}
+        ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
+        ${KV_SPARE_TRIGGER:+--set wva.capacityScaling.default.kvSpareTrigger=$KV_SPARE_TRIGGER} \
+        ${QUEUE_SPARE_TRIGGER:+--set wva.capacityScaling.default.queueSpareTrigger=$QUEUE_SPARE_TRIGGER}
 
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
