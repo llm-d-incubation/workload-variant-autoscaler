@@ -1,21 +1,38 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Local Development with Kind Emulator](#local-development-with-kind-emulator)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Configuration Options](#configuration-options)
+  - [Quick Start](#quick-start)
+  - [Scripts](#scripts)
+    - [setup.sh](#setupsh)
+    - [teardown.sh](#teardownsh)
+  - [Cluster Configuration](#cluster-configuration)
+  - [Testing Locally](#testing-locally)
+    - [1. Access metrics, Services and Pods](#1-access-metrics-services-and-pods)
+    - [2. Create Test Resources](#2-create-test-resources)
+    - [3. Generate Load](#3-generate-load)
+    - [4. Monitor](#4-monitor)
+  - [Troubleshooting](#troubleshooting)
+    - [Cluster Creation Fails](#cluster-creation-fails)
+    - [Controller Not Starting](#controller-not-starting)
+    - [GPUs Not Appearing](#gpus-not-appearing)
+    - [Port-Forward Issues](#port-forward-issues)
+    - [`kind load` fails with "content digest ... not found"](#kind-load-fails-with-content-digest--not-found)
+  - [Development Workflow](#development-workflow)
+  - [Clean Up](#clean-up)
+  - [Next Steps](#next-steps)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Local Development with Kind Emulator
 
 Quick start guide for local development using Kind (Kubernetes in Docker) with emulated GPU resources.
 
 > **Note**: This guide covers Kind-specific deployment for local testing. For a complete overview of deployment methods, Helm chart configuration, and the full configuration reference, see the [main deployment guide](../README.md).
-
-## Table of Contents
-
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Configuration Options](#configuration-options)
-- [Scripts](#scripts)
-- [Cluster Configuration](#cluster-configuration)
-- [Testing Locally](#testing-locally)
-- [Troubleshooting](#troubleshooting)
-- [Development Workflow](#development-workflow)
-- [Clean Up](#clean-up)
-- [Next Steps](#next-steps)
 
 ## Prerequisites
 
@@ -23,25 +40,6 @@ Quick start guide for local development using Kind (Kubernetes in Docker) with e
 - Kind
 - kubectl
 - Helm
-
-## Quick Start
-
-### One-Command Setup
-
-Deploy WVA with full llm-d infrastructure:
-
-```bash
-# From project root
-make deploy-wva-emulated-on-kind
-```
-
-This creates:
-
-- Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
-- WVA controller
-- llm-d infrastructure (simulation mode)
-- Prometheus monitoring
-- vLLM emulator
 
 ## Configuration Options
 
@@ -75,7 +73,7 @@ export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
 export DEPLOY_HPA=true                # Deploy HPA
 ```
 
-### Step-by-Step Setup
+## Quick Start
 
 **1. Create Kind cluster:**
 
@@ -106,6 +104,15 @@ make deploy-wva-emulated-on-kind
 ```bash
 make deploy-wva-emulated-on-kind
 ```
+
+The above 3 steps create:
+
+- Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
+- WVA controller
+- llm-d infrastructure (simulation mode)
+- Prometheus monitoring
+- vLLM emulator
+
 
 **4. Testing configuration with fast saturation:**
 
