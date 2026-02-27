@@ -4,6 +4,7 @@ package config
 type otelConfig struct {
 	// Immutable (set at startup)
 	targetEndpointGrpc string
+	insecureSkipVerify bool
 	caCertPath         string
 }
 
@@ -23,4 +24,10 @@ func (c *Config) OtelCaCertPath() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.otelConfig.caCertPath
+}
+
+func (c *Config) OtelInsecureSkipVerify() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.otelConfig.insecureSkipVerify
 }

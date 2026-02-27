@@ -51,5 +51,6 @@ data:
     # OpenTelemetry(OTEL) Configuration (Optional)
     # OTEL grpc target endpoint (no scheme or path) e.g. example.com:4317
     OTEL_TARGET_ENDPOINT_GRPC: {{ if and .Values.wva.otel .Values.wva.otel.targetEndpointGrpc }}{{ .Values.wva.otel.targetEndpointGrpc | quote }}{{ end }}
-    OTEL_TARGET_CA_CERT_PATH: {{ if and .Values.wva.otel .Values.wva.otel.targetCaCertPath }}{{ .Values.wva.otel.targetCaCertPath | quote }}{{ end }}
+    OTEL_TLS_INSECURE_SKIP_VERIFY: {{ if and .Values.wva.otel .Values.wva.otel.tls (hasKey .Values.wva.otel.tls "insecureSkipVerify") }}{{ .Values.wva.otel.tls.insecureSkipVerify | quote }}{{ else }}"true"{{ end }}
+    OTEL_CA_CERT_PATH: {{ if and .Values.wva.otel .Values.wva.otel.tls (hasKey .Values.wva.otel.tls "caCertPath") }}{{ .Values.wva.otel.tls.caCertPath | quote }}{{ else }}""{{ end }}
 {{- end }}

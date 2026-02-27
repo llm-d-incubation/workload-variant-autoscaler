@@ -105,6 +105,10 @@ spec:
           mountPath: /etc/ssl/certs/prometheus-ca.crt
           subPath: ca.crt
           readOnly: true
+        - name: otel-ca-cert
+          mountPath: /etc/ssl/certs/otel-ca.crt
+          subPath: ca.crt
+          readOnly: true
         - name: epp-metrics-token
           mountPath: /var/run/secrets/epp-metrics
           readOnly: true
@@ -115,6 +119,10 @@ spec:
       - name: prometheus-ca-cert
         configMap:
           name: {{ include "workload-variant-autoscaler.fullname" . }}-prometheus-ca
+          optional: true
+      - name: otel-ca-cert
+        configMap:
+          name: {{ include "workload-variant-autoscaler.fullname" . }}-otel-ca
           optional: true
       - name: epp-metrics-token
         secret:

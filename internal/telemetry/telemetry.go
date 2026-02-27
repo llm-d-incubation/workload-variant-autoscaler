@@ -2,16 +2,16 @@ package telemetry
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
-	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/log"
@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	"google.golang.org/grpc/credentials"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -39,21 +40,7 @@ func SetupOTelSDK(ctx context.Context, cfg *config.Config) (func(context.Context
 		return func(context.Context) error { return nil }, nil
 	}
 
-	/*
-		caCertPath := cfg.OtelCaCertPath() // Refactor if needed
-		caCert, err := os.ReadFile(caCertPath)
-		if err != nil {
-			return nil, err
-		}
-
-		certPool := x509.NewCertPool()
-		if ok := certPool.AppendCertsFromPEM(caCert); !ok {
-			return nil, errors.New("failed to append CA certificate to cert pool")
-		}
-	*/
-
 	var shutdownFuncs []func(context.Context) error
-
 	// shutdown calls cleanup functions registered via shutdownFuncs.
 	// The errors from the calls are joined.
 	// Each registered cleanup will be invoked once.
@@ -96,8 +83,31 @@ func SetupOTelSDK(ctx context.Context, cfg *config.Config) (func(context.Context
 		return nil, err
 	}
 
+	var tlsConfig *tls.Config
+	caCertPath := cfg.OtelCaCertPath()
+	if !cfg.OtelInsecureSkipVerify() {
+		// Load CA certificate to verify server
+		caCert, err := os.ReadFile(caCertPath)
+		if err != nil {
+			logger.Error(err, "Failed to read CA certificate", "caCertPath", caCertPath)
+			return nil, err
+		}
+
+		// Create certificate pool and add CA certificate
+		caCertPool := x509.NewCertPool()
+		if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+			return nil, errors.New("failed to append CA certificate to cert pool")
+		}
+
+		// Create TLS configuration
+		tlsConfig = &tls.Config{
+			RootCAs:    caCertPool,
+			MinVersion: tls.VersionTLS13,
+		}
+	}
+
 	// Set up trace provider.
-	tracerProvider, err := newTracerProvider(ctx, cfg, resource, nil) // Pass certPool if using TLS
+	tracerProvider, err := newTracerProvider(ctx, cfg, resource, tlsConfig)
 	if err != nil {
 		handleErr(err)
 		return shutdown, err
@@ -123,7 +133,10 @@ func SetupOTelSDK(ctx context.Context, cfg *config.Config) (func(context.Context
 	shutdownFuncs = append(shutdownFuncs, loggerProvider.Shutdown)
 	global.SetLoggerProvider(loggerProvider)
 
-	logger.Info("OpenTelemetry setup finished successfully")
+	logger.Info("OpenTelemetry setup finished successfully",
+		"targetEndpointGrpc", cfg.OtelTargetEndpointGrpc(),
+		"otelInsecureSkipVerify", cfg.OtelInsecureSkipVerify(),
+		"otelCaCertPath", cfg.OtelCaCertPath())
 	return shutdown, err
 }
 
@@ -134,21 +147,26 @@ func newPropagator() propagation.TextMapPropagator {
 	)
 }
 
-func newTracerProvider(ctx context.Context, cfg *config.Config, resource *resource.Resource, certPool *x509.CertPool) (*trace.TracerProvider, error) {
+func newTracerProvider(ctx context.Context, cfg *config.Config, resource *resource.Resource, tlsConfig *tls.Config) (*trace.TracerProvider, error) {
 	// Configure OTLP exporter. For production, use TLS and retry logic.
-	traceExporter, err := otlptracegrpc.New(
-		ctx,
+	var secureOption otlptracegrpc.Option
+	if cfg.OtelInsecureSkipVerify() {
+		secureOption = otlptracegrpc.WithInsecure()
+	} else {
+		secureOption = otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsConfig))
+	}
+
+	traceExporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(cfg.OtelTargetEndpointGrpc()),
-		otlptracegrpc.WithInsecure(), // TODO: comment this out and use TLS creds in production
-		//otlptracegrpc.WithTLSCredentials(credentials.NewTLS(&tls.Config {RootCAs: certPool})),
+		secureOption,
 		otlptracegrpc.WithTimeout(5*time.Second),
 		otlptracegrpc.WithRetry(otlptracegrpc.RetryConfig{
 			Enabled:         true,
 			InitialInterval: 1 * time.Second,
 			MaxInterval:     30 * time.Second,
 			MaxElapsedTime:  5 * time.Minute,
-		}),
-	)
+		}))
+
 	if err != nil {
 		return nil, err
 	}
@@ -161,27 +179,11 @@ func newTracerProvider(ctx context.Context, cfg *config.Config, resource *resour
 }
 
 func newMeterProvider() (*metric.MeterProvider, error) {
-	metricExporter, err := stdoutmetric.New(stdoutmetric.WithPrettyPrint())
-	if err != nil {
-		return nil, err
-	}
-
-	meterProvider := metric.NewMeterProvider(
-		metric.WithReader(metric.NewPeriodicReader(metricExporter,
-			// Default is 1m. Set to 3s for demonstrative purposes.
-			metric.WithInterval(3*time.Second))),
-	)
+	meterProvider := metric.NewMeterProvider()
 	return meterProvider, nil
 }
 
 func newLoggerProvider() (*log.LoggerProvider, error) {
-	logExporter, err := stdoutlog.New(stdoutlog.WithPrettyPrint())
-	if err != nil {
-		return nil, err
-	}
-
-	loggerProvider := log.NewLoggerProvider(
-		log.WithProcessor(log.NewBatchProcessor(logExporter)),
-	)
+	loggerProvider := log.NewLoggerProvider()
 	return loggerProvider, nil
 }

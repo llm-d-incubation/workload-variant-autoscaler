@@ -36,7 +36,13 @@ wva:
   # OTEL grpc target endpoint (no scheme or path) e.g. example.com:4317
   otel:
     #targetEndpointGrpc: "example.com:4317"
-    #targetCaCertPath: "/path/to/ca.cert"
+    tls:
+      insecureSkipVerify: true   # Development: true, Production: false
+      #caCert: |  # Uncomment and provide your CA certificate
+      #  -----BEGIN CERTIFICATE-----
+      #  YOUR_CA_CERTIFICATE_HERE
+      #  -----END CERTIFICATE-----
+      caCertPath: "/etc/ssl/certs/otel-ca.crt"
     
   prometheus:
     monitoringNamespace: openshift-user-workload-monitoring

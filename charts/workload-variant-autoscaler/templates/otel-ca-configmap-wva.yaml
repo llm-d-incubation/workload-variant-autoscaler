@@ -1,0 +1,16 @@
+{{- if .Values.controller.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "workload-variant-autoscaler.fullname" . }}-otel-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- if .Values.wva.otel.tls.caCert }}
+{{ .Values.wva.otel.tls.caCert | indent 4 }}
+    {{- else }}
+    # CA certificate not provided - using system CA bundle
+    {{- end }}
+{{- end }}

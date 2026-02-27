@@ -85,6 +85,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
 	v.SetDefault("OTEL_TARGET_ENDPOINT_GRPC", "")
+	v.SetDefault("OTEL_TARGET_TLS_INSECURE_SKIP_VERIFY", false)
 	v.SetDefault("OTEL_TARGET_CA_CERT_PATH", "")
 
 	// Load from config file (mounted in the container) — sits between env and defaults in precedence
@@ -170,7 +171,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 
 	// Telemetry config
 	cfg.otelConfig.targetEndpointGrpc = v.GetString("OTEL_TARGET_ENDPOINT_GRPC")
-	cfg.otelConfig.caCertPath = v.GetString("OTEL_TARGET_CA_CERT_PATH")
+	cfg.otelConfig.insecureSkipVerify = v.GetBool("OTEL_TLS_INSECURE_SKIP_VERIFY")
+	cfg.otelConfig.caCertPath = v.GetString("OTEL_CA_CERT_PATH")
 	return nil
 }
 
