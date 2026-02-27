@@ -74,5 +74,5 @@ jobs:
       pod_wait_timeout: '30m'
       pod_readiness_delay: 180
       image_override: 'ghcr.io/llm-d/llm-d-cuda-dev:latest'
-      test_target: test-e2e-openshift
+      test_target: test-e2e-full
     secrets: inherit
