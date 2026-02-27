@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -131,6 +132,11 @@ func main() {
 	opts.BindFlags(gfs) // zap expects a standard Go FlagSet and pflag.FlagSet is not compatible.
 	flag.CommandLine.AddGoFlagSet(gfs)
 
+	// Allow unknown flags for backward/forward compatibility
+	flag.CommandLine.ParseErrorsAllowlist = flag.ParseErrorsAllowlist{
+		UnknownFlags: true,
+	}
+
 	flag.Parse()
 
 	logging.InitLogging(&opts, loggerVerbosity)
@@ -138,6 +144,17 @@ func main() {
 
 	setupLog := ctrl.Log.WithName("setup")
 	setupLog.Info("Logger initialized")
+
+	// Log unknown flags that were ignored
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--") {
+			flagName := strings.TrimPrefix(arg, "--")
+			flagName = strings.Split(flagName, "=")[0] // Handle --flag=value
+			if flag.CommandLine.Lookup(flagName) == nil {
+				setupLog.Info("Unknown flag ignored", "flag", arg)
+			}
+		}
+	}
 
 	// Get REST config early (needed for config loading)
 	restConfig := ctrl.GetConfigOrDie()
