@@ -169,7 +169,7 @@ GPUs are emulated using extended resources:
 
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-system \
-  svc/workload-variant-autoscaler-controller-manager-metrics 8080:8080
+  svc/workload-variant-autoscaler-metrics 8080:8443
 ```
 
 **Port-forward Prometheus:**
@@ -188,8 +188,14 @@ kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80
 ### 2. Create Test Resources
 
 ```bash
+# Create requested namespaces
+kubectl create namespace llm-inference
+kubectl create namespace tenant-gold
+kubectl create namespace tenant-silver
 # Apply sample VariantAutoscaling
-kubectl apply -f ../../config/samples/
+kubectl apply -f ../../config/samples/hpa-integration.yaml
+kubectl apply -f ../../config/samples/model-scale-to-zero-config.yaml
+kubectl apply -f ../../config/samples/variantautoscaling-with-cost.yaml
 ```
 
 ### 3. Generate Load
