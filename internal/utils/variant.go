@@ -20,6 +20,7 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -132,7 +133,19 @@ func filterVariantsByDeployment(ctx context.Context, client client.Client, filte
 		deployName := va.Spec.ScaleTargetRef.Name
 		var deploy appsv1.Deployment
 		if err := GetDeploymentWithBackoff(ctx, client, deployName, va.Namespace, &deploy); err != nil {
-			ctrl.LoggerFrom(ctx).Error(err, "Failed to get deployment", "namespace", va.Namespace, "deploymentName", deployName, "vaName", va.Name)
+			if apierrors.IsNotFound(err) {
+				// Deployment doesn't exist yet, this is expected for VAs without corresponding deployments
+				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Deployment not found for VariantAutoscaling, skipping",
+					"namespace", va.Namespace,
+					"deploymentName", deployName,
+					"vaName", va.Name)
+			} else {
+				// Unexpected error (permissions, network issues, etc.)
+				ctrl.LoggerFrom(ctx).Error(err, "Failed to get deployment",
+					"namespace", va.Namespace,
+					"deploymentName", deployName,
+					"vaName", va.Name)
+			}
 			continue
 		}
 
