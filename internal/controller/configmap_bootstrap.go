@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,13 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		for _, ns := range namespaceList.Items {
 			// Skip system namespace to avoid duplicate global config loading
 			if ns.Name != systemNamespace {
+				if ns.Annotations != nil {
+					if value, ok := ns.Annotations[constants.NamespaceExcludeAnnotationKey]; ok {
+						if value == "true" {
+							continue // Skip excluded namespaces. Only for all-namespaces mode.
+						}
+					}
+				}
 				namespacesToScan = append(namespacesToScan, ns.Name)
 			}
 		}

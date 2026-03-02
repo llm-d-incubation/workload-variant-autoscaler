@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
 
 var _ = Describe("ConfigMap Bootstrap", func() {
@@ -189,5 +190,119 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		Expect(exists).To(BeTrue())
 		Expect(ns2ModelConfig.EnableScaleToZero).NotTo(BeNil())
 		Expect(*ns2ModelConfig.EnableScaleToZero).To(BeTrue())
+	})
+
+	It("should skip namespaces with exclude annotation during bootstrap", func() {
+		By("Creating namespaces with and without exclude annotation")
+		includedNamespace := "test-included-namespace"
+		excludedNamespace := "test-excluded-namespace"
+
+		// Namespace without exclude annotation (should be scanned)
+		nsIncluded := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: includedNamespace,
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, nsIncluded))).To(Succeed())
+
+		// Namespace with exclude annotation set to "true" (should be skipped)
+		nsExcluded := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: excludedNamespace,
+				Annotations: map[string]string{
+					constants.NamespaceExcludeAnnotationKey: "true",
+				},
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, nsExcluded))).To(Succeed())
+
+		By("Creating namespace-local ConfigMaps in both namespaces")
+		// ConfigMap in included namespace
+		includedSaturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: includedNamespace,
+			},
+			Data: map[string]string{
+				"default": "kvCacheThreshold: 0.85\nqueueLengthThreshold: 7",
+			},
+		}
+		Expect(k8sClient.Create(ctx, includedSaturationCM)).To(Succeed())
+
+		// ConfigMap in excluded namespace (should NOT be loaded)
+		excludedSaturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: excludedNamespace,
+			},
+			Data: map[string]string{
+				"default": "kvCacheThreshold: 0.95\nqueueLengthThreshold: 15",
+			},
+		}
+		Expect(k8sClient.Create(ctx, excludedSaturationCM)).To(Succeed())
+
+		By("Bootstrapping ConfigMaps")
+		Expect(reconciler.BootstrapInitialConfigMaps(ctx)).To(Succeed())
+
+		By("Verifying bootstrap readiness state")
+		Expect(cfg.ConfigMapsBootstrapComplete()).To(BeTrue())
+
+		By("Verifying ConfigMap from included namespace was loaded")
+		includedConfig := cfg.SaturationConfigForNamespace(includedNamespace)
+		includedSatConfig, exists := includedConfig["default"]
+		Expect(exists).To(BeTrue())
+		Expect(includedSatConfig.KvCacheThreshold).To(BeNumerically("~", 0.85, 0.01))
+		Expect(includedSatConfig.QueueLengthThreshold).To(BeNumerically("==", 7))
+
+		By("Verifying ConfigMap from excluded namespace was NOT loaded")
+		excludedConfig := cfg.SaturationConfigForNamespace(excludedNamespace)
+		// Should either be empty or contain only global defaults, not the excluded namespace's config
+		if len(excludedConfig) > 0 {
+			// If fallback to global is implemented, should not have the excluded namespace's values
+			if excludedSatConfig, exists := excludedConfig["default"]; exists {
+				Expect(excludedSatConfig.KvCacheThreshold).NotTo(BeNumerically("~", 0.95, 0.01))
+				Expect(excludedSatConfig.QueueLengthThreshold).NotTo(BeNumerically("==", 15))
+			}
+		}
+	})
+
+	It("should include namespaces with exclude annotation set to false", func() {
+		By("Creating namespace with exclude annotation set to 'false'")
+		namespace := "test-exclude-false-namespace"
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+				Annotations: map[string]string{
+					constants.NamespaceExcludeAnnotationKey: "false",
+				},
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
+
+		By("Creating namespace-local ConfigMap")
+		saturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: namespace,
+			},
+			Data: map[string]string{
+				"default": "kvCacheThreshold: 0.78\nqueueLengthThreshold: 6",
+			},
+		}
+		Expect(k8sClient.Create(ctx, saturationCM)).To(Succeed())
+
+		By("Bootstrapping ConfigMaps")
+		Expect(reconciler.BootstrapInitialConfigMaps(ctx)).To(Succeed())
+
+		By("Verifying bootstrap readiness state")
+		Expect(cfg.ConfigMapsBootstrapComplete()).To(BeTrue())
+
+		By("Verifying ConfigMap was loaded (exclude=false should not exclude)")
+		nsConfig := cfg.SaturationConfigForNamespace(namespace)
+		satConfig, exists := nsConfig["default"]
+		Expect(exists).To(BeTrue())
+		Expect(satConfig.KvCacheThreshold).To(BeNumerically("~", 0.78, 0.01))
+		Expect(satConfig.QueueLengthThreshold).To(BeNumerically("==", 6))
 	})
 })
