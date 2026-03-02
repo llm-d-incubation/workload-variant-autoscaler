@@ -104,4 +104,90 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		By("Verifying bootstrap readiness state")
 		Expect(cfg.ConfigMapsBootstrapComplete()).To(BeTrue())
 	})
+
+	It("should bootstrap namespace-local ConfigMaps from all namespaces when watching all namespaces", func() {
+		By("Creating multiple namespaces")
+		namespace1 := "test-namespace-1"
+		namespace2 := "test-namespace-2"
+
+		ns1 := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace1,
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns1))).To(Succeed())
+
+		ns2 := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace2,
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns2))).To(Succeed())
+
+		By("Creating global ConfigMap in system namespace")
+		globalSaturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: systemNamespace,
+			},
+			Data: map[string]string{
+				"default": "kvCacheThreshold: 0.60\nqueueLengthThreshold: 10",
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, globalSaturationCM))).To(Succeed())
+		currentGlobalSatCM := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: globalSaturationCM.Name, Namespace: globalSaturationCM.Namespace}, currentGlobalSatCM)).To(Succeed())
+		currentGlobalSatCM.Data = globalSaturationCM.Data
+		Expect(k8sClient.Update(ctx, currentGlobalSatCM)).To(Succeed())
+
+		By("Creating namespace-local saturation ConfigMap in namespace1")
+		ns1SaturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: namespace1,
+			},
+			Data: map[string]string{
+				"model-a": "kvCacheThreshold: 0.75\nqueueLengthThreshold: 5",
+			},
+		}
+		Expect(k8sClient.Create(ctx, ns1SaturationCM)).To(Succeed())
+
+		By("Creating namespace-local scale-to-zero ConfigMap in namespace2")
+		ns2ScaleToZeroCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.DefaultScaleToZeroConfigMapName,
+				Namespace: namespace2,
+			},
+			Data: map[string]string{
+				"model-b": "model_id: model-b\nenable_scale_to_zero: true\nretention_period: 10m",
+			},
+		}
+		Expect(k8sClient.Create(ctx, ns2ScaleToZeroCM)).To(Succeed())
+
+		By("Bootstrapping ConfigMaps (watching all namespaces)")
+		Expect(reconciler.BootstrapInitialConfigMaps(ctx)).To(Succeed())
+
+		By("Verifying bootstrap readiness state")
+		Expect(cfg.ConfigMapsBootstrapComplete()).To(BeTrue())
+
+		By("Verifying global saturation config was loaded")
+		globalSatConfig := cfg.SaturationConfigForNamespace("")
+		satConfig, exists := globalSatConfig["default"]
+		Expect(exists).To(BeTrue())
+		Expect(satConfig.KvCacheThreshold).To(BeNumerically("~", 0.60, 0.01))
+
+		By("Verifying namespace1 saturation config was loaded")
+		ns1SatConfig := cfg.SaturationConfigForNamespace(namespace1)
+		ns1ModelConfig, exists := ns1SatConfig["model-a"]
+		Expect(exists).To(BeTrue())
+		Expect(ns1ModelConfig.KvCacheThreshold).To(BeNumerically("~", 0.75, 0.01))
+		Expect(ns1ModelConfig.QueueLengthThreshold).To(BeNumerically("==", 5))
+
+		By("Verifying namespace2 scale-to-zero config was loaded")
+		ns2S2ZConfig := cfg.ScaleToZeroConfigForNamespace(namespace2)
+		ns2ModelConfig, exists := ns2S2ZConfig["model-b"]
+		Expect(exists).To(BeTrue())
+		Expect(ns2ModelConfig.EnableScaleToZero).NotTo(BeNil())
+		Expect(*ns2ModelConfig.EnableScaleToZero).To(BeTrue())
+	})
 })
