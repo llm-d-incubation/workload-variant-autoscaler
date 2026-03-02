@@ -83,7 +83,7 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 	appLabel := name + "-decode"
 	image := "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
 	if !useSimulator {
-		image = "vllm/vllm-openai:latest"
+		image = "ghcr.io/llm-d/llm-d-cuda-dev:latest"
 	}
 	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
 	labels := map[string]string{
@@ -93,6 +93,39 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 		"llm-d.ai/model-pool":       poolName,
 		"test-resource":             "true",
 	}
+
+	envVars := []corev1.EnvVar{
+		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.name"}}},
+		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.namespace"}}},
+		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "status.podIP"}}},
+	}
+	var volumes []corev1.Volume
+	var volumeMounts []corev1.VolumeMount
+
+	if !useSimulator {
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "HF_HOME", Value: "/model-cache"},
+			corev1.EnvVar{Name: "HF_TOKEN", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "llm-d-hf-token"},
+					Key:                  "HF_TOKEN",
+				},
+			}},
+		)
+		volumes = []corev1.Volume{
+			{Name: "model-storage", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resourcePtr("100Gi")}}},
+			{Name: "torch-compile-cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: "metrics-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: "triton-cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		}
+		volumeMounts = []corev1.VolumeMount{
+			{Name: "model-storage", MountPath: "/model-cache"},
+			{Name: "torch-compile-cache", MountPath: "/.cache"},
+			{Name: "metrics-volume", MountPath: "/.config"},
+			{Name: "triton-cache", MountPath: "/.triton"},
+		}
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appLabel,
@@ -120,26 +153,43 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 8000, Protocol: corev1.ProtocolTCP},
 							},
-							Env: []corev1.EnvVar{
-								{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.name"}}},
-								{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.namespace"}}},
-								{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "status.podIP"}}},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1"),
-									corev1.ResourceMemory: resource.MustParse("2Gi"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("2"),
-									corev1.ResourceMemory: resource.MustParse("4Gi"),
-								},
-							},
+							Env:          envVars,
+							Resources:    buildModelServiceResources(useSimulator),
+							VolumeMounts: volumeMounts,
 						},
 					},
+					Volumes:       volumes,
 					RestartPolicy: corev1.RestartPolicyAlways,
 				},
 			},
+		},
+	}
+}
+
+func resourcePtr(s string) *resource.Quantity {
+	q := resource.MustParse(s)
+	return &q
+}
+
+// buildModelServiceResources returns resource requirements appropriate for the
+// deployment mode. Real vLLM requires a GPU to detect the device type at startup;
+// the simulator runs on CPU only.
+func buildModelServiceResources(useSimulator bool) corev1.ResourceRequirements {
+	if useSimulator {
+		return corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("4Gi"),
+			},
+		}
+	}
+	return corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			"nvidia.com/gpu": resource.MustParse("1"),
 		},
 	}
 }
