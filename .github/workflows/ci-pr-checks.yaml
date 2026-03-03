@@ -256,14 +256,26 @@ jobs:
     needs: [lint-and-test, check-code-changes, check-full-tests]
     if: >-
       always() && (
-        (github.event_name == 'issue_comment' && needs.check-full-tests.outputs.run_full == 'true') ||
-        (github.event_name == 'workflow_dispatch' && needs.check-full-tests.outputs.run_full == 'true') ||
+        (github.event_name == 'issue_comment' && needs.check-full-tests.outputs.run_full == 'true' && needs.check-code-changes.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && (
+          needs.check-full-tests.outputs.run_full == 'true' ||
+          (needs.check-code-changes.result == 'success' && needs.check-code-changes.outputs.has_code_changes == 'true')
+        )) ||
         (github.event_name == 'pull_request' && needs.check-code-changes.result == 'success' && needs.check-code-changes.outputs.has_code_changes == 'true')
       )
     timeout-minutes: 60
     permissions:
       contents: read
     steps:
+      - name: Validate PR head SHA for issue_comment events
+        if: github.event_name == 'issue_comment'
+        run: |
+          if [ -z "${{ needs.check-code-changes.outputs.pr_head_sha }}" ]; then
+            echo "::error::pr_head_sha is empty — refusing to fall back to main"
+            exit 1
+          fi
+          echo "Checkout will use PR head SHA: ${{ needs.check-code-changes.outputs.pr_head_sha }}"
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:
