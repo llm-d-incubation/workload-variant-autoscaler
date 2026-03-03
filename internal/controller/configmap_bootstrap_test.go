@@ -114,6 +114,9 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		ns1 := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace1,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "true",
+				},
 			},
 		}
 		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns1))).To(Succeed())
@@ -121,6 +124,9 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		ns2 := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace2,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "true",
+				},
 			},
 		}
 		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns2))).To(Succeed())
@@ -197,18 +203,24 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		includedNamespace := "test-included-namespace"
 		excludedNamespace := "test-excluded-namespace"
 
-		// Namespace without exclude annotation (should be scanned)
+		// Namespace with config-enabled label and without exclude annotation (should be scanned)
 		nsIncluded := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: includedNamespace,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "true",
+				},
 			},
 		}
 		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, nsIncluded))).To(Succeed())
 
-		// Namespace with exclude annotation set to "true" (should be skipped)
+		// Namespace with config-enabled label and exclude annotation set to "true" (should be skipped)
 		nsExcluded := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: excludedNamespace,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "true",
+				},
 				Annotations: map[string]string{
 					constants.NamespaceExcludeAnnotationKey: "true",
 				},
@@ -273,6 +285,9 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "true",
+				},
 				Annotations: map[string]string{
 					constants.NamespaceExcludeAnnotationKey: "false",
 				},
@@ -304,5 +319,49 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		Expect(exists).To(BeTrue())
 		Expect(satConfig.KvCacheThreshold).To(BeNumerically("~", 0.78, 0.01))
 		Expect(satConfig.QueueLengthThreshold).To(BeNumerically("==", 6))
+	})
+
+	It("should skip namespaces with config-enabled label set to false", func() {
+		By("Creating namespace with config-enabled label set to 'false'")
+		namespace := "test-config-disabled-namespace"
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+				Labels: map[string]string{
+					constants.NamespaceConfigEnabledLabelKey: "false",
+				},
+			},
+		}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
+
+		By("Creating namespace-local ConfigMap")
+		saturationCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      config.SaturationConfigMapName(),
+				Namespace: namespace,
+			},
+			Data: map[string]string{
+				"default": "kvCacheThreshold: 0.88\nqueueLengthThreshold: 12",
+			},
+		}
+		Expect(k8sClient.Create(ctx, saturationCM)).To(Succeed())
+
+		By("Bootstrapping ConfigMaps")
+		Expect(reconciler.BootstrapInitialConfigMaps(ctx)).To(Succeed())
+
+		By("Verifying bootstrap readiness state")
+		Expect(cfg.ConfigMapsBootstrapComplete()).To(BeTrue())
+
+		By("Verifying ConfigMap from namespace with config-enabled=false was NOT loaded")
+		nsConfig := cfg.SaturationConfigForNamespace(namespace)
+		// Should either be empty or contain only global defaults, not the disabled namespace's config
+		if len(nsConfig) > 0 {
+			// If fallback to global is implemented, should not have the disabled namespace's values
+			if satConfig, exists := nsConfig["default"]; exists {
+				Expect(satConfig.KvCacheThreshold).NotTo(BeNumerically("~", 0.88, 0.01))
+				Expect(satConfig.QueueLengthThreshold).NotTo(BeNumerically("==", 12))
+			}
+		}
 	})
 })

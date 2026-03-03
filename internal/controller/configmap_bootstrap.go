@@ -63,8 +63,15 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 							continue // Skip excluded namespaces. Only for all-namespaces mode.
 						}
 					}
+					
 				}
-				namespacesToScan = append(namespacesToScan, ns.Name)
+				if ns.Labels != nil {
+					if value, ok := ns.Labels[constants.NamespaceConfigEnabledLabelKey]; ok {
+						if value == "true" {
+							namespacesToScan = append(namespacesToScan, ns.Name)
+						}
+					}
+				}
 			}
 		}
 		logger.Info("Initial ConfigMap bootstrap", "namespaceCount", len(namespacesToScan))
