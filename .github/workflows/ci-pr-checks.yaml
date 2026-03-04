@@ -271,7 +271,23 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      statuses: write  # For reporting status on fork PR commits
     steps:
+      - name: Set pending status on PR head
+        if: github.event_name == 'issue_comment' && needs.check-code-changes.outputs.pr_head_sha != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.check-code-changes.outputs.pr_head_sha }}',
+              state: 'pending',
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'E2E tests running...',
+              context: '${{ github.workflow }} / e2e (comment trigger)'
+            });
+
       - name: Validate PR head SHA for issue_comment events
         if: github.event_name == 'issue_comment'
         run: |
@@ -320,10 +336,12 @@ jobs:
 
       - name: Build WVA image locally
         id: build-image
+        env:
+          CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
         run: |
           # Generate unique image tag for this PR run (local image, no registry needed)
           IMAGE_NAME="llm-d-workload-variant-autoscaler"
-          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${GITHUB_SHA:0:7}"
+          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
           # Use localhost prefix for local-only image (Kind will load it directly)
           FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
           
@@ -374,3 +392,53 @@ jobs:
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |
           make ${{ steps.test-type.outputs.test_target }}
+
+  # Report status back to PR for issue_comment triggered runs
+  # This ensures fork PRs show the correct status after /trigger-e2e-full runs complete
+  report-status:
+    runs-on: ubuntu-latest
+    needs: [check-code-changes, check-full-tests, e2e-tests]
+    if: always() && github.event_name == 'issue_comment' && needs.check-full-tests.outputs.run_full == 'true'
+    permissions:
+      statuses: write
+    steps:
+      - name: Report status to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prHeadSha = '${{ needs.check-code-changes.outputs.pr_head_sha }}';
+            const e2eResult = '${{ needs.e2e-tests.result }}';
+
+            if (!prHeadSha) {
+              console.log('No PR head SHA available, skipping status report');
+              return;
+            }
+
+            let state, description;
+            if (e2eResult === 'success') {
+              state = 'success';
+              description = 'E2E tests passed';
+            } else if (e2eResult === 'skipped') {
+              state = 'failure';
+              description = 'E2E tests did not run (prerequisite failed or skipped)';
+            } else if (e2eResult === 'cancelled') {
+              state = 'failure';
+              description = 'E2E tests cancelled';
+            } else {
+              state = 'failure';
+              description = 'E2E tests failed';
+            }
+
+            console.log(`Reporting status to PR commit ${prHeadSha}: ${state} - ${description}`);
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: prHeadSha,
+              state: state,
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: description,
+              context: '${{ github.workflow }} / e2e (comment trigger)'
+            });
+
+            console.log('Status reported successfully');
