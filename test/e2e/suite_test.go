@@ -135,7 +135,7 @@ var _ = BeforeSuite(func() {
 	}, 2*time.Minute, 5*time.Second).Should(Succeed(), "Prometheus should be running")
 
 	// prometheus-adapter exports the needed custom metrics for autoscaling, 
-	// but sometimes the metrics can't be obtained until prometheus-adaper is restarted.
+	// but sometimes the metrics can't be obtained until prometheus-adapter is restarted.
 	// This has been seen many times, especially on a Kind cluster that has been running 
 	// for a while. By restarting, we can ensure more stable e2e test.
 	By("Restarting prometheus-adapter pods")
