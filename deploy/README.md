@@ -148,7 +148,6 @@ export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window (default:
 # Gateway Configuration
 export GATEWAY_PROVIDER="istio"             # Gateway provider: istio, kgateway
 export INSTALL_GATEWAY_CTRLPLANE="true"     # Install gateway control plane
-export BENCHMARK_MODE="true"                # Use benchmark configuration (for Istio only)
 
 # SLO Targets
 export SLO_TPOT=10                         # Time per output token (ms) SLO
@@ -636,7 +635,6 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 |----------|-------------|---------|
 | `GATEWAY_PROVIDER` | Gateway implementation | `istio` |
 | `INSTALL_GATEWAY_CTRLPLANE` | Install gateway control plane | `false` (prompts user) |
-| `BENCHMARK_MODE` | Use benchmark Istio config | `true` |
 
 #### Deployment Flags
 

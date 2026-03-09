@@ -54,7 +54,6 @@ SLO_TPOT=24     # Target time-per-output-token SLO (in ms)
 SLO_TTFT=500  # Target time-to-first-token SLO (in ms)
 
 # Gateway Configuration
-BENCHMARK_MODE="false"  # if true, deploys gateway in benchmark mode - unavailable for simulated deployments
 INSTALL_GATEWAY_CTRLPLANE="true" # if true, installs gateway control plane providers - defaults to true for emulated clusters
 
 # Prometheus Configuration
