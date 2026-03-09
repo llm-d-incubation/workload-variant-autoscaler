@@ -71,7 +71,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		err = fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, poolB, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service B")
 
-		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, modelServiceB+"-decode", 8001)
+		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, modelServiceB+"-decode", 8000)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create service B")
 
 		By("Creating ServiceMonitor for service B")
@@ -306,7 +306,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			err := fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "limiter-load-a", targetA, loadCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			targetB := fmt.Sprintf("http://%s-service:8001", modelServiceB)
+			targetB := fmt.Sprintf("http://%s-service:8000", modelServiceB)
 			err = fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "limiter-load-b", targetB, loadCfg)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -335,8 +335,18 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 					})
 			})
 
-			By("Waiting for VAs to process load")
-			time.Sleep(2 * time.Minute)
+			By("Waiting for both load jobs to complete")
+			Eventually(func(g Gomega) {
+				jobA, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameA, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(jobA.Status.Succeeded).To(BeNumerically(">", 0), "Job A should complete successfully")
+			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				jobB, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameB, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(jobB.Status.Succeeded).To(BeNumerically(">", 0), "Job B should complete successfully")
+			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 
 			By("Verifying both VAs are independently managed")
 			// Use Eventually to handle transient API connectivity issues (e.g., TLS handshake timeouts)
