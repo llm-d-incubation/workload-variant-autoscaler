@@ -398,7 +398,6 @@ make create-kind-cluster
 ### InferencePool CRD not found during `make deploy-wva-emulated-on-kind`
 
 **Symptom:**
-
 ```
 Error: no matches for kind "InferencePool" in version "inference.networking.x-k8s.io/v1alpha2"
 ensure CRDs are installed first
