@@ -18,6 +18,7 @@ import (
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
 var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"), func() {
@@ -119,6 +120,16 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		BeforeAll(func() {
 			// Note: InferencePool should already exist from infra-only deployment
 			// We no longer create InferencePools in individual tests
+
+			By("Deleting all existing VariantAutoscaling objects for clean test state")
+			deletedCount, vaCleanupErr := utils.DeleteAllVariantAutoscalings(ctx, crClient, cfg.LLMDNamespace)
+			if vaCleanupErr != nil {
+				GinkgoWriter.Printf("Warning: Failed to clean up existing VAs: %v\n", vaCleanupErr)
+			} else if deletedCount > 0 {
+				GinkgoWriter.Printf("Deleted %d existing VariantAutoscaling objects\n", deletedCount)
+			} else {
+				GinkgoWriter.Println("No existing VariantAutoscaling objects found")
+			}
 
 			By("Creating model service deployment")
 			err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)

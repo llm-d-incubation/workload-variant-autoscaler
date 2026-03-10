@@ -45,6 +45,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -1246,4 +1247,48 @@ func SetupTestEnvironment(image string, numNodes, gpusPerNode int, gpuTypes stri
 	gom.Expect(os.Setenv("DEPLOY_VA", "false")).To(gom.Succeed())                  // tests create their own VariantAutoscaling resources
 	gom.Expect(os.Setenv("DEPLOY_HPA", "false")).To(gom.Succeed())                 // tests create their own HPAs if needed
 	gom.Expect(os.Setenv("VLLM_SVC_ENABLED", "false")).To(gom.Succeed())           // tests deploy their own Service
+}
+
+// DeleteAllVariantAutoscalings deletes all VariantAutoscaling objects in a namespace
+// and waits for them to be fully removed. This is useful for ensuring a clean test state.
+// Returns the number of VAs that were deleted.
+func DeleteAllVariantAutoscalings(ctx context.Context, crClient client.Client, namespace string) (int, error) {
+	vaList := &v1alpha1.VariantAutoscalingList{}
+	if err := crClient.List(ctx, vaList, client.InNamespace(namespace)); err != nil {
+		return 0, fmt.Errorf("failed to list VariantAutoscaling objects: %w", err)
+	}
+
+	if len(vaList.Items) == 0 {
+		return 0, nil
+	}
+
+	deletedCount := 0
+	for i := range vaList.Items {
+		va := &vaList.Items[i]
+		if err := crClient.Delete(ctx, va); err != nil {
+			if errors.IsNotFound(err) {
+				continue // Already deleted
+			}
+			return deletedCount, fmt.Errorf("failed to delete VA %s: %w", va.Name, err)
+		}
+		deletedCount++
+	}
+
+	// Wait for all VAs to be fully deleted (with timeout)
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	err := wait.PollUntilContextTimeout(waitCtx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		remainingVAs := &v1alpha1.VariantAutoscalingList{}
+		if err := crClient.List(ctx, remainingVAs, client.InNamespace(namespace)); err != nil {
+			return false, err
+		}
+		return len(remainingVAs.Items) == 0, nil
+	})
+
+	if err != nil {
+		return deletedCount, fmt.Errorf("timeout waiting for VAs to be deleted: %w", err)
+	}
+
+	return deletedCount, nil
 }
