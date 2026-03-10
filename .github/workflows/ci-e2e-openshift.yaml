@@ -86,7 +86,7 @@ jobs:
     steps:
       - name: Check permissions and OpenShift E2E triggers (/ok-to-test, /retest)
         id: check
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             // Helper to check if user has write access
@@ -275,7 +275,7 @@ jobs:
 
       - name: Write workflow summary
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const shouldRun = '${{ steps.check.outputs.should_run }}';
@@ -1131,7 +1131,7 @@ jobs:
     if: always() && github.event_name == 'issue_comment' && needs.gate.outputs.should_run == 'true'
     steps:
       - name: Report status to PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const prHeadSha = '${{ needs.gate.outputs.pr_head_sha }}';
