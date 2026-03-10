@@ -17,24 +17,26 @@ The Saturation Analyzer is a **fast, reactive, and safe saturation guardrail** t
 
 ### Components
 
-**1. Saturation Analyzer (`internal/capacity/analyzer.go`)**
+**1. Saturation Analyzer (`internal/saturation/analyzer.go`)**
 - Core analysis logic for saturation-based scaling decisions
 - Implements spare capacity calculations
 - Performs worst-case scale-down safety simulation
 - Makes **per-variant** scaling decisions with cost-awareness
 
-**2. Metrics Collector (`internal/collector/capacity_metrics.go`)**
-- Collects vLLM metrics from Prometheus using `max_over_time[1m]` queries
-- Queries `constants.VLLMKvCacheUsagePerc` and `constants.VLLMNumRequestsWaiting`
-- Uses peak values over 1 minute for safety-first capacity analysis
-- Enriches metrics with pod metadata (variant name, accelerator type)
+**2. Metrics Collector**
 
-**3. Interfaces (`internal/interfaces/capacity_analyzer.go`)**
-- Defines data structures for replica metrics (including variant cost)
-- Defines analysis results and per-variant decision types
-- Provides interface for capacity analysis
-- Defines `VariantDecision` for per-variant scaling decisions
-- Defines `VariantReplicaState` for current/desired replica tracking
+- **Query registration** (`internal/collector/registration/saturation.go`): defines the `max_over_time[1m]` PromQL templates for `vllm:kv_cache_usage_perc` and `vllm:num_requests_waiting`
+- **Prometheus source** (`internal/collector/source/prometheus/prometheus_source.go`): executes queries and caches results
+- **Replica metrics** (`internal/collector/replica_metrics.go`): enriches raw query results with pod metadata (variant name, accelerator type)
+
+**3. Interfaces (`internal/interfaces/saturation_analyzer.go`)**
+
+- Defines `ReplicaMetrics` data structure (with variant cost, KV cache, queue fields)
+- Defines analysis results: `ModelSaturationAnalysis`, `VariantSaturationAnalysis`
+- Defines `VariantDecision` for per-variant scaling decisions (with pipeline step history)
+- Defines `VariantReplicaState` for current/desired/pending replica tracking
+- Defines `SaturationAnalyzer` interface (`AnalyzeModelSaturation`, `CalculateSaturationTargets`)
+- Sibling `analyzer.go` holds the generic `Analyzer` interface, `AnalyzerInput`, `AnalyzerResult`, and `VariantCapacity` (used by the V2 engine)
 
 ### Data Flow
 
@@ -314,7 +316,7 @@ T+90s: All 5 pods now ready, but we have 3 extra replicas (over-provisioned)
            skip  // Wait for pending pods to become ready
        if variant.Cost < cheapest.Cost:
            cheapest = variant
-   
+
    scale_up(cheapest)  // Only if no pending replicas
    ```
 
@@ -353,20 +355,19 @@ data:
 
 **Per-model overrides:**
 ```yaml
-  llama-70b-prod: |
-    model_id: meta/llama-70b
-    namespace: production
-    kvCacheThreshold: 0.85
-    kvSpareTrigger: 0.15
+llama-70b-prod: |
+  model_id: meta/llama-70b
+  namespace: production
+  kvCacheThreshold: 0.85
+  kvSpareTrigger: 0.15
 ```
 
 ## Testing
 
-Comprehensive unit tests are provided in `internal/capacity/analyzer_test.go`:
+Comprehensive unit tests are provided in `internal/saturation/analyzer_test.go`:
 
 ```bash
-cd internal/capacity
-go test -v
+go test ./internal/saturation/...
 ```
 
 **Test coverage:**
@@ -432,9 +433,10 @@ INFO Capacity target: scale-up cheapest variant
 
 ### Prometheus Queries
 
-**Two queries per model:**
-1. `max_over_time(constants.VLLMKvCacheUsagePerc{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
-2. `max_over_time(constants.VLLMNumRequestsWaiting{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
+**Two queries per model** (registered in `internal/collector/registration/saturation.go`):
+
+1. `max by (pod) (max_over_time(vllm:kv_cache_usage_perc{namespace="prod",model_name="llama-70b"}[1m]))` — peak KV cache utilization per pod
+2. `max by (pod) (max_over_time(vllm:num_requests_waiting{namespace="prod",model_name="llama-70b"}[1m]))` — peak queue length per pod
 
 **Query strategy:** Uses `max_over_time[1m]` to capture peak capacity usage in the last minute, providing conservative safety-first analysis that prevents missing saturation events between queries. The `model_id` filter ensures metrics are scoped to the specific model being analyzed, preventing cross-model metric pollution.
 
@@ -467,9 +469,10 @@ The saturation analyzer is integrated into the controller's reconciliation loop:
 
 ### Metrics Requirements
 
-The analyzer requires these Prometheus metrics from vLLM (defined in `internal/constants/metrics.go`):
-- `constants.VLLMKvCacheUsagePerc` (`vllm:kv_cache_usage_perc`) — KV cache utilization (0.0-1.0)
-- `constants.VLLMNumRequestsWaiting` (`vllm:num_requests_waiting`) — Queue length (integer)
+The analyzer requires these Prometheus metrics from vLLM. Queries are registered in `internal/collector/registration/saturation.go`:
+
+- `vllm:kv_cache_usage_perc` — KV cache utilization (0.0-1.0)
+- `vllm:num_requests_waiting` — Queue length (integer)
 
 These metrics must include the following labels:
 - `pod` or `pod_name` — Pod identification
