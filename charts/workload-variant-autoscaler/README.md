@@ -2,60 +2,38 @@
 
 ![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
 
-Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads
+## Installation Overview
+Installation is divided into three separate parts. First is the infrastructure installation where WVA prerequisites such as llm-d, gateway control plane, Prometheus or KEDA are installed, and configured to work with WVA on environments such as Openshift, Kubenettes. Next, WVA controller can be installed in any namespace. Finally, one or more WVA variants can be installed for each WVA controller as scaling targets for model deployments in llm-d namespaces. 
+- [Infrastructure installation](#infrastructure-installation)
+- [WVA controller installation](#wva-controller-installation)
+- [WVA variant installation](#wva-variant-installation)
 
-### Chart registry (OCI)
-
-The chart is published to GitHub Container Registry under the **llm-d** org (not llm-d-incubation). Use this OCI URL in Helm or Helmfile:
-
-- **OCI URL:** `oci://ghcr.io/llm-d/workload-variant-autoscaler`
-- **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.5.1`
-
-## Installation (OpenShift)
-Helm is the recommended installation method. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler` and `prometheus-adapter`. To list all helm charts installed in the cluster run `helm ls -A`.
-
-### Step 1: Setup Variables, Secret, Helm repo
+### Download and Setup Variables
 ```
-export OWNER="llm-d"
-export WVA_PROJECT="llm-d-workload-variant-autoscaler"
-export WVA_RELEASE="v0.5.1"
-export WVA_NS="workload-variant-autoscaler-system"
-export MON_NS="openshift-user-workload-monitoring"
+export WVA_RELEASE="v0.5.1" # select a release from https://github.com/llm-d/llm-d-workload-variant-autoscaler
+export WVA_NS="workload-variant-autoscaler-system" # namespace to install WVA controller
 
-kubectl get secret thanos-querier-tls -n openshift-monitoring -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
-
-git clone -b $WVA_RELEASE -- https://github.com/$OWNER/$WVA_PROJECT.git $WVA_PROJECT
-cd $WVA_PROJECT
+git clone -b $WVA_RELEASE -- https://github.com/llm-d/llm-d-workload-variant-autoscaler.git llm-d-workload-variant-autoscaler
+cd llm-d-workload-variant-autoscaler
 export WVA_PROJECT=$PWD
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
 ```
 
-### Step 2: Update prometheus-adapter To Export WVA Metrics
-**Important:** The following helm upgrade command updates the global `prometheus-adapter` 
-configmap. If this is a shared cluster then you might want to get the current
-settings, manually append the values in `config/samples/prometheus-adapter-values-ocp.yaml`
-then run helm upgrade with the appended values. Here's an example how to get the current
-values: `kubectl get configmap prometheus-adapter -n $MON_NS -o yaml`
+### Infrastructure Installation
+The infrastructure installation installs and configures WVA prerequisites such as llm-d, gateway control plane, Prometheus or KEDA into a namespace to work with WVA on environments such as Openshift, Kubenettes.
 
 ```
-helm upgrade -i prometheus-adapter prometheus-community/prometheus-adapter \
-  -n $MON_NS \
-  -f config/samples/prometheus-adapter-values-ocp.yaml
+export HF_TOKEN="hf_xxxxx"
+cd $WVA_PROJECT
+./deploy/install.sh  # SUMH: can we move it to a new 'scripts' folder and rename to install-infra.sh?
 ```
 
-### Step 3: Install WVA Controller Into a Namespace
+### WVA Controller Installation
+WVA controller is installed by using `helm`. The Helm charts are in $WVA_PROJECT/charts. All configurable parameters for WVA controller are in the $WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml. The following example shows how to install WVA controller into a namespace with required values for some of these parameters. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler`. To list all Helm charts installed in the cluster run `helm ls -A`.
 ```
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: $WVA_NS
-  labels:
-    app.kubernetes.io/name: workload-variant-autoscaler
-    control-plane: controller-manager
-    openshift.io/user-monitoring: "true"
-EOF
+# Get Prometheus CA certificate
+MON_NS="openshift-user-workload-monitoring" # Set to Prometheus namespace in your cluster
+PROM_CA_CERT="thanos-querier-tls" # Set to Prometheus CA certificate in your cluster
+kubectl get secret $PROM_CA_CERT -n $MON_NS -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
 
 cd $WVA_PROJECT/charts
 helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
@@ -67,9 +45,9 @@ helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
   --set vllmService.enabled=false
 ```
 
-### Step 4: Add Models as Scale Targets To WVA Controller
+### WVA Variant Installation
 After a WVA controller has been installed,
-you can add one or more models running in LLMD namespaces as scale targets to the WVA controller. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` LLMD namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace.
+you can add one or more models running in LLMD namespaces as scale targets to the WVA controller by creating WVA variants. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` LLMD namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace. Again, please note the required values for some of these parameters.
 ```
 helm install wva-model-a ./workload-variant-autoscaler \
   -n $WVA_NS \
