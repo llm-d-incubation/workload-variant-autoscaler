@@ -8,6 +8,8 @@ parms = "parms"
 # Short code fragments / false positives
 ot = "ot"
 vas = "vas"
+# Valid English variant (unparseable vs unparsable)
+unparseable = "unparseable"
 
 # Pre-existing typos in codebase (to be fixed separately)
 accelarator = "accelarator"
