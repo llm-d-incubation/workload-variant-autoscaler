@@ -74,20 +74,6 @@ func GroupVariantAutoscalingByModel(
 	return groups
 }
 
-// GetAcceleratorType extracts the accelerator type from a VariantAutoscaling.
-// It checks in order:
-// 1. The inference.optimization/acceleratorName label
-// 2. Returns empty string if neither is available
-func GetAcceleratorType(va *wvav1alpha1.VariantAutoscaling) string {
-	if va.Labels != nil {
-		if acc, exists := va.Labels[AcceleratorNameLabel]; exists {
-			return acc
-		}
-	}
-
-	return ""
-}
-
 // ActiveVariantAutoscalings retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
 // Returns a slice of deep-copied VariantAutoscaling objects.

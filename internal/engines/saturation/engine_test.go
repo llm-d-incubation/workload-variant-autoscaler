@@ -141,7 +141,7 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
@@ -377,7 +377,7 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{

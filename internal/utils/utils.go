@@ -415,3 +415,106 @@ func ValidatePrometheusAPIWithBackoff(ctx context.Context, promAPI promv1.API, b
 func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
 	return ValidatePrometheusAPIWithBackoff(ctx, promAPI, PrometheusValidationBackoff)
 }
+
+// GetAcceleratorNameFromDeployment extracts GPU product information from a Deployment's nodeSelector or nodeAffinity.
+// It checks for the following keys in order:
+// - nvidia.com/gpu.product
+// - amd.com/gpu.product-name
+// - cloud.google.com/gke-accelerator
+// If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
+// Returns the first matching value found, or an empty string if none are found.
+func GetAcceleratorNameFromDeployment(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) string {
+	if deployment == nil && va == nil {
+		return ""
+	}
+
+	gpuKeys := []string{
+		"nvidia.com/gpu.product",
+		"amd.com/gpu.product-name",
+		"cloud.google.com/gke-accelerator",
+	}
+
+	// Check nodeSelector first
+	if deployment != nil && deployment.Spec.Template.Spec.NodeSelector != nil {
+		for _, key := range gpuKeys {
+			if val, ok := deployment.Spec.Template.Spec.NodeSelector[key]; ok {
+				return val
+			}
+		}
+	}
+
+	// Check nodeAffinity
+	if deployment != nil && deployment.Spec.Template.Spec.Affinity != nil && deployment.Spec.Template.Spec.Affinity.NodeAffinity != nil {
+		if val := extractGPUFromNodeAffinity(deployment.Spec.Template.Spec.Affinity.NodeAffinity, gpuKeys); val != "" {
+			return val
+		}
+	}
+
+	// Fall back to VariantAutoscaling label
+	if va != nil && va.Labels != nil {
+		if accName, exists := va.Labels[AcceleratorNameLabel]; exists {
+			return accName
+		}
+	}
+
+	return ""
+}
+
+// GetAcceleratorNameFromVA is a convenience function that fetches the deployment for a VariantAutoscaling
+// and extracts GPU product/accelerator information using GetAcceleratorNameFromDeployment.
+// Returns the accelerator name string and any error from fetching the deployment.
+func GetAcceleratorNameFromVA(ctx context.Context, c client.Client, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) (string, error) {
+	if va == nil {
+		return "", fmt.Errorf("VariantAutoscaling cannot be nil")
+	}
+
+	// Fetch the deployment using the VA's scale target name and namespace
+	deployment := &appsv1.Deployment{}
+	if err := GetDeploymentWithBackoff(ctx, c, va.GetScaleTargetName(), va.Namespace, deployment); err != nil {
+		return "", fmt.Errorf("failed to get deployment %s for VA %s/%s: %w", va.GetScaleTargetName(), va.Namespace, va.Name, err)
+	}
+
+	return GetAcceleratorNameFromDeployment(va, deployment), nil
+}
+
+// extractGPUFromNodeAffinity extracts GPU product information from NodeAffinity.
+// It checks both required and preferred node affinity terms for the given GPU keys.
+func extractGPUFromNodeAffinity(nodeAffinity *corev1.NodeAffinity, gpuKeys []string) string {
+	// Check required node affinity
+	if nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+		for _, term := range nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+			if val := extractGPUFromNodeSelectorTerm(term, gpuKeys); val != "" {
+				return val
+			}
+		}
+	}
+
+	// Check preferred node affinity
+	if nodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution != nil {
+		for _, preferred := range nodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+			if val := extractGPUFromNodeSelectorTerm(preferred.Preference, gpuKeys); val != "" {
+				return val
+			}
+		}
+	}
+
+	return ""
+}
+
+// extractGPUFromNodeSelectorTerm extracts GPU product from a NodeSelectorTerm.
+// It checks MatchExpressions for the given GPU keys with "In" or "Exists" operators.
+func extractGPUFromNodeSelectorTerm(term corev1.NodeSelectorTerm, gpuKeys []string) string {
+	for _, expr := range term.MatchExpressions {
+		for _, key := range gpuKeys {
+			if expr.Key == key {
+				// For "In" operator, return the first value
+				if expr.Operator == corev1.NodeSelectorOpIn && len(expr.Values) > 0 {
+					return expr.Values[0]
+				}
+				// For "Exists" operator, we found the key but no specific value
+				// Continue searching for other keys that might have values
+			}
+		}
+	}
+	return ""
+}

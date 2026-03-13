@@ -38,7 +38,7 @@ func (e *Engine) runV2AnalysisOnly(
 				"variant", va.Name, "deployKey", deployKey)
 			continue
 		}
-		accelerator := utils.GetAcceleratorType(va)
+		accelerator := utils.GetAcceleratorNameFromDeployment(va, deploy)
 		gpuCount := getDeploymentGPUsPerReplica(deploy)
 		e.capacityStore.LoadFromDeployment(namespace, modelID, va.Name, accelerator, gpuCount, deploy)
 		logger.V(logging.DEBUG).Info("Pre-populated capacity store from deployment",
@@ -112,9 +112,9 @@ func (e *Engine) runAnalyzersAndScore(
 			continue
 		}
 		switch aw.Name {
+		// future: case "throughput", "slo"
 		case "saturation":
 			totalWeighted += baseResult.RequiredCapacity * aw.Score
-		// future: case "throughput", "slo"
 		}
 	}
 

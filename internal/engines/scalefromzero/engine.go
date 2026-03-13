@@ -291,7 +291,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, va wvav1alpha1.Vari
 	accelerator = va.Status.DesiredOptimizedAlloc.Accelerator
 	if accelerator == "" {
 		// Try to get from VA labels as last resort
-		if val, ok := va.Labels["inference.optimization/acceleratorName"]; ok && val != "" {
+		if val, err := utils.GetAcceleratorNameFromVA(ctx, e.client, &va); err == nil {
 			accelerator = val
 		}
 	}

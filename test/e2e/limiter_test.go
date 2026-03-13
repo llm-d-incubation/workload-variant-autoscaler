@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -247,7 +248,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 				Name:      vaA,
 			}, vaAObj)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vaAObj.Labels["inference.optimization/acceleratorName"]).To(Equal("H100"))
+			Expect(vaAObj.Labels[utils.AcceleratorNameLabel]).To(Equal("H100"))
 
 			By("Verifying VA B (AMD)")
 			vaBObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
@@ -256,10 +257,10 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 				Name:      vaB,
 			}, vaBObj)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vaBObj.Labels["inference.optimization/acceleratorName"]).To(Equal("MI300X"))
+			Expect(vaBObj.Labels[utils.AcceleratorNameLabel]).To(Equal("MI300X"))
 
 			GinkgoWriter.Printf("VA A accelerator: %s, VA B accelerator: %s\n",
-				vaAObj.Labels["inference.optimization/acceleratorName"], vaBObj.Labels["inference.optimization/acceleratorName"])
+				vaAObj.Labels[utils.AcceleratorNameLabel], vaBObj.Labels[utils.AcceleratorNameLabel])
 		})
 
 		It("should reconcile both VAs successfully", func() {

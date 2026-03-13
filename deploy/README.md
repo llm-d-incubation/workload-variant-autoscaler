@@ -358,6 +358,9 @@ llmd:
 # VariantAutoscaling Configuration
 va:
   enabled: true           # Create VariantAutoscaling CR
+  # accelerator: Optional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: H100       # GPU type: A100, H100, L40S, etc.
   sloTpot: 10            # Time per output token SLO (ms)
   sloTtft: 1000          # Time to first token SLO (ms)
@@ -475,6 +478,9 @@ llmd:
 # Create VariantAutoscaling
 va:
   enabled: true
+  # accelerator: Optional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: A100
   sloTpot: 10
   sloTtft: 1000

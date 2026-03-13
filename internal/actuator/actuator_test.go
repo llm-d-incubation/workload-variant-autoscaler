@@ -205,7 +205,7 @@ var _ = Describe("Actuator", func() {
 					Name:      contextResourceName,
 					Namespace: namespace,
 					Labels: map[string]string{
-						"inference.optimization/acceleratorName": "A100",
+						ctrlutils.AcceleratorNameLabel: "A100",
 					},
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{

@@ -1112,9 +1112,9 @@ func (e *Engine) emitSafetyNetMetrics(
 			}
 		}
 		if accelerator == "" {
-			// Try to get from VA labels as last resort
-			if val, ok := va.Labels[utils.AcceleratorNameLabel]; ok && val != "" {
-				accelerator = val
+			// Try to get from deployment nodeSelector/nodeAffinity or VA labels
+			if acceleratorName, err := utils.GetAcceleratorNameFromVA(ctx, e.client, &va); err == nil && acceleratorName != "" {
+				accelerator = acceleratorName
 			}
 		}
 		if accelerator == "" {

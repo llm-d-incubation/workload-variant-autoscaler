@@ -89,6 +89,9 @@ llmd:
 
 va:
   enabled: true
+  # accelerator: Otional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: H100
   # Cost per replica in arbitrary units (higher = more expensive to scale)
   # Used by saturation analysis to weight scaling decisions across variants
