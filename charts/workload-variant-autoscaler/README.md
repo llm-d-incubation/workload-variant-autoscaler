@@ -3,15 +3,15 @@
 ![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
 
 ## Installation Overview
-Installation is divided into three separate parts. First is the infrastructure installation where WVA prerequisites such as llm-d, gateway control plane, Prometheus or KEDA are installed, and configured to work with WVA on environments such as Openshift, Kubenettes. Next, WVA controller can be installed in any namespace. Finally, one or more WVA variants can be installed for each WVA controller as scaling targets for model deployments in llm-d namespaces. 
+Installation is divided into three separate parts. First is the infrastructure installation where WVA prerequisites such as llm-d, gateway control plane, Prometheus, Prometheus adapter, or KEDA are installed, and configured to work with WVA on environments such as Openshift, Kubenettes. Next, a WVA controller can be installed in a namespace. Finally, for each WVA controller, one or more WVA variants can be installed  as scaling targets for model deployments in llm-d namespaces. 
 - [Infrastructure installation](#infrastructure-installation)
 - [WVA controller installation](#wva-controller-installation)
 - [WVA variant installation](#wva-variant-installation)
 
 ### Download and Setup Variables
-```
+```bash
 export WVA_RELEASE="v0.5.1" # select a release from https://github.com/llm-d/llm-d-workload-variant-autoscaler
-export WVA_NS="workload-variant-autoscaler-system" # namespace to install WVA controller
+export WVA_NS="workload-variant-autoscaler-system" # namespace to install a WVA controller
 
 git clone -b $WVA_RELEASE -- https://github.com/llm-d/llm-d-workload-variant-autoscaler.git llm-d-workload-variant-autoscaler
 cd llm-d-workload-variant-autoscaler
@@ -19,24 +19,27 @@ export WVA_PROJECT=$PWD
 ```
 
 ### Infrastructure Installation
-The infrastructure installation installs and configures WVA prerequisites such as llm-d, gateway control plane, Prometheus or KEDA into a namespace to work with WVA on environments such as Openshift, Kubenettes.
+Infrastructure installation installs and configures WVA prerequisites such as llm-d, gateway control plane, Prometheus or KEDA into a namespace to work with WVA on environments such as Openshift, Kubenettes.
 
-```
+```bash
 export HF_TOKEN="hf_xxxxx"
+export ENVIRONMENT="kind-emulator" # or "openshift", "kubernetes"
+export INFRA_ONLY=true
 cd $WVA_PROJECT
-./deploy/install.sh  # SUMH: can we move it to a new 'scripts' folder and rename to install-infra.sh?
+./deploy/install.sh
 ```
+`install.sh` has many additional options, refer to [Infrastructure Install Options](../../deploy/README.md).
 
 ### WVA Controller Installation
-WVA controller is installed by using `helm`. The Helm charts are in $WVA_PROJECT/charts. All configurable parameters for WVA controller are in the $WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml. The following example shows how to install WVA controller into a namespace with required values for some of these parameters. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler`. To list all Helm charts installed in the cluster run `helm ls -A`.
-```
+Once the infrastruture is installed, WVA controller can be installed using `helm`. The Helm charts are in $WVA_PROJECT/charts. All configurable parameters for WVA controller are in the $WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml. The following example shows how to install WVA controller into a namespace with required values for some of these parameters. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler`. To list all Helm charts installed in the cluster run `helm ls -A`.
+```bash
 # Get Prometheus CA certificate
 MON_NS="openshift-user-workload-monitoring" # Set to Prometheus namespace in your cluster
 PROM_CA_CERT="thanos-querier-tls" # Set to Prometheus CA certificate in your cluster
 kubectl get secret $PROM_CA_CERT -n $MON_NS -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/prometheus-ca.crt
 
 cd $WVA_PROJECT/charts
-helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
+helm install workload-variant-autoscaler ./workload-variant-autoscaler \
   -n $WVA_NS \
   --set-file wva.prometheus.caCert=/tmp/prometheus-ca.crt \
   --set controller.enabled=true \
@@ -45,9 +48,11 @@ helm upgrade -i workload-variant-autoscaler ./workload-variant-autoscaler \
   --set vllmService.enabled=false
 ```
 
+For more configurable parameters for WVA controller see $WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml
+
 ### WVA Variant Installation
 After a WVA controller has been installed,
-you can add one or more models running in LLMD namespaces as scale targets to the WVA controller by creating WVA variants. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` LLMD namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace. Again, please note the required values for some of these parameters.
+you can add one or more models running in llm-d namespaces as scale targets to the WVA controller by creating WVA variants. As an example, the following command adds model name `my-model-a` with model ID `meta-llama/Llama-3.1-8` running in `team-a` llm-d namespace. This command creates the corresponding VA, HPA resources in `team-a` namespace. Again, please note the required values for some of these parameters.
 ```
 helm install wva-model-a ./workload-variant-autoscaler \
   -n $WVA_NS \
@@ -57,6 +62,7 @@ helm install wva-model-a ./workload-variant-autoscaler \
   --set llmd.namespace=team-a \
   --set llmd.modelName=my-model-a \
   --set llmd.modelID="meta-llama/Llama-3.1-8"
+  --values  ./workload-variant-autoscaler/values.yaml
 ```
 Here is an example to add another model to the same WVA controller:
 ```
@@ -68,9 +74,10 @@ helm install wva-model-b ./workload-variant-autoscaler \
   --set llmd.namespace=team-a \
   --set llmd.modelName=my-model-b \
   --set llmd.modelID="Qwen/Qwen3-0.6B"
+  --values ./workload-variant-autoscaler/values.yaml
 ```
 **Notes**:
-- When there are multiple WVA controllers installed in different namespaces, there's the possibility of adding models in a LLMD namespace as scale targets using the **same** `release name`. If `helm install` was used to add then there will be a clear message such as:
+- When there are multiple WVA controllers installed in different namespaces, there's the possibility of adding models in a llm-d namespace as scale targets using the **same** `release name`. If `helm install` was used to add then there will be a clear message such as:
   ```
   INSTALLATION FAILED: cannot re-use a name that is still in use
   ``` 
@@ -170,101 +177,12 @@ wva:
 See `docs/saturation-scaling-config.md` for detailed configuration documentation.
 
 ### HPA Behavior Configuration
-
-The chart provides full control over HPA scaling behavior through the `hpa.behavior` section. This allows you to configure stabilization windows and scaling policies without post-deployment patching.
-
-**Default Configuration:**
-```yaml
-hpa:
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 240  # Wait 240s before scaling up
-      selectPolicy: Max
-      policies:
-        - type: Pods
-          value: 10
-          periodSeconds: 150
-    scaleDown:
-      stabilizationWindowSeconds: 240  # Wait 240s before scaling down
-      selectPolicy: Max
-      policies:
-        - type: Pods
-          value: 10
-          periodSeconds: 150
-```
-
-**Configuration via Helm:**
-```bash
-# Production: Conservative scaling (240s stabilization)
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  --set hpa.behavior.scaleUp.stabilizationWindowSeconds=240 \
-  --set hpa.behavior.scaleDown.stabilizationWindowSeconds=240
-
-# E2E Testing: Fast scaling (30s stabilization)
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  --set hpa.behavior.scaleUp.stabilizationWindowSeconds=30 \
-  --set hpa.behavior.scaleDown.stabilizationWindowSeconds=30
-```
-
-**Configuration via install.sh:**
-```bash
-# Set stabilization window via environment variable
-HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
-
-# Production default (240s)
-./deploy/install.sh
-```
-
-**Key Parameters:**
-- **stabilizationWindowSeconds**: Time to wait before applying scaling decisions (prevents flapping)
-- **selectPolicy**: How to choose from multiple policies (`Max`, `Min`, `Disabled`)
-- **policies**: List of scaling policies defining rate limits
-
-**Best Practices:**
-- **Production**: Use 120-300 seconds for stability
-- **Development**: Use 30-60 seconds for faster iteration
-- **E2E Tests**: Use 30 seconds for rapid validation
-
-See [HPA Integration Guide](../../docs/integrations/hpa-integration.md) for detailed information.
+Refer to [HPA Behavior Configuration](../../docs/integrations/hpa-integration.md#hpa-behavior-configuration)
 
 ### Usage Examples
 
-#### Production Deployment
-```bash
-# Use production values (secure by default)
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --values values.yaml
-```
-
-#### Development Deployment
-```bash
-# Use development values (relaxed security)
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --values values-dev.yaml
-```
-
-#### Custom Configuration
-```bash
-# Override specific values
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --values values.yaml \
-  --set wva.prometheus.tls.insecureSkipVerify=true \
-  --set wva.image.tag=v0.0.1-dev
-```
-
 #### Immutable ConfigMap (Security Hardening)
-```bash
-# Enable immutable ConfigMap for enhanced security
-# This prevents accidental or malicious configuration changes
-# Note: Disables runtime config updates (requires ConfigMap recreation for changes)
-helm install workload-variant-autoscaler ./workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --values values.yaml \
-  --set wva.configMap.immutable=true
-```
+For enhanced security, you can enable immutable ConfigMap for WVA controller by adding the option `--set wva.configMap.immutable=true` to the `helm` command when installing WVA controller. This prevents accidental or malicious configuration changes. This also disables runtime config updates (requires ConfigMap recreation for changes).
 
 **Security Benefits:**
 - Prevents accidental configuration changes
@@ -285,11 +203,8 @@ When running multiple WVA controllers in the same cluster (e.g., for parallel e2
 
 #### E2E Testing Example
 
-For parallel e2e tests, each test run can use a unique controller instance:
-```bash
-# Each PR/run uses its namespace as the controller instance
-CONTROLLER_INSTANCE="llm-d-autoscaler-pr-123" ./deploy/install.sh
-```
+For parallel e2e tests, each test run can use a unique controller instance. Follow
+[WVA Controller Installation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) steps to install WVA controller, and use option `--set wva.controllerInstance="llm-d-autoscaler-pr-123"` to `helm`.
 
 This ensures that:
 - Metrics from PR-123's controller have `controller_instance="llm-d-autoscaler-pr-123"`

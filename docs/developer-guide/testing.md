@@ -142,22 +142,9 @@ WVA provides a **single consolidated E2E suite** that runs on multiple environme
 
 ### Infra-Only Setup (Required Before Running Tests)
 
-Tests expect **only** the WVA controller and llm-d infrastructure to be deployed; they create VariantAutoscaling resources, HPAs, and model services themselves. Use the install script in **infra-only** mode:
+Tests expect **only** the WVA controller and llm-d infrastructure to be deployed. The tests create VariantAutoscaling resources, HPAs, and model services themselves. Follow
+[Infrastructure Installation](../../charts/workload-variant-autoscaler/README.md#infrastructure-installation) steps to install infrastructure and [WVA Controller Installation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) to install WVA controller.
 
-```bash
-# From repository root: deploy only WVA + llm-d infrastructure (no VA/HPA/model services)
-cd deploy
-export ENVIRONMENT="kind-emulator"   # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
-# Or: ./install.sh --infra-only
-```
-
-This deploys:
-- WVA controller
-- llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
-- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
-- **No** VariantAutoscaling, HPA, or model services (tests create these)
 
 When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script also enables **GIE queuing** so scale-from-zero tests can run: it patches the EPP with `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER=true` and applies an **InferenceObjective** (`e2e-default`) that references the default InferencePool. This ensures the metric `inference_extension_flow_control_queue_size` is populated when requests hit the gateway.
 

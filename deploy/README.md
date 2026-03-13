@@ -93,19 +93,9 @@ make deploy-wva-on-openshift
 make deploy-wva-emulated-on-kind
 ```
 
-#### Manual Script Execution
-
-```bash
-# Navigate to deploy directory
-cd deploy
-
-# Set environment variables
-export HF_TOKEN="hf_xxxxxxxxxxxxx"
-export ENVIRONMENT="kubernetes"  # or "openshift", "kind-emulator"
-
-# Run deployment script
-bash install.sh
-```
+#### Installation
+Follow
+[Installation](../charts/workload-variant-autoscaler/README.md) steps to install infrastructure, WVA controller and WVA variants.
 
 #### Script Configuration Options
 
@@ -170,17 +160,7 @@ You can either:
 Do you want to install the Gateway control plane? (y/n):
 ```
 
-To skip this prompt and automate the decision:
-
-```bash
-# Install gateway control plane automatically
-export INSTALL_GATEWAY_CTRLPLANE="true"
-bash install.sh
-
-# Use existing gateway (don't install)
-export INSTALL_GATEWAY_CTRLPLANE="false"
-bash install.sh
-```
+To skip this prompt and automate the decision, set the environment variable `INSTALL_GATEWAY_CTRLPLANE` to `false` when install infrastructure as described in [Infrastructure Installation](../charts/workload-variant-autoscaler/README.md#infrastructure-installation).
 
 #### Script Deployment Examples
 
@@ -239,66 +219,14 @@ export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
 make deploy-wva-on-k8s
 ```
 
-##### Example 7: Infra-only mode for e2e testing
-
-Deploy only the llm-d infrastructure and WVA controller without creating VariantAutoscaling or HPA resources. This is useful for e2e testing where tests dynamically create their own VA/HPA resources.
+##### Example 7: Install infrastructure for e2e testing
+Follow
+[Installation](../charts/workload-variant-autoscaler/README.md) steps to install infrastructure, WVA controller, WVA variants.
 
 ```bash
-# Using command-line flag
-export HF_TOKEN="hf_xxxxx"
-./deploy/install.sh --infra-only
-
-# Using environment variable
-export HF_TOKEN="hf_xxxxx"
-export INFRA_ONLY=true
-make deploy-wva-emulated-on-kind
-
 # Verify: Only WVA controller + llm-d infrastructure should exist
 kubectl get variantautoscaling --all-namespaces  # Should be empty
 kubectl get hpa --all-namespaces | grep -v kube-system  # Should be empty (except system HPAs)
-```
-
-**What gets deployed in infra-only mode:**
-- ✅ Prometheus stack (metrics collection)
-- ✅ WVA controller
-- ✅ llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
-- ✅ Prometheus Adapter (external metrics API)
-- ❌ VariantAutoscaling CRs (tests create these)
-- ❌ HPA resources (tests create these)
-- ❌ Model services (tests create these)
-```
-
-### Method 2: Helm Chart
-
-The WVA can be deployed as a standalone using Helm, assuming you have:
-
-- Existing Prometheus server
-- Existing vLLM deployment
-- ServiceMonitors configured
-- Prometheus Adapter (optional, for HPA)
-
-This method is particularly useful when there is one (or more) existing llm-d infrastructure deployed
-
-#### Helm Chart Quick Start
-
-```bash
-# Add WVA Helm repository (if published)
-# helm repo add wva https://llm-d.github.io/workload-variant-autoscaler
-# helm repo update
-
-# Or install from local chart
-cd charts/workload-variant-autoscaler
-
-# Install with default values
-helm install workload-variant-autoscaler . \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace
-
-# Or install with custom values
-helm install workload-variant-autoscaler . \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace \
-  --values my-values.yaml
 ```
 
 #### Helm Chart Configuration
@@ -393,55 +321,6 @@ vllmService:
   scheme: http           # http or https
 ```
 
-**Install with custom values**:
-
-```bash
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace \
-  --values my-values.yaml
-```
-
-#### Minimal Helm Installation
-
-For a minimal installation (just the controller, no VariantAutoscaling or HPA):
-
-```bash
-# Create minimal values file
-cat > minimal-values.yaml <<EOF
-wva:
-  enabled: true
-  image:
-    tag: latest
-  imagePullPolicy: Always
-  
-  prometheus:
-    baseURL: "https://my-prometheus.monitoring.svc.cluster.local:9090"
-    monitoringNamespace: monitoring
-    tls:
-      insecureSkipVerify: true  # Only for dev/testing
-  
-  logging:
-    level: info
-
-# Disable auto-creation of resources
-va:
-  enabled: false
-
-hpa:
-  enabled: false
-
-vllmService:
-  enabled: false
-EOF
-
-# Install
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
-  -f minimal-values.yaml
-```
-
 #### Helm Chart with External Prometheus
 
 If you have an existing Prometheus (e.g., kube-prometheus-stack):
@@ -485,12 +364,8 @@ hpa:
   maxReplicas: 10
 ```
 
-```bash
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
-  -f prometheus-values.yaml
-```
+Follow
+[WVA Controller Installation](../charts/workload-variant-autoscaler/README.md#wva-controller-installation) steps to install WVA controller and pass the option `-f prometheus-values.yaml` to `helm`.
 
 #### Installing with CA Certificate File
 
@@ -501,11 +376,10 @@ If you need to provide a CA certificate for Prometheus TLS:
 kubectl get secret prometheus-web-tls \
   -n monitoring \
   -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/prometheus-ca.crt
-
-# Install with CA certificate
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
+```
+Then follow
+[WVA Controller Installation](../charts/workload-variant-autoscaler/README.md#wva-controller-installation) steps to install WVA controller and pass these options to `helm`:
+```bash
   --set-file wva.prometheus.caCert=/tmp/prometheus-ca.crt \
   --set wva.prometheus.baseURL="https://prometheus-k8s.monitoring.svc:9090" \
   --set wva.prometheus.tls.insecureSkipVerify=false
@@ -648,29 +522,6 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_HPA` | Deploy HPA | `true` |
 | `INFRA_ONLY` | Deploy only infrastructure (skip VA/HPA) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
-
-#### HPA Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `HPA_STABILIZATION_SECONDS` | HPA stabilization window in seconds | `240` |
-
-**Best Practices:**
-- **Production**: 120-300 seconds (prevents flapping, ensures stability)
-- **Development**: 30-60 seconds (faster iteration)
-- **E2E Tests**: 0-30 seconds (rapid validation)
-
-**Examples:**
-```bash
-# Production deployment (default)
-HPA_STABILIZATION_SECONDS=240 ./deploy/install.sh
-
-# Development deployment
-HPA_STABILIZATION_SECONDS=60 ./deploy/install.sh
-
-# E2E testing
-HPA_STABILIZATION_SECONDS=30 ./deploy/install.sh
-```
 
 #### Advanced Configuration
 

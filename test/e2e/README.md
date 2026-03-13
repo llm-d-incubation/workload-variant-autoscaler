@@ -16,25 +16,8 @@ This test suite is designed to run on **any Kubernetes cluster** (Kind, OpenShif
 ## Prerequisites
 
 ### Infrastructure Setup
-
-Before running tests, deploy the infrastructure in "infra-only" mode:
-
-```bash
-# Deploy only WVA controller + llm-d infrastructure (no VA/HPA resources)
-cd deploy
-export ENVIRONMENT="kind-emulator"  # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
-```
-
-This deploys:
-- ✅ WVA controller
-- ✅ llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
-- ✅ Prometheus stack (metrics collection)
-- ✅ Prometheus Adapter (external metrics API)
-- ❌ **NO** VariantAutoscaling resources (tests create these)
-- ❌ **NO** HPA resources (tests create these)
-- ❌ **NO** Model services (tests create these)
+Follow
+[Infrastructure Installation](../../charts/workload-variant-autoscaler/README.md#infrastructure-installation) steps to install infrastructure before running tests.
 
 ### Verify Infrastructure
 

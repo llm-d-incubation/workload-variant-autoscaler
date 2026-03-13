@@ -316,15 +316,8 @@ oc get featuregate cluster -o jsonpath='{.spec.customNoUpgrade.enabled}'
 ```
 
 5. Deploy HPA with `minReplicas: 0`:
-
-```sh
-# Using install script
-HPA_MIN_REPLICAS=0 ./deploy/install.sh -e openshift
-
-# Or via Helm
-helm upgrade workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --set hpa.minReplicas=0
-```
+- Follow
+  [WVA Variant Installation](../../charts/workload-variant-autoscaler/README.md#wva-variant-installation) to install or upgrade a WVA variant with this additional option `--set hpa.minReplicas=0` to `helm`.
 
 ### Note on possible timing issues
 
@@ -361,38 +354,11 @@ hpa:
 ```
 
 **Deployment Examples:**
-
-```bash
-# Production: Conservative scaling (240s stabilization)
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --set hpa.behavior.scaleUp.stabilizationWindowSeconds=240 \
-  --set hpa.behavior.scaleDown.stabilizationWindowSeconds=240
-
-# Development: Fast scaling (30s stabilization)
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --set hpa.behavior.scaleUp.stabilizationWindowSeconds=30 \
-  --set hpa.behavior.scaleDown.stabilizationWindowSeconds=30
-
-# E2E Testing: Very fast scaling (0s stabilization)
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --set hpa.behavior.scaleUp.stabilizationWindowSeconds=0 \
-  --set hpa.behavior.scaleDown.stabilizationWindowSeconds=0
-```
-
-#### Via Deployment Script
-
-The `deploy/install.sh` script supports the `HPA_STABILIZATION_SECONDS` environment variable:
-
-```bash
-# Custom stabilization window
-HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
-
-# Production default (240 seconds)
-./deploy/install.sh
-
-# E2E testing (30 seconds)
-HPA_STABILIZATION_SECONDS=30 ./deploy/install.sh
-```
+Follow
+[WVA Variant Installation](../../charts/workload-variant-autoscaler/README.md#wva-variant-installation) steps to install WVA variant with the following options for `helm`:
+- For conservative scaling, use `--set hpa.behavior.scaleUp.stabilizationWindowSeconds=240`, `--set hpa.behavior.scaleDown.stabilizationWindowSeconds=240`.
+- For fast scaling, use `--set hpa.behavior.scaleUp.stabilizationWindowSeconds=30`, `--set hpa.behavior.scaleDown.stabilizationWindowSeconds=30`.
+- For faster scaling, use `--set hpa.behavior.scaleUp.stabilizationWindowSeconds=0`, `--set hpa.behavior.scaleDown.stabilizationWindowSeconds=0`.
 
 #### Via values.yaml
 

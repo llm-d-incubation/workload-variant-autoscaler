@@ -51,52 +51,16 @@ Each team's controller only manages VAs in their designated namespace with match
 ### Adding Models to an Existing Controller
 
 The most common multi-model pattern uses a **single controller** with multiple model
-installations. Install the controller once, then add models using `controller.enabled=false`:
+installations. Install the controller once, then add models using `controller.enabled=false`.
 
-```bash
 # Step 1: Install the WVA controller (once per cluster or namespace)
-helm upgrade -i wva-controller ./charts/workload-variant-autoscaler \
-  --namespace wva-system \
-  --create-namespace \
-  --set controller.enabled=true \
-  --set va.enabled=false \
-  --set hpa.enabled=false \
-  --set vllmService.enabled=false
-```
+Follow
+[WVA Controller Installation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) to install a WVA controller.
 
-```bash
 # Step 2: Add Model A (only VA + HPA resources, no controller)
-helm upgrade -i wva-model-a ./charts/workload-variant-autoscaler \
-  --namespace wva-system \
-  --set controller.enabled=false \
-  --set va.enabled=true \
-  --set hpa.enabled=true \
-  --set llmd.namespace=team-a \
-  --set llmd.modelName=my-model-a \
-  --set llmd.modelID="meta-llama/Llama-3.1-8B"
-```
+Follow
+[WVA Variant Installation](../../charts/workload-variant-autoscaler/README.md#wva-variant-installation) to install variants.
 
-```bash
-# Step 3: Add Model B (same controller manages both models)
-helm upgrade -i wva-model-b ./charts/workload-variant-autoscaler \
-  --namespace wva-system \
-  --set controller.enabled=false \
-  --set va.enabled=true \
-  --set hpa.enabled=true \
-  --set llmd.namespace=team-b \
-  --set llmd.modelName=my-model-b \
-  --set llmd.modelID="meta-llama/Llama-3.1-70B"
-```
-
-With `controller.enabled=false`, the chart deploys only:
-
-- **VariantAutoscaling** CR (if `va.enabled=true`)
-- **HorizontalPodAutoscaler** (if `hpa.enabled=true`)
-- **Service** and **ServiceMonitor** for vLLM metrics (if `vllmService.enabled=true`)
-- **RBAC** ClusterRoles for VA resources (viewer, editor, admin)
-
-It skips all controller infrastructure: Deployment, ServiceAccount, ConfigMaps, RBAC
-bindings, leader election roles, and prometheus CA certificates.
 
 > **Tip:** If using `controllerInstance` for metric isolation, set the same value on both the
 > controller install and all model installs so the HPA metric selectors match.
@@ -129,13 +93,8 @@ wva:
   controllerInstance: "my-instance-id"
 ```
 
-Install with Helm:
-
-```bash
-helm upgrade -i workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --namespace workload-variant-autoscaler-system \
-  --set wva.controllerInstance=my-instance-id
-```
+or follow
+[WVA Controller Installation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) to install controller with option `--set wva.controllerInstance=my-instance-id` to `helm`.
 
 ### Environment Variable
 
@@ -368,21 +327,16 @@ kubectl delete hpa -l wva.llmd.ai/controller-instance=instance-a
 
 ### Example 1: Parallel Testing
 
-Deploy two test environments simultaneously:
+To deploy two WVA controllers simultaneously follow
+[WVA Controller Installation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) with the following options for first controller:
 
 ```bash
-# Environment A
-helm upgrade -i wva-test-a ./charts/workload-variant-autoscaler \
-  --namespace wva-test-a \
-  --create-namespace \
-  --set wva.controllerInstance=test-a \
+  --set wva.controllerInstance=test-a
   --set llmd.namespace=llm-test-a
-
-# Environment B
-helm upgrade -i wva-test-b ./charts/workload-variant-autoscaler \
-  --namespace wva-test-b \
-  --create-namespace \
-  --set wva.controllerInstance=test-b \
+```
+and these options for the second controller:
+```bash
+  --set wva.controllerInstance=test-b
   --set llmd.namespace=llm-test-b
 ```
 
@@ -408,23 +362,6 @@ wva:
 ```
 
 Create canary VAs with `controller-instance: canary` label to test new version.
-
-### Example 3: Multi-Tenant Platform
-
-Isolate autoscaling for different teams:
-
-```bash
-# Deploy per-team controllers
-for team in ml-research ml-production data-science; do
-  helm upgrade -i wva-${team} ./charts/workload-variant-autoscaler \
-    --namespace wva-${team} \
-    --create-namespace \
-    --set wva.controllerInstance=${team} \
-    --set llmd.namespace=${team}
-done
-```
-
-Each team's workloads are managed by their dedicated controller instance.
 
 ## Related Documentation
 

@@ -237,12 +237,8 @@ For enhanced security, you can make the entire ConfigMap immutable using the Hel
   3. Restart the controller pod
 
 **Enable Immutable ConfigMap:**
-```bash
-# Via Helm values
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --set wva.configMap.immutable=true
-```
+Follow
+[WVA Controller Instalation](../../charts/workload-variant-autoscaler/README.md#wva-controller-installation) steps to install WVA controller, and use option `--set wva.configMap.immutable=true` with `helm`.
 
 **When to Use:**
 - **Production environments** with strict security requirements

@@ -124,12 +124,9 @@ More examples in [config/samples/](config/samples/).
 ```bash
 # Apply the latest CRDs before upgrading
 kubectl apply -f charts/workload-variant-autoscaler/crds/
-
-# Then upgrade the Helm release
-helm upgrade workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --namespace workload-variant-autoscaler-system \
-  [your-values...]
 ```
+then follow
+[WVA Controller Installation](./charts/workload-variant-autoscaler/README.md#wva-controller-installation) steps to upgrade WVA controller by using `helm upgrade`.
 
 ### Breaking Changes
 
