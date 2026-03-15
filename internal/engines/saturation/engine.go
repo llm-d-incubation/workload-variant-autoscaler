@@ -362,7 +362,7 @@ func (e *Engine) optimizeV1(
 			finalDecisions = e.convertSaturationTargetsToDecisions(ctx, saturationTargets, saturationAnalysis, data.variantStates)
 
 			// Check if any variant has minReplicas > 0 — if so, skip scale-to-zero enforcement
-			if !hasMinReplicasAboveZero(variantStates) {
+			if !hasMinReplicasAboveZero(data.variantStates) {
 				// Apply scale-to-zero enforcement on decisions
 				scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
 				scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
