@@ -38,6 +38,7 @@ func (e *Engine) runV2AnalysisOnly(
 				"variant", va.Name, "deployKey", deployKey)
 			continue
 		}
+		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
 		accelerator := utils.GetAcceleratorNameFromDeployment(va, deploy)
 		gpuCount := getDeploymentGPUsPerReplica(deploy)
 		e.capacityStore.LoadFromDeployment(namespace, modelID, va.Name, accelerator, gpuCount, deploy)
@@ -112,9 +113,9 @@ func (e *Engine) runAnalyzersAndScore(
 			continue
 		}
 		switch aw.Name {
-		// future: case "throughput", "slo"
 		case "saturation":
 			totalWeighted += baseResult.RequiredCapacity * aw.Score
+		// future: case "throughput", "slo"
 		}
 	}
 

@@ -439,14 +439,17 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			continue
 		}
 		variantKey := utils.GetNamespacedKey(namespace, vaName)
-
-		// Get accelerator name from Deployment nodeSelector or VariantAutoscaling label
+		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
 		acceleratorName := ""
 		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
 			// Find the deployment for this VA
 			deploymentKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
 			if deployment, found := deployments[deploymentKey]; found {
+				// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
 				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, deployment)
+			} else {
+				// Deployment not cached, fall back to VA label via nil deployment
+				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, nil)
 			}
 		}
 

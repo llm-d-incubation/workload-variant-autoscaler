@@ -244,9 +244,29 @@ func TestMultipleInactiveVariants(t *testing.T) {
 	}
 
 	// Get all inactive VAs
-	inactiveVAs, err := utils.InactiveVariantAutoscaling(ctx, fakeClient)
+	inactiveVAs, deployments, err := utils.InactiveVariantAutoscaling(ctx, fakeClient)
 	require.NoError(t, err)
 	assert.Equal(t, 3, len(inactiveVAs), "Should have 3 inactive VAs")
+
+	// Verify deployments map is populated correctly
+	assert.NotNil(t, deployments, "Deployments map should not be nil")
+	assert.Equal(t, 3, len(deployments), "Should have 3 deployments in the map")
+
+	// Verify each deployment is keyed by namespace/deploymentName
+	expectedDeployments := []string{
+		namespace + "/resource-1-deployment",
+		namespace + "/resource-2-deployment",
+		namespace + "/resource-3-deployment",
+	}
+	for _, expectedKey := range expectedDeployments {
+		deployment, found := deployments[expectedKey]
+		assert.True(t, found, "Deployment with key %s should be in the map", expectedKey)
+		assert.NotNil(t, deployment, "Deployment should not be nil for key %s", expectedKey)
+		if deployment != nil {
+			assert.Equal(t, namespace, deployment.Namespace, "Deployment namespace should match")
+			assert.Equal(t, int32(0), *deployment.Spec.Replicas, "Deployment should have 0 replicas (inactive)")
+		}
+	}
 
 	// Run optimize - it should handle multiple VAs concurrently
 	err = engine.optimize(ctx)

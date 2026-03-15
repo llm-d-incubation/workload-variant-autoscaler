@@ -30,7 +30,7 @@ func BuildAllocationFromMetrics(
 	acc := GetAcceleratorNameFromDeployment(va, &deployment)
 	if acc == "" {
 		return interfaces.Allocation{},
-			fmt.Errorf("missing accelerator name from deployment or VA labels: %s", va.Name)
+			fmt.Errorf("accelerator name not found in deployment nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
 	}
 
 	// Calculate variant cost

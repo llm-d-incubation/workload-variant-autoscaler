@@ -201,7 +201,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 		logger.Info("Scaling to zero is enabled")
 	}
 
-	activeVAs, err := utils.ActiveVariantAutoscaling(ctx, e.client)
+	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client)
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
 		return err
@@ -345,18 +345,21 @@ func (e *Engine) optimizeV1(
 		}
 
 		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
-
-		saturationTargets, saturationAnalysis, variantStates, err := e.RunSaturationAnalysis(ctx, modelID, modelVAs, saturationConfig, e.client)
+		saturationTargets, saturationAnalysis, data, err := e.RunSaturationAnalysis(ctx, modelID, modelVAs, saturationConfig, e.client)
 		if err != nil {
 			logger.Error(err, "Saturation analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations)
+			if data == nil {
+				e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
+			} else {
+				e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
+			}
 			continue
 		}
 
 		var finalDecisions []interfaces.VariantDecision
 		if saturationAnalysis != nil {
 			// Convert saturation targets to decisions first, then apply enforcer
-			finalDecisions = e.convertSaturationTargetsToDecisions(ctx, saturationTargets, saturationAnalysis, variantStates)
+			finalDecisions = e.convertSaturationTargetsToDecisions(ctx, saturationTargets, saturationAnalysis, data.variantStates)
 
 			// Apply scale-to-zero enforcement on decisions
 			scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
@@ -448,7 +451,7 @@ func (e *Engine) optimizeV2(
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
 			logger.Error(err, "Model data preparation failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
 		if data == nil {
@@ -461,7 +464,7 @@ func (e *Engine) optimizeV2(
 			data.deployments, data.variantAutoscalings)
 		if err != nil {
 			logger.Error(err, "V2 analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
 			continue
 		}
 
@@ -813,7 +816,7 @@ func (e *Engine) RunSaturationAnalysis(
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	SaturationConfig config.SaturationScalingConfig,
 	k8sClient client.Client,
-) (map[string]int, *interfaces.ModelSaturationAnalysis, []interfaces.VariantReplicaState, error) {
+) (map[string]int, *interfaces.ModelSaturationAnalysis, *modelData, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	SaturationConfig.ApplyDefaults()
@@ -848,7 +851,7 @@ func (e *Engine) RunSaturationAnalysis(
 		"modelID", modelID,
 		"targets", saturationTargets)
 
-	return saturationTargets, saturationAnalysis, data.variantStates, nil
+	return saturationTargets, saturationAnalysis, data, nil
 }
 
 // applySaturationDecisions updates VA status and emits metrics based on Saturation decisions.
@@ -1074,22 +1077,30 @@ func (e *Engine) emitSafetyNetMetrics(
 	ctx context.Context,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*interfaces.Allocation,
+	deployments map[string]*appsv1.Deployment,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 	act := actuator.NewActuator(e.client)
 
 	for _, va := range modelVAs {
 		// Determine desired replicas
-		var desiredReplicas int32
+		var desiredReplicas, currentReplicas int32
 		var fallbackSource string
+		var deployment *appsv1.Deployment
+		var err error
 
-		// Get current replicas for metric emission
-		currentReplicas, err := act.GetCurrentDeploymentReplicas(ctx, &va)
-		if err != nil {
-			logger.Error(err, "Safety net: failed to get current replicas from Deployment for metrics", "using cached allocation",
-				"variant", va.Name)
-			if curr, ok := currentAllocations[utils.GetNamespacedKey(va.Namespace, va.Name)]; ok {
-				currentReplicas = int32(curr.NumReplicas)
+		if deployments != nil {
+			if deploy, ok := deployments[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]; ok {
+				deployment = deploy
+				// Get current replicas for metric emission.
+				currentReplicas, err = act.GetCurrentDeploymentReplicasFromDeployment(&va, deployment)
+				if err != nil {
+					logger.Error(err, "Safety net: failed to get current replicas from Deployment for metrics", "using cached allocation",
+						"variant", va.Name)
+					if curr, ok := currentAllocations[utils.GetNamespacedKey(va.Namespace, va.Name)]; ok {
+						currentReplicas = int32(curr.NumReplicas)
+					}
+				}
 			}
 		}
 
@@ -1113,8 +1124,13 @@ func (e *Engine) emitSafetyNetMetrics(
 		}
 		if accelerator == "" {
 			// Try to get from deployment nodeSelector/nodeAffinity or VA labels
-			if acceleratorName, err := utils.GetAcceleratorNameFromVA(ctx, e.client, &va); err == nil && acceleratorName != "" {
-				accelerator = acceleratorName
+			if deployment == nil {
+				logger.V(logging.DEBUG).Info("Safety net: no deployment found for VA",
+					"variant", va.Name)
+			} else {
+				if acceleratorName := utils.GetAcceleratorNameFromDeployment(&va, deployment); acceleratorName != "" {
+					accelerator = acceleratorName
+				}
 			}
 		}
 		if accelerator == "" {
