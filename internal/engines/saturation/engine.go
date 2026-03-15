@@ -1123,7 +1123,7 @@ func (e *Engine) emitSafetyNetMetrics(
 			}
 		}
 		if accelerator == "" {
-			// Try to get from deployment nodeSelector/nodeAffinity or VA labels
+			// Try to get accelerator name from deployment nodeSelector/nodeAffinity or VA labels
 			if deployment == nil {
 				logger.V(logging.DEBUG).Info("Safety net: no deployment found for VA",
 					"variant", va.Name)
