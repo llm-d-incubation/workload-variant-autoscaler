@@ -217,6 +217,14 @@ type VariantDecision struct {
 	// LimitedBy identifies which limiter constrained the decision (if any)
 	LimitedBy string
 
+	// --- Replica bounds ---
+	// MinReplicas is the minimum number of replicas for this variant (from VA spec field).
+	// nil means not set (default: 0).
+	MinReplicas *int
+	// MaxReplicas is the maximum number of replicas for this variant (from VA spec field).
+	// nil means not set (no cap).
+	MaxReplicas *int
+
 	// --- Metrics availability ---
 	// MetricsAvailable indicates whether saturation metrics were available for this decision
 	MetricsAvailable bool
@@ -275,6 +283,12 @@ type VariantReplicaState struct {
 	GPUsPerReplica int
 	// Role is the P/D disaggregation role: "prefill", "decode", or "both" (default).
 	Role string
+	// MinReplicas is the minimum number of replicas for this variant (from VA spec field).
+	// nil means not set (default: 0, allows scale to zero).
+	MinReplicas *int
+	// MaxReplicas is the maximum number of replicas for this variant (from VA spec field).
+	// nil means not set (default: 0, no cap).
+	MaxReplicas *int
 }
 
 // SaturationAnalyzer analyzes replica saturation metrics and recommends scaling decisions

@@ -31,7 +31,8 @@ func makeValidVA() *VariantAutoscaling {
 				Kind: "Deployment",
 				Name: "va-sample-deployment",
 			},
-			ModelID: "model-123",
+			ModelID:     "model-123",
+			MaxReplicas: 2,
 		},
 		Status: VariantAutoscalingStatus{
 			// CurrentAlloc: Allocation{...} -- Removed
@@ -217,4 +218,67 @@ func jsonContainsKey(b []byte, key string) bool {
 	}
 	_, ok := m[key]
 	return ok
+}
+
+func TestMinMaxReplicasJSON(t *testing.T) {
+	minVal := int32(2)
+	va := &VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{Name: "va-replicas", Namespace: "default"},
+		Spec: VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind: "Deployment",
+				Name: "my-deploy",
+			},
+			ModelID:     "model-x",
+			MinReplicas: &minVal,
+			MaxReplicas: 5,
+		},
+	}
+
+	b, err := json.Marshal(va)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var probe struct {
+		Spec struct {
+			MinReplicas *int32 `json:"minReplicas"`
+			MaxReplicas int32  `json:"maxReplicas"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if probe.Spec.MinReplicas == nil || *probe.Spec.MinReplicas != 2 {
+		t.Errorf("expected minReplicas=2, got %v", probe.Spec.MinReplicas)
+	}
+	if probe.Spec.MaxReplicas != 5 {
+		t.Errorf("expected maxReplicas=5, got %d", probe.Spec.MaxReplicas)
+	}
+
+	// minReplicas must be absent from JSON when nil (omitempty)
+	vaNoMin := &VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{Name: "va-no-min", Namespace: "default"},
+		Spec: VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind: "Deployment",
+				Name: "my-deploy",
+			},
+			ModelID:     "model-x",
+			MaxReplicas: 5,
+		},
+	}
+	b2, err := json.Marshal(vaNoMin)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var probeSpec struct {
+		Spec map[string]any `json:"spec"`
+	}
+	if err := json.Unmarshal(b2, &probeSpec); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if _, ok := probeSpec.Spec["minReplicas"]; ok {
+		t.Errorf("expected minReplicas to be absent when nil, but it was present")
+	}
 }

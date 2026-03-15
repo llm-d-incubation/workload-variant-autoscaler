@@ -75,10 +75,20 @@ func (g *GreedyBySaturation) sortByPriority(decisions []*interfaces.VariantDecis
 
 // allocateForDecision attempts to allocate GPUs for a single decision.
 // If partial allocation, adjusts TargetReplicas accordingly.
+// Respects MaxReplicas (caps scale-up) and MinReplicas (floor even under GPU scarcity).
 func (g *GreedyBySaturation) allocateForDecision(d *interfaces.VariantDecision, allocator ResourceAllocator) {
 	replicasNeeded := d.TargetReplicas - d.CurrentReplicas
 	if replicasNeeded <= 0 {
 		return
+	}
+
+	// Cap by maxReplicas if set
+	if d.MaxReplicas != nil && *d.MaxReplicas > 0 && d.TargetReplicas > *d.MaxReplicas {
+		d.TargetReplicas = *d.MaxReplicas
+		replicasNeeded = d.TargetReplicas - d.CurrentReplicas
+		if replicasNeeded <= 0 {
+			return
+		}
 	}
 
 	gpusPerReplica := d.GPUsPerReplica
@@ -98,6 +108,12 @@ func (g *GreedyBySaturation) allocateForDecision(d *interfaces.VariantDecision, 
 	// Update decision with actual allocation
 	d.GPUsAllocated = replicasAllocated * gpusPerReplica // Only count full replicas
 	d.TargetReplicas = d.CurrentReplicas + replicasAllocated
+
+	// MinReplicas is a hard floor — even if GPU availability is insufficient,
+	// set TargetReplicas to minReplicas (deployment may be unschedulable, but user intent is preserved).
+	if d.MinReplicas != nil && d.TargetReplicas < *d.MinReplicas {
+		d.TargetReplicas = *d.MinReplicas
+	}
 
 	// Mark as limited if we couldn't allocate all requested
 	if replicasAllocated < replicasNeeded {

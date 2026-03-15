@@ -149,7 +149,8 @@ data:
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())
@@ -385,7 +386,8 @@ data:
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())

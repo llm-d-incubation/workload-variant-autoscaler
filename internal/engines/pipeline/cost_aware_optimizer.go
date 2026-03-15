@@ -54,9 +54,9 @@ func (o *CostAwareOptimizer) Optimize(
 		targets := initTargets(req.VariantStates)
 
 		if req.Result.RequiredCapacity > 0 {
-			costAwareScaleUp(ctx, req.Result, targets)
+			costAwareScaleUp(ctx, req.Result, targets, stateMap)
 		} else if req.Result.SpareCapacity > 0 {
-			costAwareScaleDown(ctx, req.Result, targets)
+			costAwareScaleDown(ctx, req.Result, targets, stateMap)
 		}
 
 		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "cost-aware")
@@ -71,13 +71,13 @@ func (o *CostAwareOptimizer) Optimize(
 
 // costAwareScaleUp adds replicas to the most cost-efficient variant.
 // Sorts by cost-efficiency (cost/perReplicaCapacity) ascending, picks first eligible.
-// Pending replicas are not skipped because the analyzer already accounts for their
-// capacity in the supply calculation — if RequiredCapacity > 0, demand exceeds total
-// supply including pending.
+// Respects maxReplicas per variant — if a variant hits its cap, remaining capacity
+// spills over to the next variant.
 func costAwareScaleUp(
 	ctx context.Context,
 	result *interfaces.AnalyzerResult,
 	targets map[string]int,
+	stateMap map[string]interfaces.VariantReplicaState,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -93,6 +93,19 @@ func costAwareScaleUp(
 		}
 
 		replicasNeeded := int(math.Ceil(remaining / vc.PerReplicaCapacity))
+
+		// Cap by maxReplicas if set
+		state := stateMap[vc.VariantName]
+		if state.MaxReplicas != nil && *state.MaxReplicas > 0 {
+			maxAdd := *state.MaxReplicas - targets[vc.VariantName]
+			if maxAdd <= 0 {
+				continue // already at max
+			}
+			if replicasNeeded > maxAdd {
+				replicasNeeded = maxAdd
+			}
+		}
+
 		targets[vc.VariantName] = targets[vc.VariantName] + replicasNeeded
 		remaining -= float64(replicasNeeded) * vc.PerReplicaCapacity
 
@@ -105,6 +118,7 @@ func costAwareScaleUp(
 
 // costAwareScaleDown removes replicas from the most expensive variant.
 // Sorts by absolute cost descending, removes from most expensive first.
+// Respects minReplicas per variant — will not scale below the annotation floor.
 // The cheapest variant is protected at min 1 replica only when no other variant
 // has replicas — this prevents scale-down deadlocks where the expensive variant's
 // per-replica capacity exceeds spare but cheaper replicas could be removed.
@@ -112,12 +126,19 @@ func costAwareScaleDown(
 	ctx context.Context,
 	result *interfaces.AnalyzerResult,
 	targets map[string]int,
+	stateMap ...map[string]interfaces.VariantReplicaState,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	sorted := sortByCostDesc(result.VariantCapacities)
 	cheapest := findCheapestVariant(result.VariantCapacities)
 	remaining := result.SpareCapacity
+
+	// Build state lookup if provided
+	var states map[string]interfaces.VariantReplicaState
+	if len(stateMap) > 0 {
+		states = stateMap[0]
+	}
 
 	for _, vc := range sorted {
 		if remaining <= 0 {
@@ -128,9 +149,17 @@ func costAwareScaleDown(
 		}
 
 		current := targets[vc.VariantName]
+
+		// Determine minReplicas: annotation floor takes priority, then cheapest-variant logic
 		minReplicas := 0
+		if states != nil {
+			if state, ok := states[vc.VariantName]; ok && state.MinReplicas != nil {
+				minReplicas = *state.MinReplicas
+			}
+		}
 		if vc.VariantName == cheapest {
 			// Protect cheapest at 1 only if it's the last variant with replicas
+			// and no higher annotation min is set
 			otherHasReplicas := false
 			for name, t := range targets {
 				if name != cheapest && t > 0 {
@@ -138,7 +167,7 @@ func costAwareScaleDown(
 					break
 				}
 			}
-			if !otherHasReplicas {
+			if !otherHasReplicas && minReplicas < 1 {
 				minReplicas = 1
 			}
 		}
@@ -273,6 +302,8 @@ func buildDecisionsWithOptimizer(
 			TargetReplicas:  target,
 			Action:          action,
 			Reason:          reason,
+			MinReplicas:     state.MinReplicas,
+			MaxReplicas:     state.MaxReplicas,
 		})
 	}
 	return decisions

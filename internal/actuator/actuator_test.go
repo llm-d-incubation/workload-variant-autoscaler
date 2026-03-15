@@ -244,6 +244,7 @@ var _ = Describe("Actuator", func() {
 						Kind: "Deployment",
 						Name: resourceName,
 					},
+					MaxReplicas: 2,
 				},
 			}
 
@@ -335,7 +336,8 @@ var _ = Describe("Actuator", func() {
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/variant-1",
+					ModelID:     "test-model/variant-1",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
@@ -453,7 +455,8 @@ var _ = Describe("Actuator", func() {
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/metrics-test",
+					ModelID:     "test-model/metrics-test",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
@@ -513,7 +516,8 @@ var _ = Describe("Actuator", func() {
 						Kind: "Deployment",
 						Name: "incomplete-va",
 					},
-					ModelID: "test-model/incomplete",
+					ModelID:     "test-model/incomplete",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					// DesiredOptimizedAlloc.NumReplicas will be 0 by default
@@ -582,7 +586,8 @@ var _ = Describe("Actuator", func() {
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/validation-test",
+					ModelID:     "test-model/validation-test",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
