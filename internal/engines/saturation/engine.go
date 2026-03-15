@@ -357,7 +357,7 @@ func (e *Engine) optimizeV1(
 		}
 
 		var finalDecisions []interfaces.VariantDecision
-		if saturationAnalysis != nil {
+		if saturationAnalysis != nil && data != nil {
 			// Convert saturation targets to decisions first, then apply enforcer
 			finalDecisions = e.convertSaturationTargetsToDecisions(ctx, saturationTargets, saturationAnalysis, data.variantStates)
 
