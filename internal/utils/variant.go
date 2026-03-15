@@ -76,6 +76,7 @@ func GroupVariantAutoscalingByModel(
 
 // ActiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
+// Returns a slice of deep-copied VariantAutoscaling objects.
 // It also returns a map of deployments keyed by "namespace/deploymentName".
 func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
 	return filterVariantsByDeployment(ctx, client, isActive, "active")
@@ -83,6 +84,7 @@ func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav
 
 // InactiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have no target replicas.
+// Returns a slice of deep-copied VariantAutoscaling objects.
 // It also returns a map of deployments keyed by "namespace/deploymentName".
 func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
 	return filterVariantsByDeployment(ctx, client, isInactive, "inactive")
