@@ -316,7 +316,6 @@ T+90s: All 5 pods now ready, but we have 3 extra replicas (over-provisioned)
            skip  // Wait for pending pods to become ready
        if variant.Cost < cheapest.Cost:
            cheapest = variant
-
    scale_up(cheapest)  // Only if no pending replicas
    ```
 
@@ -355,11 +354,11 @@ data:
 
 **Per-model overrides:**
 ```yaml
-llama-70b-prod: |
-  model_id: meta/llama-70b
-  namespace: production
-  kvCacheThreshold: 0.85
-  kvSpareTrigger: 0.15
+  llama-70b-prod: |
+    model_id: meta/llama-70b
+    namespace: production
+    kvCacheThreshold: 0.85
+    kvSpareTrigger: 0.15
 ```
 
 ## Testing
@@ -433,12 +432,9 @@ INFO Capacity target: scale-up cheapest variant
 
 ### Prometheus Queries
 
-**Two queries per model** (registered in `internal/collector/registration/saturation.go`):
-
-1. `max by (pod) (max_over_time(vllm:kv_cache_usage_perc{namespace="prod",model_name="llama-70b"}[1m]))` — peak KV cache utilization per pod
-2. `max by (pod) (max_over_time(vllm:num_requests_waiting{namespace="prod",model_name="llama-70b"}[1m]))` — peak queue length per pod
-
-**Query strategy:** Uses `max_over_time[1m]` to capture peak capacity usage in the last minute, providing conservative safety-first analysis that prevents missing saturation events between queries. The `model_id` filter ensures metrics are scoped to the specific model being analyzed, preventing cross-model metric pollution.
+**Two queries per model:**
+1. `max_over_time(constants.VLLMKvCacheUsagePerc{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
+2. `max_over_time(constants.VLLMNumRequestsWaiting{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
 
 **Query frequency:** Once per reconciliation loop (typically every 60s)
 
@@ -469,10 +465,9 @@ The saturation analyzer is integrated into the controller's reconciliation loop:
 
 ### Metrics Requirements
 
-The analyzer requires these Prometheus metrics from vLLM. Queries are registered in `internal/collector/registration/saturation.go`:
-
-- `vllm:kv_cache_usage_perc` — KV cache utilization (0.0-1.0)
-- `vllm:num_requests_waiting` — Queue length (integer)
+The analyzer requires these Prometheus metrics from vLLM (defined in `internal/constants/metrics.go`):
+- `constants.VLLMKvCacheUsagePerc` (`vllm:kv_cache_usage_perc`) — KV cache utilization (0.0-1.0)
+- `constants.VLLMNumRequestsWaiting` (`vllm:num_requests_waiting`) — Queue length (integer)
 
 These metrics must include the following labels:
 - `pod` or `pod_name` — Pod identification
