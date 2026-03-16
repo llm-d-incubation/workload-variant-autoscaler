@@ -436,6 +436,8 @@ INFO Capacity target: scale-up cheapest variant
 1. `max_over_time(constants.VLLMKvCacheUsagePerc{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
 2. `max_over_time(constants.VLLMNumRequestsWaiting{namespace="prod",model_id="llama-70b"}[1m])` (returns N samples with peak values)
 
+**Query strategy:** Uses `max_over_time[1m]` to capture peak capacity usage in the last minute, providing conservative safety-first analysis that prevents missing saturation events between queries. The `model_id` filter ensures metrics are scoped to the specific model being analyzed, preventing cross-model metric pollution.
+
 **Query frequency:** Once per reconciliation loop (typically every 60s)
 
 ## Integration Notes
