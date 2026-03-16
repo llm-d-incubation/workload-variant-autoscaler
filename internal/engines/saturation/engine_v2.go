@@ -8,6 +8,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -21,7 +22,7 @@ func (e *Engine) runV2AnalysisOnly(
 	ctx context.Context,
 	modelID, namespace string,
 	replicaMetrics []interfaces.ReplicaMetrics,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 	variantStates []interfaces.VariantReplicaState,
 	deployments map[string]*appsv1.Deployment,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
@@ -37,7 +38,8 @@ func (e *Engine) runV2AnalysisOnly(
 				"variant", va.Name, "deployKey", deployKey)
 			continue
 		}
-		accelerator := utils.GetAcceleratorType(va)
+		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
+		accelerator := utils.GetAcceleratorNameFromDeployment(va, deploy)
 		gpuCount := getDeploymentGPUsPerReplica(deploy)
 		e.capacityStore.LoadFromDeployment(namespace, modelID, va.Name, accelerator, gpuCount, deploy)
 		logger.V(logging.DEBUG).Info("Pre-populated capacity store from deployment",
@@ -71,6 +73,57 @@ func (e *Engine) runV2AnalysisOnly(
 	return result, nil
 }
 
+// runAnalyzersAndScore runs the V2 saturation analyzer, then computes the
+// weighted composite score from enabled analyzers and model priority.
+func (e *Engine) runAnalyzersAndScore(
+	ctx context.Context,
+	modelID, namespace string,
+	replicaMetrics []interfaces.ReplicaMetrics,
+	config config.SaturationScalingConfig,
+	variantStates []interfaces.VariantReplicaState,
+	deployments map[string]*appsv1.Deployment,
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+) (*interfaces.AnalyzerResult, error) {
+	// Resolve per-analyzer threshold overrides before running the analyzer.
+	// The saturation analyzer reads thresholds from the config, so we apply
+	// per-analyzer overrides to the config's top-level fields.
+	for _, aw := range config.Analyzers {
+		if aw.Name == "saturation" && (aw.Enabled == nil || *aw.Enabled) {
+			if aw.ScaleUpThreshold != nil {
+				config.ScaleUpThreshold = *aw.ScaleUpThreshold
+			}
+			if aw.ScaleDownBoundary != nil {
+				config.ScaleDownBoundary = *aw.ScaleDownBoundary
+			}
+			break
+		}
+	}
+
+	// Run saturation analyzer (always needed for PerReplicaCapacity)
+	baseResult, err := e.runV2AnalysisOnly(ctx, modelID, namespace, replicaMetrics, config,
+		variantStates, deployments, variantAutoscalings)
+	if err != nil {
+		return nil, err
+	}
+
+	// Compute weighted score from enabled analyzers
+	totalWeighted := 0.0
+	for _, aw := range config.Analyzers {
+		if aw.Enabled != nil && !*aw.Enabled {
+			continue
+		}
+		switch aw.Name {
+		case "saturation":
+			totalWeighted += baseResult.RequiredCapacity * aw.Score
+		// future: case "throughput", "slo"
+		}
+	}
+
+	// Score = priority * weighted sum
+	baseResult.Score = config.Priority * totalWeighted
+	return baseResult, nil
+}
+
 // computeCurrentGPUUsage iterates over model scaling requests to compute the
 // current GPU usage per accelerator type. Used to provide current usage to
 // the ConstraintProvider when building GPU constraints for the optimizer.
@@ -102,15 +155,24 @@ func (e *Engine) collectV2ModelRequest(
 	ctx context.Context,
 	modelID, namespace string,
 	replicaMetrics []interfaces.ReplicaMetrics,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 	variantStates []interfaces.VariantReplicaState,
 	deployments map[string]*appsv1.Deployment,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 ) (*pipeline.ModelScalingRequest, error) {
-	result, err := e.runV2AnalysisOnly(ctx, modelID, namespace, replicaMetrics, config,
+	result, err := e.runAnalyzersAndScore(ctx, modelID, namespace, replicaMetrics, config,
 		variantStates, deployments, variantAutoscalings)
 	if err != nil {
 		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
+	}
+
+	// Detect P/D disaggregation: true when any variant has role != "both"
+	disaggregated := false
+	for _, vs := range variantStates {
+		if vs.Role != "" && vs.Role != "both" {
+			disaggregated = true
+			break
+		}
 	}
 
 	return &pipeline.ModelScalingRequest{
@@ -118,5 +180,7 @@ func (e *Engine) collectV2ModelRequest(
 		Namespace:     namespace,
 		Result:        result,
 		VariantStates: variantStates,
+		Priority:      config.Priority,
+		Disaggregated: disaggregated,
 	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
@@ -643,6 +644,168 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 	})
 
+	Describe("Scheduler queue demand role attribution", func() {
+		It("should attribute inputTokens to prefill and inputTokens+outputTokens to decode", func() {
+			metrics := []interfaces.ReplicaMetrics{
+				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
+					5000, 16000, 0, 100, 50),
+			}
+			activeRoles := map[string]bool{"prefill": true, "decode": true}
+			sq := &interfaces.SchedulerQueueMetrics{
+				QueueSize:  10,
+				QueueBytes: 0, // use count-based estimation only
+			}
+
+			result := estimateSchedulerQueueDemand(sq, metrics, activeRoles)
+
+			// Input: max(0/4=0, 10*100=1000) = 1000 (no cache hit)
+			// Output: 10 * 50 = 500
+			// Total: 1000 + 500 = 1500
+			Expect(result.total).To(Equal(1500.0))
+
+			// Prefill gets inputTokens only
+			Expect(result.byRole["prefill"]).To(Equal(1000.0))
+			// Decode gets inputTokens + outputTokens
+			Expect(result.byRole["decode"]).To(Equal(1500.0))
+		})
+
+		It("should attribute full demand to 'both' role", func() {
+			metrics := []interfaces.ReplicaMetrics{
+				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
+					5000, 16000, 0, 100, 50),
+			}
+			activeRoles := map[string]bool{"both": true}
+			sq := &interfaces.SchedulerQueueMetrics{
+				QueueSize:  10,
+				QueueBytes: 0,
+			}
+
+			result := estimateSchedulerQueueDemand(sq, metrics, activeRoles)
+
+			Expect(result.total).To(Equal(1500.0))
+			Expect(result.byRole["both"]).To(Equal(1500.0))
+		})
+
+		It("should return empty byRole when nil activeRoles", func() {
+			metrics := []interfaces.ReplicaMetrics{
+				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
+					5000, 16000, 0, 100, 50),
+			}
+			sq := &interfaces.SchedulerQueueMetrics{
+				QueueSize:  10,
+				QueueBytes: 0,
+			}
+
+			result := estimateSchedulerQueueDemand(sq, metrics, nil)
+
+			Expect(result.total).To(Equal(1500.0))
+			Expect(result.byRole).To(BeEmpty())
+		})
+
+		It("should return zero for nil scheduler queue", func() {
+			metrics := []interfaces.ReplicaMetrics{
+				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
+					5000, 16000, 0, 100, 50),
+			}
+			activeRoles := map[string]bool{"prefill": true, "decode": true}
+
+			result := estimateSchedulerQueueDemand(nil, metrics, activeRoles)
+
+			Expect(result.total).To(Equal(0.0))
+			Expect(result.byRole).To(BeNil())
+		})
+
+		It("should apply prefix cache hit rate to per-role input tokens", func() {
+			metrics := []interfaces.ReplicaMetrics{
+				{
+					PodName: "pod-1", VariantName: "variant-a",
+					AcceleratorName: "H100", Cost: 10.0,
+					TokensInUse: 5000, TotalKvCapacityTokens: 16000,
+					NumGpuBlocks: 1000, BlockSize: 16,
+					AvgInputTokens: 100, AvgOutputTokens: 50,
+					PrefixCacheHitRate: 0.5, // 50% cache hit rate
+				},
+			}
+			activeRoles := map[string]bool{"prefill": true, "decode": true}
+			sq := &interfaces.SchedulerQueueMetrics{
+				QueueSize:  10,
+				QueueBytes: 0,
+			}
+
+			result := estimateSchedulerQueueDemand(sq, metrics, activeRoles)
+
+			// Input: 10*100=1000, after cache: 1000*(1-0.5)=500
+			// Output: 10*50=500
+			// Total: 500 + 500 = 1000
+			Expect(result.total).To(Equal(1000.0))
+
+			// Prefill: inputTokens = 500
+			Expect(result.byRole["prefill"]).To(Equal(500.0))
+			// Decode: inputTokens + outputTokens = 500 + 500 = 1000
+			Expect(result.byRole["decode"]).To(Equal(1000.0))
+		})
+
+		It("should add queue demand to role capacities in end-to-end analysis", func() {
+			input := interfaces.AnalyzerInput{
+				ModelID:   "test-model",
+				Namespace: "test-ns",
+				ReplicaMetrics: []interfaces.ReplicaMetrics{
+					{
+						PodName: "prefill-pod", VariantName: "prefill-v",
+						AcceleratorName: "H100", Cost: 10.0,
+						TokensInUse: 3000, TotalKvCapacityTokens: 16000,
+						NumGpuBlocks: 1000, BlockSize: 16,
+						AvgInputTokens: 100, AvgOutputTokens: 50,
+						ModelID: "test-model", Namespace: "test-ns",
+					},
+					{
+						PodName: "decode-pod", VariantName: "decode-v",
+						AcceleratorName: "H100", Cost: 10.0,
+						TokensInUse: 2000, TotalKvCapacityTokens: 16000,
+						NumGpuBlocks: 1000, BlockSize: 16,
+						AvgInputTokens: 100, AvgOutputTokens: 50,
+						ModelID: "test-model", Namespace: "test-ns",
+					},
+				},
+				VariantStates: []interfaces.VariantReplicaState{
+					{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 1, Role: "prefill"},
+					{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 1, Role: "decode"},
+				},
+				Config: &config.SaturationScalingConfig{
+					KvCacheThreshold:     0.8,
+					QueueLengthThreshold: 5,
+					AnalyzerName:         "saturation",
+					ScaleUpThreshold:     0.85,
+					ScaleDownBoundary:    0.70,
+				},
+				SchedulerQueue: &interfaces.SchedulerQueueMetrics{
+					QueueSize:  10,
+					QueueBytes: 0,
+				},
+			}
+
+			store := NewCapacityKnowledgeStore()
+			a := NewSaturationAnalyzer(store)
+			result, err := a.Analyze(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RoleCapacities).NotTo(BeNil())
+
+			// Scheduler queue: input=max(0, 10*100)=1000, output=10*50=500
+			// Prefill role demand: replica(3000) + queue(1000) = 4000
+			// Decode role demand: replica(2000) + queue(1500) = 3500
+			prefill := result.RoleCapacities["prefill"]
+			Expect(prefill.TotalDemand).To(Equal(4000.0))
+
+			decode := result.RoleCapacities["decode"]
+			Expect(decode.TotalDemand).To(Equal(3500.0))
+
+			// Model-level total still uses inputTokens+outputTokens (1500)
+			// Replica demand = 3000 + 2000 = 5000
+			// Total = 5000 + 1500 = 6500
+			Expect(result.TotalDemand).To(Equal(6500.0))
+		})
+	})
+
 	Describe("median helper", func() {
 		It("should return 0 for empty slice", func() {
 			Expect(median([]int64{})).To(Equal(int64(0)))
@@ -671,7 +834,7 @@ func makeAnalyzerInput(
 	metrics []interfaces.ReplicaMetrics,
 	states []interfaces.VariantReplicaState,
 ) interfaces.AnalyzerInput {
-	config := &interfaces.SaturationScalingConfig{
+	config := &config.SaturationScalingConfig{
 		KvCacheThreshold:     0.8,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.1,
@@ -721,3 +884,115 @@ func makeReplicaMetrics(
 		Namespace:             "test-ns",
 	}
 }
+
+var _ = Describe("aggregateByRole", func() {
+	var analyzer *SaturationAnalyzer
+
+	BeforeEach(func() {
+		store := NewCapacityKnowledgeStore()
+		analyzer = NewSaturationAnalyzer(store)
+	})
+
+	It("should return nil when all variants are role 'both'", func() {
+		vcs := []interfaces.VariantCapacity{
+			{VariantName: "v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
+			{VariantName: "v2", Role: "", TotalCapacity: 20000, TotalDemand: 10000, ReplicaCount: 1, PerReplicaCapacity: 20000},
+		}
+		config := &config.SaturationScalingConfig{
+			ScaleUpThreshold:  0.85,
+			ScaleDownBoundary: 0.70,
+		}
+		result := analyzer.aggregateByRole(vcs, config, nil)
+		Expect(result).To(BeNil())
+	})
+
+	It("should compute per-role capacities for P/D disaggregated model", func() {
+		vcs := []interfaces.VariantCapacity{
+			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
+			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 5000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
+		}
+		config := &config.SaturationScalingConfig{
+			ScaleUpThreshold:  0.85,
+			ScaleDownBoundary: 0.70,
+		}
+		result := analyzer.aggregateByRole(vcs, config, nil)
+		Expect(result).NotTo(BeNil())
+		Expect(result).To(HaveLen(2))
+
+		prefill := result["prefill"]
+		Expect(prefill.Role).To(Equal("prefill"))
+		Expect(prefill.TotalSupply).To(Equal(10000.0))
+		Expect(prefill.TotalDemand).To(Equal(9000.0))
+		// requiredCapacity = 9000/0.85 - 10000 = 10588 - 10000 = 588
+		Expect(prefill.RequiredCapacity).To(BeNumerically(">", 0))
+
+		decode := result["decode"]
+		Expect(decode.Role).To(Equal("decode"))
+		Expect(decode.TotalSupply).To(Equal(20000.0))
+		Expect(decode.TotalDemand).To(Equal(5000.0))
+		// spareCapacity = 20000 - 5000/0.70 = 20000 - 7143 = 12857
+		Expect(decode.SpareCapacity).To(BeNumerically(">", 0))
+		Expect(decode.RequiredCapacity).To(Equal(0.0))
+	})
+
+	It("should handle mixed roles including 'both'", func() {
+		vcs := []interfaces.VariantCapacity{
+			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PerReplicaCapacity: 10000},
+			{VariantName: "both-v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
+		}
+		config := &config.SaturationScalingConfig{
+			ScaleUpThreshold:  0.85,
+			ScaleDownBoundary: 0.70,
+		}
+		result := analyzer.aggregateByRole(vcs, config, nil)
+		// Has disaggregation because prefill-v1 has role != "both"
+		Expect(result).NotTo(BeNil())
+		Expect(result).To(HaveKey("prefill"))
+		Expect(result).To(HaveKey("both"))
+	})
+
+	It("should add scheduler queue demand to per-role totals", func() {
+		vcs := []interfaces.VariantCapacity{
+			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 2000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
+			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 3000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
+		}
+		config := &config.SaturationScalingConfig{
+			ScaleUpThreshold:  0.85,
+			ScaleDownBoundary: 0.70,
+		}
+		queueByRole := map[string]float64{
+			"prefill": 1000, // inputTokens only
+			"decode":  1500, // inputTokens + outputTokens
+		}
+		result := analyzer.aggregateByRole(vcs, config, queueByRole)
+		Expect(result).NotTo(BeNil())
+
+		prefill := result["prefill"]
+		// 2000 (replica) + 1000 (queue) = 3000
+		Expect(prefill.TotalDemand).To(Equal(3000.0))
+
+		decode := result["decode"]
+		// 3000 (replica) + 1500 (queue) = 4500
+		Expect(decode.TotalDemand).To(Equal(4500.0))
+	})
+
+	It("should skip queue demand for roles with no variants", func() {
+		vcs := []interfaces.VariantCapacity{
+			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
+		}
+		config := &config.SaturationScalingConfig{
+			ScaleUpThreshold:  0.85,
+			ScaleDownBoundary: 0.70,
+		}
+		// Queue demand for decode, but no decode variants exist
+		queueByRole := map[string]float64{
+			"prefill": 1000,
+			"decode":  1500,
+		}
+		result := analyzer.aggregateByRole(vcs, config, queueByRole)
+		Expect(result).NotTo(BeNil())
+		Expect(result).To(HaveLen(1))
+		Expect(result).To(HaveKey("prefill"))
+		Expect(result["prefill"].TotalDemand).To(Equal(6000.0)) // 5000 + 1000
+	})
+})

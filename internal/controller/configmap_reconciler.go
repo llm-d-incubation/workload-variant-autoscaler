@@ -82,6 +82,8 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		r.handleSaturationConfigMap(ctx, cm, namespace, isGlobal)
 	case config.DefaultScaleToZeroConfigMapName:
 		r.handleScaleToZeroConfigMap(ctx, cm, namespace, isGlobal)
+	case config.QMAnalyzerConfigMapName():
+		r.handleQMAnalyzerConfigMap(ctx, cm, namespace, isGlobal)
 	default:
 		logger.V(1).Info("Ignoring unrecognized ConfigMap", "name", name, "namespace", namespace)
 	}
@@ -119,6 +121,9 @@ func (r *ConfigMapReconciler) handleConfigMapDeletion(ctx context.Context, name,
 	} else if name == config.DefaultScaleToZeroConfigMapName {
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local scale-to-zero config on ConfigMap deletion", "namespace", namespace)
+	} else if name == config.QMAnalyzerConfigMapName() {
+		r.Config.RemoveNamespaceConfig(namespace)
+		logger.Info("Removed namespace-local queueing model config on ConfigMap deletion", "namespace", namespace)
 	}
 }
 
@@ -190,5 +195,23 @@ func (r *ConfigMapReconciler) handleScaleToZeroConfigMap(ctx context.Context, cm
 	} else {
 		r.Config.UpdateScaleToZeroConfigForNamespace(namespace, scaleToZeroConfig)
 		logger.Info("Updated namespace-local scale-to-zero config from ConfigMap", "namespace", namespace, "modelCount", len(scaleToZeroConfig))
+	}
+}
+
+// handleQMAnalyzerConfigMap handles updates to the queueing model ConfigMap.
+// Supports both global and namespace-local ConfigMaps.
+func (r *ConfigMapReconciler) handleQMAnalyzerConfigMap(ctx context.Context, cm *corev1.ConfigMap, namespace string, isGlobal bool) {
+	logger := log.FromContext(ctx)
+
+	// Parse queue model based scaling config entries
+	configs, count := parseQMAnalyzerConfig(cm.Data, logger)
+
+	// Update global or namespace-local config
+	if isGlobal {
+		r.Config.UpdateQMAnalyzerConfig(configs)
+		logger.Info("Updated global queueing model config from ConfigMap", "entries", count)
+	} else {
+		r.Config.UpdateQMAnalyzerConfigForNamespace(namespace, configs)
+		logger.Info("Updated namespace-local queueing model config from ConfigMap", "namespace", namespace, "entries", count)
 	}
 }

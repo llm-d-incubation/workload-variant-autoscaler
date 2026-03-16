@@ -7,6 +7,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
@@ -33,7 +34,7 @@ func (a *Analyzer) AnalyzeModelSaturation(
 	modelID string,
 	namespace string,
 	replicaMetrics []interfaces.ReplicaMetrics,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 ) (*interfaces.ModelSaturationAnalysis, error) {
 
 	if len(replicaMetrics) == 0 {
@@ -135,7 +136,7 @@ func (a *Analyzer) analyzeVariant(
 	ctx context.Context,
 	variantName string,
 	metrics []interfaces.ReplicaMetrics,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 ) interfaces.VariantSaturationAnalysis {
 
 	analysis := interfaces.VariantSaturationAnalysis{
@@ -199,7 +200,7 @@ func (a *Analyzer) analyzeVariant(
 func (a *Analyzer) shouldScaleUp(
 	avgSpareKv float64,
 	avgSpareQueue float64,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 ) (bool, string) {
 
 	kvTriggered := avgSpareKv < config.KvSpareTrigger
@@ -235,7 +236,7 @@ func (a *Analyzer) isScaleDownSafe(
 	nonSaturatedCount int,
 	avgSpareKv float64,
 	avgSpareQueue float64,
-	config interfaces.SaturationScalingConfig,
+	config config.SaturationScalingConfig,
 ) bool {
 
 	// Require minimum non-saturated replicas for scale-down safety
@@ -433,6 +434,22 @@ func (a *Analyzer) CalculateSaturationTargets(
 		logger.V(logging.DEBUG).Info("Saturation targets: no scaling needed",
 			"avgSpareKvCapacity", saturationAnalysis.AvgSpareKvCapacity,
 			"avgSpareQueueLength", saturationAnalysis.AvgSpareQueueLength)
+	}
+
+	// Apply min/max replica bounds from VA spec fields
+	for _, state := range variantStates {
+		if target, ok := targets[state.VariantName]; ok {
+			if state.MinReplicas != nil && target < *state.MinReplicas {
+				logger.V(logging.DEBUG).Info("Clamping target to minReplicas",
+					"variant", state.VariantName, "target", target, "minReplicas", *state.MinReplicas)
+				targets[state.VariantName] = *state.MinReplicas
+			}
+			if state.MaxReplicas != nil && *state.MaxReplicas > 0 && target > *state.MaxReplicas {
+				logger.V(logging.DEBUG).Info("Clamping target to maxReplicas",
+					"variant", state.VariantName, "target", target, "maxReplicas", *state.MaxReplicas)
+				targets[state.VariantName] = *state.MaxReplicas
+			}
+		}
 	}
 
 	return targets

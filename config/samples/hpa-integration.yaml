@@ -9,7 +9,7 @@ spec:
     kind: Deployment
     name: sample-deployment
   # minReplicas: 0  # scale to zero - alpha feature
-  maxReplicas: 10
+  maxReplicas: 2
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 0

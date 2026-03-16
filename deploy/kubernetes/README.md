@@ -109,7 +109,6 @@ export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (bat
 For a complete list of all configuration options, see the [Configuration Reference](../README.md#configuration-reference) in the main deployment guide.
 export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
 export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway
-export BENCHMARK_MODE="true"                # Use Istio benchmark config
 ```
 
 **Deployment flags** - Control which components to deploy:

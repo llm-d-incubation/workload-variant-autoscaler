@@ -1,27 +1,50 @@
 package v1alpha1
 
 import (
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// VariantAutoscalingConfigSpec holds the optional tuning fields for a VariantAutoscaling.
+// It is extracted as a standalone embeddable type so that higher-level controllers
+// (e.g. KServe) can inline it without duplicating field definitions.
+type VariantAutoscalingConfigSpec struct {
+	// VariantCost specifies the cost per replica for this variant (used in saturation analysis).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
+	// +kubebuilder:default="10.0"
+	VariantCost string `json:"variantCost,omitempty"`
+}
+
 // VariantAutoscalingSpec defines the desired state for autoscaling a model variant.
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must be less than or equal to maxReplicas"
 type VariantAutoscalingSpec struct {
 	// ScaleTargetRef references the scalable resource to manage.
 	// This follows the same pattern as HorizontalPodAutoscaler.
 	// +kubebuilder:validation:Required
-	ScaleTargetRef autoscalingv1.CrossVersionObjectReference `json:"scaleTargetRef"`
+	ScaleTargetRef autoscalingv2.CrossVersionObjectReference `json:"scaleTargetRef"`
 
 	// ModelID specifies the unique identifier of the model to be autoscaled.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Required
 	ModelID string `json:"modelID"`
 
-	// VariantCost specifies the cost per replica for this variant (used in saturation analysis).
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
-	// +kubebuilder:default="10.0"
-	VariantCost string `json:"variantCost,omitempty"`
+	// MinReplicas is the lower bound on the number of replicas for this variant.
+	// A value of 0 enables scale-to-zero when the model is idle.
+	// Defaults to 1, preserving existing behavior for VAs that omit this field.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=1
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+
+	// MaxReplicas is the upper bound on the number of replicas for this variant.
+	// The autoscaler will never scale beyond this value regardless of load.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=2
+	MaxReplicas int32 `json:"maxReplicas"`
+
+	// VariantAutoscalingConfigSpec holds optional tuning fields that integrators can embed.
+	VariantAutoscalingConfigSpec `json:",inline"`
 }
 
 // VariantAutoscalingStatus represents the current status of autoscaling for a variant,
@@ -68,6 +91,8 @@ type ActuationStatus struct {
 // +kubebuilder:resource:shortName=va
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.scaleTargetRef.name"
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=".spec.modelID"
+// +kubebuilder:printcolumn:name="Min",type=integer,JSONPath=".spec.minReplicas"
+// +kubebuilder:printcolumn:name="Max",type=integer,JSONPath=".spec.maxReplicas"
 // +kubebuilder:printcolumn:name="Optimized",type=string,JSONPath=".status.desiredOptimizedAlloc.numReplicas"
 // +kubebuilder:printcolumn:name="MetricsReady",type=string,JSONPath=".status.conditions[?(@.type=='MetricsAvailable')].status"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"

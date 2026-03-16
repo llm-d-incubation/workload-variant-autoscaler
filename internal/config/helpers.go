@@ -13,6 +13,8 @@ const (
 	DefaultConfigMapName = "wva-variantautoscaling-config"
 	// DefaultSaturationConfigMapName is the default name of the ConfigMap for saturation scaling
 	DefaultSaturationConfigMapName = "wva-saturation-scaling-config"
+	// DefaultQMAnalyzerConfigMapName is the default name of the ConfigMap for queueing model based scaling
+	DefaultQMAnalyzerConfigMapName = "wva-queueing-model-config"
 	// DefaultNamespace is the default namespace for the controller
 	DefaultNamespace = "workload-variant-autoscaler-system"
 )
@@ -94,4 +96,12 @@ func SaturationConfigMapName() string {
 		return name
 	}
 	return DefaultSaturationConfigMapName
+}
+
+// QMAnalyzerConfigMapName returns the queueing model config ConfigMap name from environment variable or default.
+func QMAnalyzerConfigMapName() string {
+	if name := os.Getenv("QUEUEING_MODEL_CONFIG_MAP_NAME"); name != "" {
+		return name //TODO: check setting QUEUEING_MODEL_CONFIG_MAP_NAME
+	}
+	return DefaultQMAnalyzerConfigMapName
 }

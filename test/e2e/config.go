@@ -57,9 +57,16 @@ type E2EConfig struct {
 
 // LoadConfigFromEnv reads e2e test configuration from environment variables
 func LoadConfigFromEnv() E2EConfig {
+	env := getEnv("ENVIRONMENT", "kind-emulator")
+	eppServiceDefault := "gaie-inference-scheduling-epp"
+	if env == "kind-emulator" {
+		// kind-emulator deploy uses gaie-<NAMESPACE_SUFFIX>-epp with NAMESPACE_SUFFIX=sim
+		eppServiceDefault = "gaie-sim-epp"
+	}
+
 	cfg := E2EConfig{
 		// Cluster defaults
-		Environment: getEnv("ENVIRONMENT", "kind-emulator"),
+		Environment: env,
 		Kubeconfig:  getEnv("KUBECONFIG", os.Getenv("HOME")+"/.kube/config"),
 
 		// Namespace defaults
@@ -78,11 +85,11 @@ func LoadConfigFromEnv() E2EConfig {
 		ScalerBackend: getEnv("SCALER_BACKEND", "prometheus-adapter"),
 		KEDANamespace: getEnv("KEDA_NAMESPACE", "keda-system"),
 
-		// EPP defaults
+		// EPP defaults (kind-emulator uses gaie-sim-epp; other envs use gaie-inference-scheduling-epp)
 		EPPMode:          getEnv("EPP_MODE", "poolName"),
 		PoolName:         getEnv("POOL_NAME", ""),
 		EndpointSelector: parseEndpointSelector(getEnv("ENDPOINT_SELECTOR", "")),
-		EPPServiceName:   getEnv("EPP_SERVICE_NAME", "gaie-inference-scheduling-epp"),
+		EPPServiceName:   getEnv("EPP_SERVICE_NAME", eppServiceDefault),
 
 		// Model defaults
 		ModelID:         getEnv("MODEL_ID", "unsloth/Meta-Llama-3.1-8B"),

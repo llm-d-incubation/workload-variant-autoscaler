@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 // TestConfig_ThreadSafeUpdates tests that concurrent reads and writes to DynamicConfig
@@ -71,8 +71,8 @@ func TestConfig_ThreadSafeUpdates(t *testing.T) {
 			for j := 0; j < iterations; j++ {
 
 				// Update saturation config
-				newSatConfig := make(map[string]interfaces.SaturationScalingConfig)
-				newSatConfig["test-accelerator"] = interfaces.SaturationScalingConfig{
+				newSatConfig := make(map[string]SaturationScalingConfig)
+				newSatConfig["test-accelerator"] = SaturationScalingConfig{
 					KvCacheThreshold:     0.8,
 					QueueLengthThreshold: 5,
 					KvSpareTrigger:       0.1,
@@ -303,7 +303,7 @@ func TestConfig_NamespaceAwareResolutionPrecedence(t *testing.T) {
 	cfg := NewTestConfig()
 
 	// Set up global saturation config
-	globalSatConfig := map[string]interfaces.SaturationScalingConfig{
+	globalSatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.80,
 			QueueLengthThreshold: 5,
@@ -339,7 +339,7 @@ func TestConfig_NamespaceAwareResolutionPrecedence(t *testing.T) {
 	// Test 2: Namespace-local config takes precedence
 	t.Run("Namespace-local config takes precedence", func(t *testing.T) {
 		// Set namespace-local saturation config
-		nsSatConfig := map[string]interfaces.SaturationScalingConfig{
+		nsSatConfig := map[string]SaturationScalingConfig{
 			"default": {
 				KvCacheThreshold:     0.70, // Different from global (0.80)
 				QueueLengthThreshold: 3,    // Different from global (5)
@@ -388,7 +388,7 @@ func TestConfig_NamespaceConfigDeletion(t *testing.T) {
 	cfg := NewTestConfig()
 
 	// Set up global saturation config
-	globalSatConfig := map[string]interfaces.SaturationScalingConfig{
+	globalSatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.80,
 			QueueLengthThreshold: 5,
@@ -411,7 +411,7 @@ func TestConfig_NamespaceConfigDeletion(t *testing.T) {
 	namespace := "test-namespace"
 
 	// Set namespace-local config
-	nsSatConfig := map[string]interfaces.SaturationScalingConfig{
+	nsSatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.70,
 			QueueLengthThreshold: 3,
@@ -451,7 +451,7 @@ func TestConfig_MultipleNamespaces(t *testing.T) {
 	cfg := NewTestConfig()
 
 	// Set up global config
-	globalSatConfig := map[string]interfaces.SaturationScalingConfig{
+	globalSatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.80,
 			QueueLengthThreshold: 5,
@@ -463,7 +463,7 @@ func TestConfig_MultipleNamespaces(t *testing.T) {
 	namespace2 := "namespace2"
 
 	// Set namespace1 config
-	ns1SatConfig := map[string]interfaces.SaturationScalingConfig{
+	ns1SatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.70,
 			QueueLengthThreshold: 3,
@@ -472,7 +472,7 @@ func TestConfig_MultipleNamespaces(t *testing.T) {
 	cfg.UpdateSaturationConfigForNamespace(namespace1, ns1SatConfig)
 
 	// Set namespace2 config
-	ns2SatConfig := map[string]interfaces.SaturationScalingConfig{
+	ns2SatConfig := map[string]SaturationScalingConfig{
 		"default": {
 			KvCacheThreshold:     0.90,
 			QueueLengthThreshold: 7,
@@ -490,6 +490,71 @@ func TestConfig_MultipleNamespaces(t *testing.T) {
 	// Verify global config is unchanged
 	globalSatConfig2 := cfg.SaturationConfigForNamespace("")
 	assert.Equal(t, 0.80, globalSatConfig2["default"].KvCacheThreshold, "Global config should be unchanged")
+}
+
+func TestQMAnalyzerConfig_GlobalGetSet(t *testing.T) {
+	cfg := NewTestConfig()
+
+	// Initially empty
+	qmCfg := cfg.QMAnalyzerConfig()
+	if len(qmCfg) != 0 {
+		t.Fatalf("expected empty queueing model config, got %d entries", len(qmCfg))
+	}
+
+	// Set global config
+	cfg.UpdateQMAnalyzerConfig(QMAnalyzerConfigPerModel{
+		"default": interfaces.QueueingModelScalingConfig{SLOMultiplier: 3.0},
+	})
+
+	qmCfg = cfg.QMAnalyzerConfig()
+	if len(qmCfg) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(qmCfg))
+	}
+	if qmCfg["default"].SLOMultiplier != 3.0 {
+		t.Errorf("SLOMultiplier = %f, want 3.0", qmCfg["default"].SLOMultiplier)
+	}
+}
+
+func TestQMAnalyzerConfig_NamespaceOverride(t *testing.T) {
+	cfg := NewTestConfig()
+
+	cfg.UpdateQMAnalyzerConfig(QMAnalyzerConfigPerModel{
+		"default": interfaces.QueueingModelScalingConfig{SLOMultiplier: 3.0},
+	})
+
+	cfg.UpdateQMAnalyzerConfigForNamespace("prod", QMAnalyzerConfigPerModel{
+		"default": interfaces.QueueingModelScalingConfig{SLOMultiplier: 5.0},
+	})
+
+	global := cfg.QMAnalyzerConfig()
+	if global["default"].SLOMultiplier != 3.0 {
+		t.Errorf("global SLOMultiplier = %f, want 3.0", global["default"].SLOMultiplier)
+	}
+
+	nsCfg := cfg.QMAnalyzerConfigForNamespace("prod")
+	if nsCfg["default"].SLOMultiplier != 5.0 {
+		t.Errorf("namespace SLOMultiplier = %f, want 5.0", nsCfg["default"].SLOMultiplier)
+	}
+
+	otherCfg := cfg.QMAnalyzerConfigForNamespace("staging")
+	if otherCfg["default"].SLOMultiplier != 3.0 {
+		t.Errorf("fallback SLOMultiplier = %f, want 3.0", otherCfg["default"].SLOMultiplier)
+	}
+}
+
+func TestQMAnalyzerConfig_ReturnsCopy(t *testing.T) {
+	cfg := NewTestConfig()
+	cfg.UpdateQMAnalyzerConfig(QMAnalyzerConfigPerModel{
+		"default": interfaces.QueueingModelScalingConfig{SLOMultiplier: 3.0},
+	})
+
+	copy1 := cfg.QMAnalyzerConfig()
+	copy1["default"] = interfaces.QueueingModelScalingConfig{SLOMultiplier: 99.0}
+
+	copy2 := cfg.QMAnalyzerConfig()
+	if copy2["default"].SLOMultiplier != 3.0 {
+		t.Errorf("stored config was mutated: SLOMultiplier = %f, want 3.0", copy2["default"].SLOMultiplier)
+	}
 }
 
 // Helper function to create bool pointer

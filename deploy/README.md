@@ -148,7 +148,6 @@ export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window (default:
 # Gateway Configuration
 export GATEWAY_PROVIDER="istio"             # Gateway provider: istio, kgateway
 export INSTALL_GATEWAY_CTRLPLANE="true"     # Install gateway control plane
-export BENCHMARK_MODE="true"                # Use benchmark configuration (for Istio only)
 
 # SLO Targets
 export SLO_TPOT=10                         # Time per output token (ms) SLO
@@ -359,6 +358,9 @@ llmd:
 # VariantAutoscaling Configuration
 va:
   enabled: true           # Create VariantAutoscaling CR
+  # accelerator: Optional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: H100       # GPU type: A100, H100, L40S, etc.
   sloTpot: 10            # Time per output token SLO (ms)
   sloTtft: 1000          # Time to first token SLO (ms)
@@ -476,6 +478,9 @@ llmd:
 # Create VariantAutoscaling
 va:
   enabled: true
+  # accelerator: Optional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: A100
   sloTpot: 10
   sloTtft: 1000
@@ -636,7 +641,6 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 |----------|-------------|---------|
 | `GATEWAY_PROVIDER` | Gateway implementation | `istio` |
 | `INSTALL_GATEWAY_CTRLPLANE` | Install gateway control plane | `false` (prompts user) |
-| `BENCHMARK_MODE` | Use benchmark Istio config | `true` |
 
 #### Deployment Flags
 

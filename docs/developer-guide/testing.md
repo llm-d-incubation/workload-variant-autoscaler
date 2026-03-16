@@ -159,6 +159,8 @@ This deploys:
 - Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
 - **No** VariantAutoscaling, HPA, or model services (tests create these)
 
+When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script also enables **GIE queuing** so scale-from-zero tests can run: it patches the EPP with `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER=true` and applies an **InferenceObjective** (`e2e-default`) that references the default InferencePool. This ensures the metric `inference_extension_flow_control_queue_size` is populated when requests hit the gateway.
+
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
 ```bash

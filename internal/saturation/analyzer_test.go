@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
@@ -16,7 +17,7 @@ func init() {
 
 func TestAnalyzeModelSaturation_ScaleUp(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -79,7 +80,7 @@ func TestAnalyzeModelSaturation_ScaleUp(t *testing.T) {
 
 func TestAnalyzeModelSaturation_ScaleDownSafety(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -141,7 +142,7 @@ func TestAnalyzeModelSaturation_ScaleDownSafety(t *testing.T) {
 
 func TestAnalyzeModelSaturation_MultiVariant(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -193,7 +194,7 @@ func TestAnalyzeModelSaturation_MultiVariant(t *testing.T) {
 
 func TestAnalyzeModelSaturation_EmptyMetrics(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -227,7 +228,7 @@ func TestAnalyzeModelSaturation_EmptyMetrics(t *testing.T) {
 
 func TestAnalyzeVariant_SaturatedReplicas(t *testing.T) {
 	analyzer := &Analyzer{}
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -267,7 +268,7 @@ func TestAnalyzeVariant_SaturatedReplicas(t *testing.T) {
 
 func TestAnalyzeModelSaturation_AllSaturated(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,
@@ -324,7 +325,7 @@ func TestAnalyzeModelSaturation_AllSaturated(t *testing.T) {
 
 func TestAnalyzeModelSaturation_TimestampSet(t *testing.T) {
 	analyzer := NewAnalyzer()
-	config := interfaces.SaturationScalingConfig{
+	config := config.SaturationScalingConfig{
 		KvCacheThreshold:     0.80,
 		QueueLengthThreshold: 5,
 		KvSpareTrigger:       0.10,

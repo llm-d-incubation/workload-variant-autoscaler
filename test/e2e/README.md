@@ -216,7 +216,8 @@ ginkgo -v --label-filter="smoke" ./test/e2e/
    - Verify independent scaling per VA
 
 3. **Scale-From-Zero** (~7 min)
-   - Create HPA with minReplicas=0
+   - Requires EPP flow control enabled so the metric `inference_extension_flow_control_queue_size` is populated (InferenceObjective is not required for this metric). When deploying infra with `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the install script enables flow control on the EPP and optionally applies an InferenceObjective for e2e.
+   - Create HPA (or KEDA ScaledObject) with minReplicas=0
    - Verify deployment scales to 0 when idle
    - Generate first request, verify scale-up from 0 → 1
    - Verify request queuing during cold start

@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -92,7 +92,7 @@ var _ = Describe("PodVAMapper", func() {
 				Namespace: namespace,
 			},
 			Spec: llmdv1alpha1.VariantAutoscalingSpec{
-				ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 					Kind:       "Deployment",
 					Name:       deploymentName,
 					APIVersion: "apps/v1",

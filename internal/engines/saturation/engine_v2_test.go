@@ -6,6 +6,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	appsv1 "k8s.io/api/apps/v1"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
@@ -132,6 +135,101 @@ var _ = Describe("V2 Engine Integration", func() {
 			Expect(dm["variant-cheap"].TargetReplicas).To(Equal(3))
 			Expect(dm["variant-mid"].TargetReplicas).To(Equal(1))
 		})
+	})
+})
+
+var _ = Describe("getRoleFromDeployment", func() {
+
+	It("should return 'both' for nil deployment", func() {
+		Expect(getRoleFromDeployment(nil)).To(Equal("both"))
+	})
+
+	It("should return 'both' for deployment without labels", func() {
+		deploy := &appsv1.Deployment{}
+		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+	})
+
+	It("should return 'prefill' for prefill label", func() {
+		deploy := &appsv1.Deployment{}
+		deploy.Spec.Template.Labels = map[string]string{
+			"llm-d.ai/role": "prefill",
+		}
+		Expect(getRoleFromDeployment(deploy)).To(Equal("prefill"))
+	})
+
+	It("should return 'decode' for decode label", func() {
+		deploy := &appsv1.Deployment{}
+		deploy.Spec.Template.Labels = map[string]string{
+			"llm-d.ai/role": "decode",
+		}
+		Expect(getRoleFromDeployment(deploy)).To(Equal("decode"))
+	})
+
+	It("should return 'both' for unknown role value", func() {
+		deploy := &appsv1.Deployment{}
+		deploy.Spec.Template.Labels = map[string]string{
+			"llm-d.ai/role": "unknown",
+		}
+		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+	})
+
+	It("should return 'both' when no role label present", func() {
+		deploy := &appsv1.Deployment{}
+		deploy.Spec.Template.Labels = map[string]string{
+			"app": "vllm",
+		}
+		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+	})
+})
+
+var _ = Describe("resolveSaturationConfig", func() {
+
+	It("should return model-specific config when present", func() {
+		configMap := map[string]config.SaturationScalingConfig{
+			"default": {
+				KvCacheThreshold: 0.80,
+				AnalyzerName:     "saturation",
+			},
+			"llama-70b#production": {
+				KvCacheThreshold: 0.85,
+				Priority:         5.0,
+				AnalyzerName:     "saturation",
+			},
+		}
+		cfg := resolveSaturationConfig(configMap, "llama-70b", "production")
+		Expect(cfg.KvCacheThreshold).To(Equal(0.85))
+		Expect(cfg.Priority).To(Equal(5.0))
+	})
+
+	It("should fall back to default config when model-specific not found", func() {
+		configMap := map[string]config.SaturationScalingConfig{
+			"default": {
+				KvCacheThreshold: 0.80,
+				AnalyzerName:     "saturation",
+			},
+		}
+		cfg := resolveSaturationConfig(configMap, "unknown-model", "default")
+		Expect(cfg.KvCacheThreshold).To(Equal(0.80))
+		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
+	})
+
+	It("should return zero-value with defaults when map is empty", func() {
+		configMap := map[string]config.SaturationScalingConfig{}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
+		Expect(cfg.KvCacheThreshold).To(Equal(0.0))
+	})
+
+	It("should apply defaults on model-specific config", func() {
+		configMap := map[string]config.SaturationScalingConfig{
+			"model-1#ns-1": {
+				AnalyzerName: "saturation",
+			},
+		}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))
+		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
+		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
 	})
 })
 

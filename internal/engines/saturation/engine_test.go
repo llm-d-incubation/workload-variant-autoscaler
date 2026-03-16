@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/common/model"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -141,15 +141,16 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())
@@ -215,7 +216,7 @@ data:
 			sourceRegistry.Register("prometheus", promSource) // nolint:errcheck
 			// Create minimal test config with saturation config
 			testConfig := config.NewTestConfig()
-			testConfig.UpdateSaturationConfig(map[string]interfaces.SaturationScalingConfig{
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
 			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
@@ -377,15 +378,16 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())
@@ -445,7 +447,7 @@ data:
 			// Initialize legacy MetricsCollector for non-saturation metrics
 			// Create minimal test config with saturation config
 			testConfig := config.NewTestConfig()
-			testConfig.UpdateSaturationConfig(map[string]interfaces.SaturationScalingConfig{
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
 			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)

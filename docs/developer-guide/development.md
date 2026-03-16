@@ -17,7 +17,7 @@ Guide for developers contributing to Workload-Variant-Autoscaler.
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/llm-d/llm-d-workload-variant-autoscaler.git
+   git clone https://github.com/llm-d/llm-d-workload-variant-autoscaler.git 
    cd llm-d-workload-variant-autoscaler
    ```
 
@@ -93,16 +93,26 @@ make run
 
 #### Option 2: In a Kind cluster
 
+The recommended approach is the one-shot command that creates the cluster and deploys everything
+in a single step, avoiding a CRD timing race (see [Known Setup Issues](#known-setup-issues)):
+
 ```bash
-# Create a Kind cluster with emulated GPUs
+# Recommended: create cluster + deploy WVA + llm-d infrastructure in one step
+CREATE_CLUSTER=true make deploy-wva-emulated-on-kind
+```
+
+Alternatively, as two separate steps:
+
+```bash
+# Step 1: Create a Kind cluster with emulated GPUs
 make create-kind-cluster
 
-# Deploy the controller
-make deploy IMG=<your-image>
-
-# Or deploy with llm-d infrastructure
+# Or deploy with the full llm-d infrastructure
 make deploy-wva-emulated-on-kind
 ```
+
+> **Note:** If the two-step approach fails with `no matches for kind "InferencePool"`,
+> see [Known Setup Issues](#known-setup-issues).
 
 ### Making Changes
 
@@ -338,7 +348,13 @@ See [Agentic Workflows Guide](agentic-workflows.md) for detailed information on 
 
 ## Release Process
 
-Release process documentation is coming soon. For now, see the GitHub Actions workflows in `.github/workflows/` for the automated release pipeline.
+See the [Release Process](release-process.md) guide for how to cut a release. It covers:
+
+- Pre-release checklist (changelog, optional version bumps, upstream pins)
+- Creating the tag and GitHub Release (which triggers image build and Helm chart publish)
+- What runs automatically: Docker image push, Helm chart version bump and publish to GHCR, and commit-back of chart files
+- Post-release (required): update the llm-d [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide to the new WVA version
+- Enabling other team members to perform releases (permissions, secrets, documentation)
 
 ## Getting Help
 
@@ -374,3 +390,37 @@ make create-kind-cluster
 
 - Review [Code Style Guidelines](../../CONTRIBUTING.md#coding-guidelines)
 - Check out [Good First Issues](https://github.com/llm-d/llm-d-workload-variant-autoscaler/labels/good%20first%20issue)
+
+---
+
+## Known Setup Issues
+
+### InferencePool CRD not found during `make deploy-wva-emulated-on-kind`
+
+**Symptom:**
+```
+Error: no matches for kind "InferencePool" in version "inference.networking.x-k8s.io/v1alpha2"
+ensure CRDs are installed first
+```
+
+**Cause:** When running `make create-kind-cluster` and `make deploy-wva-emulated-on-kind` as two
+separate commands, there can be a timing race: the Gateway API Inference Extension CRDs are
+applied by the deploy script but the Kubernetes API server hasn't finished registering them
+before the helmfile tries to deploy the `InferencePool` resource.
+
+**Fix (Option 1 — preferred):** Use the one-shot command, which gives the API server enough
+time to register the CRDs during cluster startup:
+
+```bash
+CREATE_CLUSTER=true make deploy-wva-emulated-on-kind
+```
+
+**Fix (Option 2):** If you already have a running cluster and hit this error, install the CRDs
+manually and re-run the deploy (it is idempotent):
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.0.1/manifests.yaml
+kubectl wait --for=condition=Established crd/inferencepools.inference.networking.x-k8s.io --timeout=30s
+kubectl wait --for=condition=Established crd/inferencepools.inference.networking.k8s.io --timeout=30s
+make deploy-wva-emulated-on-kind
+```

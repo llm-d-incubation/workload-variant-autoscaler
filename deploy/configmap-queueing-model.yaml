@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+# This ConfigMap configures the queueing model analyzer for the WVA controller.
+# Its presence (with a "default" key) activates the queueing model analyzer.
+# Delete this ConfigMap to fall back to the analyzer selected in
+# wva-saturation-scaling-config (V1 or V2 saturation analyzer).
+#
+# Configuration structure:
+# - 'default' key: Global default parameters applied to all models.
+# - Additional keys: Per-model overrides. The key name is arbitrary; the
+#   model_id and namespace fields inside the value identify the target model.
+#   Add one key per model override. Per-model entries must set both targetTTFT
+#   and targetITL, or neither (0 means infer from metrics).
+metadata:
+  name: wva-queueing-model-config
+  namespace: workload-variant-autoscaler-system
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+data:
+  # Global defaults applied to all models unless overridden.
+  default: |
+    # rho = 1 - 1/k
+    # k=3.0 -> rho ~= 0.67, k=2.0 -> rho = 0.50, k=5.0 -> rho = 0.80
+    # where rho is the fraction of server capacity consumed by arrivals.
+    # Must be > 1.0.
+    # Default: 3.0
+    sloMultiplier: 3.0
+    # Enable online parameter learning via Kalman filter.
+    # When true, the tuner learns alpha/beta/gamma from observed metrics.
+    # When false, relies on explicit SLO targets or fallback heuristics.
+    tuningEnabled: true
+
+  # Per-model overrides — add one entry per model that needs custom parameters.
+  # The key name (e.g. "llama-prod") is arbitrary; model_id + namespace identify the model.
+  #
+  # llama-prod: |
+  #   model_id: "unsloth/Meta-Llama-3.1-8B"
+  #   namespace: "llm-d-prod"
+  #   targetTTFT: 500.0   # ms; must be set together with targetITL, or both omitted
+  #   targetITL: 50.0     # ms
+  #   sloMultiplier: 2.5
+  #   tuningEnabled: true
+  #
+  # mistral-staging: |
+  #   model_id: "mistralai/Mistral-7B-Instruct-v0.2"
+  #   namespace: "llm-d-staging"
+  #   targetTTFT: 800.0
+  #   targetITL: 80.0
+  #   sloMultiplier: 3.0
+  #   tuningEnabled: false

@@ -276,5 +276,52 @@ var _ = Describe("GreedyBySaturation", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
+
+		Context("with MaxReplicas bound", func() {
+			It("should cap scale-up at maxReplicas even when GPUs are available", func() {
+				maxReplicas := 3
+				allocator = &simpleAllocator{remaining: 100}
+				decisions = []*interfaces.VariantDecision{
+					{
+						VariantName:     "v1",
+						CurrentReplicas: 1,
+						TargetReplicas:  10, // wants to scale to 10
+						GPUsPerReplica:  1,
+						SpareCapacity:   0.0,
+						MaxReplicas:     &maxReplicas,
+					},
+				}
+
+				err := algorithm.Allocate(ctx, decisions, allocator)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Capped at maxReplicas=3
+				Expect(decisions[0].TargetReplicas).To(Equal(3))
+			})
+		})
+
+		Context("with MinReplicas bound", func() {
+			It("should enforce minReplicas floor even under GPU scarcity", func() {
+				minReplicas := 3
+				allocator = &simpleAllocator{remaining: 0} // no GPUs
+				decisions = []*interfaces.VariantDecision{
+					{
+						VariantName:     "v1",
+						CurrentReplicas: 1,
+						TargetReplicas:  5,
+						GPUsPerReplica:  2,
+						SpareCapacity:   0.0,
+						MinReplicas:     &minReplicas,
+					},
+				}
+
+				err := algorithm.Allocate(ctx, decisions, allocator)
+				Expect(err).NotTo(HaveOccurred())
+
+				// MinReplicas is a hard floor
+				Expect(decisions[0].TargetReplicas).To(Equal(3))
+				Expect(decisions[0].WasLimited).To(BeTrue())
+			})
+		})
 	})
 })

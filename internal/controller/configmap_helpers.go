@@ -26,7 +26,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 // parseSaturationConfig parses saturation scaling configuration from ConfigMap data.
@@ -35,7 +35,7 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 	configs := make(config.SaturationScalingConfigPerModel)
 	count := 0
 	for key, yamlStr := range cmData {
-		var satConfig interfaces.SaturationScalingConfig
+		var satConfig config.SaturationScalingConfig
 		if err := yaml.Unmarshal([]byte(yamlStr), &satConfig); err != nil {
 			logger.Error(err, "Failed to parse saturation scaling config entry", "key", key)
 			continue
@@ -46,6 +46,28 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 			continue
 		}
 		configs[key] = satConfig
+		count++
+	}
+	return configs, count
+}
+
+// parseQMAnalyzerConfig parses queueing model configuration from ConfigMap data.
+// Returns the parsed configs and count of successfully parsed entries.
+// Invalid or unparseable entries are skipped with an error log.
+func parseQMAnalyzerConfig(cmData map[string]string, logger logr.Logger) (config.QMAnalyzerConfigPerModel, int) {
+	configs := make(config.QMAnalyzerConfigPerModel)
+	count := 0
+	for key, yamlStr := range cmData {
+		var qmConfig interfaces.QueueingModelScalingConfig
+		if err := yaml.Unmarshal([]byte(yamlStr), &qmConfig); err != nil {
+			logger.Error(err, "Failed to parse queueing model config entry", "key", key)
+			continue
+		}
+		if err := qmConfig.Validate(); err != nil {
+			logger.Error(err, "Invalid queueing model config entry", "key", key)
+			continue
+		}
+		configs[key] = qmConfig
 		count++
 	}
 	return configs, count

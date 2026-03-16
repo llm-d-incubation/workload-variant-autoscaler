@@ -641,8 +641,6 @@ jobs:
           # HF_TOKEN is inherited from GITHUB_ENV (set in 'Get HF token from cluster secret' step)
           ENVIRONMENT: openshift
           INSTALL_GATEWAY_CTRLPLANE: "false"
-          # Disable benchmark mode - istioBench environment not available in llm-d helmfile
-          BENCHMARK_MODE: "false"
           E2E_TESTS_ENABLED: "true"
           NAMESPACE_SCOPED: "false"
           # Pass PR-specific namespaces to install script
@@ -748,8 +746,6 @@ jobs:
           # HF_TOKEN is inherited from GITHUB_ENV
           ENVIRONMENT: openshift
           INSTALL_GATEWAY_CTRLPLANE: "false"
-          # Disable benchmark mode - istioBench environment not available in llm-d helmfile
-          BENCHMARK_MODE: "false"
           E2E_TESTS_ENABLED: "true"
           NAMESPACE_SCOPED: "false"
           # Override namespaces for Model B stack

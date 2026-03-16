@@ -17,7 +17,10 @@ limitations under the License.
 // Package collector provides replica metrics collection functionality.
 //
 // This package provides ReplicaMetricsCollector which collects replica-level
-// metrics for saturation analysis using the source infrastructure.
+// metrics for both saturation analysis and queueing model analysis using the
+// source infrastructure. Saturation metrics (KV cache, queue length, token
+// capacity) and queueing model metrics (scheduler dispatch rate, max batch
+// size) are collected together and exposed via the shared ReplicaMetrics struct.
 package collector
 
 import (
@@ -34,14 +37,15 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
-// ReplicaMetricsCollector collects replica-level metrics for saturation analysis
-// using the source infrastructure.
+// ReplicaMetricsCollector collects replica-level metrics for both saturation
+// analysis and queueing model analysis using the source infrastructure.
 type ReplicaMetricsCollector struct {
 	source      source.MetricsSource
 	k8sClient   client.Client
@@ -57,12 +61,13 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 	}
 }
 
-// CollectReplicaMetrics collects KV cache and queue metrics for all replicas of a model
-// using the source infrastructure.
+// CollectReplicaMetrics collects per-replica metrics for all replicas of a model.
+// The collected metrics serve both the saturation analyzer and the queueing model analyzer:
+//   - Saturation metrics: KV cache usage, queue length, token capacity, prefix cache hit rate
+//   - Queueing model metrics: scheduler dispatch rate (arrival rate), max batch size
 //
-// This function mirrors the functionality of the original CollectReplicaMetrics in
-// internal/collector/prometheus/saturation_metrics.go but uses the source
-// infrastructure with registered query templates.
+// Prometheus-sourced metrics are fetched via registered query templates.
+// MaxBatchSize is parsed from the Deployment's container args (--max-num-seqs).
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -73,7 +78,7 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 //   - variantCosts: Map of VariantAutoscaling namespace/name to cost value
 //
 // Returns:
-//   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation analysis
+//   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
 func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	ctx context.Context,
@@ -90,7 +95,10 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		source.ParamNamespace: namespace,
 	}
 
-	// Refresh saturation queries (KV cache, queue length, and V2 token capacity queries)
+	// Refresh all Prometheus-sourced queries:
+	// - Saturation: KV cache, queue length, cache config, prefix cache hit rate
+	// - Shared (saturation + queueing model): avg input tokens, avg output tokens
+	// - Queueing model: scheduler dispatch rate, avg TTFT, avg ITL
 	queries := []string{
 		registration.QueryKvCacheUsage,
 		registration.QueryQueueLength,
@@ -98,6 +106,9 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		registration.QueryAvgOutputTokens,
 		registration.QueryAvgInputTokens,
 		registration.QueryPrefixCacheHitRate,
+		registration.QuerySchedulerDispatchRate,
+		registration.QueryAvgTTFT,
+		registration.QueryAvgITL,
 	}
 
 	results, err := c.source.Refresh(ctx, source.RefreshSpec{
@@ -123,6 +134,11 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		avgInputTokens     float64
 		prefixCacheHitRate float64
 		hasCacheConfig     bool
+		// Queueing model fields
+		arrivalRate    float64
+		hasArrivalRate bool
+		avgTTFT        float64
+		avgITL         float64
 	}
 
 	// Extract per-pod metrics from results
@@ -291,6 +307,100 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		}
 	}
 
+	// Process scheduler dispatch rate results (arrival rate per pod)
+	if result := results[registration.QuerySchedulerDispatchRate]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					logger.Info("Scheduler dispatch rate metric missing both 'pod' and 'pod_name' labels, skipping",
+						"labels", value.Labels,
+						"model", modelID,
+						"namespace", namespace)
+					continue
+				}
+
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				// NaN check: rate can produce NaN if no successful attempts
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 {
+					podData[podName].arrivalRate = value.Value
+					podData[podName].hasArrivalRate = true
+
+					logger.V(logging.DEBUG).Info("Scheduler dispatch rate metric",
+						"pod", podName,
+						"arrivalRate", value.Value)
+				}
+			}
+		}
+	}
+
+	// Process average TTFT results (seconds)
+	if result := results[registration.QueryAvgTTFT]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					continue
+				}
+
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value > 0 {
+					podData[podName].avgTTFT = value.Value
+
+					logger.V(logging.DEBUG).Info("Avg TTFT metric",
+						"pod", podName,
+						"avgTTFTSeconds", value.Value)
+				}
+			}
+		}
+	}
+
+	// Process average ITL results (seconds)
+	if result := results[registration.QueryAvgITL]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					continue
+				}
+
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value > 0 {
+					podData[podName].avgITL = value.Value
+
+					logger.V(logging.DEBUG).Info("Avg ITL metric",
+						"pod", podName,
+						"avgITLSeconds", value.Value)
+				}
+			}
+		}
+	}
+
+	// Pre-compute MaxBatchSize per deployment from container args.
+	// MaxBatchSize (--max-num-seqs) is not a Prometheus metric; it is parsed
+	// from the Deployment spec using the vLLM argument parser.
+	// Map key is deployment key (namespace/name).
+	deployMaxBatchSize := make(map[string]int64, len(deployments))
+	for key, deploy := range deployments {
+		params := saturation_v2.ParseVLLMArgs(deploy)
+		deployMaxBatchSize[key] = params.MaxNumSeqs
+	}
+
 	// Build replica metrics from pod data
 	replicaMetrics := make([]interfaces.ReplicaMetrics, 0, len(podData))
 	collectedAt := time.Now()
@@ -329,14 +439,17 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			continue
 		}
 		variantKey := utils.GetNamespacedKey(namespace, vaName)
-
-		// Get accelerator name from VariantAutoscaling label
+		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
 		acceleratorName := ""
 		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
-			if va.Labels != nil {
-				if accName, exists := va.Labels[utils.AcceleratorNameLabel]; exists {
-					acceleratorName = accName
-				}
+			// Find the deployment for this VA
+			deploymentKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+			if deployment, found := deployments[deploymentKey]; found {
+				// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
+				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, deployment)
+			} else {
+				// Deployment not cached, fall back to VA label via nil deployment
+				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, nil)
 			}
 		}
 
@@ -368,6 +481,19 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			tokensInUse = int64(rounded)
 		}
 
+		// Look up MaxBatchSize from the deployment's vLLM args via the VA's ScaleTargetRef
+		var maxBatchSize int64
+		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
+			deployKey := utils.GetNamespacedKey(namespace, va.Spec.ScaleTargetRef.Name)
+			if mbs, ok := deployMaxBatchSize[deployKey]; ok {
+				maxBatchSize = mbs
+			}
+		}
+
+		if (data.hasKv || data.hasQueue) && !data.hasArrivalRate {
+			logger.Info("Pod has vLLM metrics but no dispatch rate — possible pod/pod_name label mismatch", "pod", podName, "model", modelID, "namespace", namespace)
+		}
+
 		metric := interfaces.ReplicaMetrics{
 			PodName:               podName,
 			ModelID:               modelID,
@@ -384,6 +510,10 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			AvgOutputTokens:       data.avgOutputTokens,
 			AvgInputTokens:        data.avgInputTokens,
 			PrefixCacheHitRate:    data.prefixCacheHitRate,
+			ArrivalRate:           data.arrivalRate,
+			MaxBatchSize:          maxBatchSize,
+			AvgTTFT:               data.avgTTFT,
+			AvgITL:                data.avgITL,
 			Metadata: &interfaces.ReplicaMetricsMetadata{
 				CollectedAt:     collectedAt,
 				Age:             0, // Fresh

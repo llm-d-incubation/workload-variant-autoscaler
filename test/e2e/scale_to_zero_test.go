@@ -104,11 +104,12 @@ var _ = Describe("Scale-To-Zero Feature", Label("full", "flaky"), Ordered, func(
 			g.Expect(deployment.Status.ReadyReplicas).To(Equal(int32(1)), "Model service should have 1 ready replica")
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, 5*time.Second).Should(Succeed())
 
-		By("Creating VariantAutoscaling resource")
+		By("Creating VariantAutoscaling resource with minReplicas=0 to allow scale-to-zero")
 		err = fixtures.EnsureVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			deploymentName, cfg.ModelID, cfg.AcceleratorType, 30.0,
 			cfg.ControllerInstance,
+			fixtures.WithMinReplicas(0),
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

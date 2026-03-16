@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
@@ -57,7 +58,7 @@ func (a *SaturationAnalyzer) EvictStaleHistory(timeout time.Duration) int {
 
 // Analyze computes capacity signals for a model across all its variants.
 func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.AnalyzerInput) (*interfaces.AnalyzerResult, error) {
-	satConfig, ok := input.Config.(*interfaces.SaturationScalingConfig)
+	satConfig, ok := input.Config.(*config.SaturationScalingConfig)
 	if !ok {
 		return nil, fmt.Errorf("expected *SaturationScalingConfig, got %T", input.Config)
 	}
@@ -88,16 +89,24 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 
 	// Phase 3: Model-level aggregation
 	var totalSupply, totalAnticipatedSupply, totalDemand float64
+	activeRoles := make(map[string]bool)
 	for _, vc := range variantCapacities {
 		totalSupply += vc.TotalCapacity
 		totalDemand += vc.TotalDemand
 		// Anticipated supply includes pending replicas
 		anticipatedCapacity := float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
 		totalAnticipatedSupply += anticipatedCapacity
+		// Track active roles for queue demand attribution
+		role := vc.Role
+		if role == "" {
+			role = "both"
+		}
+		activeRoles[role] = true
 	}
 
 	// Add scheduler queue demand (requests queued upstream in llm-d flow control)
-	totalDemand += estimateSchedulerQueueDemand(input.SchedulerQueue, input.ReplicaMetrics)
+	queueDemand := estimateSchedulerQueueDemand(input.SchedulerQueue, input.ReplicaMetrics, activeRoles)
+	totalDemand += queueDemand.total
 
 	var utilization float64
 	if totalSupply > 0 {
@@ -120,6 +129,9 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		spareCapacity = 0
 	}
 
+	// Phase 4b: Per-role aggregation (P/D disaggregation)
+	roleCapacities := a.aggregateByRole(variantCapacities, satConfig, queueDemand.byRole)
+
 	// Phase 5: Build result
 	result := &interfaces.AnalyzerResult{
 		AnalyzerName:      a.Name(),
@@ -132,6 +144,7 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		Utilization:       utilization,
 		RequiredCapacity:  requiredCapacity,
 		SpareCapacity:     spareCapacity,
+		RoleCapacities:    roleCapacities,
 	}
 
 	return result, nil
@@ -141,7 +154,7 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 // Returns nil if the replica has no V2 capacity data (TotalKvCapacityTokens == 0).
 func (a *SaturationAnalyzer) computeReplicaCapacity(
 	rm interfaces.ReplicaMetrics,
-	config *interfaces.SaturationScalingConfig,
+	config *config.SaturationScalingConfig,
 	modelID, namespace string,
 	gpuCount int,
 ) *ReplicaCapacity {
@@ -335,6 +348,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			VariantName:        vs.VariantName,
 			AcceleratorName:    accelerator,
 			Cost:               cost,
+			Role:               vs.Role,
 			ReplicaCount:       readyCount,
 			PendingReplicas:    vs.PendingReplicas,
 			PerReplicaCapacity: perReplicaCapacity,
@@ -345,6 +359,86 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 		result = append(result, vc)
 	}
 
+	return result
+}
+
+// aggregateByRole groups variant capacities by P/D role and computes per-role
+// scaling signals. Returns nil when no disaggregation is active (all variants
+// are role "both" or empty). The queueDemandByRole map adds scheduler queue
+// demand attributed to each role (nil when there's no queue demand).
+func (a *SaturationAnalyzer) aggregateByRole(
+	variantCapacities []interfaces.VariantCapacity,
+	config *config.SaturationScalingConfig,
+	queueDemandByRole map[string]float64,
+) map[string]interfaces.RoleCapacity {
+	// Check if any variant has a non-"both" role
+	hasDisaggregation := false
+	for _, vc := range variantCapacities {
+		if vc.Role != "" && vc.Role != "both" {
+			hasDisaggregation = true
+			break
+		}
+	}
+	if !hasDisaggregation {
+		return nil
+	}
+
+	// Group supply/demand by role
+	type roleAccum struct {
+		supply      float64
+		anticipated float64
+		demand      float64
+	}
+	roles := make(map[string]*roleAccum)
+	for _, vc := range variantCapacities {
+		role := vc.Role
+		if role == "" {
+			role = "both"
+		}
+		ra, ok := roles[role]
+		if !ok {
+			ra = &roleAccum{}
+			roles[role] = ra
+		}
+		ra.supply += vc.TotalCapacity
+		ra.anticipated += float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
+		ra.demand += vc.TotalDemand
+	}
+
+	// Add scheduler queue demand attributed to each role
+	for role, qd := range queueDemandByRole {
+		ra, ok := roles[role]
+		if !ok {
+			// Queue demand for a role with no variants — skip
+			continue
+		}
+		ra.demand += qd
+	}
+
+	// Compute per-role scaling signals
+	result := make(map[string]interfaces.RoleCapacity, len(roles))
+	for role, ra := range roles {
+		var required, spare float64
+		if config.ScaleUpThreshold > 0 {
+			required = ra.demand/config.ScaleUpThreshold - ra.anticipated
+		}
+		if required < 0 {
+			required = 0
+		}
+		if config.ScaleDownBoundary > 0 {
+			spare = ra.supply - ra.demand/config.ScaleDownBoundary
+		}
+		if spare < 0 {
+			spare = 0
+		}
+		result[role] = interfaces.RoleCapacity{
+			Role:             role,
+			TotalSupply:      ra.supply,
+			TotalDemand:      ra.demand,
+			RequiredCapacity: required,
+			SpareCapacity:    spare,
+		}
+	}
 	return result
 }
 
@@ -458,8 +552,16 @@ func computeModelWorkloadAverages(replicaMetrics []interfaces.ReplicaMetrics) (a
 	return avgInput, avgOutput, avgHitRate
 }
 
+// schedulerQueueDemand holds the estimated token demand from scheduler-queued
+// requests, broken down by P/D role for disaggregated models.
+type schedulerQueueDemand struct {
+	total  float64            // model-level total (inputTokens + outputTokens)
+	byRole map[string]float64 // per-role demand: "prefill", "decode", "both"
+}
+
 // estimateSchedulerQueueDemand estimates the token demand from requests queued
-// in the llm-d inference scheduler's flow control layer.
+// in the llm-d inference scheduler's flow control layer, with per-role
+// attribution for P/D disaggregated models.
 //
 // These requests have not yet reached any vLLM pod, so we estimate their
 // token footprint using two independent signals:
@@ -467,7 +569,12 @@ func computeModelWorkloadAverages(replicaMetrics []interfaces.ReplicaMetrics) (a
 //	inputTokens = max(queueBytes / BytesPerToken, queueSize * avgInputTokens)
 //	             * (1 - prefixCacheHitRate)
 //	outputTokens = queueSize * avgOutputTokens
-//	demand = inputTokens + outputTokens
+//
+// Role attribution:
+//   - Prefill: inputTokens (prompt KV must be computed and stored)
+//   - Decode:  inputTokens + outputTokens (receives KV transfer + generates output)
+//   - Both:    inputTokens + outputTokens (handles full request lifecycle)
+//   - Model-level total: inputTokens + outputTokens (unchanged for backward compat)
 //
 // The prefix cache hit rate reduces expected input token KV demand because
 // a fraction of prompt tokens will hit the prefix cache and reuse existing
@@ -476,9 +583,10 @@ func computeModelWorkloadAverages(replicaMetrics []interfaces.ReplicaMetrics) (a
 func estimateSchedulerQueueDemand(
 	sq *interfaces.SchedulerQueueMetrics,
 	replicaMetrics []interfaces.ReplicaMetrics,
-) float64 {
+	activeRoles map[string]bool,
+) schedulerQueueDemand {
 	if sq == nil || (sq.QueueSize == 0 && sq.QueueBytes == 0) {
-		return 0
+		return schedulerQueueDemand{}
 	}
 
 	// Compute model-level averages from replica metrics
@@ -498,7 +606,24 @@ func estimateSchedulerQueueDemand(
 	// Estimate output tokens (no cache reduction — output must be generated)
 	outputTokens := float64(sq.QueueSize) * avgOutput
 
-	return inputTokens + outputTokens
+	total := inputTokens + outputTokens
+
+	// Build per-role attribution
+	byRole := make(map[string]float64)
+	if len(activeRoles) > 0 {
+		for role := range activeRoles {
+			switch role {
+			case "prefill":
+				byRole["prefill"] = inputTokens
+			case "decode":
+				byRole["decode"] = inputTokens + outputTokens
+			default: // "both" or unknown
+				byRole[role] = total
+			}
+		}
+	}
+
+	return schedulerQueueDemand{total: total, byRole: byRole}
 }
 
 // median returns the median value from a sorted slice of int64 values.

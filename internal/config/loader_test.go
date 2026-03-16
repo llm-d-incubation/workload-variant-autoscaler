@@ -7,8 +7,6 @@ import (
 	"time"
 
 	flag "github.com/spf13/pflag"
-
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 // writeTestConfigFile writes a YAML config file to a temp directory and returns its path.
@@ -256,7 +254,7 @@ func TestConfig_UpdateDynamicConfig(t *testing.T) {
 	}
 
 	// Update saturation config
-	satConfig := map[string]interfaces.SaturationScalingConfig{
+	satConfig := map[string]SaturationScalingConfig{
 		"test": {
 			KvCacheThreshold:     0.9,
 			QueueLengthThreshold: 10,

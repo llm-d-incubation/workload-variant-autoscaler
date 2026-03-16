@@ -61,6 +61,9 @@ llmd:
   modelID: "Qwen/Qwen3-0.6B"
 va:
   enabled: true
+  # accelerator: Optional. If not specified, it will be auto-discovered
+  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # be discovered.
   accelerator: H100
   sloTpot: 10
   sloTtft: 1000
@@ -68,7 +71,7 @@ hpa:
   enabled: true
   # minReplicas: 0 for scale-to-zero testing (requires HPAScaleToZero feature gate)
   minReplicas: 0
-  maxReplicas: 10
+  maxReplicas: 2
   targetAverageValue: "1"
 vllmService:
   enabled: true

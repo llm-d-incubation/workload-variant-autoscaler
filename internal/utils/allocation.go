@@ -26,13 +26,11 @@ func BuildAllocationFromMetrics(
 	// Number of replicas
 	numReplicas := int(*deployment.Spec.Replicas)
 
-	// Accelerator type - strict validation required
-	acc := ""
-	if val, ok := va.Labels["inference.optimization/acceleratorName"]; ok && val != "" {
-		acc = val
-	} else {
+	// Accelerator type - extract from deployment nodeSelector/nodeAffinity or VA labels
+	acc := GetAcceleratorNameFromDeployment(va, &deployment)
+	if acc == "" {
 		return interfaces.Allocation{},
-			fmt.Errorf("missing or empty acceleratorName label on VariantAutoscaling object: %s", va.Name)
+			fmt.Errorf("accelerator name not found in deployment nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
 	}
 
 	// Calculate variant cost

@@ -63,7 +63,6 @@ LLM_D_INFERENCE_SCHEDULER_IMG=${LLM_D_INFERENCE_SCHEDULER_IMG:-"ghcr.io/llm-d/ll
 
 # Gateway Configuration
 GATEWAY_PROVIDER=${GATEWAY_PROVIDER:-"istio"} # Options: kgateway, istio
-BENCHMARK_MODE=${BENCHMARK_MODE:-"false"} # if true, updates to Istio config for benchmark (istioBench env required in helmfile)
 # Save original value to detect if explicitly set via environment variable
 INSTALL_GATEWAY_CTRLPLANE_ORIGINAL="${INSTALL_GATEWAY_CTRLPLANE:-}"
 INSTALL_GATEWAY_CTRLPLANE="${INSTALL_GATEWAY_CTRLPLANE:-false}"
@@ -119,6 +118,8 @@ QUEUE_SPARE_TRIGGER=${QUEUE_SPARE_TRIGGER:-""}
 # When keda: do not deploy Prometheus Adapter; deploy KEDA instead (ScaledObjects, external metrics API)
 SCALER_BACKEND=${SCALER_BACKEND:-prometheus-adapter}
 KEDA_NAMESPACE=${KEDA_NAMESPACE:-keda-system}
+# Pin KEDA chart version for reproducible installs (only used when deploy_keda installs from helm)
+KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
 
 # Environment-related variables
 SCRIPT_DIR=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
@@ -503,6 +504,44 @@ set_wva_logging_level() {
     echo ""
 }
 
+# Detect which InferencePool API group is in use in the cluster (v1 vs v1alpha2).
+# Sets DETECTED_POOL_GROUP to inference.networking.k8s.io or inference.networking.x-k8s.io
+# so WVA can be upgraded to watch the correct group (required for scale-from-zero datastore).
+# Retries up to POOL_DETECT_RETRIES times (default 6, 10s apart) to handle the race where
+# InferencePool instances haven't been created yet after helmfile deploy.
+detect_inference_pool_api_group() {
+    DETECTED_POOL_GROUP=""
+    local max_retries=${POOL_DETECT_RETRIES:-6}
+    local retry_interval_s=10
+    local attempt=0
+    # Search in the target namespace first (avoids cluster-wide RBAC issues), then fall back to -A.
+    while [ $attempt -lt $max_retries ]; do
+        # Try namespace-scoped first if LLMD_NS is set
+        if [ -n "${LLMD_NS:-}" ]; then
+            if [ -n "$(kubectl get inferencepools.inference.networking.k8s.io -n "$LLMD_NS" -o name --request-timeout=10s 2>/dev/null | head -1)" ]; then
+                DETECTED_POOL_GROUP="inference.networking.k8s.io"
+                return
+            elif [ -n "$(kubectl get inferencepools.inference.networking.x-k8s.io -n "$LLMD_NS" -o name --request-timeout=10s 2>/dev/null | head -1)" ]; then
+                DETECTED_POOL_GROUP="inference.networking.x-k8s.io"
+                return
+            fi
+        fi
+        # Fall back to cluster-wide search
+        if [ -n "$(kubectl get inferencepools.inference.networking.k8s.io -A -o name --request-timeout=10s 2>/dev/null | head -1)" ]; then
+            DETECTED_POOL_GROUP="inference.networking.k8s.io"
+            return
+        elif [ -n "$(kubectl get inferencepools.inference.networking.x-k8s.io -A -o name --request-timeout=10s 2>/dev/null | head -1)" ]; then
+            DETECTED_POOL_GROUP="inference.networking.x-k8s.io"
+            return
+        fi
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_retries ]; then
+            log_info "InferencePool not found yet, retrying in ${retry_interval_s}s ($attempt/$max_retries)..."
+            sleep $retry_interval_s
+        fi
+    done
+}
+
 deploy_wva_controller() {
     log_info "Deploying Workload-Variant-Autoscaler..."
     log_info "Using image: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
@@ -544,7 +583,9 @@ deploy_wva_controller() {
         --set wva.prometheus.tls.insecureSkipVerify=$SKIP_TLS_VERIFY \
         --set wva.namespaceScoped=$NAMESPACE_SCOPED \
         --set wva.metrics.secure=$WVA_METRICS_SECURE \
+        --set wva.scaleToZero=$ENABLE_SCALE_TO_ZERO \
         ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
+        ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP} \
         ${KV_SPARE_TRIGGER:+--set wva.capacityScaling.default.kvSpareTrigger=$KV_SPARE_TRIGGER} \
         ${QUEUE_SPARE_TRIGGER:+--set wva.capacityScaling.default.queueSpareTrigger=$QUEUE_SPARE_TRIGGER}
 
@@ -982,9 +1023,9 @@ deploy_llm_d_infrastructure() {
         fi
     fi
 
-    # Patch llm-d-inference-scheduler deployment if scale-to-zero is enabled
-    if [ "$ENABLE_SCALE_TO_ZERO" == "true" ]; then
-        # Patch llm-d-inference-scheduler to enable flowcontrol and use new image
+    # Patch llm-d-inference-scheduler deployment to enable GIE flow control when scale-to-zero
+    # or e2e tests are enabled (required for scale-from-zero: queue metrics and queuing behavior).
+    if [ "$ENABLE_SCALE_TO_ZERO" == "true" ] || [ "$E2E_TESTS_ENABLED" == "true" ]; then
         log_info "Patching llm-d-inference-scheduler deployment to enable flowcontrol and use a new image"
         if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
             kubectl patch deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[
@@ -1003,13 +1044,56 @@ deploy_llm_d_infrastructure() {
                 }
             ]'
         else
-            log_warning "Skipping inference-scheduler patch for SCALE_TO_ZERO: Deployment $LLM_D_EPP_NAME not found in $LLMD_NS"
+            log_warning "Skipping inference-scheduler patch: Deployment $LLM_D_EPP_NAME not found in $LLMD_NS"
         fi
     fi
 
-    log_info "Waiting for llm-d components to initialize..."
-    kubectl wait --for=condition=Available deployment --all -n $LLMD_NS --timeout=60s || \
+    # Deploy InferenceObjective for GIE queuing when flow control is enabled (scale-from-zero / e2e).
+    # Enables gateway-level queuing so inference_extension_flow_control_queue_size is populated.
+    if [ "$ENABLE_SCALE_TO_ZERO" == "true" ] || [ "$E2E_TESTS_ENABLED" == "true" ]; then
+        if kubectl get crd inferenceobjectives.inference.networking.x-k8s.io &>/dev/null; then
+            local infobj_file="${WVA_PROJECT}/deploy/inference-objective-e2e.yaml"
+            if [ -f "$infobj_file" ]; then
+                local pool_ref_name="${RELEASE_NAME_POSTFIX:+gaie-$RELEASE_NAME_POSTFIX}"
+                pool_ref_name="${pool_ref_name:-gaie-$WELL_LIT_PATH_NAME}"
+                log_info "Applying InferenceObjective e2e-default (poolRef.name=$pool_ref_name) for GIE queuing"
+                if sed -e "s/NAMESPACE_PLACEHOLDER/${LLMD_NS}/g" -e "s/POOL_NAME_PLACEHOLDER/${pool_ref_name}/g" "$infobj_file" | kubectl apply -f -; then
+                    log_success "InferenceObjective e2e-default applied"
+                else
+                    log_warning "Failed to apply InferenceObjective (pool $pool_ref_name may not exist yet)"
+                fi
+            else
+                log_warning "InferenceObjective manifest not found at $infobj_file"
+            fi
+        else
+            log_warning "InferenceObjective CRD not found; GIE may not support InferenceObjective yet"
+        fi
+    fi
+
+    # Model-serving pods (vLLM) can take several minutes to download and load
+    # large models into GPU memory. The startupProbe allows up to 30m, so the
+    # wait timeout here must be long enough for the model to finish loading.
+    local DEPLOY_WAIT_TIMEOUT="${DEPLOY_WAIT_TIMEOUT:-600s}"
+    log_info "Waiting for llm-d components to initialize (timeout=${DEPLOY_WAIT_TIMEOUT})..."
+    kubectl wait --for=condition=Available deployment --all -n $LLMD_NS --timeout="$DEPLOY_WAIT_TIMEOUT" || \
         log_warning "llm-d components are not ready yet - check 'kubectl get pods -n $LLMD_NS'"
+
+    # Align WVA with the InferencePool API group in use (scale-from-zero requires WVA to watch the same group).
+    # llm-d version determines whether pools are inference.networking.k8s.io (v1) or inference.networking.x-k8s.io (v1alpha2).
+    if [ "$DEPLOY_WVA" == "true" ]; then
+        detect_inference_pool_api_group
+        if [ -n "$DETECTED_POOL_GROUP" ]; then
+            log_info "Detected InferencePool API group: $DETECTED_POOL_GROUP; upgrading WVA to watch it (scale-from-zero)"
+            if helm upgrade "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
+                -n $WVA_NS --reuse-values --set wva.poolGroup=$DETECTED_POOL_GROUP --wait --timeout=60s; then
+                log_success "WVA upgraded with wva.poolGroup=$DETECTED_POOL_GROUP"
+            else
+                log_warning "WVA upgrade with poolGroup failed - scale-from-zero may not see the InferencePool"
+            fi
+        else
+            log_warning "Could not detect InferencePool API group - WVA may have empty datastore for scale-from-zero"
+        fi
+    fi
 
     # Deploy second model infrastructure for multi-model testing (limiter e2e tests)
     if [ "$MULTI_MODEL_TESTING" == "true" ]; then
@@ -1023,12 +1107,26 @@ deploy_llm_d_infrastructure() {
 deploy_keda() {
     log_info "Deploying KEDA (scaler backend)..."
 
+    # Skip install if KEDA is already fully operational on the cluster.
+    # Check CRD + operator pods + external metrics APIService to avoid false positives
+    # from stale CRDs left behind after a prior uninstall.
+    if kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
+        if kubectl get pods -A -l app.kubernetes.io/name=keda-operator 2>/dev/null | grep -q Running; then
+            if kubectl get apiservice v1beta1.external.metrics.k8s.io >/dev/null 2>&1; then
+                log_success "KEDA CRD, operator, and metrics APIService detected — skipping helm install"
+                return
+            fi
+        fi
+        log_warning "KEDA ScaledObject CRD found but operator or metrics APIService not detected; proceeding with helm install"
+    fi
+
     kubectl create namespace "$KEDA_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
     helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
     helm repo update
 
     if ! helm upgrade -i keda kedacore/keda \
+        --version "$KEDA_CHART_VERSION" \
         -n "$KEDA_NAMESPACE" \
         --set prometheus.metricServer.enabled=true \
         --set prometheus.operator.enabled=true \
@@ -1638,12 +1736,9 @@ main() {
     fi
 
     # Deploy scaler backend: KEDA or Prometheus Adapter
-    # KEDA in this script is for kind-emulator e2e only; on OpenShift use the platform CMA / Prometheus Adapter.
+    # KEDA is supported on all environments. On OpenShift and CKS it is typically
+    # pre-installed on the cluster; deploy_keda will detect and skip the install.
     if [ "$SCALER_BACKEND" = "keda" ]; then
-        if [ "$ENVIRONMENT" != "kind-emulator" ]; then
-            log_error "KEDA scaler backend is only supported for kind-emulator environment (ENVIRONMENT=kind-emulator). Current: ENVIRONMENT=$ENVIRONMENT. Use SCALER_BACKEND=prometheus-adapter or run with ENVIRONMENT=kind-emulator."
-            exit 1
-        fi
         deploy_keda
     elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
         deploy_prometheus_adapter

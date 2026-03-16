@@ -53,10 +53,10 @@ var _ = BeforeSuite(func() {
 	By("Loading configuration from environment")
 	cfg = LoadConfigFromEnv()
 
-	// KEDA scaler backend is only supported for kind-emulator (emulated) e2e; on OpenShift use platform CMA / Prometheus Adapter.
-	if cfg.ScalerBackend == "keda" && cfg.Environment != "kind-emulator" {
-		Fail("KEDA scaler backend is only supported for kind-emulator environment. Use ENVIRONMENT=kind-emulator or SCALER_BACKEND=prometheus-adapter.")
-	}
+	// KEDA is supported on all environments — pre-installed on OCP (Custom Metrics
+	// Autoscaler operator, namespace: openshift-keda) and CKS (helm, namespace: keda),
+	// installed at runtime on kind-emulator via install.sh (namespace: keda-system).
+	// Set KEDA_NAMESPACE accordingly when running on OCP or CKS.
 
 	GinkgoWriter.Printf("=== E2E Test Configuration ===\n")
 	GinkgoWriter.Printf("Environment: %s\n", cfg.Environment)
@@ -133,6 +133,57 @@ var _ = BeforeSuite(func() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(pods.Items).NotTo(BeEmpty(), "Prometheus pod not found")
 	}, 2*time.Minute, 5*time.Second).Should(Succeed(), "Prometheus should be running")
+
+	// TODO: This is a workaround for prometheus-adapter not serving metrics reliably on Kind clusters.
+	// The underlying cause (possibly related to adapter caching/discovery issues) should be investigated.
+	// Only restart prometheus-adapter when using it as the scaler backend and in emulated environments.
+	if cfg.ScalerBackend == "prometheus-adapter" && cfg.Environment == "kind-emulator" {
+		// prometheus-adapter exports the needed custom metrics for autoscaling,
+		// but sometimes the metrics can't be obtained until prometheus-adapter is restarted.
+		// This has been seen many times, especially on a Kind cluster that has been running
+		// for a while. By restarting, we can ensure more stable e2e test.
+		By("Restarting prometheus-adapter pods")
+		// List prometheus-adapter pods
+		podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
+		})
+		Expect(err).NotTo(HaveOccurred(), "Failed to list prometheus-adapter pods")
+
+		// Delete all prometheus-adapter pods to force restart
+		for _, pod := range podList.Items {
+			deleteErr := k8sClient.CoreV1().Pods(cfg.MonitoringNS).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+			if deleteErr != nil && !errors.IsNotFound(deleteErr) {
+				GinkgoWriter.Printf("Warning: Failed to delete prometheus-adapter pod %s: %v\n", pod.Name, deleteErr)
+			} else {
+				GinkgoWriter.Printf("Deleted prometheus-adapter pod: %s\n", pod.Name)
+			}
+		}
+
+		// Wait for new prometheus-adapter pods to be ready
+		By("Waiting for prometheus-adapter pods to be ready")
+		Eventually(func(g Gomega) {
+			podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
+				LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
+			})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(len(podList.Items)).To(BeNumerically(">", 0), "At least one prometheus-adapter pod should exist")
+
+			readyCount := 0
+			for _, pod := range podList.Items {
+				if pod.Status.Phase == corev1.PodRunning {
+					for _, condition := range pod.Status.Conditions {
+						if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+							readyCount++
+							break
+						}
+					}
+				}
+			}
+			g.Expect(readyCount).To(BeNumerically(">", 0), "At least one prometheus-adapter pod should be ready")
+		}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+		GinkgoWriter.Println("prometheus-adapter pods restarted and ready")
+	}
 
 	if cfg.ScalerBackend == "keda" {
 		By("Verifying KEDA is available (ScaledObject CRD)")
@@ -228,7 +279,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 
 	// Helper function to check if resource name matches test patterns
 	isTestResource := func(name string) bool {
-		return strings.HasPrefix(name, "test-") || strings.HasPrefix(name, "smoke-") || strings.HasPrefix(name, "saturation-") || strings.HasPrefix(name, "error-test-") || strings.HasPrefix(name, "target-condition-")
+		return strings.HasPrefix(name, "test-") || strings.HasPrefix(name, "smoke-") || strings.HasPrefix(name, "saturation-") || strings.HasPrefix(name, "error-test-") || strings.HasPrefix(name, "target-condition-") || strings.HasPrefix(name, "scale-from-zero-")
 	}
 
 	// List and delete test VAs

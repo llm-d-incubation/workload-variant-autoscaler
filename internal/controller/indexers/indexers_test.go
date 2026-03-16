@@ -22,7 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -110,12 +110,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       deploymentName,
 					},
-					ModelID: "model-1",
+					ModelID:     "model-1",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va1)).To(Succeed())
@@ -127,12 +128,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       "other-deployment",
 					},
-					ModelID: "model-other",
+					ModelID:     "model-other",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaOther)).To(Succeed())
@@ -182,12 +184,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: otherNs.Name,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       deploymentName, // Same deployment name but different namespace
 					},
-					ModelID: "model-other-ns",
+					ModelID:     "model-other-ns",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaOtherNs)).To(Succeed())
@@ -217,12 +220,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-deploy",
+					ModelID:     "model-deploy",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaDeployment)).To(Succeed())
@@ -237,12 +241,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "StatefulSet",
 						Name:       sharedName,
 					},
-					ModelID: "model-sts",
+					ModelID:     "model-sts",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaStatefulSet)).To(Succeed())
@@ -261,7 +266,7 @@ var _ = Describe("Indexers", Ordered, func() {
 
 			// FindVAForScaleTarget with StatefulSet should return the StatefulSet-targeting VA
 			Eventually(func() string {
-				va, err := FindVAForScaleTarget(testCtx, mgrClient, autoscalingv1.CrossVersionObjectReference{
+				va, err := FindVAForScaleTarget(testCtx, mgrClient, autoscalingv2.CrossVersionObjectReference{
 					APIVersion: "apps/v1",
 					Kind:       "StatefulSet",
 					Name:       sharedName,
@@ -282,12 +287,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-dup-1",
+					ModelID:     "model-dup-1",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va1)).To(Succeed())
@@ -301,12 +307,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-dup-2",
+					ModelID:     "model-dup-2",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va2)).To(Succeed())
@@ -315,7 +322,7 @@ var _ = Describe("Indexers", Ordered, func() {
 			}()
 
 			Eventually(func() error {
-				_, err := FindVAForScaleTarget(testCtx, mgrClient, autoscalingv1.CrossVersionObjectReference{
+				_, err := FindVAForScaleTarget(testCtx, mgrClient, autoscalingv2.CrossVersionObjectReference{
 					APIVersion: "apps/v1",
 					Kind:       "Deployment",
 					Name:       sharedName,
@@ -335,12 +342,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       deploymentName,
 					},
-					ModelID: "model-apiversion",
+					ModelID:     "model-apiversion",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va)).To(Succeed())
@@ -367,12 +375,13 @@ var _ = Describe("Indexers", Ordered, func() {
 					Namespace: namespace,
 				},
 				Spec: llmdv1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						// APIVersion is not set - should default to apps/v1
 						Kind: "Deployment",
 						Name: deploymentName,
 					},
-					ModelID: "model-no-apiversion",
+					ModelID:     "model-no-apiversion",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va)).To(Succeed())

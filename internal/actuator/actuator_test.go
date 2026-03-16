@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,7 +77,129 @@ var _ = Describe("Actuator", func() {
 		})
 	})
 
-	Context("Testing GetCurrentDeploymentReplicas", func() {
+	Context("Testing GetCurrentDeploymentReplicasFromDeployment", func() {
+		var va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+
+		BeforeEach(func() {
+			va = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						Kind: "Deployment",
+						Name: resourceName,
+					},
+				},
+			}
+		})
+
+		It("should return status replicas when status.Replicas is set", func() {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ctrlutils.Ptr(int32(5)),
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas: 3,
+				},
+			}
+
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicas).To(Equal(int32(3)), "Should prefer status.Replicas over spec.Replicas")
+		})
+
+		It("should return status replicas when status.Replicas is 0", func() {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ctrlutils.Ptr(int32(5)),
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas: 0,
+				},
+			}
+
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicas).To(Equal(int32(0)), "Should return 0 when status.Replicas is 0")
+		})
+
+		It("should fallback to spec.Replicas when status.Replicas is not set", func() {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ctrlutils.Ptr(int32(7)),
+				},
+				Status: appsv1.DeploymentStatus{
+					// Status.Replicas not set, will be default (0 for int32)
+					// But we want to test the fallback to spec
+				},
+			}
+
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			// Status.Replicas defaults to 0, which is >= 0, so it should return 0
+			Expect(replicas).To(Equal(int32(0)))
+		})
+
+		It("should return 1 as final fallback when both status and spec are nil", func() {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: appsv1.DeploymentSpec{
+					// Replicas is nil
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas: -1, // Force status to be < 0
+				},
+			}
+
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicas).To(Equal(int32(1)), "Should return 1 as final fallback when both status and spec unavailable")
+		})
+
+		It("should return error when deployment is nil", func() {
+			_, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("deployment cannot be nil"))
+		})
+
+		It("should handle large replica counts", func() {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ctrlutils.Ptr(int32(1000)),
+				},
+				Status: appsv1.DeploymentStatus{
+					Replicas: 999,
+				},
+			}
+
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicas).To(Equal(int32(999)))
+		})
+	})
+
+	Context("Testing GetCurrentDeploymentReplicasFromVA", func() {
 		var deployment *appsv1.Deployment
 		var va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 
@@ -118,10 +240,11 @@ var _ = Describe("Actuator", func() {
 					Namespace: namespace,
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: resourceName,
 					},
+					MaxReplicas: 2,
 				},
 			}
 
@@ -137,7 +260,7 @@ var _ = Describe("Actuator", func() {
 			deployment.Status.Replicas = 3
 			Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
 
-			replicas, err := actuator.GetCurrentDeploymentReplicas(ctx, va)
+			replicas, err := actuator.GetCurrentDeploymentReplicasFromVA(ctx, va)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(deployment.Status.Replicas), fmt.Sprintf("Should return status replicas - actual: %d", replicas))
 		})
@@ -149,14 +272,14 @@ var _ = Describe("Actuator", func() {
 					Namespace: namespace,
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: "non-existent",
 					},
 				},
 			}
 
-			_, err := actuator.GetCurrentDeploymentReplicas(ctx, nonExistentVA)
+			_, err := actuator.GetCurrentDeploymentReplicasFromVA(ctx, nonExistentVA)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get Deployment"))
 		})
@@ -205,15 +328,16 @@ var _ = Describe("Actuator", func() {
 					Name:      contextResourceName,
 					Namespace: namespace,
 					Labels: map[string]string{
-						"inference.optimization/acceleratorName": "A100",
+						ctrlutils.AcceleratorNameLabel: "A100",
 					},
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/variant-1",
+					ModelID:     "test-model/variant-1",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
@@ -327,11 +451,12 @@ var _ = Describe("Actuator", func() {
 					Namespace: namespace,
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/metrics-test",
+					ModelID:     "test-model/metrics-test",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
@@ -387,11 +512,12 @@ var _ = Describe("Actuator", func() {
 					Namespace: namespace,
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: "incomplete-va",
 					},
-					ModelID: "test-model/incomplete",
+					ModelID:     "test-model/incomplete",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					// DesiredOptimizedAlloc.NumReplicas will be 0 by default
@@ -456,11 +582,12 @@ var _ = Describe("Actuator", func() {
 					Namespace: namespace,
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 						Kind: "Deployment",
 						Name: contextResourceName,
 					},
-					ModelID: "test-model/validation-test",
+					ModelID:     "test-model/validation-test",
+					MaxReplicas: 2,
 				},
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{

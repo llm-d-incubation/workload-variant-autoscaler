@@ -64,6 +64,15 @@ type SchedulerQueueMetrics struct {
 	QueueBytes int64
 }
 
+// RoleCapacity holds per-role capacity aggregation for P/D disaggregated models.
+type RoleCapacity struct {
+	Role             string
+	TotalSupply      float64
+	TotalDemand      float64
+	RequiredCapacity float64
+	SpareCapacity    float64
+}
+
 // AnalyzerResult is the common output produced by all analyzers.
 // The engine consumes these results to build scaling plans.
 type AnalyzerResult struct {
@@ -86,6 +95,15 @@ type AnalyzerResult struct {
 	// These are the primary inputs for the engine's signal combination logic.
 	RequiredCapacity float64 // >0 means scale-up needed (demand/threshold - supply)
 	SpareCapacity    float64 // >0 means scale-down possible (supply - demand/boundary)
+
+	// Score is the composite priority score for this model.
+	// Computed as: priority * sum(requiredCapacity_i * analyzerScore_i)
+	// Used by GreedyByScoreOptimizer for fair-share ordering.
+	Score float64
+
+	// RoleCapacities holds per-role capacity aggregation for P/D disaggregated models.
+	// nil when no disaggregation is active (all variants are role "both").
+	RoleCapacities map[string]RoleCapacity
 }
 
 // VariantCapacity holds per-variant capacity data in analyzer-specific units.
@@ -94,6 +112,7 @@ type VariantCapacity struct {
 	VariantName     string
 	AcceleratorName string
 	Cost            float64
+	Role            string // "prefill", "decode", "both", "" (empty = non-disaggregated)
 
 	ReplicaCount    int
 	PendingReplicas int

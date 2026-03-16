@@ -22,7 +22,7 @@ import (
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -38,7 +38,7 @@ const (
 
 // scaleTargetIndexKey returns the composite index key for a scale target reference.
 // Format: Namespace/APIVersion/Kind/Name (e.g., "default/apps/v1/Deployment/my-app")
-func scaleTargetIndexKey(namespace string, ref autoscalingv1.CrossVersionObjectReference) string {
+func scaleTargetIndexKey(namespace string, ref autoscalingv2.CrossVersionObjectReference) string {
 
 	if ref.APIVersion == "" {
 		switch ref.Kind {
@@ -77,7 +77,7 @@ func VAScaleTargetIndexFunc(o client.Object) []string {
 // FindVAForScaleTarget returns the VariantAutoscaling that targets the given scale resource.
 // Returns nil if no VariantAutoscaling targets this resource.
 // Note: A scale target should have at most one VariantAutoscaling targeting it, so the first match is returned.
-func FindVAForScaleTarget(ctx context.Context, c client.Client, ref autoscalingv1.CrossVersionObjectReference, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
+func FindVAForScaleTarget(ctx context.Context, c client.Client, ref autoscalingv2.CrossVersionObjectReference, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
 	var vaList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
 	if err := c.List(ctx, &vaList,
 		client.InNamespace(namespace),
@@ -103,7 +103,7 @@ func FindVAForScaleTarget(ctx context.Context, c client.Client, ref autoscalingv
 // Returns nil if no VariantAutoscaling targets a Deployment with the given name.
 // This is a wrapper around FindVAForScaleTarget for the Deployment scale target.
 func FindVAForDeployment(ctx context.Context, c client.Client, deploymentName, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
-	return FindVAForScaleTarget(ctx, c, autoscalingv1.CrossVersionObjectReference{
+	return FindVAForScaleTarget(ctx, c, autoscalingv2.CrossVersionObjectReference{
 		APIVersion: "apps/v1",
 		Kind:       "Deployment",
 		Name:       deploymentName,

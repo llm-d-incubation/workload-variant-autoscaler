@@ -10,20 +10,20 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
-var _ = Describe("GreedyBySaturationOptimizer", func() {
+var _ = Describe("GreedyByScoreOptimizer", func() {
 
 	var (
-		optimizer *GreedyBySaturationOptimizer
+		optimizer *GreedyByScoreOptimizer
 		ctx       context.Context
 	)
 
 	BeforeEach(func() {
-		optimizer = NewGreedyBySaturationOptimizer()
+		optimizer = NewGreedyByScoreOptimizer()
 		ctx = context.Background()
 	})
 
-	It("should return 'greedy-by-saturation' as name", func() {
-		Expect(optimizer.Name()).To(Equal("greedy-by-saturation"))
+	It("should return 'greedy-by-score' as name", func() {
+		Expect(optimizer.Name()).To(Equal("greedy-by-score"))
 	})
 
 	Context("Single-Model Scale-Up", func() {
@@ -59,34 +59,8 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Single model: mean = 20000 (only one model), target = remaining - mean = 0
-			// Wait — with single model, mean = remaining. target = remaining - mean = 0.
-			// The algorithm should still try to allocate. Let me trace:
-			// active=[model-1(20000)], mean=20000, pick model-1
-			// w.remaining(20000) <= mean(20000) AND len(active)==1 → condition is len(active)>1, so we don't break
-			// allocateForModel: target = 20000 - 20000 = 0 → returns false (already at mean)
-			// → w.remaining = -1 (removed)
-			// Actually this means single model with target=0 won't allocate. That's wrong.
-			// Need to handle single model case: when len(active)==1, mean = remaining, so target=0.
-			// The correct fix: when single model, target should be the full remaining.
-			// Actually re-reading the design doc: "If mean is 0 (single model), target is to satisfy all demand"
-			// But mean isn't 0 when single model, mean = remaining. The fix in the design doc says target = w.remaining - mean,
-			// if target <= 0 return false. So with single model, this returns false immediately.
-			// That means we need to handle the single model case differently.
-			// Let me re-examine the walkthrough: Iteration 6 has {A(5000)}, mean=5000, pick A,
-			// "A tries to allocate → 0 GPUs available → removed". So the doc expects allocation to be attempted.
-			// The check "w.remaining <= mean && len(active) > 1" doesn't break when len==1.
-			// But allocateForModel with target = 5000 - 5000 = 0 → returns false.
-			// Wait — the iteration 6 says "no GPUs" not "target is 0". Something's off.
-			//
-			// Actually looking more carefully at the design: for single model, we WANT to
-			// allocate its full demand. The correct approach is: when there's only one model,
-			// use target = remaining (don't subtract mean). Or equivalently, mean=0 for the
-			// single active model case.
-
-			// After the fix: cheap is most cost-efficient (5/10000 vs 15/20000)
+			// cheap is most cost-efficient (5/10000 vs 15/20000)
 			// ceil(20000/10000) = 2 replicas, needs 4 A100 GPUs (2 per replica)
-			// A100 has 10 available → sufficient
 			Expect(dm["cheap"].TargetReplicas).To(Equal(3)) // 1 + 2
 			Expect(dm["cheap"].Action).To(Equal(interfaces.ActionScaleUp))
 			Expect(dm["expensive"].TargetReplicas).To(Equal(1)) // unchanged
@@ -163,23 +137,6 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Iteration 1: mean=(50000+10000)/2=30000. Pick A(50000).
-			// target=50000-30000=20000, ceil(20000/15000)=2 replicas (4 GPUs).
-			// A.remaining=50000-30000=20000. GPUs left: 4.
-			// 20000 < 30000 → A stays.
-			//
-			// Iteration 2: active={A(20000), B(10000)}. mean=15000. Pick A(20000).
-			// target=20000-15000=5000, ceil(5000/15000)=1 replica (2 GPUs).
-			// A.remaining=20000-15000=5000. GPUs left: 2.
-			// 5000 < 15000 → A stays.
-			//
-			// Iteration 3: active={A(5000), B(10000)}. mean=7500. Pick B(10000).
-			// target=10000-7500=2500, ceil(2500/15000)=1 replica (2 GPUs).
-			// B.remaining=10000-15000=-5000. GPUs left: 0.
-			// B satisfied, removed.
-			//
-			// Iteration 4: active={A(5000)}. No GPUs left → A removed.
-
 			// A got 3 replicas (1 original + 3 added), B got 2 (1 original + 1 added)
 			Expect(dm["a-v1"].TargetReplicas).To(Equal(4)) // 1 + 3
 			Expect(dm["b-v1"].TargetReplicas).To(Equal(2)) // 1 + 1
@@ -236,14 +193,8 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Design doc walkthrough: A gets 3 replicas, B gets 2, C gets 1
-			// Total GPUs: (3+2+1)*2 = 12 ✓
-
-			// A: 1 original + 3 added = 4
 			Expect(dm["a-v1"].TargetReplicas).To(Equal(4))
-			// B: 1 original + 2 added = 3
 			Expect(dm["b-v1"].TargetReplicas).To(Equal(3))
-			// C: 1 original + 1 added = 2
 			Expect(dm["c-v1"].TargetReplicas).To(Equal(2))
 		})
 
@@ -278,18 +229,13 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			}
 			constraints := []*ResourceConstraints{
 				{Pools: map[string]ResourcePool{
-					"A100": {Limit: 8}, // 4 replicas worth
+					"A100": {Limit: 8},
 				}},
 			}
 
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Equal demand: mean=20000. Both tied at mean.
-			// Fair-share: allocationMean = mean - (remaining / N) = 20000 - 10000 = 10000
-			// target = 20000 - 10000 = 10000. Each model gets 1 replica per iteration.
-			// With 8 GPUs (4 replicas worth), both models get 2 replicas each.
-			// Total: X=1+2=3, Y=1+2=3. 4 replicas × 2 GPUs = 8 GPUs used.
 			Expect(dm["x-v1"].TargetReplicas).To(Equal(3))
 			Expect(dm["y-v1"].TargetReplicas).To(Equal(3))
 		})
@@ -328,24 +274,13 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			}
 			constraints := []*ResourceConstraints{
 				{Pools: map[string]ResourcePool{
-					"H100": {Limit: 4}, // 1 H100 replica
-					"A100": {Limit: 6}, // 3 A100 replicas
+					"H100": {Limit: 4},
+					"A100": {Limit: 6},
 				}},
 			}
 
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
-
-			// H100: only 4 GPUs available / 4 per replica = 1 replica max
-			// A100: 6 GPUs / 2 per replica = 3 replicas max
-			// Iter 1: mean=25000. Pick h100(30000). target=5000, ceil(5000/20000)=1.
-			//   h100.remaining=10000. H100 GPUs left: 0.
-			// Iter 2: mean=15000. Pick a100(20000). target=5000, ceil(5000/10000)=1.
-			//   a100.remaining=10000. A100 GPUs left: 4.
-			// Iter 3: mean=10000. Both tied. Fair-share: allocationMean=10000-5000=5000.
-			//   Pick h100(10000): target=5000, but H100 GPUs=0 → can't allocate → removed.
-			// Iter 4: a100(10000) single model. allocationMean=0. target=10000.
-			//   ceil(10000/10000)=1 replica (2 GPUs). A100 GPUs left: 2.
 
 			Expect(dm["h100-v"].TargetReplicas).To(Equal(2)) // 1 + 1
 			Expect(dm["a100-v"].TargetReplicas).To(Equal(3)) // 1 + 2
@@ -371,19 +306,14 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			}
 			constraints := []*ResourceConstraints{
 				{Pools: map[string]ResourcePool{
-					"A100": {Limit: 4}, // 2 A100 replicas
-					"H100": {Limit: 0}, // no H100 GPUs
+					"A100": {Limit: 4},
+					"H100": {Limit: 0},
 				}},
 			}
 
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// A100 is more cost-efficient: 5/10000=0.0005 vs H100: 15/20000=0.00075
-			// Try A100 first: 4 GPUs / 2 per replica = 2 replicas
-			// Single model: allocate full remaining. ceil(30000/10000)=3 but max 2.
-			// a100-v gets +2 (20000 tokens), remaining=10000
-			// Then try H100: 0 GPUs → skip
 			Expect(dm["a100-v"].TargetReplicas).To(Equal(3)) // 1 + 2
 			Expect(dm["h100-v"].TargetReplicas).To(Equal(1)) // unchanged
 		})
@@ -413,7 +343,6 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// No GPUs available → no scale-up
 			Expect(dm["v1"].TargetReplicas).To(Equal(1))
 		})
 
@@ -437,7 +366,6 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, nil)
 			dm := decisionMap(decisions)
 
-			// Nil constraints → empty available map → no GPUs → no scale-up
 			Expect(dm["v1"].TargetReplicas).To(Equal(1))
 		})
 	})
@@ -466,7 +394,6 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, nil)
 			dm := decisionMap(decisions)
 
-			// Same behavior as CostAwareOptimizer for scale-down
 			Expect(dm["expensive"].TargetReplicas).To(Equal(2))
 			Expect(dm["cheap"].TargetReplicas).To(Equal(2))
 		})
@@ -509,11 +436,9 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Scale-up model gets GPUs from constraints
 			Expect(dm["up-v1"].TargetReplicas).To(Equal(2))
 			Expect(dm["up-v1"].Action).To(Equal(interfaces.ActionScaleUp))
 
-			// Scale-down model handled independently
 			Expect(dm["down-v1"].TargetReplicas).To(Equal(1))
 			Expect(dm["down-v1"].Action).To(Equal(interfaces.ActionScaleDown))
 		})
@@ -548,11 +473,6 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// Pending replicas are NOT skipped — the V2 analyzer already accounts
-			// for pending capacity in anticipated supply. If RequiredCapacity > 0,
-			// demand exceeds total supply including pending.
-			// cheap-pending is more cost-efficient (5/10000=0.0005 vs 15/20000=0.00075)
-			// → it gets the allocation.
 			Expect(dm["cheap-pending"].TargetReplicas).To(Equal(3))   // +1
 			Expect(dm["expensive-ready"].TargetReplicas).To(Equal(1)) // unchanged
 		})
@@ -642,20 +562,19 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 						},
 					},
 					VariantStates: []interfaces.VariantReplicaState{
-						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 0}, // 0 defaults to 1
+						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 0},
 					},
 				},
 			}
 			constraints := []*ResourceConstraints{
 				{Pools: map[string]ResourcePool{
-					"A100": {Limit: 2}, // enough for 2 replicas at 1 GPU each
+					"A100": {Limit: 2},
 				}},
 			}
 
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 			dm := decisionMap(decisions)
 
-			// ceil(10000/10000) = 1 replica, needs 1 GPU. 2 GPUs available.
 			Expect(dm["v1"].TargetReplicas).To(Equal(2)) // 1 + 1
 		})
 	})
@@ -693,7 +612,7 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			Expect(decisions[0].Cost).To(Equal(5.0))
 		})
 
-		It("should contain greedy-by-saturation in reason strings", func() {
+		It("should contain greedy-by-score in reason strings", func() {
 			requests := []ModelScalingRequest{
 				{
 					ModelID:   "model-1",
@@ -718,7 +637,258 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 
 			Expect(decisions).To(HaveLen(1))
-			Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-saturation"))
+			Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-score"))
+		})
+	})
+
+	Context("Score-Based Priority", func() {
+
+		It("should give GPUs to higher-score model first", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "low-priority",
+					Namespace: "default",
+					Priority:  1.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 20000,
+						Score:            20000, // 1.0 * 20000
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "low-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "low-v", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				},
+				{
+					ModelID:   "high-priority",
+					Namespace: "default",
+					Priority:  5.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 20000,
+						Score:            100000, // 5.0 * 20000
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "high-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "high-v", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 4}, // Only 2 replicas worth
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// High-score model (100000) should get GPU preference over low-score (20000)
+			Expect(dm["high-v"].TargetReplicas).To(BeNumerically(">=", 2))
+		})
+	})
+
+	Context("Demand-Proportional P/D Distribution", func() {
+
+		It("should distribute replicas proportional to per-role demand", func() {
+			// Prefill RequiredCapacity=15000 (75%), Decode RequiredCapacity=5000 (25%)
+			// Total model RequiredCapacity=20000, Score=20000
+			// With 10 A100 GPUs available, each variant uses 2 GPUs/replica
+			requests := []ModelScalingRequest{
+				{
+					ModelID:       "model-pd",
+					Namespace:     "default",
+					Disaggregated: true,
+					Priority:      1.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 20000,
+						Score:            20000,
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", RequiredCapacity: 15000},
+							"decode":  {Role: "decode", RequiredCapacity: 5000},
+						},
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
+						{VariantName: "decode-v", CurrentReplicas: 3, GPUsPerReplica: 2, Role: "decode"},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 10},
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// target = 20000 (single model, allocationMean=0)
+			// prefill fraction=0.75: roleTarget=15000 → ceil(15000/10000)=2 replicas
+			Expect(dm["prefill-v"].TargetReplicas).To(Equal(3)) // 1 + 2
+			// decode fraction=0.25: roleTarget=5000 → ceil(5000/10000)=1 replica
+			Expect(dm["decode-v"].TargetReplicas).To(Equal(4)) // 3 + 1
+		})
+
+		It("should distribute equally when roles have equal demand", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:       "model-equal",
+					Namespace:     "default",
+					Disaggregated: true,
+					Priority:      1.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 20000,
+						Score:            20000,
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", RequiredCapacity: 10000},
+							"decode":  {Role: "decode", RequiredCapacity: 10000},
+						},
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
+						{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "decode"},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 8},
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// Each role gets 50%: roleTarget=10000 → ceil(10000/10000)=1 replica each
+			Expect(dm["prefill-v"].TargetReplicas).To(Equal(2)) // 1 + 1
+			Expect(dm["decode-v"].TargetReplicas).To(Equal(2))  // 1 + 1
+		})
+
+		It("should only allocate to the role that needs scale-up", func() {
+			// Only prefill needs scale-up; decode has 0 RequiredCapacity
+			requests := []ModelScalingRequest{
+				{
+					ModelID:       "model-prefill-only",
+					Namespace:     "default",
+					Disaggregated: true,
+					Priority:      1.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 10000,
+						Score:            10000,
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", RequiredCapacity: 10000},
+							"decode":  {Role: "decode", RequiredCapacity: 0},
+						},
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
+						{VariantName: "decode-v", CurrentReplicas: 3, GPUsPerReplica: 2, Role: "decode"},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 10},
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// Only prefill fraction=1.0: roleTarget=10000 → 1 replica
+			Expect(dm["prefill-v"].TargetReplicas).To(Equal(2)) // 1 + 1
+			// Decode unchanged (0 RequiredCapacity → not in roleDemands)
+			Expect(dm["decode-v"].TargetReplicas).To(Equal(3))
+		})
+
+		It("should handle GPU exhaustion for one role without affecting the other", func() {
+			// Prefill uses H100s (exhausted), decode uses A100s (available)
+			requests := []ModelScalingRequest{
+				{
+					ModelID:       "model-mixed-gpu",
+					Namespace:     "default",
+					Disaggregated: true,
+					Priority:      1.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 20000,
+						Score:            20000,
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", RequiredCapacity: 10000},
+							"decode":  {Role: "decode", RequiredCapacity: 10000},
+						},
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill-v", AcceleratorName: "H100", Cost: 15.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 20000},
+							{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 4, Role: "prefill"},
+						{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "decode"},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"H100": {Limit: 0}, // No H100s available
+					"A100": {Limit: 4},
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// Prefill can't scale (no H100 GPUs) — its share is consumed, not overflowed
+			Expect(dm["prefill-v"].TargetReplicas).To(Equal(1))
+			// Decode gets only its proportional share (50% of demand)
+			// roleTarget = 10000 (50% of 20000) → +1 replica
+			// Prefill's 10000 is consumed (not absorbed by decode)
+			Expect(dm["decode-v"].TargetReplicas).To(Equal(2)) // 1 + 1
+		})
+
+		It("should handle non-disaggregated model with Score", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Priority:  2.0,
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 10000,
+						Score:            20000, // 2.0 * 10000
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 4},
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// Should allocate based on Score (20000), which maps to 2 replicas
+			Expect(dm["v1"].TargetReplicas).To(Equal(3)) // 1 + ceil(20000/10000)=2
 		})
 	})
 
@@ -727,9 +897,9 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 		It("filterActive should return only models with remaining > 0", func() {
 			work := []*modelWork{
 				{remaining: 100},
-				{remaining: -1}, // removed
+				{remaining: -1},
 				{remaining: 50},
-				{remaining: 0}, // satisfied
+				{remaining: 0},
 			}
 
 			active := filterActive(work)
@@ -754,6 +924,103 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			Expect(mean).To(Equal(0.0))
 		})
 
+		It("allocateForModel should respect maxReplicas", func() {
+			intPtr := func(n int) *int { return &n }
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: 20}}},
+			}
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						RequiredCapacity: 50000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "cheap", CurrentReplicas: 1, GPUsPerReplica: 1, MaxReplicas: intPtr(3)},
+						{VariantName: "expensive", CurrentReplicas: 1, GPUsPerReplica: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// cheap: capped at max=3 (starts at 1, can add 2)
+			// expensive: gets remaining capacity
+			Expect(dm["cheap"].TargetReplicas).To(BeNumerically("<=", 3))
+		})
+
+		It("scale-down should respect minReplicas via costAwareScaleDown", func() {
+			intPtr := func(n int) *int { return &n }
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						SpareCapacity:    50000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
+							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "expensive", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(2)},
+						{VariantName: "cheap", CurrentReplicas: 3, GPUsPerReplica: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// expensive: minReplicas=2, so can only remove 1
+			Expect(dm["expensive"].TargetReplicas).To(BeNumerically(">=", 2))
+		})
+
+		It("scale-down should zero minReplicas=0 variant while keeping minReplicas>0 sibling", func() {
+			intPtr := func(n int) *int { return &n }
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						SpareCapacity:    80000, // enough to remove all
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "keep-alive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
+							{VariantName: "expendable", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "keep-alive", CurrentReplicas: 2, GPUsPerReplica: 1, MinReplicas: intPtr(1)},
+						{VariantName: "expendable", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(0)},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			Expect(dm["keep-alive"].TargetReplicas).To(Equal(1))
+			Expect(dm["expendable"].TargetReplicas).To(Equal(0))
+		})
+
 		It("sortByRemainingDesc should sort descending", func() {
 			active := []*modelWork{
 				{remaining: 100, req: ModelScalingRequest{ModelID: "low"}},
@@ -766,6 +1033,31 @@ var _ = Describe("GreedyBySaturationOptimizer", func() {
 			Expect(active[0].req.ModelID).To(Equal("high"))
 			Expect(active[1].req.ModelID).To(Equal("mid"))
 			Expect(active[2].req.ModelID).To(Equal("low"))
+		})
+
+		It("filterVariantCapacitiesByRole should filter by role", func() {
+			capacities := []interfaces.VariantCapacity{
+				{VariantName: "prefill-v", Role: "prefill"},
+				{VariantName: "decode-v", Role: "decode"},
+				{VariantName: "both-v", Role: "both"},
+				{VariantName: "empty-v", Role: ""},
+			}
+
+			prefill := filterVariantCapacitiesByRole(capacities, "prefill")
+			Expect(prefill).To(HaveLen(1))
+			Expect(prefill[0].VariantName).To(Equal("prefill-v"))
+
+			decode := filterVariantCapacitiesByRole(capacities, "decode")
+			Expect(decode).To(HaveLen(1))
+			Expect(decode[0].VariantName).To(Equal("decode-v"))
+
+			// "both" returns all
+			both := filterVariantCapacitiesByRole(capacities, "both")
+			Expect(both).To(HaveLen(4))
+
+			// empty returns all
+			empty := filterVariantCapacitiesByRole(capacities, "")
+			Expect(empty).To(HaveLen(4))
 		})
 	})
 })

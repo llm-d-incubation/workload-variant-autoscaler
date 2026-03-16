@@ -23,9 +23,11 @@ import (
 )
 
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
-// and scales up deployments from zero replicas when the HPAScaleToZero feature gate is enabled.
-// NOTE: Disabled — standard HPA rejects minReplicas=0; requires KEDA ScaledObject support.
-var _ = PDescribe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
+// and scales up deployments from zero replicas. Requires GIE queuing (ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER
+// on EPP and an InferenceObjective); deploy with E2E_TESTS_ENABLED=true or ENABLE_SCALE_TO_ZERO=true.
+// On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
+// so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
+var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -34,10 +36,14 @@ var _ = PDescribe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fu
 	)
 
 	BeforeAll(func() {
-		// Skip if HPAScaleToZero is not enabled
-		// if !cfg.ScaleToZeroEnabled {
-		// 	Skip("HPAScaleToZero feature gate is not enabled; skipping scale-from-zero test")
-		// }
+		// Scale-from-zero requires GIE flow control and an InferenceObjective.
+		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
+		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
+		// test creates a KEDA ScaledObject instead of a native HPA.
+		if cfg.ScalerBackend != "keda" && !cfg.ScaleToZeroEnabled {
+			Skip("Scale-from-zero requires SCALER_BACKEND=\"keda\" or ENABLE_SCALE_TO_ZERO=true; " +
+				"current configuration does not support HPA minReplicas=0")
+		}
 
 		// Note: InferencePool should already exist from infra-only deployment
 		// We no longer create InferencePools in individual tests
@@ -131,11 +137,12 @@ var _ = PDescribe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fu
 			g.Expect(deploy.Status.Replicas).To(Equal(int32(0)), "Deployment should be scaled to 0")
 		}, 1*time.Minute, 5*time.Second).Should(Succeed())
 
-		By("Creating VariantAutoscaling resource")
+		By("Creating VariantAutoscaling resource with minReplicas=0 to allow scale-from-zero")
 		err = fixtures.EnsureVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 30.0,
 			cfg.ControllerInstance,
+			fixtures.WithMinReplicas(0),
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 
@@ -160,7 +167,10 @@ var _ = PDescribe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fu
 		// InferencePool reconciler runs again. We wait here to allow time for reconciliation.
 		// We wait longer to ensure the InferencePool reconciler has had time to register the pool
 		// in the datastore before the scale-from-zero engine runs.
-		time.Sleep(30 * time.Second) // Allow time for VA reconciliation and InferencePool registration
+		// When running in the full smoke suite (not focused), other specs may have run first and the
+		// leader may have just been elected or cache may still be syncing; wait longer so the
+		// InferencePool reconciler on the leader has populated the datastore.
+		time.Sleep(60 * time.Second) // Allow time for VA reconciliation and InferencePool registration
 
 		GinkgoWriter.Println("Scale-from-zero test setup complete with deployment at 0 replicas")
 	})

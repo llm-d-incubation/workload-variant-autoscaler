@@ -13,13 +13,15 @@ type ModelScalingRequest struct {
 	Namespace     string
 	Result        *interfaces.AnalyzerResult
 	VariantStates []interfaces.VariantReplicaState
+	Priority      float64 // Model priority (default 1.0)
+	Disaggregated bool    // true when model has prefill+decode variants
 }
 
 // ScalingOptimizer makes final scaling decisions for all models.
 //
 // Implementations:
 //   - CostAwareOptimizer: processes each model independently, minimizes cost (unlimited mode)
-//   - GreedyBySaturationOptimizer: fair-shares GPUs across models (limited mode, future)
+//   - GreedyByScoreOptimizer: fair-shares GPUs across models (limited mode)
 type ScalingOptimizer interface {
 	// Name returns optimizer identifier for logging/metrics.
 	Name() string
