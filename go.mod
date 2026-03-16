@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/onsi/ginkgo/v2 v2.28.1
-	github.com/onsi/gomega v1.39.0
+	github.com/onsi/gomega v1.39.1
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.89.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
