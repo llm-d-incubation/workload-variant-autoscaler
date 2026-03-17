@@ -53,10 +53,10 @@ var _ = BeforeSuite(func() {
 	By("Loading configuration from environment")
 	cfg = LoadConfigFromEnv()
 
-	// KEDA scaler backend is only supported for kind-emulator (emulated) e2e; on OpenShift use platform CMA / Prometheus Adapter.
-	if cfg.ScalerBackend == "keda" && cfg.Environment != "kind-emulator" {
-		Fail("KEDA scaler backend is only supported for kind-emulator environment. Use ENVIRONMENT=kind-emulator or SCALER_BACKEND=prometheus-adapter.")
-	}
+	// KEDA is supported on all environments — pre-installed on OCP (Custom Metrics
+	// Autoscaler operator, namespace: openshift-keda) and CKS (helm, namespace: keda),
+	// installed at runtime on kind-emulator via install.sh (namespace: keda-system).
+	// Set KEDA_NAMESPACE accordingly when running on OCP or CKS.
 
 	GinkgoWriter.Printf("=== E2E Test Configuration ===\n")
 	GinkgoWriter.Printf("Environment: %s\n", cfg.Environment)

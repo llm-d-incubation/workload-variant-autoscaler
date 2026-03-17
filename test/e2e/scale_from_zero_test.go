@@ -25,7 +25,8 @@ import (
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
 // and scales up deployments from zero replicas. Requires GIE queuing (ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER
 // on EPP and an InferenceObjective); deploy with E2E_TESTS_ENABLED=true or ENABLE_SCALE_TO_ZERO=true.
-// Uses KEDA ScaledObject when standard HPA rejects minReplicas=0 (e.g. OpenShift).
+// On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
+// so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
 var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
@@ -35,9 +36,13 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 	)
 
 	BeforeAll(func() {
-		// Scale-from-zero is not validated on OpenShift (POOL_GROUP / flow control setup differs; HPA minReplicas=0 often unsupported).
-		if cfg.Environment == "openshift" {
-			Skip("Scale-from-zero test is disabled on OpenShift")
+		// Scale-from-zero requires GIE flow control and an InferenceObjective.
+		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
+		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
+		// test creates a KEDA ScaledObject instead of a native HPA.
+		if cfg.ScalerBackend != "keda" && !cfg.ScaleToZeroEnabled {
+			Skip("Scale-from-zero requires SCALER_BACKEND=\"keda\" or ENABLE_SCALE_TO_ZERO=true; " +
+				"current configuration does not support HPA minReplicas=0")
 		}
 
 		// Note: InferencePool should already exist from infra-only deployment
@@ -132,11 +137,12 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 			g.Expect(deploy.Status.Replicas).To(Equal(int32(0)), "Deployment should be scaled to 0")
 		}, 1*time.Minute, 5*time.Second).Should(Succeed())
 
-		By("Creating VariantAutoscaling resource")
+		By("Creating VariantAutoscaling resource with minReplicas=0 to allow scale-from-zero")
 		err = fixtures.EnsureVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 30.0,
 			cfg.ControllerInstance,
+			fixtures.WithMinReplicas(0),
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
 

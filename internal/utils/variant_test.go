@@ -24,72 +24,6 @@ import (
 	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 )
 
-func TestGetAcceleratorType(t *testing.T) {
-	tests := []struct {
-		name     string
-		va       *wvav1alpha1.VariantAutoscaling
-		expected string
-	}{
-		{
-			name: "accelerator from spec",
-			va: &wvav1alpha1.VariantAutoscaling{
-				Spec: wvav1alpha1.VariantAutoscalingSpec{},
-			},
-			expected: "",
-		},
-		{
-			name: "accelerator from label when spec is empty",
-			va: &wvav1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						AcceleratorNameLabel: "H100",
-					},
-				},
-				Spec: wvav1alpha1.VariantAutoscalingSpec{},
-			},
-			expected: "H100",
-		},
-		{
-			name: "spec takes precedence over label",
-			va: &wvav1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						AcceleratorNameLabel: "H100",
-					},
-				},
-				Spec: wvav1alpha1.VariantAutoscalingSpec{},
-			},
-			expected: "H100",
-		},
-		{
-			name: "empty when no accelerator info",
-			va: &wvav1alpha1.VariantAutoscaling{
-				Spec: wvav1alpha1.VariantAutoscalingSpec{},
-			},
-			expected: "",
-		},
-		{
-			name: "empty when nil labels",
-			va: &wvav1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: nil,
-				},
-				Spec: wvav1alpha1.VariantAutoscalingSpec{},
-			},
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := GetAcceleratorType(tt.va)
-			if result != tt.expected {
-				t.Errorf("GetAcceleratorType() = %v, want %v", result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestGroupVariantAutoscalingByModel(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -105,7 +39,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 						Name:      "va-a100",
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: wvav1alpha1.VariantAutoscalingSpec{
@@ -117,7 +51,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 						Name:      "va-h100",
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "H100",
+							AcceleratorNameLabel: "H100",
 						},
 					},
 					Spec: wvav1alpha1.VariantAutoscalingSpec{

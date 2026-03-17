@@ -115,7 +115,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       deploymentName,
 					},
-					ModelID: "model-1",
+					ModelID:     "model-1",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va1)).To(Succeed())
@@ -132,7 +133,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       "other-deployment",
 					},
-					ModelID: "model-other",
+					ModelID:     "model-other",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaOther)).To(Succeed())
@@ -187,7 +189,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       deploymentName, // Same deployment name but different namespace
 					},
-					ModelID: "model-other-ns",
+					ModelID:     "model-other-ns",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaOtherNs)).To(Succeed())
@@ -222,7 +225,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-deploy",
+					ModelID:     "model-deploy",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaDeployment)).To(Succeed())
@@ -242,7 +246,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "StatefulSet",
 						Name:       sharedName,
 					},
-					ModelID: "model-sts",
+					ModelID:     "model-sts",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, vaStatefulSet)).To(Succeed())
@@ -287,7 +292,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-dup-1",
+					ModelID:     "model-dup-1",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va1)).To(Succeed())
@@ -306,7 +312,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       sharedName,
 					},
-					ModelID: "model-dup-2",
+					ModelID:     "model-dup-2",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va2)).To(Succeed())
@@ -340,7 +347,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind:       "Deployment",
 						Name:       deploymentName,
 					},
-					ModelID: "model-apiversion",
+					ModelID:     "model-apiversion",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va)).To(Succeed())
@@ -372,7 +380,8 @@ var _ = Describe("Indexers", Ordered, func() {
 						Kind: "Deployment",
 						Name: deploymentName,
 					},
-					ModelID: "model-no-apiversion",
+					ModelID:     "model-no-apiversion",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(testCtx, va)).To(Succeed())

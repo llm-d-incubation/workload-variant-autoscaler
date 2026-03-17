@@ -924,6 +924,103 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			Expect(mean).To(Equal(0.0))
 		})
 
+		It("allocateForModel should respect maxReplicas", func() {
+			intPtr := func(n int) *int { return &n }
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: 20}}},
+			}
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						RequiredCapacity: 50000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "cheap", CurrentReplicas: 1, GPUsPerReplica: 1, MaxReplicas: intPtr(3)},
+						{VariantName: "expensive", CurrentReplicas: 1, GPUsPerReplica: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// cheap: capped at max=3 (starts at 1, can add 2)
+			// expensive: gets remaining capacity
+			Expect(dm["cheap"].TargetReplicas).To(BeNumerically("<=", 3))
+		})
+
+		It("scale-down should respect minReplicas via costAwareScaleDown", func() {
+			intPtr := func(n int) *int { return &n }
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						SpareCapacity:    50000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
+							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "expensive", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(2)},
+						{VariantName: "cheap", CurrentReplicas: 3, GPUsPerReplica: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// expensive: minReplicas=2, so can only remove 1
+			Expect(dm["expensive"].TargetReplicas).To(BeNumerically(">=", 2))
+		})
+
+		It("scale-down should zero minReplicas=0 variant while keeping minReplicas>0 sibling", func() {
+			intPtr := func(n int) *int { return &n }
+
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						ModelID:          "model-1",
+						Namespace:        "default",
+						AnalyzedAt:       time.Now(),
+						SpareCapacity:    80000, // enough to remove all
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "keep-alive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
+							{VariantName: "expendable", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "keep-alive", CurrentReplicas: 2, GPUsPerReplica: 1, MinReplicas: intPtr(1)},
+						{VariantName: "expendable", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(0)},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			Expect(dm["keep-alive"].TargetReplicas).To(Equal(1))
+			Expect(dm["expendable"].TargetReplicas).To(Equal(0))
+		})
+
 		It("sortByRemainingDesc should sort descending", func() {
 			active := []*modelWork{
 				{remaining: 100, req: ModelScalingRequest{ModelID: "low"}},

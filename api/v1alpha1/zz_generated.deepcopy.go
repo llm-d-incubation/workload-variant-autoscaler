@@ -61,7 +61,7 @@ func (in *VariantAutoscaling) DeepCopyInto(out *VariantAutoscaling) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
 }
 
@@ -134,6 +134,11 @@ func (in *VariantAutoscalingList) DeepCopyObject() runtime.Object {
 func (in *VariantAutoscalingSpec) DeepCopyInto(out *VariantAutoscalingSpec) {
 	*out = *in
 	out.ScaleTargetRef = in.ScaleTargetRef
+	if in.MinReplicas != nil {
+		in, out := &in.MinReplicas, &out.MinReplicas
+		*out = new(int32)
+		**out = **in
+	}
 	out.VariantAutoscalingConfigSpec = in.VariantAutoscalingConfigSpec
 }
 

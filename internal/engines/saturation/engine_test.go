@@ -141,7 +141,7 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
@@ -149,7 +149,8 @@ data:
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())
@@ -377,7 +378,7 @@ data:
 						Name:      name,
 						Namespace: "default",
 						Labels: map[string]string{
-							"inference.optimization/acceleratorName": "A100",
+							utils.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
@@ -385,7 +386,8 @@ data:
 							Kind: "Deployment",
 							Name: name,
 						},
-						ModelID: modelID,
+						ModelID:     modelID,
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, r)).To(Succeed())

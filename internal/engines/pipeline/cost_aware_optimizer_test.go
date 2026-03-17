@@ -373,6 +373,121 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 	})
 
+	Context("MinReplicas/MaxReplicas Bounds", func() {
+		intPtr := func(n int) *int { return &n }
+
+		It("should respect maxReplicas during scale-up (spillover to next variant)", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 30000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "cheap", CurrentReplicas: 1, MaxReplicas: intPtr(3)},
+						{VariantName: "expensive", CurrentReplicas: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// cheap: ceil(30000/10000)=3, but current=1 so target=1+3=4, capped by max=3 → add 2
+			// remaining = 30000 - 2*10000 = 10000
+			// expensive: ceil(10000/20000)=1 → target=1+1=2
+			Expect(dm["cheap"].TargetReplicas).To(Equal(3))
+			Expect(dm["expensive"].TargetReplicas).To(Equal(2))
+		})
+
+		It("should respect minReplicas during scale-down", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 50000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "expensive", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
+							{VariantName: "cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "expensive", CurrentReplicas: 3, MinReplicas: intPtr(2)},
+						{VariantName: "cheap", CurrentReplicas: 3},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// expensive: cost DESC → tried first. min=2, removable=3-2=1. floor(50000/20000)=2 → capped to 1
+			// remaining = 50000-20000=30000
+			// cheap: not last variant → min=0. removable=3. floor(30000/10000)=3 → remove 3
+			Expect(dm["expensive"].TargetReplicas).To(Equal(2))
+			Expect(dm["cheap"].TargetReplicas).To(Equal(0))
+		})
+
+		It("should scale minReplicas=0 variant to zero while keeping minReplicas>0 sibling", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 80000, // enough to remove all
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "keep-alive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
+							{VariantName: "expendable", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "keep-alive", CurrentReplicas: 2, MinReplicas: intPtr(1)},
+						{VariantName: "expendable", CurrentReplicas: 3, MinReplicas: intPtr(0)},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// keep-alive: minReplicas=1, so floor at 1
+			Expect(dm["keep-alive"].TargetReplicas).To(Equal(1))
+			// expendable: minReplicas=0 and other variant has replicas, so can go to 0
+			Expect(dm["expendable"].TargetReplicas).To(Equal(0))
+		})
+
+		It("should propagate MinReplicas/MaxReplicas to VariantDecision", func() {
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						RequiredCapacity: 0,
+						SpareCapacity:    0,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v1", CurrentReplicas: 2, MinReplicas: intPtr(1), MaxReplicas: intPtr(10)},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+
+			Expect(decisions).To(HaveLen(1))
+			Expect(decisions[0].MinReplicas).To(Equal(intPtr(1)))
+			Expect(decisions[0].MaxReplicas).To(Equal(intPtr(10)))
+		})
+	})
+
 	Context("Helper Functions", func() {
 
 		It("sortByCostEfficiencyAsc should order by cost/capacity", func() {

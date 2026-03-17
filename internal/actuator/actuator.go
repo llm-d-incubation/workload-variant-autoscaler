@@ -26,7 +26,7 @@ func NewActuator(k8sClient client.Client) *Actuator {
 }
 
 // GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
-func (a *Actuator) GetCurrentDeploymentReplicas(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
+func (a *Actuator) GetCurrentDeploymentReplicasFromVA(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
 	var deploy appsv1.Deployment
 	// Use ScaleTargetRef to get the deployment name
 	err := utils.GetDeploymentWithBackoff(ctx, a.Client, va.GetScaleTargetName(), va.Namespace, &deploy)
@@ -34,14 +34,23 @@ func (a *Actuator) GetCurrentDeploymentReplicas(ctx context.Context, va *llmdOpt
 		return 0, fmt.Errorf("failed to get Deployment %s/%s: %w", va.Namespace, va.GetScaleTargetName(), err)
 	}
 
+	return a.GetCurrentDeploymentReplicasFromDeployment(va, &deploy)
+}
+
+// GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
+func (a *Actuator) GetCurrentDeploymentReplicasFromDeployment(va *llmdOptv1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) (int32, error) {
+	if deployment == nil {
+		return 0, fmt.Errorf("deployment cannot be nil for %s/%s", va.Namespace, va.GetScaleTargetName())
+	}
+
 	// Prefer status replicas (actual current state)
-	if deploy.Status.Replicas >= 0 {
-		return deploy.Status.Replicas, nil
+	if deployment.Status.Replicas >= 0 {
+		return deployment.Status.Replicas, nil
 	}
 
 	// Fallback to spec if status not ready
-	if deploy.Spec.Replicas != nil {
-		return *deploy.Spec.Replicas, nil
+	if deployment.Spec.Replicas != nil {
+		return *deployment.Spec.Replicas, nil
 	}
 
 	// Final fallback
@@ -54,7 +63,7 @@ func (a *Actuator) EmitMetrics(ctx context.Context, VariantAutoscaling *llmdOptv
 	if VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas >= 0 {
 
 		// Get real current replicas from Deployment (not stale VariantAutoscaling status)
-		currentReplicas, err := a.GetCurrentDeploymentReplicas(ctx, VariantAutoscaling)
+		currentReplicas, err := a.GetCurrentDeploymentReplicasFromVA(ctx, VariantAutoscaling)
 		if err != nil {
 			logger.Error(err, "Could not get current deployment replicas, using VariantAutoscaling status",
 				"variantName", VariantAutoscaling.Name)

@@ -38,7 +38,8 @@ func (e *Engine) runV2AnalysisOnly(
 				"variant", va.Name, "deployKey", deployKey)
 			continue
 		}
-		accelerator := utils.GetAcceleratorType(va)
+		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
+		accelerator := utils.GetAcceleratorNameFromDeployment(va, deploy)
 		gpuCount := getDeploymentGPUsPerReplica(deploy)
 		e.capacityStore.LoadFromDeployment(namespace, modelID, va.Name, accelerator, gpuCount, deploy)
 		logger.V(logging.DEBUG).Info("Pre-populated capacity store from deployment",

@@ -92,7 +92,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		targets := initTargets(req.VariantStates)
 
 		if req.Result.SpareCapacity > 0 {
-			costAwareScaleDown(ctx, req.Result, targets)
+			costAwareScaleDown(ctx, req.Result, targets, stateMap)
 		}
 
 		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "greedy-by-score")
@@ -327,6 +327,18 @@ func (o *GreedyByScoreOptimizer) allocateToVariants(
 		if n > maxByGPU {
 			n = maxByGPU
 		}
+
+		// Cap by maxReplicas if set
+		if state.MaxReplicas != nil && *state.MaxReplicas > 0 {
+			maxAdd := *state.MaxReplicas - w.targets[vc.VariantName]
+			if maxAdd <= 0 {
+				continue // already at max
+			}
+			if n > maxAdd {
+				n = maxAdd
+			}
+		}
+
 		if n <= 0 {
 			continue
 		}

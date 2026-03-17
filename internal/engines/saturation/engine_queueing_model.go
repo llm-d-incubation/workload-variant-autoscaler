@@ -49,7 +49,7 @@ func (e *Engine) optimizeQueueingModel(
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
 			logger.Error(err, "Model data preparation failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
 		if data == nil {
@@ -64,7 +64,7 @@ func (e *Engine) optimizeQueueingModel(
 			data.replicaMetrics, qConfig, data.variantStates)
 		if err != nil {
 			logger.Error(err, "Queueing model analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
 			continue
 		}
 

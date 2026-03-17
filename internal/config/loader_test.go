@@ -7,8 +7,6 @@ import (
 	"time"
 
 	flag "github.com/spf13/pflag"
-
-
 )
 
 // writeTestConfigFile writes a YAML config file to a temp directory and returns its path.

@@ -89,8 +89,8 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 							Kind: "Deployment",
 							Name: resourceName,
 						},
-						// Example spec fields, adjust as necessary
-						ModelID: "default-default",
+						ModelID:     "default-default",
+						MaxReplicas: 2,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -196,8 +196,8 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 						Kind: "Deployment",
 						Name: "invalid-model-id",
 					},
-					ModelID: "", // Empty ModelID
-
+					ModelID:     "", // Empty ModelID
+					MaxReplicas: 2,
 				},
 			}
 			err := k8sClient.Create(ctx, resource)
@@ -314,7 +314,8 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 						Kind: "Deployment",
 						Name: resourceName,
 					},
-					ModelID: "default-default",
+					ModelID:     "default-default",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -406,7 +407,8 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 						Kind: "Deployment",
 						Name: resourceName,
 					},
-					ModelID: "test-model",
+					ModelID:     "test-model",
+					MaxReplicas: 2,
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())

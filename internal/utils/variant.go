@@ -37,7 +37,7 @@ type VariantFilter func(deploy *appsv1.Deployment) bool
 // and have at least one target replica.
 // Returns the shallow-copied VAs (not safe for mutation) grouped by ModelID.
 func ActiveVariantAutoscalingByModel(ctx context.Context, client client.Client) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
-	vas, err := ActiveVariantAutoscaling(ctx, client)
+	vas, _, err := ActiveVariantAutoscaling(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func ActiveVariantAutoscalingByModel(ctx context.Context, client client.Client) 
 // and have no target replicas.
 // Returns the shallow-copied VAs (not safe for mutation) grouped by ModelID.
 func InactiveVariantAutoscalingByModel(ctx context.Context, client client.Client) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
-	vas, err := InactiveVariantAutoscaling(ctx, client)
+	vas, _, err := InactiveVariantAutoscaling(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -74,49 +74,39 @@ func GroupVariantAutoscalingByModel(
 	return groups
 }
 
-// GetAcceleratorType extracts the accelerator type from a VariantAutoscaling.
-// It checks in order:
-// 1. The inference.optimization/acceleratorName label
-// 2. Returns empty string if neither is available
-func GetAcceleratorType(va *wvav1alpha1.VariantAutoscaling) string {
-	if va.Labels != nil {
-		if acc, exists := va.Labels[AcceleratorNameLabel]; exists {
-			return acc
-		}
-	}
-
-	return ""
-}
-
-// ActiveVariantAutoscalings retrieves all VariantAutoscaling resources that are ready for optimization
+// ActiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
 // Returns a slice of deep-copied VariantAutoscaling objects.
-func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, error) {
+// It also returns a map of deployments keyed by "namespace/deploymentName".
+func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
 	return filterVariantsByDeployment(ctx, client, isActive, "active")
 }
 
 // InactiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have no target replicas.
 // Returns a slice of deep-copied VariantAutoscaling objects.
-func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, error) {
+// It also returns a map of deployments keyed by "namespace/deploymentName".
+func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
 	return filterVariantsByDeployment(ctx, client, isInactive, "inactive")
 }
 
 // filterVariantsByDeployment is a generic function to filter VAs based on deployment state.
-func filterVariantsByDeployment(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, error) {
+// Returns filtered VAs and a map of deployments keyed by "namespace/deploymentName".
+func filterVariantsByDeployment(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
 	readyVAs, err := readyVariantAutoscalings(ctx, client)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	filteredVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(readyVAs))
+	deployments := make(map[string]*appsv1.Deployment)
 
 	for _, va := range readyVAs {
 
 		// Check if the context is done
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		default:
 		}
 
@@ -158,13 +148,16 @@ func filterVariantsByDeployment(ctx context.Context, client client.Client, filte
 		// Apply the filter function
 		if filter(&deploy) {
 			filteredVAs = append(filteredVAs, va)
+			// Store deployment in map using namespace/deploymentName as key
+			deployKey := GetNamespacedKey(va.Namespace, deployName)
+			deployments[deployKey] = &deploy
 		}
 	}
 	ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Found filtered VariantAutoscaling resources",
 		"filterType", filterName,
 		"count", len(filteredVAs))
 
-	return filteredVAs, nil
+	return filteredVAs, deployments, nil
 }
 
 // readyVariantAutoscalings retrieves all VariantAutoscaling resources that are ready for optimization

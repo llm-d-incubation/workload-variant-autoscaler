@@ -65,6 +65,15 @@ var (
 	}
 )
 
+var (
+	// gpuProductKeys are the node selector/affinity keys used to identify GPU products
+	gpuProductKeys = []string{
+		"nvidia.com/gpu.product",
+		"amd.com/gpu.product-name",
+		"cloud.google.com/gke-accelerator",
+	}
+)
+
 // GetResourceWithBackoff performs a Get operation with exponential backoff retry logic
 func GetResourceWithBackoff[T client.Object](ctx context.Context, c client.Client, objKey client.ObjectKey, obj T, backoff wait.Backoff, resourceType string) error {
 	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
@@ -414,4 +423,79 @@ func ValidatePrometheusAPIWithBackoff(ctx context.Context, promAPI promv1.API, b
 // ValidatePrometheusAPI validates Prometheus API connectivity using standard Prometheus backoff
 func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
 	return ValidatePrometheusAPIWithBackoff(ctx, promAPI, PrometheusValidationBackoff)
+}
+
+// GetAcceleratorNameFromDeployment extracts GPU product information from a Deployment's nodeSelector or nodeAffinity.
+// It checks for the following keys in order:
+// - nvidia.com/gpu.product
+// - amd.com/gpu.product-name
+// - cloud.google.com/gke-accelerator
+// If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
+// Returns the first matching value found, or an empty string if none are found.
+func GetAcceleratorNameFromDeployment(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) string {
+	// Check nodeSelector first
+	if deployment != nil && deployment.Spec.Template.Spec.NodeSelector != nil {
+		for _, key := range gpuProductKeys {
+			if val, ok := deployment.Spec.Template.Spec.NodeSelector[key]; ok {
+				return val
+			}
+		}
+	}
+
+	// Check nodeAffinity
+	if deployment != nil && deployment.Spec.Template.Spec.Affinity != nil && deployment.Spec.Template.Spec.Affinity.NodeAffinity != nil {
+		if val := extractGPUFromNodeAffinity(deployment.Spec.Template.Spec.Affinity.NodeAffinity, gpuProductKeys); val != "" {
+			return val
+		}
+	}
+
+	// Fall back to VariantAutoscaling label
+	if va != nil && va.Labels != nil {
+		if accName, exists := va.Labels[AcceleratorNameLabel]; exists {
+			return accName
+		}
+	}
+
+	return ""
+}
+// extractGPUFromNodeAffinity extracts GPU product information from NodeAffinity.
+// It checks both required and preferred node affinity terms for the given GPU keys.
+func extractGPUFromNodeAffinity(nodeAffinity *corev1.NodeAffinity, gpuKeys []string) string {
+	// Check required node affinity
+	if nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+		for _, term := range nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+			if val := extractGPUFromNodeSelectorTerm(term, gpuKeys); val != "" {
+				return val
+			}
+		}
+	}
+
+	// Check preferred node affinity
+	if nodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution != nil {
+		for _, preferred := range nodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+			if val := extractGPUFromNodeSelectorTerm(preferred.Preference, gpuKeys); val != "" {
+				return val
+			}
+		}
+	}
+
+	return ""
+}
+
+// extractGPUFromNodeSelectorTerm extracts GPU product from a NodeSelectorTerm.
+// It checks MatchExpressions for the given GPU keys with "In" or "Exists" operators.
+func extractGPUFromNodeSelectorTerm(term corev1.NodeSelectorTerm, gpuKeys []string) string {
+	for _, expr := range term.MatchExpressions {
+		for _, key := range gpuKeys {
+			if expr.Key == key {
+				// For "In" operator, return the first value
+				if expr.Operator == corev1.NodeSelectorOpIn && len(expr.Values) > 0 {
+					return expr.Values[0]
+				}
+				// For "Exists" operator, we found the key but no specific value
+				// Continue searching for other keys that might have values
+			}
+		}
+	}
+	return ""
 }
