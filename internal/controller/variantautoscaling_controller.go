@@ -245,8 +245,8 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 // fullDesiredAllocPatchBase returns a patch base that forces the full
 // desiredOptimizedAlloc object into the JSON merge patch. Without this,
 // MergeFrom only includes changed fields within nested structs, and the
-// CRD validates the partial patch — rejecting it when required fields
-// (numReplicas, accelerator) are absent from the partial object.
+// CRD validates the partial patch — rejecting it when the required field
+// (accelerator) is absent from the partial object.
 // When desiredOptimizedAlloc hasn't been set yet (accelerator is empty),
 // the base is left unchanged so the zero-valued struct is not included.
 func fullDesiredAllocPatchBase(originalVA *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) *llmdVariantAutoscalingV1alpha1.VariantAutoscaling {

@@ -211,13 +211,14 @@ spec:
                     format: date-time
                     type: string
                   numReplicas:
-                    description: NumReplicas is the number of replicas for the optimized
-                      allocation.
+                    description: |-
+                      NumReplicas is the number of replicas for the optimized allocation.
+                      nil means no optimization decision has been made yet.
+                    format: int32
                     minimum: 0
                     type: integer
                 required:
                 - accelerator
-                - numReplicas
                 type: object
             type: object
         type: object

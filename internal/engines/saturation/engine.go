@@ -596,10 +596,15 @@ func (e *Engine) BuildVariantStates(
 
 		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("BuildVariantStates result", "variant", va.Name, "currentReplicas", currentReplicas, "readyReplicas", readyReplicas, "pendingReplicas", pendingReplicas, "gpusPerReplica", gpusPerReplica, "role", role, "minReplicas", minReplicas, "maxReplicas", maxReplicas)
 
+		desiredReplicas := 0
+		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+			desiredReplicas = int(*va.Status.DesiredOptimizedAlloc.NumReplicas)
+		}
+
 		states = append(states, interfaces.VariantReplicaState{
 			VariantName:     va.Name,
 			CurrentReplicas: currentReplicas,
-			DesiredReplicas: va.Status.DesiredOptimizedAlloc.NumReplicas,
+			DesiredReplicas: desiredReplicas,
 			PendingReplicas: pendingReplicas,
 			GPUsPerReplica:  gpusPerReplica,
 			Role:            role,
@@ -957,8 +962,8 @@ func (e *Engine) applySaturationDecisions(
 		} else {
 			// No change/decision: Keep current target or default to current replicas
 			// We effectively explicitly "decide" to keep things as they are if no decision was made
-			if updateVa.Status.DesiredOptimizedAlloc.NumReplicas > 0 {
-				targetReplicas = updateVa.Status.DesiredOptimizedAlloc.NumReplicas
+			if updateVa.Status.DesiredOptimizedAlloc.NumReplicas != nil && *updateVa.Status.DesiredOptimizedAlloc.NumReplicas > 0 {
+				targetReplicas = int(*updateVa.Status.DesiredOptimizedAlloc.NumReplicas)
 			} else if curr, ok := currentAllocations[vaName]; ok {
 				targetReplicas = curr.NumReplicas
 			}
@@ -996,8 +1001,9 @@ func (e *Engine) applySaturationDecisions(
 
 		// Update DesiredOptimizedAlloc
 		// ALWAYS update LastRunTime to trigger reconciliation in the controller
+		numReplicas := int32(targetReplicas)
 		updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
-			NumReplicas: targetReplicas,
+			NumReplicas: &numReplicas,
 			Accelerator: acceleratorName,
 			LastRunTime: metav1.Now(),
 		}
@@ -1144,8 +1150,8 @@ func (e *Engine) emitSafetyNetMetrics(
 		}
 
 		// Strategy 1: Use previous desired replicas if available
-		if va.Status.DesiredOptimizedAlloc.NumReplicas > 0 {
-			desiredReplicas = int32(va.Status.DesiredOptimizedAlloc.NumReplicas)
+		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil && *va.Status.DesiredOptimizedAlloc.NumReplicas > 0 {
+			desiredReplicas = *va.Status.DesiredOptimizedAlloc.NumReplicas
 			fallbackSource = "previous-desired"
 		} else {
 			desiredReplicas = currentReplicas

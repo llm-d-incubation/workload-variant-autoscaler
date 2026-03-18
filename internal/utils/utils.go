@@ -315,10 +315,11 @@ func CreateOptimizedAlloc(name string,
 		return nil, fmt.Errorf("server %s not found", serverName)
 	}
 	ctrl.Log.Info("Setting accelerator name ", "Name ", allocationData.Accelerator, "allocationData ", allocationData)
+	numReplicas := int32(allocationData.NumReplicas)
 	optimizedAlloc := &llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 		LastRunTime: metav1.NewTime(time.Now()),
 		Accelerator: allocationData.Accelerator,
-		NumReplicas: allocationData.NumReplicas,
+		NumReplicas: &numReplicas,
 	}
 	return optimizedAlloc, nil
 }
@@ -458,6 +459,7 @@ func GetAcceleratorNameFromDeployment(va *llmdVariantAutoscalingV1alpha1.Variant
 
 	return ""
 }
+
 // extractGPUFromNodeAffinity extracts GPU product information from NodeAffinity.
 // It checks both required and preferred node affinity terms for the given GPU keys.
 func extractGPUFromNodeAffinity(nodeAffinity *corev1.NodeAffinity, gpuKeys []string) string {

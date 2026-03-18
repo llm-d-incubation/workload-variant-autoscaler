@@ -58,39 +58,40 @@ func (a *Actuator) GetCurrentDeploymentReplicasFromDeployment(va *llmdOptv1alpha
 }
 
 func (a *Actuator) EmitMetrics(ctx context.Context, VariantAutoscaling *llmdOptv1alpha1.VariantAutoscaling) error {
-	// Emit replica metrics with real-time data for external autoscalers
 	logger := log.FromContext(ctx)
-	if VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas >= 0 {
-
-		// Get real current replicas from Deployment (not stale VariantAutoscaling status)
-		currentReplicas, err := a.GetCurrentDeploymentReplicasFromVA(ctx, VariantAutoscaling)
-		if err != nil {
-			logger.Error(err, "Could not get current deployment replicas, using VariantAutoscaling status",
-				"variantName", VariantAutoscaling.Name)
-			currentReplicas = 0 // Fallback to 0 since CurrentAlloc is removed
-		}
-
-		if err := a.MetricsEmitter.EmitReplicaMetrics(
-			ctx,
-			VariantAutoscaling,
-			currentReplicas, // Real current from Deployment
-			int32(VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas), // Inferno's optimization target
-			VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
-		); err != nil {
-			logger.Error(err, "Failed to emit optimization signals for variantAutoscaling",
-				"variantName", VariantAutoscaling.Name)
-			// Don't fail the reconciliation for metric emission errors
-			// Metrics are critical for HPA, but emission failures shouldn't break core functionality
-			return nil
-		}
-		logger.Info("EmitReplicaMetrics completed",
-			"variantName", VariantAutoscaling.Name,
-			"currentReplicas", currentReplicas,
-			"desiredReplicas", VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas,
-			"accelerator", VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
+	if VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas == nil {
+		logger.Info("Skipping EmitReplicaMetrics - no optimization decision yet",
+			"variantName", VariantAutoscaling.Name)
 		return nil
 	}
-	logger.Info("Skipping EmitReplicaMetrics - NumReplicas is 0",
-		"variantName", VariantAutoscaling.Name)
+
+	desiredReplicas := *VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
+
+	// Get real current replicas from Deployment (not stale VariantAutoscaling status)
+	currentReplicas, err := a.GetCurrentDeploymentReplicasFromVA(ctx, VariantAutoscaling)
+	if err != nil {
+		logger.Error(err, "Could not get current deployment replicas, using VariantAutoscaling status",
+			"variantName", VariantAutoscaling.Name)
+		currentReplicas = 0 // Fallback to 0 since CurrentAlloc is removed
+	}
+
+	if err := a.MetricsEmitter.EmitReplicaMetrics(
+		ctx,
+		VariantAutoscaling,
+		currentReplicas,
+		desiredReplicas, // Inferno's optimization target
+		VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
+	); err != nil {
+		logger.Error(err, "Failed to emit optimization signals for variantAutoscaling",
+			"variantName", VariantAutoscaling.Name)
+		// Don't fail the reconciliation for metric emission errors
+		// Metrics are critical for HPA, but emission failures shouldn't break core functionality
+		return nil
+	}
+	logger.Info("EmitReplicaMetrics completed",
+		"variantName", VariantAutoscaling.Name,
+		"currentReplicas", currentReplicas,
+		"desiredReplicas", desiredReplicas,
+		"accelerator", VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
 	return nil
 }

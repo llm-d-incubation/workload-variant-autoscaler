@@ -488,7 +488,7 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 
 			// DesiredOptimizedAlloc should remain at zero values (not set)
 			Expect(resource.Status.DesiredOptimizedAlloc.Accelerator).To(BeEmpty(), "Accelerator should remain empty")
-			Expect(resource.Status.DesiredOptimizedAlloc.NumReplicas).To(Equal(0), "NumReplicas should remain 0")
+			Expect(resource.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNil(), "NumReplicas should remain nil")
 		})
 	})
 

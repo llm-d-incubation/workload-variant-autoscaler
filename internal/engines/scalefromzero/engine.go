@@ -346,8 +346,9 @@ func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[str
 	}
 
 	// 3. Updates VA status.
+	numReplicas := int32(targetWorkloadReplicas)
 	va.Status.DesiredOptimizedAlloc = wvav1alpha1.OptimizedAlloc{
-		NumReplicas: targetWorkloadReplicas,
+		NumReplicas: &numReplicas,
 		LastRunTime: metav1.Now(),
 		Accelerator: accelerator,
 	}

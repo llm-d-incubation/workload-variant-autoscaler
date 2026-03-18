@@ -325,7 +325,10 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
 
-				optimized := va.Status.DesiredOptimizedAlloc.NumReplicas
+				var optimized int32
+				if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+					optimized = *va.Status.DesiredOptimizedAlloc.NumReplicas
+				}
 
 				metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
 				optCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeOptimizationReady)

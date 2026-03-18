@@ -854,9 +854,13 @@ func LogVariantAutoscalingStatus(ctx context.Context, vaName, namespace string, 
 		return err
 	}
 
-	_, err = fmt.Fprintf(writer, "Desired Optimized Allocation for VA: %s - Replicas: %d, Accelerator: %s\n",
+	replicas := "<nil>"
+	if nr := variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
+		replicas = fmt.Sprintf("%d", *nr)
+	}
+	_, err = fmt.Fprintf(writer, "Desired Optimized Allocation for VA: %s - Replicas: %s, Accelerator: %s\n",
 		variantAutoscaling.Name,
-		variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas,
+		replicas,
 		variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
 	if err != nil {
 		return err

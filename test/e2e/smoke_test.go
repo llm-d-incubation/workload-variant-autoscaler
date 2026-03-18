@@ -337,7 +337,9 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			Expect(getErr).NotTo(HaveOccurred())
 			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
 				// If populated, verify it's valid
-				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
 					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
 			} else {
 				// If not populated yet, that's okay - Engine may not have run yet
@@ -467,10 +469,12 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			// DesiredOptimizedAlloc is populated by the Engine, which may not run immediately
 			// This is a best-effort check - we verify it's valid if populated, but don't fail if not
 			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
-				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
 					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
 				GinkgoWriter.Printf("DesiredOptimizedAlloc is populated: accelerator=%s, replicas=%d\n",
-					va.Status.DesiredOptimizedAlloc.Accelerator, va.Status.DesiredOptimizedAlloc.NumReplicas)
+					va.Status.DesiredOptimizedAlloc.Accelerator, *va.Status.DesiredOptimizedAlloc.NumReplicas)
 			} else {
 				GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
 			}
@@ -493,7 +497,10 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 					Namespace: cfg.LLMDNamespace,
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
-				optimized := int32(va.Status.DesiredOptimizedAlloc.NumReplicas)
+				var optimized int32
+				if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+					optimized = *va.Status.DesiredOptimizedAlloc.NumReplicas
+				}
 				GinkgoWriter.Printf("Waiting for VA to be ready: optimized=%d, minReplicas=%d\n", optimized, minReplicas)
 				// Wait for optimized >= minReplicas (allows for initial 0 during engine startup)
 				// accepts any value >= minReplicas as initial state
@@ -529,11 +536,15 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				if err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va); err != nil {
 					break
 				}
-				if int32(va.Status.DesiredOptimizedAlloc.NumReplicas) == minReplicas {
+				if va.Status.DesiredOptimizedAlloc.NumReplicas != nil && *va.Status.DesiredOptimizedAlloc.NumReplicas == minReplicas {
 					settled = true
 					break
 				}
-				GinkgoWriter.Printf("Waiting for VA to settle: optimized=%d, minReplicas=%d\n", va.Status.DesiredOptimizedAlloc.NumReplicas, minReplicas)
+				var current int32
+				if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+					current = *va.Status.DesiredOptimizedAlloc.NumReplicas
+				}
+				GinkgoWriter.Printf("Waiting for VA to settle: optimized=%d, minReplicas=%d\n", current, minReplicas)
 				time.Sleep(10 * time.Second)
 			}
 			if !settled {
@@ -547,7 +558,10 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				Namespace: cfg.LLMDNamespace,
 			}, va)
 			Expect(err).NotTo(HaveOccurred())
-			initialOptimized := int32(va.Status.DesiredOptimizedAlloc.NumReplicas)
+			var initialOptimized int32
+			if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+				initialOptimized = *va.Status.DesiredOptimizedAlloc.NumReplicas
+			}
 			GinkgoWriter.Printf("Initial optimized replicas (after stabilization): %d (settled=%v)\n", initialOptimized, settled)
 
 			By("Starting burst load generation to trigger scale-up")
@@ -719,7 +733,9 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
 
-				desiredReplicas = va.Status.DesiredOptimizedAlloc.NumReplicas
+				if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+					desiredReplicas = int(*va.Status.DesiredOptimizedAlloc.NumReplicas)
+				}
 				metricsAvailable := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
 				metricsStatus := "Unknown"
 				metricsReason := ""
@@ -1132,7 +1148,9 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			// This is acceptable - the important thing is that the VA continues to reconcile
 			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
 				// If populated, verify it's valid
-				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
 					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
 			} else {
 				// If not populated, that's okay - Engine may not have run yet
