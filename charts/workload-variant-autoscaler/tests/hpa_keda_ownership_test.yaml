@@ -1,0 +1,110 @@
+# Helm unit tests for hpa.enabled and keda.enabled flags.
+# Run with: helm unittest charts/workload-variant-autoscaler (requires helm-unittest plugin)
+
+suite: HPA / KEDA ownership flags
+
+templates:
+  - templates/hpa.yaml
+  - templates/keda.yaml
+
+tests:
+  # ──────────────────────────────────────────────────────────────────
+  # HPA tests
+  # ──────────────────────────────────────────────────────────────────
+
+  - it: "hpa.enabled=true (default) should render an HPA"
+    set:
+      hpa.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/hpa.yaml
+      - isKind:
+          of: HorizontalPodAutoscaler
+        template: templates/hpa.yaml
+
+  - it: "hpa.enabled=false should render NO HPA (external controller owns it)"
+    set:
+      hpa.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/hpa.yaml
+
+  # ──────────────────────────────────────────────────────────────────
+  # KEDA tests
+  # ──────────────────────────────────────────────────────────────────
+
+  - it: "keda.enabled=false (default) should render NO ScaledObject"
+    set:
+      keda.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/keda.yaml
+
+  - it: "keda.enabled=true should render a ScaledObject"
+    set:
+      hpa.enabled: false
+      keda.enabled: true
+      keda.prometheusServerAddress: "https://prometheus.svc:9090"
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/keda.yaml
+      - isKind:
+          of: ScaledObject
+        template: templates/keda.yaml
+      - equal:
+          path: apiVersion
+          value: "keda.sh/v1alpha1"
+        template: templates/keda.yaml
+      - matchRegex:
+          path: spec.triggers[0].metadata.serverAddress
+          pattern: "^https://"
+        template: templates/keda.yaml
+
+  - it: "keda.enabled=true should use correct metric query labels"
+    set:
+      hpa.enabled: false
+      keda.enabled: true
+      keda.prometheusServerAddress: "https://prometheus.svc:9090"
+      llmd.namespace: "test-namespace"
+    asserts:
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: "exported_namespace=\"test-namespace\""
+        template: templates/keda.yaml
+
+  - it: "keda.enabled=true should respect minReplicaCount and maxReplicaCount"
+    set:
+      hpa.enabled: false
+      keda.enabled: true
+      keda.prometheusServerAddress: "https://prometheus.svc:9090"
+      keda.minReplicaCount: 1
+      keda.maxReplicaCount: 5
+    asserts:
+      - equal:
+          path: spec.minReplicaCount
+          value: 1
+        template: templates/keda.yaml
+      - equal:
+          path: spec.maxReplicaCount
+          value: 5
+        template: templates/keda.yaml
+
+  # ──────────────────────────────────────────────────────────────────
+  # External-platform mode: both disabled
+  # ──────────────────────────────────────────────────────────────────
+
+  - it: "hpa.enabled=false + keda.enabled=false should render neither (KServe mode)"
+    set:
+      hpa.enabled: false
+      keda.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/hpa.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/keda.yaml

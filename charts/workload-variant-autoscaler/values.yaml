@@ -100,7 +100,24 @@ va:
   sloTpot: 10
   sloTtft: 1000
 
+# ───────────────────────────────────────────────────────────────────────────
+# Autoscaling sub-resource ownership
+#
+# WVA emits wva_desired_replicas metrics that external autoscalers consume.
+# By default WVA also creates an HPA that reads those metrics. If an external
+# platform (e.g. KServe) already owns the HPA or ScaledObject for the same
+# target Deployment, set hpa.enabled=false (and keda.enabled=false) to
+# prevent conflicting controllers competing over the same scaling objects.
+#
+# Migration path:
+#   Phase 1 (today/KServe): hpa.enabled=false, keda.enabled=false
+#     → external platform owns HPA/ScaledObject; WVA only emits metrics.
+#   Phase 2 (future): hpa.enabled=true OR keda.enabled=true
+#     → WVA owns autoscaling sub-resources end-to-end.
+# ───────────────────────────────────────────────────────────────────────────
 hpa:
+  # Set to false when an external controller (e.g. KServe) owns the HPA
+  # for the target Deployment. Only one controller should own the HPA at a time.
   enabled: true
   # minReplicas: 0 enables scale-to-zero (requires HPAScaleToZero feature gate in k8s)
   # minReplicas: 1 is the safe default that prevents scale-to-zero
@@ -124,6 +141,56 @@ hpa:
         - type: Pods
           value: 10
           periodSeconds: 150
+
+# KEDA ScaledObject — alternative to the built-in HPA above.
+# Enable this when you want WVA to manage a KEDA ScaledObject instead of
+# (or in addition to) a plain HPA. Requires KEDA to be installed in the cluster.
+# Do NOT enable both hpa.enabled and keda.enabled for the same target Deployment —
+# that would create two competing autoscalers.
+# Set both to false to let an external platform (e.g. KServe) own all
+# autoscaling sub-resources.
+keda:
+  # Set to true to let WVA deploy a KEDA ScaledObject for the target Deployment.
+  # Ensure hpa.enabled=false when this is enabled to avoid dual-controller conflicts.
+  enabled: false
+
+  # Minimum replica count (0 = scale-to-zero, KEDA's native support).
+  minReplicaCount: 0
+  maxReplicaCount: 10
+
+  # How often KEDA polls metrics (seconds).
+  pollingInterval: 15
+  # Idle time before scaling to zero (seconds).
+  cooldownPeriod: 30
+
+  # Prometheus trigger — must point to the same Prometheus instance
+  # that WVA emits wva_desired_replicas metrics to.
+  # Example: https://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  prometheusServerAddress: ""
+
+  # Scaling threshold: replica count target per metric value.
+  threshold: "1"
+  # Scale out from zero only when metric exceeds this value.
+  activationThreshold: "0"
+  # Set to "true" to skip TLS verification (development only).
+  unsafeSsl: "false"
+
+  # Optional: advanced HPA behavior config injected into the KEDA-managed HPA.
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: 10
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: 10
+          periodSeconds: 30
 
 vllmService:
   enabled: true

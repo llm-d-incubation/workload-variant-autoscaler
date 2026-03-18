@@ -1,0 +1,80 @@
+{{- /*
+keda.yaml — deploys a KEDA ScaledObject that drives replica counts using
+the wva_desired_replicas Prometheus metric emitted by the WVA controller.
+
+Enable with: --set keda.enabled=true
+Disable with: --set keda.enabled=false (default)
+
+IMPORTANT: Do NOT enable both hpa.enabled and keda.enabled for the same
+target Deployment — two competing autoscalers will produce undefined behavior.
+Set hpa.enabled=false when keda.enabled=true.
+
+KServe integration: set both hpa.enabled=false and keda.enabled=false
+(the default) to allow KServe (or another external platform) to own all
+autoscaling sub-resources exclusively. WVA continues to emit
+wva_desired_replicas metrics that the external autoscaler can consume.
+*/ -}}
+{{- if .Values.keda.enabled }}
+{{- if and .Values.hpa.enabled .Values.keda.enabled }}
+{{- fail "hpa.enabled and keda.enabled cannot both be true for the same target Deployment. Set hpa.enabled=false when using KEDA." }}
+{{- end }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "workload-variant-autoscaler.fullname" . }}-scaledobject
+  namespace: {{ .Values.llmd.namespace }}
+  labels:
+    {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
+    scaler: wva-keda
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ printf "%s-decode" .Values.llmd.modelName }}
+
+  pollingInterval:  {{ .Values.keda.pollingInterval }}
+  cooldownPeriod:   {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount:  {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount:  {{ .Values.keda.maxReplicaCount }}
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      name: {{ include "workload-variant-autoscaler.fullname" . }}-keda-hpa
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.keda.behavior.scaleUp.stabilizationWindowSeconds }}
+          selectPolicy: {{ .Values.keda.behavior.scaleUp.selectPolicy }}
+          policies:
+          {{- range .Values.keda.behavior.scaleUp.policies }}
+          - type: {{ .type }}
+            value: {{ .value }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.keda.behavior.scaleDown.stabilizationWindowSeconds }}
+          selectPolicy: {{ .Values.keda.behavior.scaleDown.selectPolicy }}
+          policies:
+          {{- range .Values.keda.behavior.scaleDown.policies }}
+          - type: {{ .type }}
+            value: {{ .value }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+
+  triggers:
+  - type: prometheus
+    name: wva-desired-replicas
+    metadata:
+      serverAddress: {{ required "keda.prometheusServerAddress is required when keda.enabled=true" .Values.keda.prometheusServerAddress | quote }}
+      query: |
+        wva_desired_replicas{
+          variant_name="{{ include "workload-variant-autoscaler.fullname" . }}-va",
+          exported_namespace="{{ .Values.llmd.namespace }}"
+          {{- if .Values.wva.controllerInstance }},
+          controller_instance="{{ .Values.wva.controllerInstance }}"
+          {{- end }}
+        }
+      threshold:           {{ .Values.keda.threshold | quote }}
+      activationThreshold: {{ .Values.keda.activationThreshold | quote }}
+      metricType:          "AverageValue"
+      unsafeSsl:           {{ .Values.keda.unsafeSsl | quote }}
+{{- end }}

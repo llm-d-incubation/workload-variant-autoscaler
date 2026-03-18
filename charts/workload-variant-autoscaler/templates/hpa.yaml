@@ -1,3 +1,13 @@
+{{- /*
+hpa.yaml — deploys a plain Kubernetes HorizontalPodAutoscaler that reads the
+wva_desired_replicas external metric exposed by the Prometheus Adapter.
+
+Set hpa.enabled=false when an external platform (e.g. KServe) already owns
+the HPA for the same target Deployment. Two controllers competing over the
+same HPA leads to undefined, conflicting scaling behavior.
+
+See docs/integrations/kserve-integration.md for the full migration guide.
+*/ -}}
 {{- if .Values.hpa.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
