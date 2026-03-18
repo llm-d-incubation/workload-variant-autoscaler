@@ -490,8 +490,10 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 		err = crClient.Get(ctx, client.ObjectKey{Name: vaB, Namespace: cfg.LLMDNamespace}, vaBObj)
 		Expect(err).NotTo(HaveOccurred())
 
-		replicasA := vaAObj.Status.DesiredOptimizedAlloc.NumReplicas
-		replicasB := vaBObj.Status.DesiredOptimizedAlloc.NumReplicas
+		Expect(vaAObj.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "VA A NumReplicas should be set")
+		Expect(vaBObj.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "VA B NumReplicas should be set")
+		replicasA := *vaAObj.Status.DesiredOptimizedAlloc.NumReplicas
+		replicasB := *vaBObj.Status.DesiredOptimizedAlloc.NumReplicas
 
 		GinkgoWriter.Printf("VA A (cheaper, cost=30.0) replicas: %d\n", replicasA)
 		GinkgoWriter.Printf("VA B (expensive, cost=50.0) replicas: %d\n", replicasB)

@@ -60,8 +60,8 @@ func TestDecisionToOptimizedAlloc(t *testing.T) {
 
 	replicas, acc, _ := DecisionToOptimizedAlloc(d)
 
-	if replicas != 3 {
-		t.Errorf("Expected 3 replicas, got %d", replicas)
+	if replicas == nil || *replicas != 3 {
+		t.Errorf("Expected 3 replicas, got %v", replicas)
 	}
 	if acc != "H100" {
 		t.Errorf("Expected H100 accelerator, got %s", acc)

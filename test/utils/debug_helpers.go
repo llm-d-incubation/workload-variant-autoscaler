@@ -61,7 +61,11 @@ func DumpVAStatus(ctx context.Context, crClient client.Client, w io.Writer) {
 		_, _ = fmt.Fprintf(w, "  Labels: %v\n", va.Labels)
 		_, _ = fmt.Fprintf(w, "  DesiredOptimizedAlloc:\n")
 		_, _ = fmt.Fprintf(w, "    Accelerator: %s\n", va.Status.DesiredOptimizedAlloc.Accelerator)
-		_, _ = fmt.Fprintf(w, "    NumReplicas: %d\n", va.Status.DesiredOptimizedAlloc.NumReplicas)
+		replicas := "<nil>"
+		if nr := va.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
+			replicas = fmt.Sprintf("%d", *nr)
+		}
+		_, _ = fmt.Fprintf(w, "    NumReplicas: %s\n", replicas)
 		_, _ = fmt.Fprintf(w, "    LastRunTime: %v\n", va.Status.DesiredOptimizedAlloc.LastRunTime)
 		_, _ = fmt.Fprintf(w, "  Conditions:\n")
 		for _, cond := range va.Status.Conditions {

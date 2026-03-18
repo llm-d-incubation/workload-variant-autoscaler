@@ -214,7 +214,8 @@ hpa:
           value: 10
           periodSeconds: 150
 ```
-
+You may want to set `scaleUp.stabilizationWindowSeconds` to a **low** number to trigger quicker scale-up, especially for models with long startup times. Similarly, set `scaleDown.stabilizationWindowSeconds` to a **high** number to slow down scale-down (reducing capacity), since once scaled down, it takes longer to restore capacity for slow-starting models. Another setting also affects scale-down is pod termination grace period as described here https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination.
+  
 **Configuration via Helm:**
 ```bash
 # Production: Conservative scaling (240s stabilization)

@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+func int32Ptr(v int32) *int32 { return &v }
+
 // helper: build a valid VariantAutoscaling object
 // TODO: move to utils??
 func makeValidVA() *VariantAutoscaling {
@@ -39,7 +41,7 @@ func makeValidVA() *VariantAutoscaling {
 			DesiredOptimizedAlloc: OptimizedAlloc{
 				LastRunTime: metav1.NewTime(time.Unix(1730000000, 0).UTC()),
 				Accelerator: "nvidia.com/mig-1g.5gb",
-				NumReplicas: 2,
+				NumReplicas: int32Ptr(2),
 			},
 			Actuation: ActuationStatus{
 				Applied: true,
@@ -163,7 +165,7 @@ func TestStatusOmitEmpty(t *testing.T) {
 		Status struct {
 			DesiredOptimizedAlloc struct {
 				LastRunTime *string `json:"lastRunTime"`
-				NumReplicas int     `json:"numReplicas"`
+				NumReplicas *int32  `json:"numReplicas,omitempty"`
 			} `json:"desiredOptimizedAlloc"`
 			Actuation struct {
 				Applied bool `json:"applied"`
@@ -173,7 +175,7 @@ func TestStatusOmitEmpty(t *testing.T) {
 	if err := json.Unmarshal(b, &probe); err != nil {
 		t.Fatalf("unmarshal probe failed: %v", err)
 	}
-	if probe.Status.DesiredOptimizedAlloc.NumReplicas != 0 ||
+	if probe.Status.DesiredOptimizedAlloc.NumReplicas != nil ||
 		probe.Status.Actuation.Applied != false {
 		t.Errorf("unexpected non-zero defaults in status: %+v", probe.Status)
 	}

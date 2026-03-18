@@ -253,12 +253,13 @@ var _ = Describe("Scale-To-Zero Feature", Label("full", "flaky"), Ordered, func(
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
 
-				desiredReplicas := va.Status.DesiredOptimizedAlloc.NumReplicas
+				g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "NumReplicas should be set")
+				desiredReplicas := *va.Status.DesiredOptimizedAlloc.NumReplicas
 
 				GinkgoWriter.Printf("VA desired replicas: %d (waiting for 0)\n", desiredReplicas)
 
 				// VA should recommend scaling to zero after idle period
-				g.Expect(desiredReplicas).To(Equal(0),
+				g.Expect(desiredReplicas).To(Equal(int32(0)),
 					"VA should recommend scaling to zero after idle period")
 
 			}, 10*time.Minute, 15*time.Second).Should(Succeed())
@@ -463,7 +464,8 @@ enable_scale_to_zero: false`, cfg.ModelID),
 			}, va)
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to get VariantAutoscaling")
 
-			desiredReplicas := va.Status.DesiredOptimizedAlloc.NumReplicas
+			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "NumReplicas should be set")
+			desiredReplicas := *va.Status.DesiredOptimizedAlloc.NumReplicas
 			GinkgoWriter.Printf("VA desired replicas: %d (should be >= 1)\n", desiredReplicas)
 
 			// When scale-to-zero is disabled, VA should recommend at least 1 replica

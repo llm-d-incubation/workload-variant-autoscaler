@@ -45,11 +45,12 @@ var DecisionCache = &InternalDecisionCache{
 // Buffered to prevent blocking the engine loop.
 var DecisionTrigger = make(chan event.GenericEvent, 1000)
 
-// Helper to convert VariantDecision to OptimizedAlloc status
-func DecisionToOptimizedAlloc(d interfaces.VariantDecision) (int, string, metav1.Time) {
+// DecisionToOptimizedAlloc converts a VariantDecision to OptimizedAlloc status fields.
+func DecisionToOptimizedAlloc(d interfaces.VariantDecision) (*int32, string, metav1.Time) {
 	// If LastRunTime is adding to VariantDecision, use it, else Now
 	// For now we assume the consumer sets LastRunTime or uses Now
-	return d.TargetReplicas, d.AcceleratorName, metav1.NewTime(time.Now())
+	numReplicas := int32(d.TargetReplicas)
+	return &numReplicas, d.AcceleratorName, metav1.NewTime(time.Now())
 }
 
 // GlobalConfig and Config singleton have been removed in favor of unified Config

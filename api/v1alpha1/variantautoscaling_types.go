@@ -76,8 +76,9 @@ type OptimizedAlloc struct {
 	Accelerator string `json:"accelerator"`
 
 	// NumReplicas is the number of replicas for the optimized allocation.
+	// nil means no optimization decision has been made yet.
 	// +kubebuilder:validation:Minimum=0
-	NumReplicas int `json:"numReplicas"`
+	NumReplicas *int32 `json:"numReplicas,omitempty"`
 }
 
 // ActuationStatus provides details about the actuation process and its current status.

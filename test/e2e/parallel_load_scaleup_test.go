@@ -236,7 +236,10 @@ var _ = Describe("Parallel Load Scale-Up Test", Label("full"), Ordered, func() {
 				Name:      vaName,
 			}, currentVA)
 			g.Expect(err).NotTo(HaveOccurred())
-			optimized := int32(currentVA.Status.DesiredOptimizedAlloc.NumReplicas)
+			var optimized int32
+			if currentVA.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+				optimized = *currentVA.Status.DesiredOptimizedAlloc.NumReplicas
+			}
 			GinkgoWriter.Printf("Waiting for VA to be ready: optimized=%d, minReplicas=%d\n", optimized, hpaMinReplicas)
 			// Wait for optimized >= minReplicas (allows for initial 0 during engine startup)
 			g.Expect(optimized).To(BeNumerically(">=", hpaMinReplicas), "VA should have optimized >= minReplicas")
@@ -264,7 +267,9 @@ var _ = Describe("Parallel Load Scale-Up Test", Label("full"), Ordered, func() {
 			Name:      vaName,
 		}, va)
 		Expect(err).NotTo(HaveOccurred())
-		initialOptimized = int32(va.Status.DesiredOptimizedAlloc.NumReplicas)
+		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+			initialOptimized = *va.Status.DesiredOptimizedAlloc.NumReplicas
+		}
 		GinkgoWriter.Printf("Initial optimized replicas (after stabilization): %d\n", initialOptimized)
 	})
 
@@ -361,7 +366,9 @@ var _ = Describe("Parallel Load Scale-Up Test", Label("full"), Ordered, func() {
 			}, va)
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to get VariantAutoscaling")
 
-			scaledOptimized = int32(va.Status.DesiredOptimizedAlloc.NumReplicas)
+			if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+				scaledOptimized = *va.Status.DesiredOptimizedAlloc.NumReplicas
+			}
 
 			GinkgoWriter.Printf("VA check #%d (%v elapsed): optimized=%d (initial=%d, minReplicas=%d)\n",
 				attempt, elapsed.Round(time.Second), scaledOptimized, initialOptimized, hpaMinReplicas)

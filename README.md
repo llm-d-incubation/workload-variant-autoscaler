@@ -170,7 +170,7 @@ Apache 2.0 - see [LICENSE](LICENSE) for details.
 - [llm-d main repository](https://github.com/llm-d/llm-d)
 
 ## References
-
+- [WVA paper](https://arxiv.org/abs/2603.09730)
 - [Saturation based design discussion](https://docs.google.com/document/d/1iGHqdxRUDpiKwtJFr5tMCKM7RF6fbTfZBL7BTn6UkwA/edit?tab=t.0#heading=h.mdte0lq44ul4)
 
 ---
