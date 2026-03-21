@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: epp-metrics-token
+  namespace: system
+  annotations:
+    kubernetes.io/service-account.name: workload-variant-autoscaler-epp-metrics-reader

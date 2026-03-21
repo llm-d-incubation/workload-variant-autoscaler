@@ -61,7 +61,23 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - deployments/scale
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - apps
+  resources:
   - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - inference.networking.k8s.io
+  - inference.networking.x-k8s.io
+  resources:
+  - inferencepools
   verbs:
   - get
   - list

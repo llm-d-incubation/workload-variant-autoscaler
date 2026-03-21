@@ -21,7 +21,6 @@ spec:
     matchLabels:
       control-plane: controller-manager
       app.kubernetes.io/name: workload-variant-autoscaler
-  replicas: 2
   template:
     metadata:
       annotations:

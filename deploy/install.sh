@@ -114,8 +114,11 @@ INFRA_ONLY=${INFRA_ONLY:-false}
 KV_SPARE_TRIGGER=${KV_SPARE_TRIGGER:-""}
 QUEUE_SPARE_TRIGGER=${QUEUE_SPARE_TRIGGER:-""}
 
-# Scaler backend for e2e: "prometheus-adapter" (default) or "keda"
-# When keda: do not deploy Prometheus Adapter; deploy KEDA instead (ScaledObjects, external metrics API)
+# Scaler backend: "prometheus-adapter" (default), "keda", or "none"
+# prometheus-adapter: deploy Prometheus Adapter + patch external metrics APIService
+# keda:              deploy KEDA via Helm (or detect pre-installed) + configure ScaledObjects
+# none:              skip all scaler backend deployment; use when KEDA or another metrics API
+#                    is already installed on the cluster (e.g. llmd benchmark clusters)
 SCALER_BACKEND=${SCALER_BACKEND:-prometheus-adapter}
 KEDA_NAMESPACE=${KEDA_NAMESPACE:-keda-system}
 # Pin KEDA chart version for reproducible installs (only used when deploy_keda installs from helm)
@@ -241,7 +244,11 @@ Environment Variables:
   HPA_STABILIZATION_SECONDS    HPA stabilization window in seconds (default: 240)
   HPA_MIN_REPLICAS             HPA minReplicas (default: 1, set to 0 for scale-to-zero)
   INFRA_ONLY                   Deploy only infrastructure (default: false, same as --infra-only flag)
-  SCALER_BACKEND               Scaler backend: prometheus-adapter (default) or keda. When keda, deploys KEDA and skips Prometheus Adapter.
+  SCALER_BACKEND               Scaler backend: "prometheus-adapter" (default), "keda", or "none".
+                               prometheus-adapter: installs Prometheus Adapter and patches the external metrics APIService.
+                               keda: installs KEDA (or detects pre-installed) and skips Prometheus Adapter.
+                               none: skips all scaler backend deployment. Use this on clusters that already have
+                                     KEDA or another external metrics API installed (e.g. llmd benchmark clusters).
   KEDA_NAMESPACE               Namespace for KEDA (default: keda-system)
   UNDEPLOY                     Undeploy mode (default: false)
   DELETE_NAMESPACES            Delete namespaces after undeploy (default: false)
@@ -1331,7 +1338,7 @@ verify_deployment() {
         fi
     fi
 
-    # Check scaler backend (KEDA or Prometheus Adapter)
+    # Check scaler backend (KEDA, Prometheus Adapter, or none)
     if [ "$SCALER_BACKEND" = "keda" ]; then
         log_info "Checking KEDA..."
         if kubectl get pods -n "$KEDA_NAMESPACE" -l app.kubernetes.io/name=keda-operator 2>/dev/null | grep -q Running; then
@@ -1339,6 +1346,8 @@ verify_deployment() {
         else
             log_warning "KEDA may still be starting"
         fi
+    elif [ "$SCALER_BACKEND" = "none" ]; then
+        log_info "Scaler backend skipped (SCALER_BACKEND=none) — assuming external metrics API is pre-installed"
     elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
         log_info "Checking Prometheus Adapter..."
         if kubectl get pods -n $MONITORING_NAMESPACE -l app.kubernetes.io/name=prometheus-adapter 2>/dev/null | grep -q Running; then
@@ -1384,6 +1393,8 @@ print_summary() {
     fi
     if [ "$SCALER_BACKEND" = "keda" ]; then
         echo "✓ KEDA (scaler backend, external metrics API)"
+    elif [ "$SCALER_BACKEND" = "none" ]; then
+        echo "- Scaler backend: skipped (SCALER_BACKEND=none, pre-installed on cluster)"
     elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
         echo "✓ Prometheus Adapter (external metrics API)"
     fi
@@ -1735,11 +1746,16 @@ main() {
         log_info "Skipping llm-d deployment (DEPLOY_LLM_D=false)"
     fi
 
-    # Deploy scaler backend: KEDA or Prometheus Adapter
+    # Deploy scaler backend: KEDA, Prometheus Adapter, or none
     # KEDA is supported on all environments. On OpenShift and CKS it is typically
     # pre-installed on the cluster; deploy_keda will detect and skip the install.
+    # Use SCALER_BACKEND=none on clusters that already have an external metrics API
+    # (e.g. llmd benchmark clusters with KEDA pre-installed) to avoid conflicts.
     if [ "$SCALER_BACKEND" = "keda" ]; then
         deploy_keda
+    elif [ "$SCALER_BACKEND" = "none" ]; then
+        log_info "Skipping scaler backend deployment (SCALER_BACKEND=none)"
+        log_info "Assumes an external metrics API (e.g. KEDA) is already installed on the cluster"
     elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
         deploy_prometheus_adapter
     else

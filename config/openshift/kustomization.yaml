@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
 - ../default
+- cluster-monitoring-view-binding.yaml
 
 patches:
 - path: configmap-patch.yaml
@@ -10,6 +11,14 @@ patches:
     kind: ConfigMap
     name: wva-variantautoscaling-config
 - path: prometheus-patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+- path: epp-metrics-token-patch.yaml
+  target:
+    kind: Secret
+    name: epp-metrics-token
+- path: epp-metrics-volume-patch.yaml
   target:
     kind: Deployment
     name: controller-manager
