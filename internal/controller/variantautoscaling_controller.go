@@ -41,7 +41,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
 // VariantAutoscalingReconciler reconciles a variantAutoscaling object
@@ -52,6 +53,8 @@ type VariantAutoscalingReconciler struct {
 	Recorder  record.EventRecorder
 	Config    *config.Config      // Unified configuration (injected from main.go)
 	Datastore datastore.Datastore // Datastore for namespace tracking and InferencePool data
+
+	LWSEnabled bool // Whether LeaderWorkerSet support is enabled (CRD detected at startup)
 }
 
 // +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings,verbs=get;list;watch;create;update;patch;delete
@@ -71,8 +74,6 @@ type VariantAutoscalingReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Note: Namespace watch permission is required for label-based namespace opt-in for namespace-local ConfigMaps.
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch
-// +kubebuilder:rbac:groups=inference.networking.x-k8s.io;inference.networking.k8s.io,resources=inferencepools,verbs=get;watch;list
-// +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 const (
@@ -135,14 +136,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		"modelID", va.Spec.ModelID)
 
 	// Attempts to resolve the target model variant using scaleTargetRef
-
-	// Fetch scale target Deployment
 	scaleTargetName := va.GetScaleTargetName()
-
-	var deployment appsv1.Deployment
-	if err := utils.GetDeploymentWithBackoff(ctx, r.Client, scaleTargetName, va.Namespace, &deployment); err != nil {
+	if _, err := scaletarget.FetchScaleTarget(ctx, r.Client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("Scale target Deployment not found, waiting for deployment watch",
+			logger.Info(fmt.Sprintf("Scale target %s not found, waiting for %s watch", va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Kind),
 				"name", scaleTargetName,
 				"namespace", va.Namespace)
 
@@ -151,18 +148,18 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				llmdVariantAutoscalingV1alpha1.TypeTargetResolved,
 				metav1.ConditionFalse,
 				llmdVariantAutoscalingV1alpha1.ReasonTargetNotFound,
-				fmt.Sprintf("Scale target Deployment %s not found", scaleTargetName))
+				fmt.Sprintf("Scale target %s %s not found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 			if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
 				logger.Error(err, "Failed to update VariantAutoscaling status")
 				return ctrl.Result{}, err
 			}
 
-			// Don't requeue - the deployment watch will trigger reconciliation
-			// when the target deployment is created
+			// Don't requeue - the scale target watch will trigger reconciliation
+			// when the scale target is created
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Failed to get scale target Deployment",
+		logger.Error(err, fmt.Sprintf("Failed to get scale target %s", va.Spec.ScaleTargetRef.Kind),
 			"name", scaleTargetName,
 			"namespace", va.Namespace)
 		return ctrl.Result{}, err
@@ -173,10 +170,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		llmdVariantAutoscalingV1alpha1.TypeTargetResolved,
 		metav1.ConditionTrue,
 		llmdVariantAutoscalingV1alpha1.ReasonTargetFound,
-		fmt.Sprintf("Scale target Deployment %s found", scaleTargetName))
+		fmt.Sprintf("Scale target %s %s found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 	logger.V(logging.DEBUG).Info(
-		fmt.Sprintf("Scale target Deployment found: name=%s, namespace=%s", scaleTargetName, va.Namespace),
+		fmt.Sprintf("Scale target %s found: name=%s, namespace=%s", va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace),
 	)
 
 	// Process Engine Decisions from Shared Cache
@@ -276,7 +273,9 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	// Use indexed lookup for VA targeting this Deployment
 	va, err := indexers.FindVAForDeployment(ctx, r.Client, deploy.Name, deploy.Namespace)
 	if err != nil {
-		logger.Error(err, "Failed to find VA for deployment event using index")
+		logger.Error(err, "Failed to find VA for deployment event using index",
+			"deployment", deploy.Name,
+			"namespace", deploy.Namespace)
 		return nil
 	}
 
@@ -297,9 +296,47 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	}}
 }
 
+// handleLeaderWorkerSetEvent maps LeaderWorkerSet events to VA reconcile requests.
+// When a LeaderWorkerSet is created, this finds any VAs that reference it and triggers reconciliation.
+// This handles the race condition where VA is created before its target leaderWorkerSet.
+// Uses custom indexes for efficient VA lookup instead of listing all VAs.
+func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Context, obj client.Object) []reconcile.Request {
+	lws, ok := obj.(*lwsv1.LeaderWorkerSet)
+	if !ok {
+		return nil
+	}
+
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Use indexed lookup for VA targeting this LeaderWorkerSet
+	va, err := indexers.FindVAForLeaderWorkerSet(ctx, r.Client, lws.Name, lws.Namespace)
+	if err != nil {
+		logger.Error(err, "Failed to find VA for leaderWorkerSet event using index",
+			"leaderWorkerSet", lws.GetName(),
+			"namespace", lws.Namespace)
+		return nil
+	}
+
+	if va == nil {
+		return nil
+	}
+
+	logger.V(logging.DEBUG).Info("LeaderWorkerSet created, triggering VA reconciliation",
+		"leaderWorkerSet", lws.Name,
+		"va", va.Name,
+		"namespace", lws.Namespace)
+
+	return []reconcile.Request{{
+		NamespacedName: client.ObjectKey{
+			Namespace: lws.Namespace,
+			Name:      va.Name,
+		},
+	}}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VariantAutoscalingReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
 		For(&llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
 			// Filter VAs by controller-instance label and namespace exclusion
 			builder.WithPredicates(VariantAutoscalingPredicate(mgr.GetClient(), r.Config)),
@@ -316,8 +353,19 @@ func (r *VariantAutoscalingReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Watches(
 			&appsv1.Deployment{},
 			handler.EnqueueRequestsFromMapFunc(r.handleDeploymentEvent),
-			builder.WithPredicates(DeploymentPredicate()),
-		).
+			builder.WithPredicates(ScaleTargetPredicate()),
+		)
+
+	// Only watch LeaderWorkerSet if LWS support is enabled (CRD detected at startup)
+	if r.LWSEnabled {
+		controllerBuilder = controllerBuilder.Watches(
+			&lwsv1.LeaderWorkerSet{},
+			handler.EnqueueRequestsFromMapFunc(r.handleLeaderWorkerSetEvent),
+			builder.WithPredicates(ScaleTargetPredicate()),
+		)
+	}
+
+	return controllerBuilder.
 		// Watch DecisionTrigger channel for Engine decisions
 		// This enables the Engine to trigger reconciliation without updating the object in API server
 		WatchesRawSource(

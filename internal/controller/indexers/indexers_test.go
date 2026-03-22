@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
 
 var _ = Describe("Indexers", Ordered, func() {
@@ -206,6 +207,252 @@ var _ = Describe("Indexers", Ordered, func() {
 				}
 				return va.Name
 			}).Should(Equal("va-1"))
+		})
+	})
+
+	Describe("FindVAForLeaderWorkerSet", func() {
+		var (
+			lwsName string
+			va1     *llmdv1alpha1.VariantAutoscaling
+			vaOther *llmdv1alpha1.VariantAutoscaling
+		)
+
+		BeforeEach(func() {
+			lwsName = "test-lws"
+
+			// Create a VA targeting the LeaderWorkerSet
+			va1 = &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-lws-1",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: constants.LeaderWorkerSetAPIVersion,
+						Kind:       constants.LeaderWorkerSetKind,
+						Name:       lwsName,
+					},
+					ModelID:     "model-lws-1",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, va1)).To(Succeed())
+
+			// Create a VA targeting a different LeaderWorkerSet
+			vaOther = &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-lws-other",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: constants.LeaderWorkerSetAPIVersion,
+						Kind:       constants.LeaderWorkerSetKind,
+						Name:       "other-lws",
+					},
+					ModelID:     "model-lws-other",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, vaOther)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, va1))).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, vaOther))).To(Succeed())
+		})
+
+		It("should return VA targeting a specific LeaderWorkerSet", func() {
+			Eventually(func() string {
+				va, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, lwsName, namespace)
+				if err != nil || va == nil {
+					return ""
+				}
+				return va.Name
+			}).Should(Equal("va-lws-1"))
+
+			va, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, lwsName, namespace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(va).NotTo(BeNil())
+			Expect(va.Name).To(Equal("va-lws-1"))
+		})
+
+		It("should return nil for non-existent LeaderWorkerSet", func() {
+			va, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, "non-existent-lws", namespace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(va).To(BeNil())
+		})
+
+		It("should not return VAs from other namespaces", func() {
+			// Create a VA in a different Namespace
+			otherNs := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace + "-lws-other",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, otherNs)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, otherNs))).To(Succeed())
+			}()
+
+			vaOtherNs := &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-lws-other-ns",
+					Namespace: otherNs.Name,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: constants.LeaderWorkerSetAPIVersion,
+						Kind:       constants.LeaderWorkerSetKind,
+						Name:       lwsName, // Same LWS name but different namespace
+					},
+					ModelID:     "model-lws-other-ns",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, vaOtherNs)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, vaOtherNs))).To(Succeed())
+			}()
+
+			// Should only return VA from the specified namespace
+			Eventually(func() string {
+				va, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, lwsName, namespace)
+				if err != nil || va == nil {
+					return ""
+				}
+				return va.Name
+			}).Should(Equal("va-lws-1"))
+		})
+
+		It("should distinguish LeaderWorkerSet from Deployment with the same name", func() {
+			sharedName := "my-workload-lws"
+
+			// VA targeting a LeaderWorkerSet named "my-workload-lws"
+			vaLWS := &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-targets-lws",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: constants.LeaderWorkerSetAPIVersion,
+						Kind:       constants.LeaderWorkerSetKind,
+						Name:       sharedName,
+					},
+					ModelID:     "model-lws",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, vaLWS)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, vaLWS))).To(Succeed())
+			}()
+
+			// VA targeting a Deployment named "my-workload-lws" - same name, different kind
+			vaDeployment := &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-targets-deployment-lws",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: "apps/v1",
+						Kind:       "Deployment",
+						Name:       sharedName,
+					},
+					ModelID:     "model-deploy",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, vaDeployment)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, vaDeployment))).To(Succeed())
+			}()
+
+			// FindVAForLeaderWorkerSet should return the LeaderWorkerSet-targeting VA
+			Eventually(func() string {
+				va, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, sharedName, namespace)
+				if err != nil || va == nil {
+					return ""
+				}
+				return va.Name
+			}).Should(Equal("va-targets-lws"))
+
+			// FindVAForDeployment should return the Deployment-targeting VA
+			Eventually(func() string {
+				va, err := FindVAForDeployment(testCtx, mgrClient, sharedName, namespace)
+				if err != nil || va == nil {
+					return ""
+				}
+				return va.Name
+			}).Should(Equal("va-targets-deployment-lws"))
+		})
+
+		It("should match VAs with explicit LeaderWorkerSet APIVersion", func() {
+			lwsNameAPI := "test-lws-apiversion"
+
+			va := &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-lws-with-apiversion",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: constants.LeaderWorkerSetAPIVersion,
+						Kind:       constants.LeaderWorkerSetKind,
+						Name:       lwsNameAPI,
+					},
+					ModelID:     "model-lws-apiversion",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, va)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, va))).To(Succeed())
+			}()
+
+			// FindVAForLeaderWorkerSet uses LeaderWorkerSetAPIVersion by default
+			Eventually(func() string {
+				found, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, lwsNameAPI, namespace)
+				if err != nil || found == nil {
+					return ""
+				}
+				return found.Name
+			}).Should(Equal("va-lws-with-apiversion"))
+		})
+
+		It("should match VAs without APIVersion (defaults to leaderworkerset.x-k8s.io/v1 for LeaderWorkerSet)", func() {
+			lwsNameNoAPI := "test-lws-no-apiversion"
+
+			va := &llmdv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "va-lws-without-apiversion",
+					Namespace: namespace,
+				},
+				Spec: llmdv1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						// APIVersion is not set - should default to leaderworkerset.x-k8s.io/v1
+						Kind: constants.LeaderWorkerSetKind,
+						Name: lwsNameNoAPI,
+					},
+					ModelID:     "model-lws-no-apiversion",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, va)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, va))).To(Succeed())
+			}()
+
+			// FindVAForLeaderWorkerSet should still find it since it defaults to LeaderWorkerSetAPIVersion
+			Eventually(func() string {
+				found, err := FindVAForLeaderWorkerSet(testCtx, mgrClient, lwsNameNoAPI, namespace)
+				if err != nil || found == nil {
+					return ""
+				}
+				return found.Name
+			}).Should(Equal("va-lws-without-apiversion"))
 		})
 	})
 

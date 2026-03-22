@@ -17,6 +17,29 @@ const (
 	kedaKindScaledObject = "ScaledObject"
 )
 
+// ScaledObjectOption is a functional option for configuring ScaledObject resources.
+type ScaledObjectOption func(map[string]interface{})
+
+// WithScaledObjectScaleTargetKind sets the Kind and APIVersion on the ScaledObject's ScaleTargetRef.
+func WithScaledObjectScaleTargetKind(kind string) ScaledObjectOption {
+	return func(spec map[string]interface{}) {
+		scaleTargetRef, ok := spec["scaleTargetRef"].(map[string]interface{})
+		if !ok {
+			return
+		}
+		scaleTargetRef["kind"] = kind
+		// Set appropriate APIVersion based on kind
+		switch kind {
+		case "LeaderWorkerSet":
+			scaleTargetRef["apiVersion"] = "leaderworkerset.x-k8s.io/v1"
+		case "Deployment":
+			scaleTargetRef["apiVersion"] = "apps/v1"
+		default:
+			// Keep existing APIVersion for unknown kinds
+		}
+	}
+}
+
 // CreateScaledObject creates a KEDA ScaledObject for WVA. Fails if it already exists.
 func CreateScaledObject(
 	ctx context.Context,
@@ -24,8 +47,9 @@ func CreateScaledObject(
 	namespace, name, deploymentName, vaName string,
 	minReplicas, maxReplicas int32,
 	monitoringNamespace string,
+	opts ...ScaledObjectOption,
 ) error {
-	obj := buildScaledObject(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, monitoringNamespace)
+	obj := buildScaledObject(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, monitoringNamespace, opts...)
 	return crClient.Create(ctx, obj)
 }
 
@@ -50,8 +74,9 @@ func EnsureScaledObject(
 	namespace, name, deploymentName, vaName string,
 	minReplicas, maxReplicas int32,
 	monitoringNamespace string,
+	opts ...ScaledObjectOption,
 ) error {
-	obj := buildScaledObject(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, monitoringNamespace)
+	obj := buildScaledObject(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, monitoringNamespace, opts...)
 	existing := &unstructured.Unstructured{}
 	existing.SetAPIVersion(kedaAPIVersion)
 	existing.SetKind(kedaKindScaledObject)
@@ -78,7 +103,7 @@ func EnsureScaledObject(
 	return crClient.Create(ctx, obj)
 }
 
-func buildScaledObject(namespace, name, deploymentName, vaName string, minReplicas, maxReplicas int32, monitoringNamespace string) *unstructured.Unstructured {
+func buildScaledObject(namespace, name, deploymentName, vaName string, minReplicas, maxReplicas int32, monitoringNamespace string, opts ...ScaledObjectOption) *unstructured.Unstructured {
 	objName := name + scaledObjectSuffix
 	obj := &unstructured.Unstructured{}
 	obj.SetAPIVersion(kedaAPIVersion)
@@ -116,6 +141,10 @@ func buildScaledObject(namespace, name, deploymentName, vaName string, minReplic
 				},
 			},
 		},
+	}
+	// Apply functional options
+	for _, opt := range opts {
+		opt(spec)
 	}
 	if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
 		panic(err)

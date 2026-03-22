@@ -16,11 +16,20 @@ metadata:
 # This is essentially static input to the optimizer
 spec:
   # ScaleTargetRef references the target resource to scale (similar to HPA)
-  # TODO: Support templating for scaleTargetRef to enable managing groups of deployments
   scaleTargetRef:
+    {{- if eq .Values.llmd.scaleTargetKind "LeaderWorkerSet" }}
+    apiVersion: leaderworkerset.x-k8s.io/v1
+    kind: LeaderWorkerSet
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
+    {{- end }}
+    {{- if .Values.llmd.scaleTargetName }}
+    name: {{ .Values.llmd.scaleTargetName }}
+    {{- else }}
     name: {{ .Values.llmd.deploymentName | default (printf "%s-decode" .Values.llmd.modelName) }}
+    {{- end }}
+
   # OpenAI API compatible name of the model
   modelID: {{ .Values.llmd.modelID | quote }}
   # Cost per replica for this variant (used in saturation analysis)

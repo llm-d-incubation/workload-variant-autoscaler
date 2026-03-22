@@ -159,3 +159,148 @@ func TestClientOnlyControllerInstance(t *testing.T) {
 		t.Error("should not contain controller Deployment in client-only mode")
 	}
 }
+
+// TestScaleTargetKindDefault verifies that when scaleTargetKind is not specified,
+// the VA defaults to Deployment as the scale target.
+func TestScaleTargetKindDefault(t *testing.T) {
+	output := helmTemplate(t, "wva-default-kind", map[string]string{
+		"controller.enabled": "false",
+		"va.enabled":         "true",
+		"llmd.namespace":     "test-ns",
+		"llmd.modelName":     "test-model",
+	})
+
+	if !strings.Contains(output, "kind: VariantAutoscaling") {
+		t.Fatal("should contain VariantAutoscaling")
+	}
+
+	// Should default to Deployment
+	if !strings.Contains(output, "apiVersion: apps/v1") {
+		t.Error("should contain apiVersion: apps/v1 for Deployment")
+	}
+	if !strings.Contains(output, "kind: Deployment") {
+		t.Error("should contain kind: Deployment as default scale target")
+	}
+
+	// Should NOT contain LeaderWorkerSet
+	if strings.Contains(output, "kind: LeaderWorkerSet") {
+		t.Error("should not contain LeaderWorkerSet when scaleTargetKind is not set")
+	}
+	if strings.Contains(output, "apiVersion: leaderworkerset.x-k8s.io/v1") {
+		t.Error("should not contain leaderworkerset apiVersion when scaleTargetKind is not set")
+	}
+}
+
+// TestScaleTargetKindDeployment verifies that scaleTargetKind="Deployment"
+// produces a VA with Deployment as scale target.
+func TestScaleTargetKindDeployment(t *testing.T) {
+	output := helmTemplate(t, "wva-deployment-kind", map[string]string{
+		"controller.enabled":   "false",
+		"va.enabled":           "true",
+		"llmd.namespace":       "test-ns",
+		"llmd.modelName":       "test-model",
+		"llmd.scaleTargetKind": "Deployment",
+	})
+
+	if !strings.Contains(output, "kind: VariantAutoscaling") {
+		t.Fatal("should contain VariantAutoscaling")
+	}
+
+	// Should use Deployment
+	if !strings.Contains(output, "apiVersion: apps/v1") {
+		t.Error("should contain apiVersion: apps/v1 for Deployment")
+	}
+	if !strings.Contains(output, "kind: Deployment") {
+		t.Error("should contain kind: Deployment as scale target")
+	}
+
+	// Should NOT contain LeaderWorkerSet
+	if strings.Contains(output, "kind: LeaderWorkerSet") {
+		t.Error("should not contain LeaderWorkerSet when scaleTargetKind is Deployment")
+	}
+}
+
+// TestScaleTargetKindLeaderWorkerSet verifies that scaleTargetKind="LeaderWorkerSet"
+// produces a VA with LeaderWorkerSet as scale target.
+func TestScaleTargetKindLeaderWorkerSet(t *testing.T) {
+	output := helmTemplate(t, "wva-lws-kind", map[string]string{
+		"controller.enabled":   "false",
+		"va.enabled":           "true",
+		"llmd.namespace":       "test-ns",
+		"llmd.modelName":       "test-model",
+		"llmd.scaleTargetKind": "LeaderWorkerSet",
+	})
+
+	if !strings.Contains(output, "kind: VariantAutoscaling") {
+		t.Fatal("should contain VariantAutoscaling")
+	}
+
+	// Should use LeaderWorkerSet
+	if !strings.Contains(output, "apiVersion: leaderworkerset.x-k8s.io/v1") {
+		t.Error("should contain apiVersion: leaderworkerset.x-k8s.io/v1 for LeaderWorkerSet")
+	}
+	if !strings.Contains(output, "kind: LeaderWorkerSet") {
+		t.Error("should contain kind: LeaderWorkerSet as scale target")
+	}
+
+	// Note: "kind: Deployment" might still appear in HPA scaleTargetRef,
+	// but the LeaderWorkerSet check above ensures the VA uses the correct scale target.
+}
+
+// TestScaleTargetNameOverride verifies that scaleTargetName can override
+// the default scale target name in the VA scaleTargetRef.
+func TestScaleTargetNameOverride(t *testing.T) {
+	output := helmTemplate(t, "wva-custom-target", map[string]string{
+		"controller.enabled":   "false",
+		"va.enabled":           "true",
+		"llmd.namespace":       "test-ns",
+		"llmd.modelName":       "test-model",
+		"llmd.scaleTargetName": "custom-statefulset",
+		"llmd.scaleTargetKind": "LeaderWorkerSet",
+	})
+
+	if !strings.Contains(output, "kind: VariantAutoscaling") {
+		t.Fatal("should contain VariantAutoscaling")
+	}
+
+	// Should use custom name in VA
+	if !strings.Contains(output, "name: custom-statefulset") {
+		t.Error("should contain custom scaleTargetName in VA scaleTargetRef")
+	}
+
+	// Verify that both LeaderWorkerSet and custom name appear together
+	// (indicates they're in the same scaleTargetRef block)
+	if !strings.Contains(output, "kind: LeaderWorkerSet") {
+		t.Error("should contain LeaderWorkerSet when scaleTargetKind is LeaderWorkerSet")
+	}
+
+	// Note: "name: test-model-decode" will still appear in the HPA scaleTargetRef
+	// because HPA always targets the Deployment, not the LeaderWorkerSet.
+	// This is expected behavior, so we don't check for its absence.
+}
+
+// TestScaleTargetKindWithDefaultName verifies that when scaleTargetKind is set
+// but scaleTargetName is not, it uses the default naming pattern.
+func TestScaleTargetKindWithDefaultName(t *testing.T) {
+	output := helmTemplate(t, "wva-lws-default-name", map[string]string{
+		"controller.enabled":   "false",
+		"va.enabled":           "true",
+		"llmd.namespace":       "test-ns",
+		"llmd.modelName":       "my-model",
+		"llmd.scaleTargetKind": "LeaderWorkerSet",
+	})
+
+	if !strings.Contains(output, "kind: VariantAutoscaling") {
+		t.Fatal("should contain VariantAutoscaling")
+	}
+
+	// Should use LeaderWorkerSet
+	if !strings.Contains(output, "kind: LeaderWorkerSet") {
+		t.Error("should contain kind: LeaderWorkerSet")
+	}
+
+	// Should use default name pattern (modelName-decode)
+	if !strings.Contains(output, "name: my-model-decode") {
+		t.Error("should use default name pattern {modelName}-decode when scaleTargetName is not specified")
+	}
+}

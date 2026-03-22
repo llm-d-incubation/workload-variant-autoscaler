@@ -14,12 +14,13 @@ import (
 	"github.com/prometheus/common/model"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	infernoConfig "github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,50 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
-)
-
-// Global backoff configurations
-var (
-	// Standard backoff for most operations
-	StandardBackoff = wait.Backoff{
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Steps:    5,
-	}
-
-	// Slow backoff for operations that need more time
-	ReconcileBackoff = wait.Backoff{
-		Duration: 500 * time.Millisecond,
-		Factor:   2.0,
-		Steps:    5,
-	}
-
-	// Lightweight backoff for individual Prometheus queries (collector, etc.)
-	PrometheusQueryBackoff = wait.Backoff{
-		Duration: 500 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Steps:    5, // 500ms, 1s, 2s, 4s = ~7.5s total
-	}
-
-	// Prometheus validation backoff with longer intervals
-	// TODO: investigate why Prometheus needs longer backoff durations
-	PrometheusValidationBackoff = wait.Backoff{
-		Duration: 5 * time.Second,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Steps:    6, // 5s, 10s, 20s, 40s, 80s, 160s = ~5 minutes total
-	}
-)
-
-var (
-	// gpuProductKeys are the node selector/affinity keys used to identify GPU products
-	gpuProductKeys = []string{
-		"nvidia.com/gpu.product",
-		"amd.com/gpu.product-name",
-		"cloud.google.com/gke-accelerator",
-	}
 )
 
 // GetResourceWithBackoff performs a Get operation with exponential backoff retry logic
@@ -95,16 +52,12 @@ func GetResourceWithBackoff[T client.Object](ctx context.Context, c client.Clien
 }
 
 // Helper functions for common resource types with standard backoff
-func GetDeploymentWithBackoff(ctx context.Context, c client.Client, name, namespace string, deploy *appsv1.Deployment) error {
-	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, deploy, StandardBackoff, "Deployment")
-}
-
 func GetConfigMapWithBackoff(ctx context.Context, c client.Client, name, namespace string, cm *corev1.ConfigMap) error {
-	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, cm, StandardBackoff, "ConfigMap")
+	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, cm, constants.StandardBackoff, "ConfigMap")
 }
 
 func GetVariantAutoscalingWithBackoff(ctx context.Context, c client.Client, name, namespace string, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) error {
-	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, va, StandardBackoff, "VariantAutoscaling")
+	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, va, constants.StandardBackoff, "VariantAutoscaling")
 }
 
 // UpdateStatusWithBackoff performs a Status Update operation with exponential backoff retry logic.
@@ -383,7 +336,7 @@ func Ptr[T any](v T) *T {
 func QueryPrometheusWithBackoff(ctx context.Context, promAPI promv1.API, query string) (val model.Value, warn promv1.Warnings, err error) {
 	var lastErr error
 
-	err = wait.ExponentialBackoffWithContext(ctx, PrometheusQueryBackoff, func(ctx context.Context) (bool, error) {
+	err = wait.ExponentialBackoffWithContext(ctx, constants.PrometheusQueryBackoff, func(ctx context.Context) (bool, error) {
 		val, warn, err = promAPI.Query(ctx, query, time.Now())
 		if err != nil {
 			// Record the last error so that we can surface it if the backoff is exhausted.
@@ -423,30 +376,34 @@ func ValidatePrometheusAPIWithBackoff(ctx context.Context, promAPI promv1.API, b
 
 // ValidatePrometheusAPI validates Prometheus API connectivity using standard Prometheus backoff
 func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
-	return ValidatePrometheusAPIWithBackoff(ctx, promAPI, PrometheusValidationBackoff)
+	return ValidatePrometheusAPIWithBackoff(ctx, promAPI, constants.PrometheusValidationBackoff)
 }
 
-// GetAcceleratorNameFromDeployment extracts GPU product information from a Deployment's nodeSelector or nodeAffinity.
+// GetAcceleratorNameFromScaleTarget extracts GPU product information from a scale target's nodeSelector or nodeAffinity.
 // It checks for the following keys in order:
 // - nvidia.com/gpu.product
 // - amd.com/gpu.product-name
 // - cloud.google.com/gke-accelerator
 // If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
 // Returns the first matching value found, or an empty string if none are found.
-func GetAcceleratorNameFromDeployment(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) string {
-	// Check nodeSelector first
-	if deployment != nil && deployment.Spec.Template.Spec.NodeSelector != nil {
-		for _, key := range gpuProductKeys {
-			if val, ok := deployment.Spec.Template.Spec.NodeSelector[key]; ok {
-				return val
+func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, scaleTarget scaletarget.ScaleTargetAccessor) string {
+	// Check scaleTarget for accelerator name if it's not nil
+	if scaleTarget != nil {
+		podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+		// Check nodeSelector first
+		if podTemplateSpec.Spec.NodeSelector != nil {
+			for _, key := range constants.GpuProductKeys {
+				if val, ok := podTemplateSpec.Spec.NodeSelector[key]; ok {
+					return val
+				}
 			}
 		}
-	}
 
-	// Check nodeAffinity
-	if deployment != nil && deployment.Spec.Template.Spec.Affinity != nil && deployment.Spec.Template.Spec.Affinity.NodeAffinity != nil {
-		if val := extractGPUFromNodeAffinity(deployment.Spec.Template.Spec.Affinity.NodeAffinity, gpuProductKeys); val != "" {
-			return val
+		// Check nodeAffinity
+		if podTemplateSpec.Spec.Affinity != nil && podTemplateSpec.Spec.Affinity.NodeAffinity != nil {
+			if val := extractGPUFromNodeAffinity(podTemplateSpec.Spec.Affinity.NodeAffinity, constants.GpuProductKeys); val != "" {
+				return val
+			}
 		}
 	}
 
@@ -456,7 +413,6 @@ func GetAcceleratorNameFromDeployment(va *llmdVariantAutoscalingV1alpha1.Variant
 			return accName
 		}
 	}
-
 	return ""
 }
 

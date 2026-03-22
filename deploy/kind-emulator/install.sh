@@ -202,7 +202,6 @@ load_image() {
     
     # Load the image into the KIND cluster
     kind load docker-image "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG" --name "$CLUSTER_NAME"
-    
     log_success "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' loaded into KIND cluster '$CLUSTER_NAME'"
 }
 
@@ -289,6 +288,14 @@ deploy_wva_prerequisites() {
         log_info "TLS verification enabled: using values.yaml for production deployments"
         VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values.yaml"
     fi
+
+    CHART_VERSION=0.8.0
+    log_info "Installing LeaderWorkerSet version $CHART_VERSION into lws-system namespace"
+    helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
+        --version=$CHART_VERSION \
+        --namespace lws-system \
+        --create-namespace \
+        --wait --timeout 300s
 
     log_success "WVA prerequisites complete"
 }

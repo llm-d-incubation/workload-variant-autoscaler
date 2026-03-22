@@ -5,10 +5,9 @@ import (
 	"fmt"
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -25,32 +24,30 @@ func NewActuator(k8sClient client.Client) *Actuator {
 	}
 }
 
-// GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
-func (a *Actuator) GetCurrentDeploymentReplicasFromVA(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
-	var deploy appsv1.Deployment
-	// Use ScaleTargetRef to get the deployment name
-	err := utils.GetDeploymentWithBackoff(ctx, a.Client, va.GetScaleTargetName(), va.Namespace, &deploy)
+// GetCurrentScaleTargetReplicasFromVA gets the real current replica count from the actual Deployment/LWS
+func (a *Actuator) GetCurrentScaleTargetReplicasFromVA(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
+	// Use ScaleTargetRef to get the scale target name
+	scaleTarget, err := scaletarget.FetchScaleTarget(ctx, a.Client, va.Name, va.Spec.ScaleTargetRef.Kind, va.GetScaleTargetName(), va.Namespace)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get Deployment %s/%s: %w", va.Namespace, va.GetScaleTargetName(), err)
+		return 0, fmt.Errorf("failed to get scale target %s/%s: %w", va.Namespace, va.GetScaleTargetName(), err)
 	}
-
-	return a.GetCurrentDeploymentReplicasFromDeployment(va, &deploy)
+	return a.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaleTarget)
 }
 
-// GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
-func (a *Actuator) GetCurrentDeploymentReplicasFromDeployment(va *llmdOptv1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) (int32, error) {
-	if deployment == nil {
-		return 0, fmt.Errorf("deployment cannot be nil for %s/%s", va.Namespace, va.GetScaleTargetName())
+// GetCurrentScaleTargetReplicasFromScaleTarget gets the real current replica count from the actual Deployment/LWS
+func (a *Actuator) GetCurrentScaleTargetReplicasFromScaleTarget(va *llmdOptv1alpha1.VariantAutoscaling, scaleTarget scaletarget.ScaleTargetAccessor) (int32, error) {
+	if scaleTarget == nil {
+		return 0, fmt.Errorf("scale target cannot be nil for %s/%s", va.Namespace, va.GetScaleTargetName())
 	}
 
 	// Prefer status replicas (actual current state)
-	if deployment.Status.Replicas >= 0 {
-		return deployment.Status.Replicas, nil
+	if scaleTarget.GetStatusReplicas() >= 0 {
+		return scaleTarget.GetStatusReplicas(), nil
 	}
 
 	// Fallback to spec if status not ready
-	if deployment.Spec.Replicas != nil {
-		return *deployment.Spec.Replicas, nil
+	if scaleTarget.GetReplicas() != nil {
+		return *scaleTarget.GetReplicas(), nil
 	}
 
 	// Final fallback
@@ -68,9 +65,9 @@ func (a *Actuator) EmitMetrics(ctx context.Context, VariantAutoscaling *llmdOptv
 	desiredReplicas := *VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
 
 	// Get real current replicas from Deployment (not stale VariantAutoscaling status)
-	currentReplicas, err := a.GetCurrentDeploymentReplicasFromVA(ctx, VariantAutoscaling)
+	currentReplicas, err := a.GetCurrentScaleTargetReplicasFromVA(ctx, VariantAutoscaling)
 	if err != nil {
-		logger.Error(err, "Could not get current deployment replicas, using VariantAutoscaling status",
+		logger.Error(err, "Could not get current scale target replicas, using VariantAutoscaling status",
 			"variantName", VariantAutoscaling.Name)
 		currentReplicas = 0 // Fallback to 0 since CurrentAlloc is removed
 	}

@@ -4,7 +4,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
-	appsv1 "k8s.io/api/apps/v1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // BuildAllocationFromMetrics assembles an Allocation struct from raw optimizer metrics
@@ -12,8 +12,8 @@ import (
 func BuildAllocationFromMetrics(
 	metrics interfaces.OptimizerMetrics,
 	va *v1alpha1.VariantAutoscaling,
-	deployment appsv1.Deployment,
+	scaleTarget scaletarget.ScaleTargetAccessor,
 	acceleratorCost float64,
 ) (interfaces.Allocation, error) {
-	return utils.BuildAllocationFromMetrics(metrics, va, deployment, acceleratorCost)
+	return utils.BuildAllocationFromMetrics(metrics, va, scaleTarget, acceleratorCost)
 }

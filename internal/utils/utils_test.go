@@ -12,6 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
@@ -36,9 +38,9 @@ func TestQueryPrometheusWithBackoff(t *testing.T) {
 		},
 		{
 			name:           "exhausts_retries",
-			failures:       PrometheusQueryBackoff.Steps + 5,
+			failures:       constants.PrometheusQueryBackoff.Steps + 5,
 			expectErr:      true,
-			expectAttempts: PrometheusQueryBackoff.Steps,
+			expectAttempts: constants.PrometheusQueryBackoff.Steps,
 			description:    "Every attempt keeps failing so backoff gives up and surfaces the last Prometheus error.",
 		},
 	}
@@ -90,7 +92,7 @@ func TestQueryPrometheusWithBackoff(t *testing.T) {
 	}
 }
 
-func TestGetAcceleratorNameFromDeployment(t *testing.T) {
+func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -321,7 +323,11 @@ func TestGetAcceleratorNameFromDeployment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := GetAcceleratorNameFromDeployment(tc.va, tc.deployment)
+			var scaleTarget scaletarget.ScaleTargetAccessor
+			if tc.deployment != nil {
+				scaleTarget = scaletarget.NewDeploymentAccessor(tc.deployment)
+			}
+			result := GetAcceleratorNameFromScaleTarget(tc.va, scaleTarget)
 			assert.Equal(t, tc.expected, result)
 		})
 	}

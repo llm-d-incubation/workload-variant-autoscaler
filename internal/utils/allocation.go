@@ -5,8 +5,9 @@ import (
 	"strconv"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
-	appsv1 "k8s.io/api/apps/v1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // BuildAllocationFromMetrics assembles an Allocation struct from raw optimizer metrics
@@ -19,18 +20,23 @@ import (
 func BuildAllocationFromMetrics(
 	metrics interfaces.OptimizerMetrics,
 	va *v1alpha1.VariantAutoscaling,
-	deployment appsv1.Deployment,
+	scaleTarget scaletarget.ScaleTargetAccessor,
 	acceleratorCost float64,
 ) (interfaces.Allocation, error) {
 	// Extract K8s information
 	// Number of replicas
-	numReplicas := int(*deployment.Spec.Replicas)
+	var numReplicas int
+	if scaleTarget.GetReplicas() != nil {
+		numReplicas = int(*scaleTarget.GetReplicas())
+	} else {
+		numReplicas = int(constants.SpecReplicasFallback)
+	}
 
-	// Accelerator type - extract from deployment nodeSelector/nodeAffinity or VA labels
-	acc := GetAcceleratorNameFromDeployment(va, &deployment)
+	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels
+	acc := GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 	if acc == "" {
 		return interfaces.Allocation{},
-			fmt.Errorf("accelerator name not found in deployment nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
+			fmt.Errorf("accelerator name not found in scale target nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
 	}
 
 	// Calculate variant cost

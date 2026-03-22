@@ -22,8 +22,6 @@ import (
 	"strconv"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -47,6 +45,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // resolveSaturationConfig resolves config for a model.
@@ -351,7 +350,7 @@ func (e *Engine) optimizeV1(
 			if data == nil {
 				e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			} else {
-				e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
+				e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			}
 			continue
 		}
@@ -467,10 +466,10 @@ func (e *Engine) optimizeV2(
 
 		req, err := e.collectV2ModelRequest(ctx, modelID, namespace,
 			data.replicaMetrics, saturationConfig, data.variantStates,
-			data.deployments, data.variantAutoscalings)
+			data.scaleTargets, data.variantAutoscalings)
 		if err != nil {
 			logger.Error(err, "V2 analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			continue
 		}
 
@@ -529,44 +528,44 @@ func (e *Engine) optimizeV2(
 func (e *Engine) BuildVariantStates(
 	ctx context.Context,
 	vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	k8sClient client.Client,
 ) []interfaces.VariantReplicaState {
 	states := make([]interfaces.VariantReplicaState, 0, len(vas))
 
 	for _, va := range vas {
-		// Get current replicas from deployment using ScaleTargetRef
-		// Get current replicas from deployment using ScaleTargetRef
-		var deploy *appsv1.Deployment
+		// Get current replicas using ScaleTargetRef
+		var scaleTarget scaletarget.ScaleTargetAccessor
 		var found bool
 
 		// Try to look up in provided map first (optimization)
-		if deployments != nil {
-			deploy, found = deployments[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]
+		if scaleTargets != nil {
+			scaleTarget, found = scaleTargets[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]
 		}
 
 		if !found {
 			// Fallback to API call
-			fetchedDeploy := &appsv1.Deployment{}
-			if err := utils.GetDeploymentWithBackoff(ctx, k8sClient, va.GetScaleTargetName(), va.Namespace, fetchedDeploy); err != nil {
-				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Could not get deployment for VA, skipping",
+			var fetchedScaleTarget scaletarget.ScaleTargetAccessor
+			var err error
+			if fetchedScaleTarget, err = scaletarget.FetchScaleTarget(ctx, k8sClient, va.Name, va.Spec.ScaleTargetRef.Kind, va.GetScaleTargetName(), va.Namespace); err != nil {
+				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Could not get scale target for VA, skipping",
 					"variant", va.Name,
 					"error", err)
 				continue
 			}
-			deploy = fetchedDeploy
-			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("BuildVariantStates fallback lookup", "variant", va.Name, "deployName", deploy.Name, "specReplicas", deploy.Spec.Replicas, "statusReplicas", deploy.Status.Replicas, "readyReplicas", deploy.Status.ReadyReplicas)
+			scaleTarget = fetchedScaleTarget
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("BuildVariantStates fallback lookup", "variant", va.Name, "scaleTargetName", va.GetScaleTargetName(), "specReplicas", scaleTarget.GetReplicas(), "statusReplicas", scaleTarget.GetStatusReplicas(), "readyReplicas", scaleTarget.GetStatusReadyReplicas())
 		} else {
-			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("BuildVariantStates map lookup", "variant", va.Name, "deployName", deploy.Name, "specReplicas", deploy.Spec.Replicas, "statusReplicas", deploy.Status.Replicas, "readyReplicas", deploy.Status.ReadyReplicas)
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("BuildVariantStates map lookup", "variant", va.Name, "scaleTargetName", va.GetScaleTargetName(), "specReplicas", scaleTarget.GetReplicas(), "statusReplicas", scaleTarget.GetStatusReplicas(), "readyReplicas", scaleTarget.GetStatusReadyReplicas())
 		}
 
-		currentReplicas := int(deploy.Status.Replicas)
-		if currentReplicas == 0 && deploy.Spec.Replicas != nil {
-			currentReplicas = int(*deploy.Spec.Replicas)
+		currentReplicas := int(scaleTarget.GetStatusReplicas())
+		if currentReplicas == 0 && scaleTarget.GetReplicas() != nil {
+			currentReplicas = int(*scaleTarget.GetReplicas())
 		}
 
 		// Calculate pending replicas (not yet ready)
-		readyReplicas := int(deploy.Status.ReadyReplicas)
+		readyReplicas := int(scaleTarget.GetStatusReadyReplicas())
 		pendingReplicas := currentReplicas - readyReplicas
 		if pendingReplicas < 0 {
 			// This indicates an unexpected state where readyReplicas exceeds currentReplicas.
@@ -576,11 +575,11 @@ func (e *Engine) BuildVariantStates(
 			pendingReplicas = 0
 		}
 
-		// Extract GPUs per replica from deployment's pod template
-		gpusPerReplica := getDeploymentGPUsPerReplica(deploy)
+		// Extract GPUs per replica from scale target's pod template
+		gpusPerReplica := scaleTarget.GetTotalGPUsPerReplica()
 
-		// Extract P/D role from deployment labels
-		role := getRoleFromDeployment(deploy)
+		// Extract P/D role from scale target labels
+		role := getRoleFromScaleTarget(scaleTarget)
 
 		// Read min/max replica bounds from VA spec fields
 		var minReplicas *int
@@ -600,7 +599,6 @@ func (e *Engine) BuildVariantStates(
 		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
 			desiredReplicas = int(*va.Status.DesiredOptimizedAlloc.NumReplicas)
 		}
-
 		states = append(states, interfaces.VariantReplicaState{
 			VariantName:     va.Name,
 			CurrentReplicas: currentReplicas,
@@ -616,15 +614,16 @@ func (e *Engine) BuildVariantStates(
 	return states
 }
 
-// getRoleFromDeployment extracts the P/D role from a deployment's pod template labels.
+// getRoleFromScaleTarget extracts the P/D role from a scale target's pod template labels.
 // Returns "prefill", "decode", or "both" (default when no role label is present).
-func getRoleFromDeployment(deploy *appsv1.Deployment) string {
-	if deploy == nil {
-		return "both"
+func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string {
+	both := "both"
+	if scaleTarget == nil {
+		return both
 	}
-	labels := deploy.Spec.Template.Labels
+	labels := scaleTarget.GetLeaderPodTemplateSpec().Labels
 	if labels == nil {
-		return "both"
+		return both
 	}
 	if val, ok := labels["llm-d.ai/role"]; ok {
 		switch val {
@@ -636,36 +635,7 @@ func getRoleFromDeployment(deploy *appsv1.Deployment) string {
 			return "both"
 		}
 	}
-	return "both"
-}
-
-// gpuVendors lists the resource name prefixes for GPU vendors
-var gpuVendors = []string{"nvidia.com", "amd.com", "intel.com"}
-
-// getDeploymentGPUsPerReplica extracts the total GPU requests from a deployment's pod template.
-// It sums GPU requests across all containers for supported vendors (nvidia.com, amd.com, intel.com).
-// Returns 1 as default if no GPU requests are found (assumes at least 1 GPU for inference workloads).
-func getDeploymentGPUsPerReplica(deploy *appsv1.Deployment) int {
-	if deploy == nil {
-		return 1
-	}
-
-	total := 0
-	for _, container := range deploy.Spec.Template.Spec.Containers {
-		for _, vendor := range gpuVendors {
-			resName := corev1.ResourceName(vendor + "/gpu")
-			if qty, ok := container.Resources.Requests[resName]; ok {
-				total += int(qty.Value())
-			}
-		}
-	}
-
-	// Default to 1 GPU if no explicit requests found
-	// (common for inference workloads that may not have resource requests)
-	if total == 0 {
-		return 1
-	}
-	return total
+	return both
 }
 
 // convertSaturationTargetsToDecisions converts saturation-only targets to VariantDecisions.
@@ -705,7 +675,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			action = interfaces.ActionNoChange
 		}
 
-		// Use GPUsPerReplica from variant state (extracted from deployment)
+		// Use GPUsPerReplica from variant state (extracted from scale target)
 		gpusPerReplica := state.GPUsPerReplica
 		if gpusPerReplica <= 0 {
 			gpusPerReplica = 1 // Fallback default
@@ -761,7 +731,7 @@ type modelData struct {
 	modelID             string
 	namespace           string
 	replicaMetrics      []interfaces.ReplicaMetrics
-	deployments         map[string]*appsv1.Deployment
+	scaleTargets        map[string]scaletarget.ScaleTargetAccessor
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 	variantCosts        map[string]float64
 	variantStates       []interfaces.VariantReplicaState
@@ -785,18 +755,16 @@ func (e *Engine) prepareModelData(
 	namespace := modelVAs[0].Namespace
 
 	variantCosts := make(map[string]float64)
-	deployments := make(map[string]*appsv1.Deployment)
+	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
 	variantAutoscalings := make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling)
 
 	for i := range modelVAs {
 		va := &modelVAs[i]
-
-		var deploy appsv1.Deployment
-		err := utils.GetDeploymentWithBackoff(ctx, k8sClient, va.GetScaleTargetName(), va.Namespace, &deploy)
+		scaleTarget, err := scaletarget.FetchScaleTarget(ctx, k8sClient, va.Name, va.Spec.ScaleTargetRef.Kind, va.GetScaleTargetName(), va.Namespace)
 		if err != nil {
-			logger.V(logging.DEBUG).Info("Could not get deployment for VA",
+			logger.V(logging.DEBUG).Info("Could not get scale target for VA",
 				"variant", va.Name,
-				"deployment", va.GetScaleTargetName(),
+				"scaleTarget", va.GetScaleTargetName(),
 				"error", err)
 			continue
 		}
@@ -811,8 +779,8 @@ func (e *Engine) prepareModelData(
 			}
 		}
 
-		deploymentKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
-		deployments[deploymentKey] = &deploy
+		key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+		scaleTargets[key] = scaleTarget
 
 		variantKey := utils.GetNamespacedKey(va.Namespace, va.Name)
 		variantAutoscalings[variantKey] = va
@@ -822,7 +790,7 @@ func (e *Engine) prepareModelData(
 	logger.V(logging.DEBUG).Info("Using source infrastructure for replica metrics",
 		"modelID", modelID,
 		"namespace", namespace)
-	replicaMetrics, err := e.ReplicaMetricsCollector.CollectReplicaMetrics(ctx, modelID, namespace, deployments, variantAutoscalings, variantCosts)
+	replicaMetrics, err := e.ReplicaMetricsCollector.CollectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect Saturation metrics for model %s: %w", modelID, err)
 	}
@@ -839,13 +807,13 @@ func (e *Engine) prepareModelData(
 		return nil, nil // nil modelData signals skip
 	}
 
-	variantStates := e.BuildVariantStates(ctx, modelVAs, deployments, k8sClient)
+	variantStates := e.BuildVariantStates(ctx, modelVAs, scaleTargets, k8sClient)
 
 	return &modelData{
 		modelID:             modelID,
 		namespace:           namespace,
 		replicaMetrics:      replicaMetrics,
-		deployments:         deployments,
+		scaleTargets:        scaleTargets,
 		variantAutoscalings: variantAutoscalings,
 		variantCosts:        variantCosts,
 		variantStates:       variantStates,
@@ -1122,7 +1090,7 @@ func (e *Engine) emitSafetyNetMetrics(
 	ctx context.Context,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*interfaces.Allocation,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 	act := actuator.NewActuator(e.client)
@@ -1131,16 +1099,15 @@ func (e *Engine) emitSafetyNetMetrics(
 		// Determine desired replicas
 		var desiredReplicas, currentReplicas int32
 		var fallbackSource string
-		var deployment *appsv1.Deployment
+		var scaleTarget scaletarget.ScaleTargetAccessor
 		var err error
-
-		if deployments != nil {
-			if deploy, ok := deployments[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]; ok {
-				deployment = deploy
+		if scaleTargets != nil {
+			if target, ok := scaleTargets[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]; ok {
+				scaleTarget = target
 				// Get current replicas for metric emission.
-				currentReplicas, err = act.GetCurrentDeploymentReplicasFromDeployment(&va, deployment)
+				currentReplicas, err = act.GetCurrentScaleTargetReplicasFromScaleTarget(&va, scaleTarget)
 				if err != nil {
-					logger.Error(err, "Safety net: failed to get current replicas from Deployment for metrics", "using cached allocation",
+					logger.Error(err, "Safety net: failed to get current replicas from scale target for metrics", "using cached allocation",
 						"variant", va.Name)
 					if curr, ok := currentAllocations[utils.GetNamespacedKey(va.Namespace, va.Name)]; ok {
 						currentReplicas = int32(curr.NumReplicas)
@@ -1168,12 +1135,12 @@ func (e *Engine) emitSafetyNetMetrics(
 			}
 		}
 		if accelerator == "" {
-			// Try to get accelerator name from deployment nodeSelector/nodeAffinity or VA labels
-			if deployment == nil {
-				logger.V(logging.DEBUG).Info("Safety net: no deployment found for VA",
+			// Try to get accelerator name from scale target nodeSelector/nodeAffinity or VA labels
+			if scaleTarget == nil {
+				logger.V(logging.DEBUG).Info("Safety net: no scale target found for VA",
 					"variant", va.Name)
 			} else {
-				if acceleratorName := utils.GetAcceleratorNameFromDeployment(&va, deployment); acceleratorName != "" {
+				if acceleratorName := utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget); acceleratorName != "" {
 					accelerator = acceleratorName
 				}
 			}

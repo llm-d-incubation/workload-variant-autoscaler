@@ -11,6 +11,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 var _ = Describe("V2 Engine Integration", func() {
@@ -138,15 +139,15 @@ var _ = Describe("V2 Engine Integration", func() {
 	})
 })
 
-var _ = Describe("getRoleFromDeployment", func() {
+var _ = Describe("getRoleFromScaleTarget", func() {
 
-	It("should return 'both' for nil deployment", func() {
-		Expect(getRoleFromDeployment(nil)).To(Equal("both"))
+	It("should return 'both' for nil scale target", func() {
+		Expect(getRoleFromScaleTarget(nil)).To(Equal("both"))
 	})
 
-	It("should return 'both' for deployment without labels", func() {
+	It("should return 'both' for scale target without labels", func() {
 		deploy := &appsv1.Deployment{}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 
 	It("should return 'prefill' for prefill label", func() {
@@ -154,7 +155,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "prefill",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("prefill"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("prefill"))
 	})
 
 	It("should return 'decode' for decode label", func() {
@@ -162,7 +163,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "decode",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("decode"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("decode"))
 	})
 
 	It("should return 'both' for unknown role value", func() {
@@ -170,7 +171,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"llm-d.ai/role": "unknown",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 
 	It("should return 'both' when no role label present", func() {
@@ -178,7 +179,7 @@ var _ = Describe("getRoleFromDeployment", func() {
 		deploy.Spec.Template.Labels = map[string]string{
 			"app": "vllm",
 		}
-		Expect(getRoleFromDeployment(deploy)).To(Equal("both"))
+		Expect(getRoleFromScaleTarget(scaletarget.NewDeploymentAccessor(deploy))).To(Equal("both"))
 	})
 })
 

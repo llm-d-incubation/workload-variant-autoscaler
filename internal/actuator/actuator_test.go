@@ -23,6 +23,7 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	ctrlutils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -84,7 +85,7 @@ var _ = Describe("Actuator", func() {
 		})
 	})
 
-	Context("Testing GetCurrentDeploymentReplicasFromDeployment", func() {
+	Context("Testing GetCurrentScaleTargetReplicasFromScaleTarget", func() {
 		var va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 
 		BeforeEach(func() {
@@ -116,7 +117,7 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaletarget.NewDeploymentAccessor(deployment))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(int32(3)), "Should prefer status.Replicas over spec.Replicas")
 		})
@@ -135,7 +136,7 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaletarget.NewDeploymentAccessor(deployment))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(int32(0)), "Should return 0 when status.Replicas is 0")
 		})
@@ -155,7 +156,7 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaletarget.NewDeploymentAccessor(deployment))
 			Expect(err).NotTo(HaveOccurred())
 			// Status.Replicas defaults to 0, which is >= 0, so it should return 0
 			Expect(replicas).To(Equal(int32(0)))
@@ -175,15 +176,15 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaletarget.NewDeploymentAccessor(deployment))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(int32(1)), "Should return 1 as final fallback when both status and spec unavailable")
 		})
 
-		It("should return error when deployment is nil", func() {
-			_, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, nil)
+		It("should return error when scale target is nil", func() {
+			_, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, nil)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("deployment cannot be nil"))
+			Expect(err.Error()).To(ContainSubstring("scale target cannot be nil"))
 		})
 
 		It("should handle large replica counts", func() {
@@ -200,13 +201,13 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromDeployment(va, deployment)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaletarget.NewDeploymentAccessor(deployment))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(int32(999)))
 		})
 	})
 
-	Context("Testing GetCurrentDeploymentReplicasFromVA", func() {
+	Context("Testing GetCurrentScaleTargetReplicasFromVA", func() {
 		var deployment *appsv1.Deployment
 		var va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 
@@ -267,12 +268,12 @@ var _ = Describe("Actuator", func() {
 			deployment.Status.Replicas = 3
 			Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
 
-			replicas, err := actuator.GetCurrentDeploymentReplicasFromVA(ctx, va)
+			replicas, err := actuator.GetCurrentScaleTargetReplicasFromVA(ctx, va)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(replicas).To(Equal(deployment.Status.Replicas), fmt.Sprintf("Should return status replicas - actual: %d", replicas))
 		})
 
-		It("should return error when deployment doesn't exist", func() {
+		It("should return error when scale target doesn't exist", func() {
 			nonExistentVA := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "non-existent",
@@ -286,9 +287,9 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			_, err := actuator.GetCurrentDeploymentReplicasFromVA(ctx, nonExistentVA)
+			_, err := actuator.GetCurrentScaleTargetReplicasFromVA(ctx, nonExistentVA)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to get Deployment"))
+			Expect(err.Error()).To(ContainSubstring("failed to get scale target"))
 		})
 	})
 

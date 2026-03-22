@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	appsv1 "k8s.io/api/apps/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -13,6 +12,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // runV2AnalysisOnly runs the V2 saturation analyzer and returns the raw AnalyzerResult
@@ -24,25 +24,25 @@ func (e *Engine) runV2AnalysisOnly(
 	replicaMetrics []interfaces.ReplicaMetrics,
 	config config.SaturationScalingConfig,
 	variantStates []interfaces.VariantReplicaState,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 ) (*interfaces.AnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
-	// 1. Pre-populate capacity store with deployment-derived params
+	// 1. Pre-populate capacity store with scale target-derived params
 	for _, va := range variantAutoscalings {
-		deployKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
-		deploy := deployments[deployKey]
-		if deploy == nil {
-			logger.V(logging.DEBUG).Info("No deployment found for VA, skipping capacity store pre-population",
-				"variant", va.Name, "deployKey", deployKey)
+		key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+		scaleTarget := scaleTargets[key]
+		if scaleTarget == nil {
+			logger.V(logging.DEBUG).Info("No scale target found for VA, skipping capacity store pre-population",
+				"variant", va.Name, "scaleTargetKey", key)
 			continue
 		}
-		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
-		accelerator := utils.GetAcceleratorNameFromDeployment(va, deploy)
-		gpuCount := getDeploymentGPUsPerReplica(deploy)
-		e.capacityStore.LoadFromDeployment(namespace, modelID, va.Name, accelerator, gpuCount, deploy)
-		logger.V(logging.DEBUG).Info("Pre-populated capacity store from deployment",
+		// Get accelerator name from scale target nodeSelector/nodeAffinity or VA label
+		accelerator := utils.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+		gpuCount := scaleTarget.GetTotalGPUsPerReplica()
+		e.capacityStore.LoadFromScaleTarget(namespace, modelID, va.Name, accelerator, gpuCount, scaleTarget)
+		logger.V(logging.DEBUG).Info("Pre-populated capacity store from scale target",
 			"variant", va.Name, "accelerator", accelerator, "gpuCount", gpuCount)
 	}
 
@@ -81,7 +81,7 @@ func (e *Engine) runAnalyzersAndScore(
 	replicaMetrics []interfaces.ReplicaMetrics,
 	config config.SaturationScalingConfig,
 	variantStates []interfaces.VariantReplicaState,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 ) (*interfaces.AnalyzerResult, error) {
 	// Resolve per-analyzer threshold overrides before running the analyzer.
@@ -101,7 +101,7 @@ func (e *Engine) runAnalyzersAndScore(
 
 	// Run saturation analyzer (always needed for PerReplicaCapacity)
 	baseResult, err := e.runV2AnalysisOnly(ctx, modelID, namespace, replicaMetrics, config,
-		variantStates, deployments, variantAutoscalings)
+		variantStates, scaleTargets, variantAutoscalings)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (e *Engine) runAnalyzersAndScore(
 		switch aw.Name {
 		case "saturation":
 			totalWeighted += baseResult.RequiredCapacity * aw.Score
-		// future: case "throughput", "slo"
+			// future: case "throughput", "slo"
 		}
 	}
 
@@ -157,11 +157,11 @@ func (e *Engine) collectV2ModelRequest(
 	replicaMetrics []interfaces.ReplicaMetrics,
 	config config.SaturationScalingConfig,
 	variantStates []interfaces.VariantReplicaState,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 ) (*pipeline.ModelScalingRequest, error) {
 	result, err := e.runAnalyzersAndScore(ctx, modelID, namespace, replicaMetrics, config,
-		variantStates, deployments, variantAutoscalings)
+		variantStates, scaleTargets, variantAutoscalings)
 	if err != nil {
 		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
 	}

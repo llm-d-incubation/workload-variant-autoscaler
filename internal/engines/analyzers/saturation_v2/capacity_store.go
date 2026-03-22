@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // CapacityRecord holds cached capacity knowledge for a specific variant.
@@ -80,11 +80,11 @@ func (s *CapacityKnowledgeStore) IsStale(namespace, modelID, variantName string)
 	return time.Since(rec.LearnedAt) > CapacityStalenessTimeout
 }
 
-// LoadFromDeployment parses vLLM args from a Deployment and stores an
+// LoadFromScaleTarget parses vLLM args from a scale target and stores an
 // estimated capacity record for the variant. It does NOT overwrite an
-// existing "live" record — deployment-derived data is a fallback only.
-func (s *CapacityKnowledgeStore) LoadFromDeployment(namespace, modelID, variantName, accelerator string, gpuCount int, deploy *appsv1.Deployment) {
-	if deploy == nil {
+// existing "live" record — scale target-derived data is a fallback only.
+func (s *CapacityKnowledgeStore) LoadFromScaleTarget(namespace, modelID, variantName, accelerator string, gpuCount int, scaleTarget scaletarget.ScaleTargetAccessor) {
+	if scaleTarget == nil {
 		return
 	}
 
@@ -98,12 +98,12 @@ func (s *CapacityKnowledgeStore) LoadFromDeployment(namespace, modelID, variantN
 		return
 	}
 
-	params := ParseVLLMArgs(deploy)
+	params := ParseVLLMArgs(scaleTarget)
 	record := &CapacityRecord{
 		AcceleratorName: accelerator,
 		GpuCount:        gpuCount,
 		VLLMParams:      &params,
-		LearnedFrom:     "deployment",
+		LearnedFrom:     "deployment", // same for deployment and LWS
 		LearnedAt:       time.Now(),
 	}
 
@@ -148,7 +148,7 @@ func (s *CapacityKnowledgeStore) EvictStale(timeout time.Duration) int {
 // Capacity is a property of hardware + vLLM config, not namespace, so
 // cross-namespace matching is intentional.
 //
-// Returns the best match (preferring "live" records over "deployment" records),
+// Returns the best match (preferring "live" records over "deployment"/"lws" records),
 // or nil if no compatible record exists.
 func (s *CapacityKnowledgeStore) FindCompatible(modelID, accelerator string, gpuCount int, params *VLLMEngineParams) *CapacityRecord {
 	s.mu.RLock()
@@ -177,7 +177,7 @@ func (s *CapacityKnowledgeStore) FindCompatible(modelID, accelerator string, gpu
 			continue
 		}
 
-		// Prefer live data over deployment-derived
+		// Prefer live data over deployment/lws-derived
 		if best == nil || (best.LearnedFrom != "live" && rec.LearnedFrom == "live") {
 			best = rec
 		}

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
@@ -91,6 +92,9 @@ var _ = BeforeSuite(func() {
 	// Add prometheus-operator scheme for ServiceMonitor support
 	err = promoperator.AddToScheme(s)
 	Expect(err).NotTo(HaveOccurred(), "Failed to add prometheus-operator scheme")
+	// Add LeaderWorkerSet scheme for LWS support
+	err = lwsv1.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add LWS scheme")
 
 	crClient, err = client.New(restConfig, client.Options{Scheme: s})
 	Expect(err).NotTo(HaveOccurred(), "Failed to create controller-runtime client")
@@ -347,6 +351,22 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 					_, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploy.Name, metav1.GetOptions{})
 					return errors.IsNotFound(err)
 				}, "Deployment", deploy.Name)
+			}
+		}
+	}
+
+	// Clean up test LeaderWorkerSets
+	lwsList := &lwsv1.LeaderWorkerSetList{}
+	if err := crClient.List(ctx, lwsList, client.InNamespace(namespace)); err == nil {
+		for _, lws := range lwsList.Items {
+			if isTestResource(lws.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover LeaderWorkerSet: %s\n", lws.Name)
+				deleteResourceWithVerification(ctx, func() error {
+					return crClient.Delete(ctx, &lws)
+				}, func() bool {
+					err := crClient.Get(ctx, client.ObjectKey{Name: lws.Name, Namespace: namespace}, &lws)
+					return errors.IsNotFound(err)
+				}, "LeaderWorkerSet", lws.Name)
 			}
 		}
 	}

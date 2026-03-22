@@ -1,6 +1,6 @@
 module github.com/llm-d/llm-d-workload-variant-autoscaler
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/onsi/ginkgo/v2 v2.28.1
@@ -13,6 +13,7 @@ require (
 	k8s.io/client-go v0.34.5
 	sigs.k8s.io/controller-runtime v0.22.5
 	sigs.k8s.io/gateway-api-inference-extension v1.2.1
+	sigs.k8s.io/lws v0.8.0
 )
 
 require (

@@ -16,17 +16,18 @@ import (
 
 	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 var _ = Describe("PodVAMapper", func() {
 	var (
 		ctx         context.Context
-		deployments map[string]*appsv1.Deployment
+		deployments map[string]scaletarget.ScaleTargetAccessor
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		deployments = make(map[string]*appsv1.Deployment)
+		deployments = make(map[string]scaletarget.ScaleTargetAccessor)
 	})
 
 	// Helper function to create a scheme with all required types
@@ -116,7 +117,7 @@ var _ = Describe("PodVAMapper", func() {
 					},
 				},
 			}
-			deployments["default/llama-deploy"] = deployment
+			deployments["default/llama-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			va := createVA("llama-va", "default", "llama-deploy")
 			rs := createReplicaSet("llama-deploy-abc123", "default", "llama-deploy")
@@ -153,7 +154,7 @@ var _ = Describe("PodVAMapper", func() {
 					},
 				},
 			}
-			deployments["default/orphan-deploy"] = deployment
+			deployments["default/orphan-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			rs := createReplicaSet("orphan-deploy-abc123", "default", "orphan-deploy")
 			pod := createPod("orphan-deploy-abc123-xyz", "default", "orphan-deploy-abc123", map[string]string{"app": "orphan"})
@@ -180,7 +181,7 @@ var _ = Describe("PodVAMapper", func() {
 					},
 				},
 			}
-			deployments["default/llama-deploy"] = deployment
+			deployments["default/llama-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			// VA in different namespace should not match
 			va := createVA("llama-va", "production", "llama-deploy")
@@ -201,7 +202,7 @@ var _ = Describe("PodVAMapper", func() {
 			// Setup multiple deployments
 			var objects []client.Object
 			for _, name := range []string{"deploy-a", "deploy-b", "deploy-c"} {
-				deployments["default/"+name] = &appsv1.Deployment{
+				deployments["default/"+name] = scaletarget.NewDeploymentAccessor(&appsv1.Deployment{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      name,
 						Namespace: "default",
@@ -213,7 +214,7 @@ var _ = Describe("PodVAMapper", func() {
 							},
 						},
 					},
-				}
+				})
 				rs := createReplicaSet(name+"-rs", "default", name)
 				objects = append(objects, rs)
 			}
@@ -246,7 +247,7 @@ var _ = Describe("PodVAMapper", func() {
 					},
 				},
 			}
-			deployments["default/cached-deploy"] = deployment
+			deployments["default/cached-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			va := createVA("cached-va", "default", "cached-deploy")
 			rs := createReplicaSet("cached-deploy-rs", "default", "cached-deploy")
@@ -280,7 +281,7 @@ var _ = Describe("PodVAMapper", func() {
 					},
 				},
 			}
-			deployments["default/removable-deploy"] = deployment
+			deployments["default/removable-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			va := createVA("removable-va", "default", "removable-deploy")
 			rs := createReplicaSet("removable-deploy-rs", "default", "removable-deploy")
@@ -310,7 +311,7 @@ var _ = Describe("PodVAMapper", func() {
 					Namespace: "default",
 				},
 			}
-			deployments["default/standalone-deploy"] = deployment
+			deployments["default/standalone-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
 
 			// Pod without owner references (standalone pod)
 			pod := &corev1.Pod{
@@ -336,7 +337,7 @@ var _ = Describe("PodVAMapper", func() {
 					Namespace: "namespace-a",
 				},
 			}
-			deployments["namespace-a/shared-deploy"] = deploymentA
+			deployments["namespace-a/shared-deploy"] = scaletarget.NewDeploymentAccessor(deploymentA)
 
 			// Deployment in namespace-b (same deployment name, different namespace)
 			deploymentB := &appsv1.Deployment{
@@ -345,7 +346,7 @@ var _ = Describe("PodVAMapper", func() {
 					Namespace: "namespace-b",
 				},
 			}
-			deployments["namespace-b/shared-deploy"] = deploymentB
+			deployments["namespace-b/shared-deploy"] = scaletarget.NewDeploymentAccessor(deploymentB)
 
 			// VA in namespace-a targeting shared-deploy
 			vaA := createVA("va-a", "namespace-a", "shared-deploy")
