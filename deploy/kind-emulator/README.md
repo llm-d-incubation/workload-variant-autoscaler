@@ -91,7 +91,7 @@ make create-kind-cluster
 
 # With custom configuration
 make create-kind-cluster KIND_ARGS="-t mix -n 4 -g 2"
-# -t: vendor type (nvidia, amd, intel, mix)
+# -t: vendor type (nvidia, amd, intel-gaudi, intel-i915, intel-xe, mix)
 # -n: number of nodes
 # -g: GPUs per node
 ```
@@ -122,7 +122,7 @@ Creates Kind cluster with emulated GPU support.
 
 **Options:**
 
-- `-t`: Vendor type (nvidia|amd|intel|mix) - default: mix
+- `-t`: Vendor type - default: mix (nvidia|amd|intel-gaudi|intel-i915|intel-xe|mix|nvidia-mix|amd-mix)
 - `-n`: Number of nodes - default: 3
 - `-g`: GPUs per node - default: 2
 
@@ -158,7 +158,9 @@ GPUs are emulated using extended resources:
 
 - `nvidia.com/gpu`
 - `amd.com/gpu`
-- `intel.com/gpu`
+- `habana.ai/gaudi`
+- `gpu.intel.com/i915`
+- `gpu.intel.com/xe`
 
 ## Testing Locally
 
@@ -266,7 +268,7 @@ kubectl get clusterrole,clusterrolebinding -l app=workload-variant-autoscaler
 # Verify GPU labels on nodes
 kubectl get nodes -o json | jq '.items[].status.capacity'
 
-# Should see nvidia.com/gpu, amd.com/gpu, or intel.com/gpu
+# Should see nvidia.com/gpu, amd.com/gpu, habana.ai/gaudi, gpu.intel.com/i915 or gpu.intel.com/xe
 ```
 
 ### Port-Forward Issues

@@ -20,7 +20,7 @@ type SharedConfig struct {
 
 	// Infrastructure mode
 	UseSimulator bool   // true for emulated GPUs, false for real vLLM
-	GPUType      string // "nvidia-mix", "amd-mix", "real"
+	GPUType      string // "nvidia-mix", "amd-mix", "real"...
 
 	// Scaler backend: "prometheus-adapter" (HPA) or "keda" (ScaledObject)
 	ScalerBackend string

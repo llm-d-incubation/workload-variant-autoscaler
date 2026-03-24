@@ -34,8 +34,8 @@ import (
 func GetContainersGPUs(containers []corev1.Container) int {
 	total := 0
 	for _, container := range containers {
-		for _, vendor := range constants.GpuVendors {
-			resName := corev1.ResourceName(vendor + "/gpu")
+		for _, resource := range constants.GpuResources {
+			resName := corev1.ResourceName(resource)
 			if qty, ok := container.Resources.Requests[resName]; ok {
 				total += int(qty.Value())
 			}

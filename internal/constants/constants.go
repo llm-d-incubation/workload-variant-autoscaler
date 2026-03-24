@@ -42,14 +42,22 @@ var (
 )
 
 var (
-	// gpuVendors lists the resource name prefixes for GPU vendors
-	GpuVendors = []string{"nvidia.com", "amd.com", "intel.com"}
+	// GpuResources lists extended resource names provided by K8s GPU device vendor plugins
+	GpuResources = []string{
+		"nvidia.com/gpu",
+		"amd.com/gpu",
+		"habana.ai/gaudi",
+		"gpu.intel.com/i915",
+		"gpu.intel.com/xe",
+	}
 
 	// GpuProductKeys are the node selector/affinity keys used to identify GPU products
 	GpuProductKeys = []string{
 		"nvidia.com/gpu.product",
 		"amd.com/gpu.product-name",
 		"cloud.google.com/gke-accelerator",
+		"habana.ai/product.name",
+		"gpu.intel.com/product",
 	}
 
 	SpecReplicasFallback int32 = 1 // in case Spec.Replicas is nil

@@ -486,7 +486,7 @@ func TestGetContainersGPUs(t *testing.T) {
 		expected   int
 	}{
 		{
-			name: "single container with nvidia GPUs",
+			name: "single container with NVIDIA GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
@@ -500,7 +500,7 @@ func TestGetContainersGPUs(t *testing.T) {
 			expected: 4,
 		},
 		{
-			name: "single container with amd GPUs",
+			name: "single container with AMD GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
@@ -514,13 +514,13 @@ func TestGetContainersGPUs(t *testing.T) {
 			expected: 2,
 		},
 		{
-			name: "single container with intel GPUs",
+			name: "single container with Intel GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							"intel.com/gpu": resource.MustParse("1"),
+							"gpu.intel.com/xe": resource.MustParse("1"),
 						},
 					},
 				},
@@ -572,7 +572,7 @@ func TestGetContainersGPUs(t *testing.T) {
 					Name: "intel-container",
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							"intel.com/gpu": resource.MustParse("1"),
+							"gpu.intel.com/xe": resource.MustParse("1"),
 						},
 					},
 				},
