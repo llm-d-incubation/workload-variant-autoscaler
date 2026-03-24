@@ -12,7 +12,7 @@ This document covers **WVA-specific** development setup and workflows.
 
 ### Prerequisites
 
-- Go 1.24.0+
+- Go 1.25.0+
 - Docker 17.03+
 - kubectl 1.31.0+ (or `oc` for OpenShift)
 - Kind (for local development)
