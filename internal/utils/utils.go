@@ -361,10 +361,7 @@ func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
 }
 
 // GetAcceleratorNameFromScaleTarget extracts GPU product information from a scale target's nodeSelector or nodeAffinity.
-// It checks for the following keys in order:
-// - nvidia.com/gpu.product
-// - amd.com/gpu.product-name
-// - cloud.google.com/gke-accelerator
+// GPU product information is checked against keys listed in constants.GpuProductKeys.
 // If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
 // Returns the first matching value found, or constants.DefaultAcceleratorName ("unknown") if none are found.
 // The sentinel allows callers to proceed without hard-stopping; the GPU limiter resolves

@@ -13,11 +13,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+type gpuInfo struct {
+	vendor       string
+	resourceName string
+	productLabel string
+	memoryLabel  string
+}
+
 // vendors list for GPU vendors
-var vendors = []string{
-	"nvidia.com",
-	"amd.com",
-	"intel.com",
+var vendors = []gpuInfo{
+	{"NVIDIA", "nvidia.com/gpu", "nvidia.com/gpu.product", "nvidia.com/gpu.memory"},
+	{"AMD", "amd.com/gpu", "amd.com/gpu.product-name", "amd.com/gpu.memory"},
+	// NOTE: Node labeling rules installed for Node Feature Discovery (NFD) by Intel GPU operator,
+	// provide product labels only for Data Center products. Current Intel Gaudi / GPU operators
+	// do not label nodes with device memory information, that info needs to be labeled separately.
+	{"Intel", "habana.ai/gaudi", "habana.ai/product.name", "habana.ai/device.memory"},
+	{"Intel", "gpu.intel.com/i915", "gpu.intel.com/product", "gpu.intel.com/memory"},
+	{"Intel", "gpu.intel.com/xe", "gpu.intel.com/product", "gpu.intel.com/memory"},
 }
 
 // K8sWithGpuOperator implements CapacityDiscovery for Kubernetes clusters with GPU Operator
@@ -57,9 +69,10 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 
 	// Query nodes for each GPU vendor separately.
 	// K8s LabelSelectors don't support OR logic across different keys (e.g. nvidia OR amd).
-	for _, vendor := range vendors {
-		prodKey := vendor + "/gpu.product"
-		memKey := vendor + "/gpu.memory"
+	for _, gpuInfo := range vendors {
+		vendor := gpuInfo.vendor
+		memKey := gpuInfo.memoryLabel
+		prodKey := gpuInfo.productLabel
 
 		req, err := labels.NewRequirement(prodKey, selection.Exists, nil)
 		if err != nil {
@@ -86,7 +99,7 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 			}
 
 			count := 0
-			if cap, ok := node.Status.Allocatable[corev1.ResourceName(vendor+"/gpu")]; ok {
+			if cap, ok := node.Status.Allocatable[corev1.ResourceName(gpuInfo.resourceName)]; ok {
 				count = int(cap.Value())
 			}
 
@@ -196,8 +209,7 @@ func (d *K8sWithGpuOperator) DiscoverUsage(ctx context.Context) (map[string]int,
 
 // discoverNodeGPUTypes returns a map of node name to GPU type (model name).
 // For multi-vendor nodes (nodes labeled for more than one GPU vendor), the model
-// from the LAST matching vendor in `vendors` wins (order: nvidia.com, amd.com,
-// intel.com → intel wins if present, else amd, else nvidia).
+// from the LAST vendor with matching gpuInfo.productLabel wins.
 //
 // This preserves the pre-refactor behavior: the original implementation iterated
 // vendors in order and assigned `nodeGPUType[node] = model` on each match,
@@ -215,11 +227,11 @@ func (d *K8sWithGpuOperator) discoverNodeGPUTypes(ctx context.Context) (map[stri
 	out := make(map[string]string, len(nodes))
 	for name, n := range nodes {
 		// Iterate vendors in REVERSE order and break on first match so the
-		// last vendor in `vendors` wins (intel > amd > nvidia). Relies on the
+		// last item in `vendors` wins (Intel > AMD > NVIDIA). Relies on the
 		// listGPUNodes invariant that n.Accelerators[model] exists whenever
-		// n.Labels[vendor+"/gpu.product"] == model.
+		// n.Labels[gpuInfo.productLabel] == model.
 		for i := len(vendors) - 1; i >= 0; i-- {
-			prodKey := vendors[i] + "/gpu.product"
+			prodKey := vendors[i].productLabel
 			if model, ok := n.Labels[prodKey]; ok {
 				out[name] = model
 				break
@@ -238,8 +250,8 @@ func getPodGPURequests(pod *corev1.Pod) int {
 	// Sum GPU requests from regular containers (run concurrently)
 	regularTotal := 0
 	for _, container := range pod.Spec.Containers {
-		for _, vendor := range vendors {
-			resName := corev1.ResourceName(vendor + "/gpu")
+		for _, gpuInfo := range vendors {
+			resName := corev1.ResourceName(gpuInfo.resourceName)
 			if qty, ok := container.Resources.Requests[resName]; ok {
 				regularTotal += int(qty.Value())
 			}
@@ -250,8 +262,8 @@ func getPodGPURequests(pod *corev1.Pod) int {
 	initMax := 0
 	for _, container := range pod.Spec.InitContainers {
 		containerGPUs := 0
-		for _, vendor := range vendors {
-			resName := corev1.ResourceName(vendor + "/gpu")
+		for _, gpuInfo := range vendors {
+			resName := corev1.ResourceName(gpuInfo.resourceName)
 			if qty, ok := container.Resources.Requests[resName]; ok {
 				containerGPUs += int(qty.Value())
 			}
