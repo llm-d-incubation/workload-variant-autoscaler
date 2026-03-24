@@ -71,6 +71,8 @@ type VariantAutoscalingReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Note: Namespace watch permission is required for label-based namespace opt-in for namespace-local ConfigMaps.
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch
+// +kubebuilder:rbac:groups=inference.networking.x-k8s.io;inference.networking.k8s.io,resources=inferencepools,verbs=get;watch;list
+// +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 const (

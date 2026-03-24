@@ -973,6 +973,26 @@ func (e *Engine) applySaturationDecisions(
 			} else if curr, ok := currentAllocations[vaName]; ok {
 				acceleratorName = curr.Accelerator
 			}
+
+			// Fallback for new VAs without prior status or collected metrics:
+			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
+			// and use current deployment replicas as target to avoid unintended scaling.
+			if acceleratorName == "" {
+				scaleTargetName := updateVa.GetScaleTargetName()
+				if scaleTargetName != "" {
+					var dep appsv1.Deployment
+					if depErr := utils.GetDeploymentWithBackoff(ctx, e.client, scaleTargetName, va.Namespace, &dep); depErr == nil {
+						acceleratorName = utils.GetAcceleratorNameFromDeployment(&updateVa, &dep)
+						if targetReplicas == 0 && dep.Spec.Replicas != nil {
+							targetReplicas = int(*dep.Spec.Replicas)
+						}
+					} else {
+						// If deployment fetch fails, try VA label directly
+						acceleratorName = utils.GetAcceleratorNameFromDeployment(&updateVa, nil)
+					}
+				}
+			}
+
 			reason = "No scaling decision (optimization loop)"
 		}
 

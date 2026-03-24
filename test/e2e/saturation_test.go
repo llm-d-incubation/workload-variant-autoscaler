@@ -425,22 +425,29 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 
 	It("should prefer cheaper variant (VA A) for scale-up when both variants are available", func() {
 		By("Generating load to both services")
+		// Use burst load (curl) instead of guidellm because the simulator only tracks
+		// KV cache for /v1/completions requests. guidellm defaults to /v1/chat/completions,
+		// which bypasses KV cache tracking and prevents saturation detection.
+		scaleUpPrompts := 2400
+		if cfg.NumPrompts > scaleUpPrompts {
+			scaleUpPrompts = cfg.NumPrompts
+		}
 		loadCfg := fixtures.LoadConfig{
 			Strategy:     cfg.LoadStrategy,
-			RequestRate:  cfg.RequestRate,
-			NumPrompts:   cfg.NumPrompts,
+			RequestRate:  0,              // Not used for burst pattern
+			NumPrompts:   scaleUpPrompts, // Enough prompts to sustain load across multiple engine cycles
 			InputTokens:  cfg.InputTokens,
-			OutputTokens: cfg.OutputTokens,
+			OutputTokens: 400, // High output tokens to hold KV cache and create queue pressure
 			ModelID:      cfg.ModelID,
 		}
 
-		// Create load jobs for both services
-		targetA := fmt.Sprintf("http://%s-service:8000", modelServiceA)
-		err := fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-load-a", targetA, loadCfg)
+		// Create burst load jobs targeting /v1/completions endpoint directly
+		targetA := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/completions", modelServiceA, cfg.LLMDNamespace)
+		err := fixtures.EnsureBurstLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-load-a", targetA, loadCfg)
 		Expect(err).NotTo(HaveOccurred())
 
-		targetB := fmt.Sprintf("http://%s-service:8000", modelServiceB)
-		err = fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-load-b", targetB, loadCfg)
+		targetB := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/completions", modelServiceB, cfg.LLMDNamespace)
+		err = fixtures.EnsureBurstLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-load-b", targetB, loadCfg)
 		Expect(err).NotTo(HaveOccurred())
 
 		jobNameA := "multi-load-a-load"
@@ -468,18 +475,36 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 				})
 		})
 
-		By("Waiting for both load jobs to complete")
+		By("Waiting for load jobs to start running")
 		Eventually(func(g Gomega) {
 			jobA, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameA, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(jobA.Status.Succeeded).To(BeNumerically(">", 0), "Job A should complete successfully")
-		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			g.Expect(jobA.Status.Active).To(BeNumerically(">", 0), "Job A should be running")
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			jobB, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameB, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(jobB.Status.Succeeded).To(BeNumerically(">", 0), "Job B should complete successfully")
-		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			g.Expect(jobB.Status.Active).To(BeNumerically(">", 0), "Job B should be running")
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("Waiting for load to ramp up (30 seconds)")
+		time.Sleep(30 * time.Second)
+
+		By("Waiting for VA A (cheaper) to scale up under load")
+		// Don't wait for burst load jobs to complete — they send 2400 requests at ~42s each,
+		// which takes much longer than the test timeout. Instead, wait for the saturation
+		// engine to detect load and recommend scale-up, matching the smoke test pattern.
+		Eventually(func(g Gomega) {
+			vaAObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			err := crClient.Get(ctx, client.ObjectKey{Name: vaA, Namespace: cfg.LLMDNamespace}, vaAObj)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(vaAObj.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "VA A NumReplicas should be set")
+			replicasA := *vaAObj.Status.DesiredOptimizedAlloc.NumReplicas
+			GinkgoWriter.Printf("VA A (cheaper, cost=30.0) desired replicas: %d\n", replicasA)
+			g.Expect(replicasA).To(BeNumerically(">", 1),
+				"VA A should scale up beyond initial replica count")
+		}, 8*time.Minute, 15*time.Second).Should(Succeed())
 
 		By("Verifying VA A (cheaper) scaled up more than VA B")
 		vaAObj := &variantautoscalingv1alpha1.VariantAutoscaling{}

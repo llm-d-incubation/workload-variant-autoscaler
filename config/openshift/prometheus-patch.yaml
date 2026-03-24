@@ -12,21 +12,10 @@ spec:
         - name: PROMETHEUS_TOKEN_PATH
           value: "/var/run/secrets/kubernetes.io/serviceaccount/token"
         - name: PROMETHEUS_CA_CERT_PATH
-          value: "/etc/openshift-ca/ca.crt"
+          value: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
         - name: PROMETHEUS_CLIENT_CERT_PATH
           value: ""
         - name: PROMETHEUS_CLIENT_KEY_PATH
           value: ""
         - name: PROMETHEUS_SERVER_NAME
           value: "thanos-querier.openshift-monitoring.svc"
-        volumeMounts:
-        - name: openshift-service-ca
-          mountPath: /etc/openshift-ca
-          readOnly: true
-      volumes:
-      - name: openshift-service-ca
-        secret:
-          secretName: openshift-service-ca
-          items:
-          - key: ca.crt
-            path: ca.crt 
