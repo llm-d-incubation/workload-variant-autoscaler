@@ -948,15 +948,16 @@ func (e *Engine) applySaturationDecisions(
 			if acceleratorName == "" {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
-					var dep appsv1.Deployment
-					if depErr := utils.GetDeploymentWithBackoff(ctx, e.client, scaleTargetName, va.Namespace, &dep); depErr == nil {
-						acceleratorName = utils.GetAcceleratorNameFromDeployment(&updateVa, &dep)
-						if targetReplicas == 0 && dep.Spec.Replicas != nil {
-							targetReplicas = int(*dep.Spec.Replicas)
+					var scaleTarget scaletarget.ScaleTargetAccessor
+					var err error
+					if scaleTarget, err = scaletarget.FetchScaleTarget(ctx, e.client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err == nil {
+						acceleratorName = utils.GetAcceleratorNameFromScaleTarget(&updateVa, scaleTarget)
+						if targetReplicas == 0 && scaleTarget.GetReplicas() != nil {
+							targetReplicas = int(*scaleTarget.GetReplicas())
 						}
 					} else {
-						// If deployment fetch fails, try VA label directly
-						acceleratorName = utils.GetAcceleratorNameFromDeployment(&updateVa, nil)
+						// If scaleTarget fetch fails, try VA label directly
+						acceleratorName = utils.GetAcceleratorNameFromScaleTarget(&updateVa, nil)
 					}
 				}
 			}
