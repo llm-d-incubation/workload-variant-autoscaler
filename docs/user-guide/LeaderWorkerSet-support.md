@@ -136,9 +136,9 @@ llmd:
   # Valid values are "Deployment", "LeaderWorkerSet" - case sensitive.
   #scaleTargetKind: "Deployment"
   
-  # scaleTargetName: For scaleTargetKind "Deployment", specify the name of the model deployment as scale target. 
-  # For scaleTargetKind "LeaderWorkerSet", specify the name of the LeaderWorkerSet's 
-  # the corresponding StatefulSet.
+  # scaleTargetName: Name of the scale target resource.
+  # For "Deployment": name of the Deployment.
+  # For "LeaderWorkerSet": name of the LeaderWorkerSet.
   #scaleTargetName: 
 ```
 
