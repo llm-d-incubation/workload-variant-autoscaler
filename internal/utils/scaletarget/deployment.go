@@ -26,24 +26,17 @@ func (r *deploymentAccessor) GetReplicas() *int32 {
 }
 
 func (r *deploymentAccessor) GetStatusReplicas() int32 {
-	if r.deployment == nil {
-		return 1 // K8S fallback?
-	}
+	// Caller must not pass nil r.deployment
 	return r.deployment.Status.Replicas
 }
 
 func (r *deploymentAccessor) GetStatusReadyReplicas() int32 {
-	if r.deployment == nil {
-		return 1 // K8S fallback?
-	}
+	// Caller must not pass nil r.deployment
 	return r.deployment.Status.ReadyReplicas
 }
 
 func (r *deploymentAccessor) GetTotalGPUsPerReplica() int {
-	if r.deployment == nil {
-		return 1
-	}
-
+	// Caller must not pass nil r.deployment
 	total := GetContainersGPUs(r.deployment.Spec.Template.Spec.Containers)
 	// Default to 1 GPU if no explicit requests found
 	// (common for inference workloads that may not have resource requests)
@@ -76,6 +69,5 @@ func (r *deploymentAccessor) GetGroupSize() int32 {
 }
 
 func (r *deploymentAccessor) GetObject() client.Object {
-
 	return r.deployment
 }

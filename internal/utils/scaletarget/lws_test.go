@@ -105,11 +105,6 @@ func TestLWSAccessor_GetStatusReplicas(t *testing.T) {
 			},
 			expected: 0,
 		},
-		{
-			name:     "nil lws returns fallback",
-			lws:      nil,
-			expected: 1,
-		},
 	}
 
 	for _, tt := range tests {
@@ -156,11 +151,6 @@ func TestLWSAccessor_GetStatusReadyReplicas(t *testing.T) {
 				},
 			},
 			expected: 0,
-		},
-		{
-			name:     "nil lws returns fallback",
-			lws:      nil,
-			expected: 1,
 		},
 	}
 
@@ -479,11 +469,6 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			},
 			expected: 4, // 2 + (3-1)*1 = 2 + 2 = 4
 		},
-		{
-			name:     "nil lws defaults to 1",
-			lws:      nil,
-			expected: 1,
-		},
 	}
 
 	for _, tt := range tests {
@@ -702,11 +687,6 @@ func TestLWSAccessor_GetGroupSize(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-		},
-		{
-			name:     "nil lws returns fallback",
-			lws:      nil,
 			expected: 1,
 		},
 	}

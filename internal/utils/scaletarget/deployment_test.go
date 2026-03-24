@@ -60,11 +60,6 @@ func TestDeploymentAccessor_GetReplicas(t *testing.T) {
 			},
 			expected: nil,
 		},
-		{
-			name:       "nil deployment",
-			deployment: nil,
-			expected:   nil,
-		},
 	}
 
 	for _, tt := range tests {
@@ -104,11 +99,6 @@ func TestDeploymentAccessor_GetStatusReplicas(t *testing.T) {
 				},
 			},
 			expected: 0,
-		},
-		{
-			name:       "nil deployment returns fallback",
-			deployment: nil,
-			expected:   1,
 		},
 	}
 
@@ -156,11 +146,6 @@ func TestDeploymentAccessor_GetStatusReadyReplicas(t *testing.T) {
 				},
 			},
 			expected: 0,
-		},
-		{
-			name:       "nil deployment returns fallback",
-			deployment: nil,
-			expected:   1,
 		},
 	}
 
@@ -341,11 +326,6 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			},
 			expected: 1,
 		},
-		{
-			name:       "nil deployment defaults to 1",
-			deployment: nil,
-			expected:   1,
-		},
 	}
 
 	for _, tt := range tests {
@@ -382,11 +362,6 @@ func TestDeploymentAccessor_GetDeletionTimestamp(t *testing.T) {
 				},
 			},
 			expected: nil,
-		},
-		{
-			name:       "nil deployment",
-			deployment: nil,
-			expected:   nil,
 		},
 	}
 

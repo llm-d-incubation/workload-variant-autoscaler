@@ -17,7 +17,6 @@ rules:
   - ""
   resources:
   - configmaps/status
-  - secrets
   verbs:
   - get
 - apiGroups:
@@ -32,6 +31,7 @@ rules:
   resources:
   - namespaces
   - pods
+  - secrets
   - services
   verbs:
   - get
@@ -61,10 +61,37 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - deployments/scale
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - apps
+  resources:
   - replicasets
+  - statefulsets
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - inference.networking.k8s.io
+  - inference.networking.x-k8s.io
+  resources:
+  - inferencepools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - leaderworkerset.x-k8s.io
+  resources:
+  - leaderworkersets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - llmd.ai

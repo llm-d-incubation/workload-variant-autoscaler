@@ -24,10 +24,10 @@ func getResourceWithBackoff[T client.Object](ctx context.Context, c client.Clien
 				return false, err // Don't retry on notFound errors
 			}
 
-			ctrl.LoggerFrom(ctx).Error(err, "transient error getting resource, retrying - ",
-				"resourceType: ", resourceType,
-				" name: ", objKey.Name,
-				" namespace: ", objKey.Namespace)
+			ctrl.LoggerFrom(ctx).Error(err, "transient error getting resource, retrying",
+				"resourceType", resourceType,
+				"name", objKey.Name,
+				"namespace", objKey.Namespace)
 			return false, nil // Retry on transient errors
 		}
 
@@ -76,7 +76,7 @@ func FetchScaleTarget(ctx context.Context, c client.Client, vaName, kind, name, 
 		}
 		return NewLWSAccessor(&lws), nil
 	}
-	return nil, fmt.Errorf("invalid scale target kind %s", kind)
+	return nil, fmt.Errorf("invalid scale target kind %q", kind)
 }
 
 func GetContainersGPUs(containers []corev1.Container) int {

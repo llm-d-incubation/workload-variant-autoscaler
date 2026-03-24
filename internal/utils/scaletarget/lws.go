@@ -26,25 +26,18 @@ func (r *lwsAccessor) GetReplicas() *int32 {
 }
 
 func (r *lwsAccessor) GetStatusReplicas() int32 {
-	if r.lws == nil {
-		return 1 // K8S fallback?
-	}
+	// Caller must not pass nil r.lws
 	return r.lws.Status.Replicas
 }
 
 func (r *lwsAccessor) GetStatusReadyReplicas() int32 {
-	if r.lws == nil {
-		return 1 // K8S fallback?
-	}
+	// Caller must not pass nil r.lws
 	return r.lws.Status.ReadyReplicas
 }
 
 // leader_GPUs + (Size - 1) * worker_GPUs.
 func (r *lwsAccessor) GetTotalGPUsPerReplica() int {
-	if r.lws == nil {
-		return 1
-	}
-
+	// Caller must not pass nil r.lws
 	leaderGPUs := 0
 	if r.lws.Spec.LeaderWorkerTemplate.LeaderTemplate != nil {
 		leaderGPUs = GetContainersGPUs(r.lws.Spec.LeaderWorkerTemplate.LeaderTemplate.Spec.Containers)
@@ -68,7 +61,7 @@ func (r *lwsAccessor) GetDeletionTimestamp() *v1.Time {
 
 func (r *lwsAccessor) GetLeaderPodTemplateSpec() corev1.PodTemplateSpec {
 	if r.lws == nil || r.lws.Spec.LeaderWorkerTemplate.LeaderTemplate == nil {
-		return corev1.PodTemplateSpec{}
+		return r.GetWorkerPodTemplateSpec()
 	}
 	return *r.lws.Spec.LeaderWorkerTemplate.LeaderTemplate
 }
@@ -81,8 +74,11 @@ func (r *lwsAccessor) GetWorkerPodTemplateSpec() corev1.PodTemplateSpec {
 }
 
 func (r *lwsAccessor) GetGroupSize() int32 {
-	if r.lws == nil || r.lws.Spec.LeaderWorkerTemplate.Size == nil {
-		return 1 // K8S fallback
+	// Caller must not pass nil r.lws
+	if r.lws.Spec.LeaderWorkerTemplate.Size == nil {
+		// As documented, this is optional (nil) and default to 1
+		// https://pkg.go.dev/sigs.k8s.io/lws@v0.8.0/api/leaderworkerset/v1#LeaderWorkerTemplate.Size
+		return 1
 	}
 	return *r.lws.Spec.LeaderWorkerTemplate.Size
 }
