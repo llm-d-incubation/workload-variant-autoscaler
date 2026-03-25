@@ -973,6 +973,10 @@ jobs:
           echo "=== Metrics pipeline verification complete ==="
 
       - name: Install Go dependencies
+         run: |
+           GOTOOLCHAIN=auto go version
+           GOTOOLCHAIN=auto go env GOTOOLCHAIN
+           GOTOOLCHAIN=auto go mod download
         run: go mod download
 
       - name: Run OpenShift E2E tests
