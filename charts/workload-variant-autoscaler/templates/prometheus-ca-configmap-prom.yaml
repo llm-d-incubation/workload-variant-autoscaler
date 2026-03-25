@@ -1,4 +1,4 @@
-{{- if .Values.controller.enabled }}
+{{- if and .Values.controller.enabled .Values.wva.prometheus.caCert }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,9 +8,5 @@ metadata:
     {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
 data:
   ca.crt: |
-    {{- if .Values.wva.prometheus.caCert }}
 {{ .Values.wva.prometheus.caCert | indent 4 }}
-    {{- else }}
-    # CA certificate not provided - using system CA bundle
-    {{- end }}
 {{- end }}

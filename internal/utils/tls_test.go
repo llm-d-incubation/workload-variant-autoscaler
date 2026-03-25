@@ -86,23 +86,52 @@ func TestCreateTLSConfig(t *testing.T) {
 			}),
 			expectError: false,
 		},
+		{
+			name: "insecure skip verify with invalid CA cert path should not error",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":                 "https://prometheus:9090",
+				"PROMETHEUS_TLS_INSECURE_SKIP_VERIFY": "true",
+				"PROMETHEUS_CA_CERT_PATH":             "/nonexistent/path/ca.crt",
+			}),
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := CreateTLSConfig(tt.promConfig)
+			tlsCfg, err := CreateTLSConfig(tt.promConfig)
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
 			if tt.promConfig != nil {
-				assert.NotNil(t, config)
+				assert.NotNil(t, tlsCfg)
 			} else {
-				assert.Nil(t, config)
+				assert.Nil(t, tlsCfg)
 			}
 		})
 	}
+}
+
+func TestCreateTLSConfig_InsecureSkipVerifySkipsCertLoading(t *testing.T) {
+	invalidCertFile, err := os.CreateTemp(t.TempDir(), "invalid-cert-*.crt")
+	require.NoError(t, err)
+	_, err = invalidCertFile.WriteString("# CA certificate not provided - using system CA bundle")
+	require.NoError(t, err)
+	require.NoError(t, invalidCertFile.Close())
+
+	cfg := testConfigFromEnv(t, map[string]string{
+		"PROMETHEUS_BASE_URL":                 "https://prometheus:9090",
+		"PROMETHEUS_TLS_INSECURE_SKIP_VERIFY": "true",
+		"PROMETHEUS_CA_CERT_PATH":             invalidCertFile.Name(),
+	})
+
+	tlsCfg, err := CreateTLSConfig(cfg)
+	assert.NoError(t, err)
+	assert.NotNil(t, tlsCfg)
+	assert.True(t, tlsCfg.InsecureSkipVerify)
+	assert.Nil(t, tlsCfg.RootCAs, "RootCAs should be nil when insecureSkipVerify is true")
 }
 
 func TestValidateTLSConfig(t *testing.T) {

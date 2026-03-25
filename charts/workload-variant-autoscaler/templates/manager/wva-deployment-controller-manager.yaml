@@ -105,10 +105,12 @@ spec:
           mountPath: /etc/wva/config.yaml
           subPath: config.yaml
           readOnly: true
+        {{- if .Values.wva.prometheus.caCert }}
         - name: prometheus-ca-cert
           mountPath: /etc/ssl/certs/prometheus-ca.crt
           subPath: ca.crt
           readOnly: true
+        {{- end }}
         - name: epp-metrics-token
           mountPath: /var/run/secrets/epp-metrics
           readOnly: true
@@ -116,10 +118,11 @@ spec:
       - name: wva-config
         configMap:
           name: {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
+      {{- if .Values.wva.prometheus.caCert }}
       - name: prometheus-ca-cert
         configMap:
           name: {{ include "workload-variant-autoscaler.fullname" . }}-prometheus-ca
-          optional: true
+      {{- end }}
       - name: epp-metrics-token
         secret:
           secretName: {{ include "workload-variant-autoscaler.fullname" . }}-epp-metrics-token

@@ -21,8 +21,10 @@ data:
     # Prometheus Configuration (REQUIRED)
     # Base URL for Prometheus API (must use HTTPS).
     PROMETHEUS_BASE_URL: {{ .Values.wva.prometheus.baseURL | quote }}
+    {{- if .Values.wva.prometheus.caCert }}
     # Filesystem path to the CA certificate used to verify Prometheus TLS cert.
     PROMETHEUS_CA_CERT_PATH: {{ .Values.wva.prometheus.tls.caCertPath | default "/etc/ssl/certs/prometheus-ca.crt" | quote }}
+    {{- end }}
     # Whether to skip TLS certificate verification when connecting to Prometheus.
     PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: {{ if and .Values.wva.prometheus.tls (hasKey .Values.wva.prometheus.tls "insecureSkipVerify") }}{{ .Values.wva.prometheus.tls.insecureSkipVerify | quote }}{{ else }}"true"{{ end }}
 
