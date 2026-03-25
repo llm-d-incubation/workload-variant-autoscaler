@@ -385,7 +385,11 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: ./go.sum
-
+- name: Verify Go toolchain
+  run: |
+    which go
+    go version
+    go env GOTOOLCHAIN
       - name: Install tools (kubectl, oc, helm, make)
         run: |
           sudo apt-get update && sudo apt-get install -y make
