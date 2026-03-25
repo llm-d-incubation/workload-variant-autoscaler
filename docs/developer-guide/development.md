@@ -6,7 +6,7 @@ Guide for developers contributing to Workload-Variant-Autoscaler.
 
 ### Prerequisites
 
-- Go 1.24.0+
+- Go 1.25.0+
 - Docker 17.03+
 - kubectl 1.32.0+
 - Kind (for local testing)
