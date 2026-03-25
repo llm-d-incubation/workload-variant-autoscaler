@@ -201,6 +201,14 @@ deploy_wva_prerequisites() {
         local cert_subject=$(openssl x509 -in "$PROM_CA_CERT_PATH" -noout -subject 2>/dev/null | sed 's/subject=//' || echo "unknown")
         log_info "Certificate subject: $cert_subject"
     fi
+
+    CHART_VERSION=0.8.0
+    log_info "Installing LeaderWorkerSet version $CHART_VERSION into lws-system namespace"
+    helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
+        --version=$CHART_VERSION \
+        --namespace lws-system \
+        --create-namespace \
+        --wait --timeout 300s
     
     log_success "WVA prerequisites deployed"
 }
