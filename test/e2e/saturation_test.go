@@ -963,22 +963,29 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings with LeaderWork
 
 	It("should prefer cheaper variant (VA A) for scale-up when both variants are available", func() {
 		By("Generating load to both services")
+		// Use burst load (curl) instead of guidellm because the simulator only tracks
+		// KV cache for /v1/completions requests. guidellm defaults to /v1/chat/completions,
+		// which bypasses KV cache tracking and prevents saturation detection.
+		scaleUpPrompts := 2400
+		if cfg.NumPrompts > scaleUpPrompts {
+			scaleUpPrompts = cfg.NumPrompts
+		}
 		loadCfg := fixtures.LoadConfig{
 			Strategy:     cfg.LoadStrategy,
-			RequestRate:  cfg.RequestRate,
-			NumPrompts:   cfg.NumPrompts,
+			RequestRate:  0,              // Not used for burst pattern
+			NumPrompts:   scaleUpPrompts, // Enough prompts to sustain load across multiple engine cycles
 			InputTokens:  cfg.InputTokens,
-			OutputTokens: cfg.OutputTokens,
+			OutputTokens: 400, // High output tokens to hold KV cache and create queue pressure
 			ModelID:      cfg.ModelID,
 		}
 
-		// Create load jobs for both services
-		targetA := fmt.Sprintf("http://%s-service:8000", modelServiceA)
-		err := fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-lws-load-a", targetA, loadCfg)
+		// Create burst load jobs targeting /v1/completions endpoint directly
+		targetA := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/completions", modelServiceA, cfg.LLMDNamespace)
+		err := fixtures.EnsureBurstLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-lws-load-a", targetA, loadCfg)
 		Expect(err).NotTo(HaveOccurred())
 
-		targetB := fmt.Sprintf("http://%s-service:8000", modelServiceB)
-		err = fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-lws-load-b", targetB, loadCfg)
+		targetB := fmt.Sprintf("http://%s-service.%s.svc.cluster.local:8000/v1/completions", modelServiceB, cfg.LLMDNamespace)
+		err = fixtures.EnsureBurstLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "multi-lws-load-b", targetB, loadCfg)
 		Expect(err).NotTo(HaveOccurred())
 
 		jobNameA := "multi-lws-load-a-load"
