@@ -12,7 +12,7 @@ spec:
     matchLabels:
       control-plane: controller-manager
       {{- include "workload-variant-autoscaler.selectorLabels" . | nindent 6 }}
-  replicas: 2
+  replicas: {{ .Values.wva.replicaCount }}
   template:
     metadata:
       annotations:

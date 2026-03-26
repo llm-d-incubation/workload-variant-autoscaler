@@ -71,12 +71,53 @@ on:
         default: '240'
 
 jobs:
+  # Check if PR contains code changes (not just docs/metadata)
+  check-code-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
+    steps:
+      - name: Checkout source
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+
+      - name: Check for code changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!docs/**'
+              - '!README.md'
+              - '!CONTRIBUTING.md'
+              - '!LICENSE'
+              - '!OWNERS'
+              - '!PROJECT'
+
+      - name: Set output
+        id: set-output
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # Always run for issue_comment (/ok-to-test, /retest) and workflow_dispatch
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          elif [ -n "${{ steps.filter.outputs.code }}" ]; then
+            echo "has_code_changes=${{ steps.filter.outputs.code }}" >> $GITHUB_OUTPUT
+          else
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          fi
+
   # Gate: Check permissions and handle /ok-to-test for fork PRs.
   # - Maintainers (write access): Tests run automatically on pull_request.
   # - Fork PRs: Gate succeeds (no failure) so the PR does not show a false red check; E2E runs
   #   only after a maintainer comments /ok-to-test. Branch protection should require the
   #   "e2e-openshift" job so merge stays blocked until that run passes.
   gate:
+    needs: check-code-changes
+    if: needs.check-code-changes.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
