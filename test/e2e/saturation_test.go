@@ -320,7 +320,7 @@ var _ = Describe("Saturation Mode - Single VariantAutoscaling", Label("full"), O
 
 var _ = Describe("Saturation Mode - Single VariantAutoscaling with LeaderWorkerSet", Label("full"), Ordered, func() {
 	var (
-		poolName         = "saturation-single-lws-pool"
+		poolName         = "saturation-single-pool" // Reuse same pool as Deployment test
 		modelServiceName = "saturation-single-lws-ms"
 		lwsName          = modelServiceName + "-decode"
 		vaName           = "saturation-single-lws-va"
@@ -840,8 +840,8 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 // Multi-variant saturation test with LeaderWorkerSet (cost-based scaling)
 var _ = Describe("Saturation Mode - Multiple VariantAutoscalings with LeaderWorkerSet", Label("full"), Ordered, func() {
 	var (
-		poolA         = "saturation-multi-lws-pool-a"
-		poolB         = "saturation-multi-lws-pool-b"
+		poolA         = "saturation-multi-pool-a" // Reuse same pools as Deployment test
+		poolB         = "saturation-multi-pool-b" // Reuse same pools as Deployment test
 		modelServiceA = "saturation-multi-lws-ms-a"
 		modelServiceB = "saturation-multi-lws-ms-b"
 		lwsNameA      = modelServiceA + "-decode"

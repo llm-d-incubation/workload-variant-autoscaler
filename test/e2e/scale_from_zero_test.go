@@ -489,7 +489,7 @@ fi
 // Scale-from-zero test for LeaderWorkerSet validates that LWS scales up from zero replicas when requests are pending
 var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Label("smoke", "full", "flaky"), Ordered, func() {
 	var (
-		poolName         = "scale-from-zero-lws-pool"
+		poolName         = "scale-from-zero-pool" // Reuse same pool as Deployment test
 		modelServiceName = "scale-from-zero-lws-ms"
 		lwsName          = modelServiceName + "-decode"
 		vaName           = "scale-from-zero-lws-va"

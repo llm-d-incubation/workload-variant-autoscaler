@@ -480,7 +480,7 @@ enable_scale_to_zero: false`, cfg.ModelID),
 // Scale-to-zero test for LeaderWorkerSet validates that LWS scale down to zero replicas when idle
 var _ = Describe("Scale-To-Zero Feature with LeaderWorkerSet", Label("full", "flaky"), Ordered, func() {
 	var (
-		poolName         = "scale-to-zero-lws-pool"
+		poolName         = "scale-to-zero-pool" // Reuse same pool as Deployment test
 		modelServiceName = "scale-to-zero-lws-ms"
 		lwsName          = modelServiceName + "-decode"
 		vaName           = "scale-to-zero-lws-va"
@@ -757,7 +757,7 @@ var _ = Describe("Scale-To-Zero Feature with LeaderWorkerSet", Label("full", "fl
 // Scale-to-zero disabled test for LeaderWorkerSet validates that LWS maintain minimum replicas
 var _ = Describe("Scale-To-Zero Feature with LeaderWorkerSet - Disabled", Label("full"), Ordered, func() {
 	var (
-		poolName          = "scale-to-zero-disabled-lws-pool"
+		poolName          = "scale-to-zero-disabled-pool" // Reuse same pool as Deployment test
 		modelServiceName  = "scale-to-zero-disabled-lws-ms"
 		lwsName           = modelServiceName + "-decode"
 		vaName            = "scale-to-zero-disabled-lws-va"
