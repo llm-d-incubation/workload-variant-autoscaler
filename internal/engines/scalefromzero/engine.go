@@ -26,7 +26,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -213,12 +212,18 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 	}
 
 	// Extract Labels for the pods created by the ScaleTarget object
-	labels, found, err := unstructured.NestedStringMap(unstructuredObj.Object, "spec", "template", "metadata", "labels")
-	if err != nil {
-		return err
-	}
-
+	// Use ScaleTargetAccessor to handle both Deployment and LeaderWorkerSet uniformly
+	key := utils.GetNamespacedKey(va.Namespace, objName)
+	scaleTarget, found := scaleTargets[key]
 	if !found {
+		// Fetch on-demand if not in the cache
+		scaleTarget, err = scaletarget.FetchScaleTarget(ctx, e.client, va.Name, objKind, objName, va.Namespace)
+		if err != nil {
+			return err
+		}
+	}
+	labels := scaleTarget.GetLeaderPodTemplateSpec().Labels
+	if labels == nil {
 		return errors.New("labels are missing for target workload object")
 	}
 
