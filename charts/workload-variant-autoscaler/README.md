@@ -3,7 +3,7 @@
 ![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
 
 ## Installation Overview
-Installation is divided into three separate parts. First is the infrastructure installation where WVA prerequisites such as llm-d, gateway control plane, Prometheus, Prometheus adapter, or KEDA are installed, and configured to work with WVA on environments such as Openshift, Kubenettes. Next, a WVA controller can be installed in a namespace. Finally, for each WVA controller, one or more WVA variants can be installed  as scaling targets for model deployments in llm-d namespaces. 
+Installation is divided into three separate parts. First is the infrastructure installation, where WVA prerequisites such as llm-d, gateway control plane, Prometheus, Prometheus adapter, or KEDA are installed and configured to work with WVA in environments such as OpenShift and Kubernetes. Next, a WVA controller can be installed in a namespace. Finally, for each WVA controller, one or more WVA variants can be installed as scaling targets for model deployments in llm-d namespaces. 
 - [Infrastructure installation](#infrastructure-installation)
 - [WVA controller installation](#wva-controller-installation)
 - [WVA variant installation](#wva-variant-installation)
