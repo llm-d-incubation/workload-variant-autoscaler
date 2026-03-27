@@ -1,23 +1,22 @@
 name: CI - PR Checks
 
 # Cancel previous runs on the same PR when new commits are pushed
-# Only group by PR number for legitimate triggers (pull_request, workflow_dispatch, e2e trigger comments)
+# Group by PR number for pull_request and /ok-to-test comment triggers
 # Regular comments get a unique group (run_id) so they don't cancel in-progress test runs
+# workflow_dispatch falls back to run_id (no PR number available)
 #
 # Logic:
-# - Regular comments (not e2e trigger): unique group prevents cancellation of real tests
-# - Valid triggers: group 'ci-pr-checks-{pr_number}' (can cancel previous runs for same PR)
+# - Regular comments (not /ok-to-test): unique group prevents cancellation of real tests
+# - pull_request / /ok-to-test comments: group 'ci-pr-checks-{pr_number}' (can cancel previous runs for same PR)
+# - workflow_dispatch: group 'ci-pr-checks-{run_id}' (unique per run)
 # - Fallback chain for ID: pull_request.number -> issue.number -> run_id
 #
-# NOTE: Accepted commands (/trigger-e2e-full, /test-e2e-full, /test-full) must stay in sync
-#       with check-full-tests job validation
+# NOTE: Accepted command (/ok-to-test) must stay in sync with check-full-tests job validation
 concurrency:
   group: >-
     ${{
       github.event_name == 'issue_comment' &&
-      !contains(github.event.comment.body, '/trigger-e2e-full') &&
-      !contains(github.event.comment.body, '/test-e2e-full') &&
-      !contains(github.event.comment.body, '/test-full')
+      !contains(github.event.comment.body, '/ok-to-test')
       && format('comment-isolated-{0}', github.run_id)
       || format('ci-pr-checks-{0}',
            github.event.pull_request.number
@@ -39,7 +38,7 @@ on:
         required: false
         default: false
         type: boolean
-  # Allow triggering via PR comments
+  # Allow triggering via /ok-to-test PR comment
   issue_comment:
     types: [created]
 
@@ -85,7 +84,7 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && steps.pr-info.outputs.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-      
+
       - name: Check for code changes
         uses: dorny/paths-filter@v3
         id: filter
@@ -99,12 +98,12 @@ jobs:
               - '!LICENSE'
               - '!OWNERS'
               - '!PROJECT'
-      
+
       - name: Set output with default
         id: set-output
         run: |
           # Use filter output if available, otherwise default to 'true' for issue_comment events
-          # This ensures /trigger-e2e-full works even if PR context is unclear
+          # This ensures comment triggers work even if PR context is unclear
           FILTER_OUTPUT="${{ steps.filter.outputs.code }}"
           if [ "${{ github.event_name }}" == "issue_comment" ] && [ -z "$FILTER_OUTPUT" ]; then
             echo "has_code_changes=true" >> $GITHUB_OUTPUT
@@ -191,21 +190,21 @@ jobs:
               core.setOutput('run_full', 'true');
               return;
             }
-            
-            // Check for /trigger-e2e-full comment trigger
+
+            // Check for /ok-to-test comment trigger
             if (context.eventName === 'issue_comment') {
               const comment = context.payload.comment.body.trim();
               const issue = context.payload.issue;
 
-              // Only process /trigger-e2e-full comments on PRs
+              // Only process /ok-to-test comments on PRs
               if (!issue.pull_request) {
                 console.log('Comment is not on a PR, skipping');
                 core.setOutput('run_full', 'false');
                 return;
               }
 
-              // Accept multiple command variants (case-sensitive, exact match)
-              const validCommands = ['/trigger-e2e-full', '/test-e2e-full', '/test-full'];
+              // Accept /ok-to-test (same command triggers both Kind full E2E and OpenShift E2E)
+              const validCommands = ['/ok-to-test'];
               if (!validCommands.includes(comment)) {
                 console.log(`Comment "${comment}" is not a valid trigger command, skipping`);
                 core.setOutput('run_full', 'false');
@@ -245,13 +244,13 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `🚀 **Kind E2E (full)** triggered by \`${comment}\`\n\n[View the Kind E2E workflow run](${runUrl})`
+                body: `🚀 **Kind E2E (full)** triggered by \`/ok-to-test\`\n\n[View the Kind E2E workflow run](${runUrl})`
               });
 
               core.setOutput('run_full', 'true');
               return;
             }
-            
+
             core.setOutput('run_full', 'false');
 
   # E2E smoke tests - run automatically on every PR with code changes
@@ -305,13 +304,13 @@ jobs:
           IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
           # Use localhost prefix for local-only image (Kind will load it directly)
           FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
-          
+
           echo "Building local image: $FULL_IMAGE"
           echo "Image will be loaded into Kind cluster (no push needed)"
-          
+
           # Build image locally (no push needed for Kind)
           make docker-build IMG="$FULL_IMAGE"
-          
+
           echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Image built locally: $FULL_IMAGE"
@@ -339,7 +338,7 @@ jobs:
         run: |
           make test-e2e-smoke-with-setup
 
-  # Full Kind E2E - runs only when triggered (/trigger-e2e-full or workflow_dispatch with run_full_tests).
+  # Full Kind E2E - runs only when triggered (/ok-to-test or workflow_dispatch with run_full_tests).
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
   # and must run and pass before merge (shows as "Expected" until triggered).
   e2e-tests-full:
@@ -445,7 +444,7 @@ jobs:
           make test-e2e-full-with-setup
 
   # Report status back to PR for issue_comment triggered runs
-  # This ensures fork PRs show the correct status after /trigger-e2e-full runs complete
+  # This ensures fork PRs show the correct status after /ok-to-test runs complete
   report-status:
     runs-on: ubuntu-latest
     needs: [check-code-changes, check-full-tests, e2e-tests-full]

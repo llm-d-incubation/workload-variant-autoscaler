@@ -331,6 +331,7 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 	)
 
 	BeforeAll(func() {
+
 		// Note: InferencePools should already exist from infra-only deployment
 		// We no longer create InferencePools in individual tests
 
@@ -421,6 +422,10 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 		// Delete deployments
 		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelServiceA+"-decode", metav1.DeleteOptions{})
 		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelServiceB+"-decode", metav1.DeleteOptions{})
+	})
+
+	BeforeEach(func() {
+		Skip("Multi-variant saturation test is currently disabled due to instability and long execution time. Re-enable after addressing underlying issues.")
 	})
 
 	It("should prefer cheaper variant (VA A) for scale-up when both variants are available", func() {

@@ -27,7 +27,7 @@ wva:
     # Development security configuration (relaxed for easier development)
     tls:
       insecureSkipVerify: true   # Development: true, Production: false
-      caCertPath: "/etc/ssl/certs/prometheus-ca.crt"
+      # caCertPath: "/etc/ssl/certs/prometheus-ca.crt"  # Only used when caCert is provided
     # caCert: |  # Uncomment and provide your CA certificate
     #   -----BEGIN CERTIFICATE-----
     #   YOUR_CA_CERTIFICATE_HERE

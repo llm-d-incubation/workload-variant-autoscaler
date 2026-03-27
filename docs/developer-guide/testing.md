@@ -262,20 +262,18 @@ Runs OpenShift E2E tests on dedicated cluster:
 
 #### Triggering E2E via PR Comments
 
-You can trigger specific e2e runs by commenting on a PR:
+You can trigger E2E runs by commenting on a PR:
 
 | Comment | Workflow | Who can use | Effect |
 |--------|----------|-------------|--------|
-| **`/trigger-e2e-full`** | `ci-pr-checks.yaml` | Anyone with PR access | Runs the **full** e2e suite on Kind (instead of smoke only). Aliases: `/test-e2e-full`, `/test-full`. |
-| **`/ok-to-test`** | `ci-e2e-openshift.yaml` | Maintainers/admins only | **OpenShift E2E:** Approve and trigger the OpenShift E2E (GPU) run on this PR. Use on fork PRs (required before E2E can run) or to start E2E on demand. |
-| **`/retest`** | `ci-e2e-openshift.yaml` | Maintainers/admins only | **OpenShift E2E:** Re-run the OpenShift E2E workflow (e.g. after a failure, flake, or new commits). Same workflow as `/ok-to-test`, different trigger intent. |
-
-Both `/ok-to-test` and `/retest` trigger the **same** OpenShift E2E workflow; the first is “approve and run,” the second is “run again.”
+| **`/ok-to-test`** | `ci-pr-checks.yaml` + `ci-e2e-openshift.yaml` | Users with write access | Runs the **full** Kind E2E suite **and** the OpenShift E2E (GPU) run on this PR. On fork PRs, this is required before OpenShift E2E can run. |
+| **`/retest`** | `ci-e2e-openshift.yaml` | Users with write access | **OpenShift E2E only:** Re-run the OpenShift E2E workflow (e.g. after a failure, flake, or new commits). Same workflow as `/ok-to-test`, different trigger intent. |
 
 **When to use:**
 
-- **Full e2e on Kind**: Comment `/trigger-e2e-full` when you want the full e2e suite to run on your PR (e.g. after making scaling or saturation changes). By default, PRs only run smoke e2e.
-- **Fork PRs (OpenShift E2E)**: If you opened a PR from a fork, OpenShift E2E will not run until a maintainer or admin comments **`/ok-to-test`** (approve and run OpenShift E2E). Use **`/retest`** to re-run OpenShift E2E (e.g. after failure or new commits). Branch protection should require the **e2e-openshift** status check so merge stays blocked until that run passes (the gate check is intentionally green on fork PRs to avoid a false failure that cannot be updated from upstream).
+- **`/ok-to-test`**: Comment this when you want the full E2E suite to run on your PR. It triggers both the full Kind E2E (instead of smoke only) and the OpenShift E2E. By default, PRs only run smoke E2E on Kind.
+- **`/retest`**: Use to re-run only the OpenShift E2E workflow (e.g. after a failure or new commits).
+- **Fork PRs**: If you opened a PR from a fork, OpenShift E2E will not run until a maintainer or admin comments **`/ok-to-test`**. Branch protection should require the **e2e-openshift** status check so merge stays blocked until that run passes (the gate check is intentionally green on fork PRs to avoid a false failure that cannot be updated from upstream).
 
 ### Running CI Tests Locally
 
