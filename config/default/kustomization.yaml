@@ -41,6 +41,24 @@ patches:
   target:
     kind: Deployment
 
+# [NAMESPACE-SELECTOR] Ensure the ServiceMonitor namespaceSelector matches the
+# deployment namespace. Without this, the hardcoded value in monitor.yaml won't
+# update when an overlay changes the namespace (e.g. deploying into 'opendatahub'
+# or `redhat-ods-operator`).
+replacements:
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ServiceMonitor
+      group: monitoring.coreos.com
+      version: v1
+      name: controller-manager-metrics-monitor
+    fieldPaths:
+    - spec.namespaceSelector.matchNames.0
+
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.
 # This patch will protect the metrics with certManager self-signed certs.
