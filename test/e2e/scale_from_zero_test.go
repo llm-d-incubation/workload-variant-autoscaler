@@ -27,7 +27,7 @@ import (
 // on EPP and an InferenceObjective); deploy with E2E_TESTS_ENABLED=true or ENABLE_SCALE_TO_ZERO=true.
 // On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
 // so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
-var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full", "flaky"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -487,7 +487,7 @@ fi
 }
 
 // Scale-from-zero test for LeaderWorkerSet validates that LWS scales up from zero replicas when requests are pending
-var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Label("smoke", "full", "flaky"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Label("smoke", "full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool" // Reuse same pool as Deployment test
 		modelServiceName = "scale-from-zero-lws-ms"
