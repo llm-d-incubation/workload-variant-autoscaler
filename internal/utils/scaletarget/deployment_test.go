@@ -383,7 +383,7 @@ func TestDeploymentAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 	tests := []struct {
 		name       string
 		deployment *appsv1.Deployment
-		validate   func(t *testing.T, spec corev1.PodTemplateSpec)
+		validate   func(t *testing.T, spec *corev1.PodTemplateSpec)
 	}{
 		{
 			name: "deployment with pod template",
@@ -401,7 +401,8 @@ func TestDeploymentAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 					},
 				},
 			},
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				require.NotNil(t, spec)
 				assert.Equal(t, "test", spec.Labels["app"])
 				assert.Equal(t, 1, len(spec.Spec.Containers))
 				assert.Equal(t, "main", spec.Spec.Containers[0].Name)
@@ -410,9 +411,8 @@ func TestDeploymentAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 		{
 			name:       "nil deployment returns empty spec",
 			deployment: nil,
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
-				assert.Empty(t, spec.Labels)
-				assert.Empty(t, spec.Spec.Containers)
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				// Not called since accessor is nil
 			},
 		},
 	}
@@ -420,6 +420,10 @@ func TestDeploymentAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewDeploymentAccessor(tt.deployment)
+			if tt.deployment == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetLeaderPodTemplateSpec()
 			tt.validate(t, result)
 		})
@@ -444,12 +448,13 @@ func TestDeploymentAccessor_GetWorkerPodTemplateSpec(t *testing.T) {
 
 	accessor := NewDeploymentAccessor(deployment)
 
-	// For Deployment, worker and leader should be the same
+	// For Deployment, worker and leader should be the same pointer
 	leader := accessor.GetLeaderPodTemplateSpec()
 	worker := accessor.GetWorkerPodTemplateSpec()
 
-	assert.Equal(t, leader.Labels, worker.Labels)
-	assert.Equal(t, leader.Spec.Containers, worker.Spec.Containers)
+	require.NotNil(t, leader)
+	require.NotNil(t, worker)
+	assert.Equal(t, leader, worker, "For Deployment, GetWorkerPodTemplateSpec should return the same pointer as GetLeaderPodTemplateSpec")
 }
 
 func TestDeploymentAccessor_GetGroupSize(t *testing.T) {
@@ -477,6 +482,10 @@ func TestDeploymentAccessor_GetGroupSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewDeploymentAccessor(tt.deployment)
+			if tt.deployment == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetGroupSize()
 			assert.Equal(t, tt.expected, result)
 		})
@@ -492,15 +501,12 @@ func TestDeploymentAccessor_GetObject(t *testing.T) {
 	}
 
 	accessor := NewDeploymentAccessor(deployment)
-	result := accessor.GetObject()
 
-	require.NotNil(t, result)
-	assert.Equal(t, "test-deployment", result.GetName())
-	assert.Equal(t, "default", result.GetNamespace())
+	assert.Equal(t, "test-deployment", accessor.GetName())
+	assert.Equal(t, "default", accessor.GetNamespace())
 }
 
-func TestDeploymentAccessor_GetObject_Nil(t *testing.T) {
+func TestDeploymentAccessor_GetName_GetNamespace_Nil(t *testing.T) {
 	accessor := NewDeploymentAccessor(nil)
-	result := accessor.GetObject()
-	assert.Nil(t, result)
+	assert.Nil(t, accessor)
 }

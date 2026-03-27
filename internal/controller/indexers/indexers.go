@@ -104,8 +104,8 @@ func FindVAForScaleTarget(ctx context.Context, c client.Client, ref autoscalingv
 // This is a wrapper around FindVAForScaleTarget for the Deployment scale target.
 func FindVAForDeployment(ctx context.Context, c client.Client, deploymentName, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
 	return FindVAForScaleTarget(ctx, c, autoscalingv2.CrossVersionObjectReference{
-		APIVersion: "apps/v1",
-		Kind:       "Deployment",
+		APIVersion: constants.DeploymentAPIVersion,
+		Kind:       constants.DeploymentKind,
 		Name:       deploymentName,
 	}, namespace)
 }

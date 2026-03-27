@@ -263,8 +263,7 @@ func TestMultipleInactiveVariants(t *testing.T) {
 		assert.True(t, found, "ScaleTarget with key %s should be in the map", expectedKey)
 		assert.NotNil(t, scaleTarget, "ScaleTarget should not be nil for key %s", expectedKey)
 		if scaleTarget != nil {
-			obj := scaleTarget.GetObject()
-			assert.Equal(t, namespace, obj.GetNamespace(), "ScaleTarget namespace should match")
+			assert.Equal(t, namespace, scaleTarget.GetNamespace(), "ScaleTarget namespace should match")
 			assert.Equal(t, int32(0), *scaleTarget.GetReplicas(), "ScaleTarget should have 0 replicas (inactive)")
 		}
 	}

@@ -3,12 +3,17 @@ package scaletarget
 import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ScaleTargetAccessor provides a uniform interface to extract scaling-relevant
 // information from any supported scale target kind (Deployment, LeaderWorkerSet).
 type ScaleTargetAccessor interface {
+	// GetName returns the name of the scale target.
+	GetName() string
+
+	// GetNamespace returns the namespace of the scale target.
+	GetNamespace() string
+
 	// GetReplicas returns current spec replicas.
 	GetReplicas() *int32
 	GetDeletionTimestamp() *v1.Time
@@ -27,19 +32,16 @@ type ScaleTargetAccessor interface {
 	// For LWS: the leader template (falls back to worker template if not set).
 	// Use this for: vLLM args extraction (leader starts the API server),
 	// metrics port discovery, pod label matching.
-	GetLeaderPodTemplateSpec() corev1.PodTemplateSpec
+	GetLeaderPodTemplateSpec() *corev1.PodTemplateSpec
 
 	// GetWorkerPodTemplateSpec returns the pod template for worker pods.
 	// For Deployment: same as GetLeaderPodTemplateSpec() (single template).
 	// For LWS: the worker template.
 	// Use this for: GPU resource extraction when workers differ from leader.
-	GetWorkerPodTemplateSpec() corev1.PodTemplateSpec
+	GetWorkerPodTemplateSpec() *corev1.PodTemplateSpec
 
 	// GetGroupSize returns the number of pods per replica.
 	// For Deployment: always 1.
 	// For LWS: spec.leaderWorkerTemplate.size (1 leader + N-1 workers).
 	GetGroupSize() int32
-
-	// GetObject returns the underlying client.Object for K8s operations.
-	GetObject() client.Object
 }

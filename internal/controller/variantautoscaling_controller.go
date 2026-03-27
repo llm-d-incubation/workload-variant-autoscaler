@@ -50,11 +50,29 @@ type VariantAutoscalingReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	Recorder  record.EventRecorder
-	Config    *config.Config      // Unified configuration (injected from main.go)
-	Datastore datastore.Datastore // Datastore for namespace tracking and InferencePool data
+	Recorder   record.EventRecorder
+	Config     *config.Config      // Unified configuration (injected from main.go)
+	Datastore  datastore.Datastore // Datastore for namespace tracking and InferencePool data
+	lwsEnabled bool                // Whether LeaderWorkerSet support is enabled (CRD detected at startup)
+}
 
-	LWSEnabled bool // Whether LeaderWorkerSet support is enabled (CRD detected at startup)
+// NewVariantAutoscalingReconciler creates a new VariantAutoscalingReconciler
+func NewVariantAutoscalingReconciler(
+	client client.Client,
+	scheme *runtime.Scheme,
+	recorder record.EventRecorder,
+	cfg *config.Config,
+	ds datastore.Datastore,
+	lwsEnabled bool,
+) *VariantAutoscalingReconciler {
+	return &VariantAutoscalingReconciler{
+		Client:     client,
+		Scheme:     scheme,
+		Recorder:   recorder,
+		Config:     cfg,
+		Datastore:  ds,
+		lwsEnabled: lwsEnabled,
+	}
 }
 
 // +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings,verbs=get;list;watch;create;update;patch;delete
@@ -316,7 +334,7 @@ func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Co
 	va, err := indexers.FindVAForLeaderWorkerSet(ctx, r.Client, lws.Name, lws.Namespace)
 	if err != nil {
 		logger.Error(err, "Failed to find VA for leaderWorkerSet event using index",
-			"leaderWorkerSet", lws.GetName(),
+			"leaderWorkerSet", lws.Name,
 			"namespace", lws.Namespace)
 		return nil
 	}
@@ -361,7 +379,7 @@ func (r *VariantAutoscalingReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		)
 
 	// Only watch LeaderWorkerSet if LWS support is enabled (CRD detected at startup)
-	if r.LWSEnabled {
+	if r.lwsEnabled {
 		controllerBuilder = controllerBuilder.Watches(
 			&lwsv1.LeaderWorkerSet{},
 			handler.EnqueueRequestsFromMapFunc(r.handleLeaderWorkerSetEvent),

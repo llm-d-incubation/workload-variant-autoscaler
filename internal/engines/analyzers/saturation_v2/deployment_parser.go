@@ -54,12 +54,18 @@ func defaultVLLMEngineParams() VLLMEngineParams {
 //   - VLLM_USE_V1 environment variable for V1 engine detection
 func ParseVLLMArgs(scaleTarget scaletarget.ScaleTargetAccessor) VLLMEngineParams {
 	params := defaultVLLMEngineParams()
-	if scaleTarget == nil || len(scaleTarget.GetLeaderPodTemplateSpec().Spec.Containers) == 0 {
+	if scaleTarget == nil {
 		resolveEffectiveMaxBatchedTokens(&params)
 		return params
 	}
 
-	for _, container := range scaleTarget.GetLeaderPodTemplateSpec().Spec.Containers {
+	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+	if podTemplateSpec == nil || len(podTemplateSpec.Spec.Containers) == 0 {
+		resolveEffectiveMaxBatchedTokens(&params)
+		return params
+	}
+
+	for _, container := range podTemplateSpec.Spec.Containers {
 		// Check environment variables first
 		for _, env := range container.Env {
 			if env.Name == "VLLM_USE_V1" {

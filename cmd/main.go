@@ -86,6 +86,7 @@ func init() {
 }
 
 // checkLeaderWorkerSetCRD checks if the LeaderWorkerSet CRD is installed in the cluster
+// TODO: this is checked once at start up for now. We should handle LWS installed after controller starts.
 func checkLeaderWorkerSetCRD(restConfig *rest.Config, logger logr.Logger) bool {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
 	if err != nil {
@@ -476,14 +477,14 @@ func main() {
 	}
 
 	// Create the reconciler with unified Config and datastore
-	reconciler := &controller.VariantAutoscalingReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
-		Config:     cfg,        // Pass unified Config to reconciler
-		Datastore:  ds,         // Pass datastore for namespace tracking
-		LWSEnabled: lwsEnabled, // Pass LWS support status
-	}
+	reconciler := controller.NewVariantAutoscalingReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
+		cfg,
+		ds,
+		lwsEnabled,
+	)
 
 	// Setup the controller with the manager
 	if err = reconciler.SetupWithManager(mgr); err != nil {

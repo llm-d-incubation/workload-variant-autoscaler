@@ -121,8 +121,7 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 	// Verify the Deployment/LWS is in our map of tracked Deployments/LWSs
 	key := namespace + "/" + rsOwner.Name
 	if scaleTarget, ok := scaleTargets[key]; ok && scaleTarget != nil {
-		obj := scaleTarget.GetObject()
-		if obj != nil && obj.GetNamespace() == namespace {
+		if scaleTarget.GetNamespace() == namespace {
 			return rsOwner.Kind, rsOwner.Name
 		}
 	}

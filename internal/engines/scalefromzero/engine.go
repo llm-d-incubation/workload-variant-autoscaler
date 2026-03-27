@@ -222,7 +222,11 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			return err
 		}
 	}
-	labels := scaleTarget.GetLeaderPodTemplateSpec().Labels
+	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+	if podTemplateSpec == nil {
+		return errors.New("pod template spec is missing for target workload object")
+	}
+	labels := podTemplateSpec.Labels
 	if labels == nil {
 		return errors.New("labels are missing for target workload object")
 	}

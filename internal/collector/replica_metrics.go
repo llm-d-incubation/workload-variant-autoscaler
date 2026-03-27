@@ -601,7 +601,7 @@ func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 func getScaleTargetNames(scaleTargets map[string]scaletarget.ScaleTargetAccessor) []string {
 	names := make([]string, 0, len(scaleTargets))
 	for _, scaleTarget := range scaleTargets {
-		names = append(names, scaleTarget.GetObject().GetName())
+		names = append(names, scaleTarget.GetName())
 	}
 	return names
 }

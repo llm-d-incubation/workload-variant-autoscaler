@@ -621,7 +621,11 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 	if scaleTarget == nil {
 		return both
 	}
-	labels := scaleTarget.GetLeaderPodTemplateSpec().Labels
+	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+	if podTemplateSpec == nil {
+		return both
+	}
+	labels := podTemplateSpec.Labels
 	if labels == nil {
 		return both
 	}

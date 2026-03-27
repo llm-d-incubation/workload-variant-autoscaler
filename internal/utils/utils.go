@@ -17,6 +17,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/resources"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	infernoConfig "github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
 	"go.uber.org/zap/zapcore"
@@ -31,33 +32,13 @@ import (
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
 
-// GetResourceWithBackoff performs a Get operation with exponential backoff retry logic
-func GetResourceWithBackoff[T client.Object](ctx context.Context, c client.Client, objKey client.ObjectKey, obj T, backoff wait.Backoff, resourceType string) error {
-	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		err := c.Get(ctx, objKey, obj)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, err // Don't retry on notFound errors
-			}
-
-			ctrl.LoggerFrom(ctx).Error(err, "transient error getting resource, retrying - ",
-				"resourceType: ", resourceType,
-				" name: ", objKey.Name,
-				" namespace: ", objKey.Namespace)
-			return false, nil // Retry on transient errors
-		}
-
-		return true, nil
-	})
-}
-
 // Helper functions for common resource types with standard backoff
 func GetConfigMapWithBackoff(ctx context.Context, c client.Client, name, namespace string, cm *corev1.ConfigMap) error {
-	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, cm, constants.StandardBackoff, "ConfigMap")
+	return resources.GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, cm, constants.StandardBackoff, "ConfigMap")
 }
 
 func GetVariantAutoscalingWithBackoff(ctx context.Context, c client.Client, name, namespace string, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) error {
-	return GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, va, constants.StandardBackoff, "VariantAutoscaling")
+	return resources.GetResourceWithBackoff(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, va, constants.StandardBackoff, "VariantAutoscaling")
 }
 
 // UpdateStatusWithBackoff performs a Status Update operation with exponential backoff retry logic.
@@ -390,6 +371,9 @@ func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.Varian
 	// Check scaleTarget for accelerator name if it's not nil
 	if scaleTarget != nil {
 		podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+		if podTemplateSpec == nil {
+			return ""
+		}
 		// Check nodeSelector first
 		if podTemplateSpec.Spec.NodeSelector != nil {
 			for _, key := range constants.GpuProductKeys {

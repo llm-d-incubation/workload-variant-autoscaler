@@ -70,6 +70,10 @@ func TestLWSAccessor_GetReplicas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewLWSAccessor(tt.lws)
+			if tt.lws == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetReplicas()
 			if tt.expected == nil {
 				assert.Nil(t, result)
@@ -248,7 +252,7 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			expected: 60, // 4 + (8-1)*8 = 4 + 56 = 60
 		},
 		{
-			name: "nil leader template uses default, workers have GPUs",
+			name: "nil leader template, workers have GPUs",
 			lws: &lwsv1.LeaderWorkerSet{
 				Spec: lwsv1.LeaderWorkerSetSpec{
 					LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
@@ -271,10 +275,10 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 					},
 				},
 			},
-			expected: 5, // 1 (default) + (3-1)*2 = 1 + 4 = 5
+			expected: 4, // 0 (no leader GPUs) + (3-1)*2 = 0 + 4 = 4
 		},
 		{
-			name: "leader with no GPUs defaults to 1, workers have GPUs",
+			name: "leader with no GPUs, workers have GPUs",
 			lws: &lwsv1.LeaderWorkerSet{
 				Spec: lwsv1.LeaderWorkerSetSpec{
 					LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
@@ -310,7 +314,7 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 					},
 				},
 			},
-			expected: 9, // 1 + (5-1)*2 = 1 + 8 = 9
+			expected: 8, // 0 (no leader GPUs) + (5-1)*2 = 0 + 8 = 8
 		},
 		{
 			name: "leader has GPUs, workers have no GPUs",
@@ -516,6 +520,10 @@ func TestLWSAccessor_GetDeletionTimestamp(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewLWSAccessor(tt.lws)
+			if tt.lws == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetDeletionTimestamp()
 			if tt.expected == nil {
 				assert.Nil(t, result)
@@ -531,7 +539,7 @@ func TestLWSAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 	tests := []struct {
 		name     string
 		lws      *lwsv1.LeaderWorkerSet
-		validate func(t *testing.T, spec corev1.PodTemplateSpec)
+		validate func(t *testing.T, spec *corev1.PodTemplateSpec)
 	}{
 		{
 			name: "lws with leader template",
@@ -551,32 +559,44 @@ func TestLWSAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 					},
 				},
 			},
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				require.NotNil(t, spec)
 				assert.Equal(t, "leader", spec.Labels["role"])
 				assert.Equal(t, 1, len(spec.Spec.Containers))
 				assert.Equal(t, "leader-container", spec.Spec.Containers[0].Name)
 			},
 		},
 		{
-			name: "lws with nil leader template returns empty",
+			name: "lws with nil leader template returns worker template",
 			lws: &lwsv1.LeaderWorkerSet{
 				Spec: lwsv1.LeaderWorkerSetSpec{
 					LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
 						LeaderTemplate: nil,
+						WorkerTemplate: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{"role": "worker"},
+							},
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "worker-container", Image: "worker:latest"},
+								},
+							},
+						},
 					},
 				},
 			},
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
-				assert.Empty(t, spec.Labels)
-				assert.Empty(t, spec.Spec.Containers)
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				require.NotNil(t, spec)
+				assert.Equal(t, "worker", spec.Labels["role"])
+				assert.Equal(t, 1, len(spec.Spec.Containers))
+				assert.Equal(t, "worker-container", spec.Spec.Containers[0].Name)
 			},
 		},
 		{
 			name: "nil lws returns empty spec",
 			lws:  nil,
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
-				assert.Empty(t, spec.Labels)
-				assert.Empty(t, spec.Spec.Containers)
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				// Not called since accessor is nil
 			},
 		},
 	}
@@ -584,6 +604,10 @@ func TestLWSAccessor_GetLeaderPodTemplateSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewLWSAccessor(tt.lws)
+			if tt.lws == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetLeaderPodTemplateSpec()
 			tt.validate(t, result)
 		})
@@ -594,7 +618,7 @@ func TestLWSAccessor_GetWorkerPodTemplateSpec(t *testing.T) {
 	tests := []struct {
 		name     string
 		lws      *lwsv1.LeaderWorkerSet
-		validate func(t *testing.T, spec corev1.PodTemplateSpec)
+		validate func(t *testing.T, spec *corev1.PodTemplateSpec)
 	}{
 		{
 			name: "lws with worker template",
@@ -614,7 +638,8 @@ func TestLWSAccessor_GetWorkerPodTemplateSpec(t *testing.T) {
 					},
 				},
 			},
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				require.NotNil(t, spec)
 				assert.Equal(t, "worker", spec.Labels["role"])
 				assert.Equal(t, 1, len(spec.Spec.Containers))
 				assert.Equal(t, "worker-container", spec.Spec.Containers[0].Name)
@@ -623,9 +648,8 @@ func TestLWSAccessor_GetWorkerPodTemplateSpec(t *testing.T) {
 		{
 			name: "nil lws returns empty spec",
 			lws:  nil,
-			validate: func(t *testing.T, spec corev1.PodTemplateSpec) {
-				assert.Empty(t, spec.Labels)
-				assert.Empty(t, spec.Spec.Containers)
+			validate: func(t *testing.T, spec *corev1.PodTemplateSpec) {
+				// Not called since accessor is nil
 			},
 		},
 	}
@@ -633,6 +657,10 @@ func TestLWSAccessor_GetWorkerPodTemplateSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			accessor := NewLWSAccessor(tt.lws)
+			if tt.lws == nil {
+				assert.Nil(t, accessor)
+				return
+			}
 			result := accessor.GetWorkerPodTemplateSpec()
 			tt.validate(t, result)
 		})
@@ -709,15 +737,12 @@ func TestLWSAccessor_GetObject(t *testing.T) {
 	}
 
 	accessor := NewLWSAccessor(lws)
-	result := accessor.GetObject()
 
-	require.NotNil(t, result)
-	assert.Equal(t, "test-lws", result.GetName())
-	assert.Equal(t, "default", result.GetNamespace())
+	assert.Equal(t, "test-lws", accessor.GetName())
+	assert.Equal(t, "default", accessor.GetNamespace())
 }
 
-func TestLWSAccessor_GetObject_Nil(t *testing.T) {
+func TestLWSAccessor_GetName_GetNamespace_Nil(t *testing.T) {
 	accessor := NewLWSAccessor(nil)
-	result := accessor.GetObject()
-	assert.Nil(t, result)
+	assert.Nil(t, accessor)
 }

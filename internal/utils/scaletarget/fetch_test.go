@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/resources"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,7 +51,7 @@ func TestFetchScaleTarget(t *testing.T) {
 		existingObjs  []client.Object
 		expectedError bool
 		errorType     string
-		validate      func(t *testing.T, obj client.Object)
+		validate      func(t *testing.T, accessor ScaleTargetAccessor)
 	}{
 		{
 			name:       "successfully fetch existing deployment",
@@ -86,13 +87,11 @@ func TestFetchScaleTarget(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				deploy, ok := obj.(*appsv1.Deployment)
-				require.True(t, ok, "expected object to be a Deployment")
-				assert.Equal(t, "test-deployment", deploy.Name)
-				assert.Equal(t, "default", deploy.Namespace)
-				assert.Equal(t, int32(3), *deploy.Spec.Replicas)
-				assert.Equal(t, int32(3), deploy.Status.Replicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, "test-deployment", accessor.GetName())
+				assert.Equal(t, "default", accessor.GetNamespace())
+				assert.Equal(t, int32(3), *accessor.GetReplicas())
+				assert.Equal(t, int32(3), accessor.GetStatusReplicas())
 			},
 		},
 		{
@@ -104,7 +103,7 @@ func TestFetchScaleTarget(t *testing.T) {
 			existingObjs:  []client.Object{},
 			expectedError: true,
 			errorType:     "NotFound",
-			validate: func(t *testing.T, obj client.Object) {
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
 				// No validation needed for error case
 			},
 		},
@@ -142,11 +141,9 @@ func TestFetchScaleTarget(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				deploy, ok := obj.(*appsv1.Deployment)
-				require.True(t, ok, "expected object to be a Deployment")
-				assert.Equal(t, int32(0), *deploy.Spec.Replicas)
-				assert.Equal(t, int32(0), deploy.Status.Replicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, int32(0), *accessor.GetReplicas())
+				assert.Equal(t, int32(0), accessor.GetStatusReplicas())
 			},
 		},
 		{
@@ -180,10 +177,8 @@ func TestFetchScaleTarget(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				deploy, ok := obj.(*appsv1.Deployment)
-				require.True(t, ok, "expected object to be a Deployment")
-				assert.Equal(t, "other-namespace", deploy.Namespace)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, "other-namespace", accessor.GetNamespace())
 			},
 		},
 		{
@@ -195,7 +190,7 @@ func TestFetchScaleTarget(t *testing.T) {
 			existingObjs:  []client.Object{},
 			expectedError: true,
 			errorType:     "InvalidKind",
-			validate: func(t *testing.T, obj client.Object) {
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
 				// No validation needed for error case
 			},
 		},
@@ -234,12 +229,10 @@ func TestFetchScaleTarget(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				deploy, ok := obj.(*appsv1.Deployment)
-				require.True(t, ok, "expected object to be a Deployment")
-				assert.Equal(t, int32(10), *deploy.Spec.Replicas)
-				assert.Equal(t, int32(10), deploy.Status.Replicas)
-				assert.Equal(t, int32(8), deploy.Status.ReadyReplicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, int32(10), *accessor.GetReplicas())
+				assert.Equal(t, int32(10), accessor.GetStatusReplicas())
+				assert.Equal(t, int32(8), accessor.GetStatusReadyReplicas())
 			},
 		},
 	}
@@ -270,7 +263,7 @@ func TestFetchScaleTarget(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, accessor)
-				tt.validate(t, accessor.GetObject())
+				tt.validate(t, accessor)
 			}
 		})
 	}
@@ -384,7 +377,7 @@ func TestGetResourceWithBackoff(t *testing.T) {
 			ctx := context.Background()
 			var obj appsv1.Deployment
 
-			err := getResourceWithBackoff(ctx, fakeClient, tt.objKey, &obj, constants.StandardBackoff, "Deployment")
+			err := resources.GetResourceWithBackoff(ctx, fakeClient, tt.objKey, &obj, constants.StandardBackoff, "Deployment")
 
 			if tt.expectedError {
 				require.Error(t, err)
@@ -437,7 +430,8 @@ func TestFetchScaleTargetReturnsAccessor(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, accessor)
-	assert.NotNil(t, accessor.GetObject())
+	assert.Equal(t, "test-deployment", accessor.GetName())
+	assert.Equal(t, "default", accessor.GetNamespace())
 	assert.Equal(t, int32(1), *accessor.GetReplicas())
 }
 
@@ -478,7 +472,7 @@ func TestGetResourceWithBackoffRetries(t *testing.T) {
 	ctx := context.Background()
 	var obj appsv1.Deployment
 
-	err := getResourceWithBackoff(ctx, mockClient, client.ObjectKey{Name: "test", Namespace: "default"}, &obj, constants.StandardBackoff, "Deployment")
+	err := resources.GetResourceWithBackoff(ctx, mockClient, client.ObjectKey{Name: "test", Namespace: "default"}, &obj, constants.StandardBackoff, "Deployment")
 
 	// Should eventually succeed after retries
 	assert.Error(t, err) // Will be NotFound from mock
@@ -630,7 +624,7 @@ func TestGetContainersGPUs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GetContainersGPUs(tt.containers)
+			result := resources.GetContainersGPUs(tt.containers)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -650,7 +644,7 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 		existingObjs  []client.Object
 		expectedError bool
 		errorType     string
-		validate      func(t *testing.T, obj client.Object)
+		validate      func(t *testing.T, accessor ScaleTargetAccessor)
 	}{
 		{
 			name:       "successfully fetch existing LeaderWorkerSet",
@@ -696,13 +690,11 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				lws, ok := obj.(*lwsv1.LeaderWorkerSet)
-				require.True(t, ok, "expected object to be a LeaderWorkerSet")
-				assert.Equal(t, "test-lws", lws.Name)
-				assert.Equal(t, "default", lws.Namespace)
-				assert.Equal(t, int32(3), *lws.Spec.Replicas)
-				assert.Equal(t, int32(3), lws.Status.Replicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, "test-lws", accessor.GetName())
+				assert.Equal(t, "default", accessor.GetNamespace())
+				assert.Equal(t, int32(3), *accessor.GetReplicas())
+				assert.Equal(t, int32(3), accessor.GetStatusReplicas())
 			},
 		},
 		{
@@ -714,7 +706,7 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 			existingObjs:  []client.Object{},
 			expectedError: true,
 			errorType:     "NotFound",
-			validate:      func(t *testing.T, obj client.Object) {},
+			validate:      func(t *testing.T, accessor ScaleTargetAccessor) {},
 		},
 		{
 			name:       "LeaderWorkerSet with zero replicas",
@@ -747,11 +739,9 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				lws, ok := obj.(*lwsv1.LeaderWorkerSet)
-				require.True(t, ok, "expected object to be a LeaderWorkerSet")
-				assert.Equal(t, int32(0), *lws.Spec.Replicas)
-				assert.Equal(t, int32(0), lws.Status.Replicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, int32(0), *accessor.GetReplicas())
+				assert.Equal(t, int32(0), accessor.GetStatusReplicas())
 			},
 		},
 		{
@@ -782,10 +772,8 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				lws, ok := obj.(*lwsv1.LeaderWorkerSet)
-				require.True(t, ok, "expected object to be a LeaderWorkerSet")
-				assert.Equal(t, "other-namespace", lws.Namespace)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, "other-namespace", accessor.GetNamespace())
 			},
 		},
 		{
@@ -820,12 +808,10 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 				},
 			},
 			expectedError: false,
-			validate: func(t *testing.T, obj client.Object) {
-				lws, ok := obj.(*lwsv1.LeaderWorkerSet)
-				require.True(t, ok, "expected object to be a LeaderWorkerSet")
-				assert.Equal(t, int32(10), *lws.Spec.Replicas)
-				assert.Equal(t, int32(10), lws.Status.Replicas)
-				assert.Equal(t, int32(8), lws.Status.ReadyReplicas)
+			validate: func(t *testing.T, accessor ScaleTargetAccessor) {
+				assert.Equal(t, int32(10), *accessor.GetReplicas())
+				assert.Equal(t, int32(10), accessor.GetStatusReplicas())
+				assert.Equal(t, int32(8), accessor.GetStatusReadyReplicas())
 			},
 		},
 	}
@@ -854,7 +840,7 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, accessor)
-				tt.validate(t, accessor.GetObject())
+				tt.validate(t, accessor)
 			}
 		})
 	}
@@ -896,7 +882,8 @@ func TestFetchScaleTarget_LWSReturnsAccessor(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, accessor)
-	assert.NotNil(t, accessor.GetObject())
+	assert.Equal(t, "test-lws", accessor.GetName())
+	assert.Equal(t, "default", accessor.GetNamespace())
 	assert.Equal(t, int32(5), *accessor.GetReplicas())
 	assert.Equal(t, int32(4), accessor.GetGroupSize())
 }
