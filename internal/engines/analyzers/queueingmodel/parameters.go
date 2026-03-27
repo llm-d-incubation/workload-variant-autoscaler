@@ -24,6 +24,34 @@ type LearnedParameters struct {
 	LastUpdated time.Time
 }
 
+// DeepCopy creates a deep copy of LearnedParameters
+func (lp *LearnedParameters) deepCopy() *LearnedParameters {
+	if lp == nil {
+		return nil
+	}
+
+	copied := &LearnedParameters{
+		Alpha:       lp.Alpha,
+		Beta:        lp.Beta,
+		Gamma:       lp.Gamma,
+		NIS:         lp.NIS,
+		LastUpdated: lp.LastUpdated,
+	}
+
+	// Deep copy the Covariance matrix
+	if lp.Covariance != nil {
+		copied.Covariance = make([][]float64, len(lp.Covariance))
+		for i := range lp.Covariance {
+			if lp.Covariance[i] != nil {
+				copied.Covariance[i] = make([]float64, len(lp.Covariance[i]))
+				copy(copied.Covariance[i], lp.Covariance[i])
+			}
+		}
+	}
+
+	return copied
+}
+
 // NewParameterStore creates a new parameter store
 func NewParameterStore() *ParameterStore {
 	return &ParameterStore{
@@ -31,12 +59,17 @@ func NewParameterStore() *ParameterStore {
 	}
 }
 
-// Get retrieves parameters for a variant (nil if does not exist)
+// Get retrieves a deep copy of parameters for a variant (nil if does not exist)
 func (s *ParameterStore) Get(namespace, variantName string) *LearnedParameters {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := makeVariantKey(namespace, variantName)
-	return s.params[key]
+	params := s.params[key]
+	if params == nil {
+		return nil
+	}
+	// Return a deep copy to avoid race conditions on Covariance slice
+	return params.deepCopy()
 }
 
 // Set stores parameters for a variant (overrides any earlier parameters)
