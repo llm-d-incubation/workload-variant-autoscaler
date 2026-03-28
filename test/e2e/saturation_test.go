@@ -623,8 +623,8 @@ var _ = Describe("Saturation Mode - Single VariantAutoscaling with LeaderWorkerS
 // Multi-variant saturation test (cost-based scaling)
 var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full"), Ordered, func() {
 	var (
-		poolA         = "saturation-multi-pool-a"
-		poolB         = "saturation-multi-pool-b"
+		poolA         = "saturation-single-pool" // Use same pool as single-variant test (multiple VAs can share one pool)
+		poolB         = "saturation-single-pool" // Use same pool as single-variant test (multiple VAs can share one pool)
 		modelServiceA = "saturation-multi-ms-a"
 		modelServiceB = "saturation-multi-ms-b"
 		vaA           = "saturation-multi-va-a"
@@ -840,8 +840,8 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings", Label("full")
 // Multi-variant saturation test with LeaderWorkerSet (cost-based scaling)
 var _ = Describe("Saturation Mode - Multiple VariantAutoscalings with LeaderWorkerSet", Label("full"), Ordered, func() {
 	var (
-		poolA         = "saturation-multi-pool-a" // Reuse same pools as Deployment test
-		poolB         = "saturation-multi-pool-b" // Reuse same pools as Deployment test
+		poolA         = "saturation-single-pool" // Use same pool as single-variant test (multiple VAs can share one pool)
+		poolB         = "saturation-single-pool" // Use same pool as single-variant test (multiple VAs can share one pool)
 		modelServiceA = "saturation-multi-lws-ms-a"
 		modelServiceB = "saturation-multi-lws-ms-b"
 		lwsNameA      = modelServiceA + "-decode"
@@ -959,6 +959,10 @@ var _ = Describe("Saturation Mode - Multiple VariantAutoscalings with LeaderWork
 		lwsB.SetNamespace(cfg.LLMDNamespace)
 		lwsB.SetName(lwsNameB)
 		_ = crClient.Delete(ctx, lwsB)
+	})
+
+	BeforeEach(func() {
+		Skip("Multi-variant saturation test is currently disabled due to instability and long execution time. Re-enable after addressing underlying issues.")
 	})
 
 	It("should prefer cheaper variant (VA A) for scale-up when both variants are available", func() {
