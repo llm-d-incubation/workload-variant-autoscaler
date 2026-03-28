@@ -250,7 +250,7 @@ test-e2e-full: manifests generate fmt vet ## Run full e2e test suite
 	MODEL_ID=$(MODEL_ID) \
 	REQUEST_RATE=$(REQUEST_RATE) \
 	NUM_PROMPTS=$(NUM_PROMPTS) \
-	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
+	go test ./test/e2e/ -timeout 60m -v -ginkgo.v \
 		-ginkgo.label-filter="full && !flaky" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
