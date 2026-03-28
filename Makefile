@@ -91,7 +91,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest helm ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH="$(LOCALBIN):$(PATH)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH=$(LOCALBIN):$(PATH) go test $$(go list ./... | grep -v /e2e | grep -v /benchmark) -coverprofile cover.out
 
 # Creates a multi-node Kind cluster
 # Adds emulated GPU labels and capacities per node
@@ -269,7 +269,32 @@ test-e2e-smoke-with-setup: deploy-e2e-infra test-e2e-smoke
 # Convenience target that deploys infra + runs full test suite.
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
 .PHONY: test-e2e-full-with-setup
-test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full 
+test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full
+
+# Benchmark targets
+.PHONY: test-benchmark
+test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-latency scenario)
+	@echo "Running benchmark tests..."
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALER_BACKEND=$(SCALER_BACKEND) \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/benchmark/ -timeout 30m -v -ginkgo.v \
+		-ginkgo.label-filter="benchmark"; \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Benchmark execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Convenience target that deploys infra + runs benchmark tests.
+.PHONY: test-benchmark-with-setup
+test-benchmark-with-setup: deploy-e2e-infra test-benchmark
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

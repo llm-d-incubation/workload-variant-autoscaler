@@ -313,7 +313,7 @@ echo "Sending $TOTAL_REQUESTS requests to $TARGET_URL"
 echo "Waiting for service to be ready..."
 CONNECTED=false
 for i in $(seq 1 $MAX_RETRIES); do
-  if curl -s -o /dev/null -w "%%{http_code}" "$TARGET_URL" 2>/dev/null | grep -qE "^(200|404)"; then
+  if curl -s -o /dev/null -w "%%{http_code}" "$TARGET_URL" 2>/dev/null | grep -qE "^(200|404|405)"; then
     echo "Connection test passed on attempt $i"
     CONNECTED=true
     break
