@@ -1,0 +1,410 @@
+name: CI - Benchmark
+
+concurrency:
+  group: >-
+    ${{
+      github.event_name == 'issue_comment' &&
+      !contains(github.event.comment.body, '/benchmark kind')
+      && format('benchmark-isolated-{0}', github.run_id)
+      || format('benchmark-kind-{0}',
+           github.event.issue.number
+           || github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      run_benchmark: ${{ steps.check.outputs.run_benchmark }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      pr_head_sha: ${{ steps.check.outputs.pr_head_sha }}
+      pr_head_repo: ${{ steps.check.outputs.pr_head_repo }}
+    steps:
+      - name: Check if benchmark requested
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function hasWriteAccess(username) {
+              try {
+                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: username
+                });
+                const privilegedRoles = ['admin', 'maintain', 'write'];
+                return privilegedRoles.includes(permission.permission);
+              } catch (e) {
+                console.log(`Could not get permissions for ${username}: ${e.message}`);
+                return false;
+              }
+            }
+
+            if (context.eventName !== 'issue_comment') {
+              core.setOutput('run_benchmark', 'false');
+              return;
+            }
+
+            const comment = context.payload.comment.body.trim();
+            const issue = context.payload.issue;
+
+            if (!issue.pull_request) {
+              console.log('Comment is not on a PR, skipping');
+              core.setOutput('run_benchmark', 'false');
+              return;
+            }
+
+            const validCommands = ['/benchmark kind'];
+            if (!validCommands.includes(comment)) {
+              console.log(`Comment "${comment}" is not a valid benchmark command, skipping`);
+              core.setOutput('run_benchmark', 'false');
+              return;
+            }
+
+            const commenter = context.payload.comment.user.login;
+            const hasAccess = await hasWriteAccess(commenter);
+            if (!hasAccess) {
+              console.log(`User ${commenter} does not have write access, ignoring ${comment}`);
+              core.setOutput('run_benchmark', 'false');
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: issue.number
+            });
+
+            const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
+            const headRepo = pr.head.repo ? pr.head.repo.full_name : baseRepo;
+
+            console.log(`/benchmark kind approved by ${commenter} for PR #${issue.number}`);
+            console.log(`PR head SHA: ${pr.head.sha}`);
+
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `🚀 **Benchmark (Kind)** triggered by \`/benchmark kind\`\n\n[View the benchmark workflow run](${runUrl})`
+            });
+
+            core.setOutput('run_benchmark', 'true');
+            core.setOutput('pr_number', issue.number.toString());
+            core.setOutput('pr_head_sha', pr.head.sha);
+            core.setOutput('pr_head_repo', headRepo);
+
+  benchmark-kind:
+    runs-on: ubuntu-latest
+    needs: [gate]
+    if: needs.gate.outputs.run_benchmark == 'true'
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      statuses: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Set pending status on PR head
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.gate.outputs.pr_head_sha }}',
+              state: 'pending',
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Benchmark running...',
+              context: '${{ github.workflow }} / benchmark-kind'
+            });
+
+      - name: Validate PR head SHA
+        run: |
+          if [ -z "${{ needs.gate.outputs.pr_head_sha }}" ]; then
+            echo "::error::pr_head_sha is empty — refusing to fall back to main"
+            exit 1
+          fi
+          echo "Checkout will use PR head SHA: ${{ needs.gate.outputs.pr_head_sha }}"
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.gate.outputs.pr_head_repo || github.repository }}
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        uses: actions/setup-go@v6
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install Kind
+        run: |
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)  KIND_ARCH="amd64" ;;
+            aarch64) KIND_ARCH="arm64" ;;
+            *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+          esac
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-${KIND_ARCH}"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build WVA image locally
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ needs.gate.outputs.pr_head_sha }}
+        run: |
+          IMAGE_NAME="llm-d-workload-variant-autoscaler"
+          IMAGE_TAG="bench-${CHECKOUT_SHA:0:7}"
+          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "Building local image: $FULL_IMAGE"
+          make docker-build IMG="$FULL_IMAGE"
+          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Deploy e2e infrastructure
+        env:
+          ENVIRONMENT: kind-emulator
+          USE_SIMULATOR: "true"
+          CREATE_CLUSTER: "true"
+          INSTALL_GATEWAY_CTRLPLANE: "true"
+          E2E_TESTS_ENABLED: "true"
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          KV_SPARE_TRIGGER: "0.5"
+          QUEUE_SPARE_TRIGGER: "4.5"
+          INSTALL_GRAFANA: "true"
+        run: make deploy-e2e-infra
+
+      - name: Run benchmark
+        env:
+          ENVIRONMENT: kind-emulator
+          USE_SIMULATOR: "true"
+          SCALER_BACKEND: prometheus-adapter
+          BENCHMARK_RESULTS_FILE: /tmp/benchmark-results.json
+          BENCHMARK_GRAFANA_ENABLED: "true"
+          BENCHMARK_GRAFANA_SNAPSHOT_FILE: /tmp/benchmark-grafana-snapshot.txt
+          BENCHMARK_GRAFANA_SNAPSHOT_JSON: /tmp/benchmark-grafana-snapshot.json
+          BENCHMARK_GRAFANA_PANEL_DIR: /tmp/benchmark-panels
+          KV_SPARE_TRIGGER: "0.5"
+          QUEUE_SPARE_TRIGGER: "4.5"
+        run: make test-benchmark
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            /tmp/benchmark-results.json
+            /tmp/benchmark-grafana-snapshot.txt
+            /tmp/benchmark-grafana-snapshot.json
+            /tmp/benchmark-panels/
+          if-no-files-found: warn
+
+      - name: Post benchmark results as PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const prNumber = parseInt('${{ needs.gate.outputs.pr_number }}');
+            const sha = '${{ needs.gate.outputs.pr_head_sha }}';
+            const runId = context.runId;
+            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
+
+            // Look up the uploaded artifact to get a direct download link
+            let artifactUrl = `${repoUrl}/actions/runs/${runId}`;
+            try {
+              const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId
+              });
+              const benchArtifact = artifacts.find(a => a.name === 'benchmark-results');
+              if (benchArtifact) {
+                artifactUrl = `${repoUrl}/actions/runs/${runId}/artifacts/${benchArtifact.id}`;
+              }
+            } catch (e) {
+              console.log(`Could not look up artifact: ${e.message}`);
+            }
+
+            let resultsTable = '⚠️ Benchmark results file not found or could not be parsed.';
+
+            try {
+              const data = JSON.parse(fs.readFileSync('/tmp/benchmark-results.json', 'utf8'));
+
+              const fmtTime = (v) => v < 0 ? 'N/A' : `${v.toFixed(1)}s`;
+
+              resultsTable = `| Metric | Value |
+            |--------|-------|
+            | Scale-up time | ${fmtTime(data.scaleUpTimeSec)} |
+            | Scale-down time | ${fmtTime(data.scaleDownTimeSec)} |
+            | Max replicas | ${data.maxReplicas} |
+            | Avg KV cache usage | ${data.avgKVCacheUsage.toFixed(3)} |
+            | Avg queue depth | ${data.avgQueueDepth.toFixed(1)} |
+            | Replica oscillation (σ) | ${data.replicaOscillation.toFixed(2)} |
+            | Total duration | ${data.totalDurationSec.toFixed(0)}s |`;
+            } catch (e) {
+              console.log(`Could not read results: ${e.message}`);
+            }
+
+            // Upload panel PNGs as release assets and collect URLs for embedding
+            let panelImages = '';
+            const panelDir = '/tmp/benchmark-panels';
+            const hasPanels = fs.existsSync(panelDir) &&
+              fs.readdirSync(panelDir).some(f => f.endsWith('.png'));
+
+            if (hasPanels) {
+              const pngs = fs.readdirSync(panelDir).filter(f => f.endsWith('.png')).sort();
+              const tag = `benchmark-run-${runId}`;
+
+              try {
+                // Create a lightweight release to host panel images
+                const release = await github.rest.repos.createRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tag,
+                  name: `Benchmark panels (PR #${prNumber}, ${sha.substring(0, 7)})`,
+                  body: `Auto-generated by benchmark CI run #${runId}`,
+                  draft: false,
+                  prerelease: true
+                });
+
+                const imageUrls = [];
+                for (const png of pngs) {
+                  const filePath = path.join(panelDir, png);
+                  const fileData = fs.readFileSync(filePath);
+                  const asset = await github.rest.repos.uploadReleaseAsset({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.data.id,
+                    name: png,
+                    data: fileData,
+                    headers: { 'content-type': 'image/png' }
+                  });
+                  const title = png.replace('panel-', '').replace('.png', '').replace(/-/g, ' ');
+                  imageUrls.push(`#### ${title}\n![${title}](${asset.data.browser_download_url})`);
+                  console.log(`Uploaded ${png}: ${asset.data.browser_download_url}`);
+                }
+
+                if (imageUrls.length > 0) {
+                  panelImages = `\n\n<details>\n<summary>Dashboard Panels (${imageUrls.length})</summary>\n\n${imageUrls.join('\n\n')}\n\n</details>`;
+                }
+              } catch (e) {
+                console.log(`Could not upload panel images: ${e.message}`);
+              }
+            }
+
+            // Check for Grafana snapshot
+            const hasSnapshotJson = fs.existsSync('/tmp/benchmark-grafana-snapshot.json');
+            let artifactsSection = '';
+            if (hasSnapshotJson || hasPanels) {
+              const items = [];
+              if (hasSnapshotJson) {
+                items.push('Grafana snapshot JSON');
+              }
+              artifactsSection = `\n\n📎 **[Download artifacts](${artifactUrl})**${items.length ? ' — ' + items.join(', ') : ''}`;
+            }
+
+            const body = `## Benchmark: scale-up-latency (Kind)
+
+            ${resultsTable}${panelImages}${artifactsSection}
+
+            <details>
+            <summary>Environment</summary>
+
+            - Cluster: Kind (emulated GPUs)
+            - Model: unsloth/Meta-Llama-3.1-8B (simulator)
+            - Commit: ${sha.substring(0, 7)}
+            - Scaler: prometheus-adapter
+            - [Workflow run](${repoUrl}/actions/runs/${runId})
+
+            </details>`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body
+            });
+
+      - name: Cleanup Kind cluster
+        if: always()
+        run: kind delete cluster --name kind-wva-gpu-cluster || true
+
+  report-status:
+    runs-on: ubuntu-latest
+    needs: [gate, benchmark-kind]
+    if: always() && needs.gate.outputs.run_benchmark == 'true'
+    permissions:
+      statuses: write
+    steps:
+      - name: Report status to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prHeadSha = '${{ needs.gate.outputs.pr_head_sha }}';
+            const benchResult = '${{ needs.benchmark-kind.result }}';
+
+            if (!prHeadSha) {
+              console.log('No PR head SHA available, skipping status report');
+              return;
+            }
+
+            let state, description;
+            if (benchResult === 'success') {
+              state = 'success';
+              description = 'Benchmark completed successfully';
+            } else if (benchResult === 'skipped') {
+              state = 'failure';
+              description = 'Benchmark did not run (prerequisite failed or skipped)';
+            } else if (benchResult === 'cancelled') {
+              state = 'failure';
+              description = 'Benchmark cancelled';
+            } else {
+              state = 'failure';
+              description = 'Benchmark failed';
+            }
+
+            console.log(`Reporting status to PR commit ${prHeadSha}: ${state} - ${description}`);
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: prHeadSha,
+              state: state,
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: description,
+              context: '${{ github.workflow }} / benchmark-kind'
+            });
+
+            console.log('Status reported successfully');

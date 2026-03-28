@@ -398,8 +398,8 @@ func GetProjectDir() (string, error) {
 		return wd, err
 	}
 
-	// Handle test package path (consolidated e2e suite)
-	m := regexp.MustCompile(`/test/e2e`)
+	// Handle test package paths (e2e suite, benchmark suite, etc.)
+	m := regexp.MustCompile(`/test/[^/]+$`)
 	wd = m.ReplaceAllString(wd, "")
 	return wd, nil
 }
@@ -719,8 +719,8 @@ func SetUpPortForward(k8sClient *kubernetes.Clientset, ctx context.Context, serv
 func VerifyPortForwardReadiness(ctx context.Context, localPort int, request string) error {
 	var client *http.Client
 	tr := &http.Transport{}
-	// Prometheus uses a self-signed certificate for tests, so we need to skip verification when accessing its HTTPS endpoint.
-	if request == fmt.Sprintf("https://localhost:%d/api/v1/query?query=up", localPort) {
+	// Skip TLS verification for HTTPS endpoints (e.g. Prometheus uses self-signed certs in tests).
+	if strings.HasPrefix(request, "https://") {
 		tr = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
@@ -973,6 +973,11 @@ type PrometheusQueryResult struct {
 // PrometheusClient wraps the official Prometheus client
 type PrometheusClient struct {
 	client promv1.API
+}
+
+// API returns the underlying Prometheus v1 API for advanced queries (e.g., QueryRange).
+func (p *PrometheusClient) API() promv1.API {
+	return p.client
 }
 
 // creates a new Prometheus client for e2e tests

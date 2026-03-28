@@ -1,0 +1,171 @@
+# Standalone Grafana deployment for benchmark snapshot capture.
+# Deployed via kubectl apply — avoids Helm subchart issues with kube-prometheus-stack.
+# Grafana runs with anonymous admin access so the benchmark can use the API without tokens.
+# The dashboard JSON is mounted from a ConfigMap created separately by the benchmark code.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-ini
+  labels:
+    app: benchmark-grafana
+data:
+  grafana.ini: |
+    [auth.anonymous]
+    enabled = true
+    org_role = Admin
+
+    [security]
+    allow_embedding = true
+
+    [snapshots]
+    external_enabled = false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  labels:
+    app: benchmark-grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090
+        isDefault: true
+        jsonData:
+          tlsSkipVerify: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: benchmark-grafana
+  labels:
+    app: benchmark-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: benchmark-grafana
+  template:
+    metadata:
+      labels:
+        app: benchmark-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: docker.io/grafana/grafana:11.4.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+            - name: GF_RENDERING_SERVER_URL
+              value: http://localhost:8081/render
+            - name: GF_RENDERING_CALLBACK_URL
+              value: http://localhost:3000/
+            - name: GF_LOG_FILTERS
+              value: rendering:debug
+          volumeMounts:
+            - name: grafana-ini
+              mountPath: /etc/grafana/grafana.ini
+              subPath: grafana.ini
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+        - name: renderer
+          image: docker.io/grafana/grafana-image-renderer:3.11.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: renderer
+          env:
+            - name: ENABLE_METRICS
+              value: "false"
+            - name: HTTP_PORT
+              value: "8081"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: grafana-ini
+          configMap:
+            name: grafana-ini
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: benchmark-dashboard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  labels:
+    app: benchmark-grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: benchmark
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: benchmark-grafana
+  labels:
+    app: benchmark-grafana
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: benchmark-grafana
