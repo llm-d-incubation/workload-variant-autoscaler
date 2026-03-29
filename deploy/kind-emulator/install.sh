@@ -206,18 +206,32 @@ load_image() {
     # containerd image store where `docker save` chokes on multi-platform manifests),
     # fall back to pulling the image directly into each KIND node's containerd.
     local full_image="$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
-    if kind load docker-image "$full_image" --name "$CLUSTER_NAME" 2>/dev/null; then
+    local load_stderr
+    if load_stderr="$(kind load docker-image "$full_image" --name "$CLUSTER_NAME" 2>&1)"; then
         log_success "Image '$full_image' loaded into KIND cluster '$CLUSTER_NAME'"
         return
     fi
 
-    log_warning "'kind load docker-image' failed — falling back to pulling directly into KIND nodes (containerd image store workaround)"
+    # Only fall back to the crictl/ctr path for the known containerd image store
+    # issue (docker save fails on multi-platform manifests, kubernetes-sigs/kind#3795).
+    # For any other error, report it and abort.
+    if ! echo "$load_stderr" | grep -qi "docker save"; then
+        log_error "'kind load docker-image' failed:"
+        log_error "$load_stderr"
+        exit 1
+    fi
+
+    log_warning "'kind load docker-image' failed (containerd image store issue) — falling back to pulling directly into KIND nodes"
+    log_info "kind load stderr: $load_stderr"
 
     # Pull the image directly into each KIND node's containerd, bypassing
     # Docker Desktop entirely. This avoids the `docker save` multi-platform
     # manifest issue (kubernetes-sigs/kind#3795).
     local nodes
-    nodes="$(kind get nodes --name "$CLUSTER_NAME" 2>/dev/null)"
+    nodes="$(kind get nodes --name "$CLUSTER_NAME")" || {
+        log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
+        exit 1
+    }
     if [ -z "$nodes" ]; then
         log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
         exit 1
@@ -226,15 +240,24 @@ load_image() {
     local failed=false
     for node in $nodes; do
         log_info "Pulling image on node '$node'..."
-        if ! docker exec "$node" crictl pull "$full_image" 2>/dev/null; then
-            # crictl may not resolve short names; try with docker.io prefix for non-qualified images
-            if ! docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>/dev/null; then
-                log_warning "Failed to pull image on node '$node'"
-                failed=true
-            else
-                # Tag so kubelet can find it by the original name
-                docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" 2>/dev/null || true
-            fi
+        local pull_stderr
+        if pull_stderr="$(docker exec "$node" crictl pull "$full_image" 2>&1)"; then
+            continue
+        fi
+        log_warning "crictl pull failed on node '$node': $pull_stderr"
+
+        # crictl may not resolve short names; try with docker.io prefix, but
+        # only for unqualified image names (no registry prefix like ghcr.io/).
+        if echo "$full_image" | grep -q '/.*/' ; then
+            # Image is fully qualified (e.g., ghcr.io/org/repo:tag) — docker.io prefix would be wrong
+            log_warning "Failed to pull image on node '$node' (image is fully qualified, skipping docker.io fallback)"
+            failed=true
+        elif pull_stderr="$(docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>&1)"; then
+            # Tag so kubelet can find it by the original name
+            docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" || true
+        else
+            log_warning "Failed to pull image on node '$node': $pull_stderr"
+            failed=true
         fi
     done
 
