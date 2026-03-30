@@ -73,8 +73,8 @@ type OptimizedAlloc struct {
 
 	// Accelerator is the type of accelerator for the optimized allocation.
 	// Deprecated: This field is deprecated and will be removed in a future version. Use node selector or node affinity from scale target instead.
-	// +kubebuilder:validation:MinLength=2
-	Accelerator string `json:"accelerator"`
+	// +optional
+	Accelerator string `json:"accelerator,omitempty"`
 
 	// NumReplicas is the number of replicas for the optimized allocation.
 	// nil means no optimization decision has been made yet.
