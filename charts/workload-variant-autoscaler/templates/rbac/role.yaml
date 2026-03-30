@@ -94,6 +94,13 @@ rules:
   - update
   - watch
 - apiGroups:
+  - leaderworkerset.x-k8s.io
+  resources:
+  - leaderworkersets/scale
+  verbs:
+  - get
+  - update
+- apiGroups:
   - apps
   resources:
   - replicasets
