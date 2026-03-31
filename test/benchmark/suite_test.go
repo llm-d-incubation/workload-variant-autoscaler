@@ -1,3 +1,6 @@
+// Package benchmark runs cluster-backed scale-up latency scenarios. Parallel
+// load Jobs are created via github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures
+// (see workload_builder.go there for why load helpers share that package with e2e).
 package benchmark
 
 import (

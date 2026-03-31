@@ -47,7 +47,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(deployment.Status.ReadyReplicas).To(BeNumerically(">=", 1),
 				"Model service should have at least 1 ready replica")
-		}, time.Duration(cfg.PodReadyTimeout)*time.Second, 5*time.Second).Should(Succeed())
+		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Discovering EPP service")
 		// Discover existing EPP services dynamically (like legacy tests)
@@ -79,7 +79,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			}
 
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
-		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		}).Should(Succeed())
 
 		Expect(eppServiceName).NotTo(BeEmpty(), "EPP service name should be set")
 
@@ -99,7 +99,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 			}
 			g.Expect(readyCount).To(BeNumerically(">=", 1),
 				"Should have at least one Ready EPP pod")
-		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
 		By("Discovering or creating metrics reader secret")
 		var discoverErr error

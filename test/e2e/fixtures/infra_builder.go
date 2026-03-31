@@ -39,7 +39,9 @@ func EnsureService(ctx context.Context, k8sClient *kubernetes.Clientset, namespa
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing service %s: %w", serviceName, deleteErr)
 		}
-		time.Sleep(500 * time.Millisecond)
+		if waitErr := WaitUntilServiceDeleted(ctx, k8sClient, namespace, serviceName, 30*time.Second); waitErr != nil {
+			return fmt.Errorf("timeout waiting for service %s to be deleted: %w", serviceName, waitErr)
+		}
 	} else if !errors.IsNotFound(err) {
 		return fmt.Errorf("check existing service %s: %w", serviceName, err)
 	}
@@ -47,7 +49,9 @@ func EnsureService(ctx context.Context, k8sClient *kubernetes.Clientset, namespa
 	_, err = k8sClient.CoreV1().Services(namespace).Create(ctx, service, metav1.CreateOptions{})
 	if err != nil && errors.IsAlreadyExists(err) {
 		_ = k8sClient.CoreV1().Services(namespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
-		time.Sleep(1 * time.Second)
+		if waitErr := WaitUntilServiceDeleted(ctx, k8sClient, namespace, serviceName, 30*time.Second); waitErr != nil {
+			return fmt.Errorf("timeout waiting for service %s to be deleted before recreate: %w", serviceName, waitErr)
+		}
 		_, err = k8sClient.CoreV1().Services(namespace).Create(ctx, service, metav1.CreateOptions{})
 	}
 	return err
@@ -109,17 +113,8 @@ func EnsureServiceMonitor(ctx context.Context, crClient client.Client, monitorin
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing ServiceMonitor %s: %w", serviceMonitorName, deleteErr)
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		for {
-			checkErr := crClient.Get(waitCtx, client.ObjectKey{Name: serviceMonitorName, Namespace: monitoringNamespace}, &promoperator.ServiceMonitor{})
-			if errors.IsNotFound(checkErr) {
-				break
-			}
-			if waitCtx.Err() != nil {
-				return fmt.Errorf("timeout waiting for ServiceMonitor %s to be deleted", serviceMonitorName)
-			}
-			time.Sleep(1 * time.Second)
+		if waitErr := WaitUntilServiceMonitorDeleted(ctx, crClient, monitoringNamespace, serviceMonitorName, 30*time.Second); waitErr != nil {
+			return fmt.Errorf("timeout waiting for ServiceMonitor %s to be deleted: %w", serviceMonitorName, waitErr)
 		}
 	} else if !errors.IsNotFound(err) {
 		return fmt.Errorf("check existing ServiceMonitor %s: %w", serviceMonitorName, err)
