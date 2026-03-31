@@ -51,7 +51,7 @@ func scaleTargetIndexKey(namespace string, ref autoscalingv2.CrossVersionObjectR
 		default:
 			logger := ctrl.LoggerFrom(context.TODO())
 			logger.V(logging.DEBUG).Info("APIVersion not specified for scale target; defaulting to apps/v1", "kind", ref.Kind, "name", ref.Name)
-			ref.APIVersion = "apps/v1"
+			ref.APIVersion = constants.DeploymentAPIVersion
 		}
 	}
 	return fmt.Sprintf("%s/%s/%s/%s", namespace, ref.APIVersion, ref.Kind, ref.Name)
