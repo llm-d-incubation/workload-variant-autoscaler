@@ -18,8 +18,104 @@ import (
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
+
+// cleanupSmokeTestResources deletes all resources created by smoke tests to ensure clean state
+func cleanupSmokeTestResources() {
+	GinkgoWriter.Println("Cleaning up smoke test resources for clean state...")
+
+	// Helper to check if resource name matches smoke test patterns
+	isSmokeTestResource := func(name string) bool {
+		return strings.HasPrefix(name, "smoke-test-") || strings.HasPrefix(name, "error-test-")
+	}
+
+	// Delete all VariantAutoscalings with smoke-test prefix
+	vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
+	if err := crClient.List(ctx, vaList, client.InNamespace(cfg.LLMDNamespace)); err == nil {
+		for _, va := range vaList.Items {
+			if isSmokeTestResource(va.Name) {
+				GinkgoWriter.Printf("  Deleting VA: %s\n", va.Name)
+				_ = crClient.Delete(ctx, &va)
+			}
+		}
+	}
+
+	// Delete all HPAs with smoke-test prefix
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, hpa := range hpaList.Items {
+			if isSmokeTestResource(hpa.Name) {
+				GinkgoWriter.Printf("  Deleting HPA: %s\n", hpa.Name)
+				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
+			}
+		}
+	}
+
+	// Delete all ScaledObjects with smoke-test prefix (KEDA)
+	if cfg.ScalerBackend == "keda" {
+		soList := &unstructured.UnstructuredList{}
+		soList.SetAPIVersion("keda.sh/v1alpha1")
+		soList.SetKind("ScaledObjectList")
+		if err := crClient.List(ctx, soList, client.InNamespace(cfg.LLMDNamespace)); err == nil {
+			for _, so := range soList.Items {
+				if isSmokeTestResource(so.GetName()) {
+					GinkgoWriter.Printf("  Deleting ScaledObject: %s\n", so.GetName())
+					_ = crClient.Delete(ctx, &so)
+				}
+			}
+		}
+	}
+
+	// Delete all Deployments with smoke-test prefix
+	deployList, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, deploy := range deployList.Items {
+			if isSmokeTestResource(deploy.Name) {
+				GinkgoWriter.Printf("  Deleting Deployment: %s\n", deploy.Name)
+				_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
+			}
+		}
+	}
+
+	// Delete all LeaderWorkerSets with smoke-test prefix
+	lwsList := &unstructured.UnstructuredList{}
+	lwsList.SetAPIVersion("leaderworkerset.x-k8s.io/v1")
+	lwsList.SetKind("LeaderWorkerSetList")
+	if err := crClient.List(ctx, lwsList, client.InNamespace(cfg.LLMDNamespace)); err == nil {
+		for _, lws := range lwsList.Items {
+			if isSmokeTestResource(lws.GetName()) {
+				GinkgoWriter.Printf("  Deleting LeaderWorkerSet: %s\n", lws.GetName())
+				_ = crClient.Delete(ctx, &lws)
+			}
+		}
+	}
+
+	// Delete all Services with smoke-test prefix
+	svcList, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, svc := range svcList.Items {
+			if isSmokeTestResource(svc.Name) {
+				GinkgoWriter.Printf("  Deleting Service: %s\n", svc.Name)
+				_ = k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
+			}
+		}
+	}
+
+	// Delete all ServiceMonitors with smoke-test prefix in monitoring namespace
+	smList := &promoperator.ServiceMonitorList{}
+	if err := crClient.List(ctx, smList, client.InNamespace(cfg.MonitoringNS)); err == nil {
+		for _, sm := range smList.Items {
+			if isSmokeTestResource(sm.Name) {
+				GinkgoWriter.Printf("  Deleting ServiceMonitor: %s\n", sm.Name)
+				_ = crClient.Delete(ctx, &sm)
+			}
+		}
+	}
+
+	// Wait a moment for deletions to propagate
+	time.Sleep(2 * time.Second)
+	GinkgoWriter.Println("Cleanup completed")
+}
 
 var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"), func() {
 	Context("Basic infrastructure validation", func() {
@@ -107,7 +203,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		})
 	})
 
-	Context("Basic VA lifecycle", Ordered, func() {
+	Context("Basic VA lifecycle", Serial, Ordered, func() {
 		var (
 			poolName         = "smoke-test-pool"
 			modelServiceName = "smoke-test-ms"
@@ -118,18 +214,8 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		)
 
 		BeforeAll(func() {
-			// Note: InferencePool should already exist from infra-only deployment
-			// We no longer create InferencePools in individual tests
-
-			By("Deleting all existing VariantAutoscaling objects for clean test state")
-			deletedCount, vaCleanupErr := utils.DeleteAllVariantAutoscalings(ctx, crClient, cfg.LLMDNamespace)
-			if vaCleanupErr != nil {
-				GinkgoWriter.Printf("Warning: Failed to clean up existing VAs: %v\n", vaCleanupErr)
-			} else if deletedCount > 0 {
-				GinkgoWriter.Printf("Deleted %d existing VariantAutoscaling objects\n", deletedCount)
-			} else {
-				GinkgoWriter.Println("No existing VariantAutoscaling objects found")
-			}
+			By("Cleaning up any existing smoke test resources")
+			cleanupSmokeTestResources()
 
 			By("Creating model service deployment")
 			err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
@@ -481,7 +567,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		})
 	})
 
-	Context("Basic VA lifecycle with LeaderWorkerSet", Ordered, func() {
+	Context("Basic VA lifecycle with LeaderWorkerSet", Serial, Ordered, func() {
 		var (
 			poolName         = "smoke-test-lws-pool"
 			modelServiceName = "smoke-test-lws-ms"
@@ -493,6 +579,9 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		)
 
 		BeforeAll(func() {
+			By("Cleaning up any existing smoke test resources")
+			cleanupSmokeTestResources()
+
 			By("Creating model service LeaderWorkerSet")
 			err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
@@ -646,6 +735,71 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
+		It("should expose external metrics for the VA with LWS", func() {
+			By("Waiting for VA to be reconciled (TargetResolved condition)")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+				condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeTargetResolved)
+				g.Expect(condition).NotTo(BeNil(), "VA should have TargetResolved condition")
+				g.Expect(condition.Status).To(Equal(metav1.ConditionTrue), "TargetResolved should be True")
+			}).Should(Succeed())
+
+			if cfg.ScalerBackend == "keda" {
+				By("Verifying ScaledObject exists (KEDA backend; external metric name is KEDA-generated)")
+				soName := hpaName + "-so"
+				so := &unstructured.Unstructured{}
+				so.SetAPIVersion("keda.sh/v1alpha1")
+				so.SetKind("ScaledObject")
+				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: soName}, so)
+				Expect(err).NotTo(HaveOccurred(), "ScaledObject %s should exist", soName)
+			} else {
+				By("Querying external metrics API for wva_desired_replicas")
+				result, err := k8sClient.RESTClient().
+					Get().
+					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
+					DoRaw(ctx)
+				if err != nil {
+					if errors.IsNotFound(err) {
+						GinkgoWriter.Printf("External metrics API is accessible, but metric %s doesn't exist yet (Engine may not have run)\n", constants.WVADesiredReplicas)
+						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
+						Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
+					} else {
+						Expect(err).NotTo(HaveOccurred(), "Should be able to query external metrics API")
+					}
+				} else {
+					if strings.Contains(string(result), `"items":[]`) {
+						GinkgoWriter.Printf("External metrics API is accessible, but metric %s doesn't exist yet (Engine may not have run)\n", constants.WVADesiredReplicas)
+						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
+						Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
+					} else {
+						Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas), "Metric response should contain metric name")
+						GinkgoWriter.Printf("External metrics API returned metric: %s\n", constants.WVADesiredReplicas)
+					}
+				}
+			}
+
+			By("Verifying DesiredOptimizedAlloc is eventually populated (if Engine has run)")
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			getErr := crClient.Get(ctx, client.ObjectKey{
+				Name:      vaName,
+				Namespace: cfg.LLMDNamespace,
+			}, va)
+			Expect(getErr).NotTo(HaveOccurred())
+			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
+			} else {
+				GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
+			}
+		})
+
 		It("should verify LWS structure with correct group size", func() {
 			By("Checking LWS has correct group size")
 			lws := &unstructured.Unstructured{}
@@ -674,6 +828,112 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				g.Expect(condition.Status).To(BeElementOf(metav1.ConditionTrue, metav1.ConditionFalse),
 					"MetricsAvailable condition should have a valid status")
 			}, 3*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("should have scaling controlled by backend with LWS", func() {
+			if cfg.ScalerBackend == "keda" {
+				By("Verifying ScaledObject exists and KEDA has created an HPA for LWS")
+				soName := hpaName + "-so"
+				so := &unstructured.Unstructured{}
+				so.SetAPIVersion("keda.sh/v1alpha1")
+				so.SetKind("ScaledObject")
+				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: soName}, so)
+				Expect(err).NotTo(HaveOccurred(), "ScaledObject should exist")
+
+				Eventually(func(g Gomega) {
+					hpaList, listErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+					g.Expect(listErr).NotTo(HaveOccurred())
+					var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+					for i := range hpaList.Items {
+						h := &hpaList.Items[i]
+						if h.Spec.ScaleTargetRef.Name == lwsName {
+							kedaHPA = h
+							break
+						}
+					}
+					g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the LWS")
+					g.Expect(kedaHPA.Status.DesiredReplicas).To(BeNumerically(">=", 0), "HPA should have desired replicas set")
+				}).Should(Succeed())
+			} else {
+				By("Verifying HPA exists and is configured for LWS")
+				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
+				Expect(err).NotTo(HaveOccurred(), "HPA should exist")
+				Expect(hpa.Spec.Metrics).NotTo(BeEmpty(), "HPA should have metrics configured")
+				Expect(hpa.Spec.Metrics[0].Type).To(Equal(autoscalingv2.ExternalMetricSourceType), "HPA should use External metric type")
+				Expect(hpa.Spec.Metrics[0].External.Metric.Name).To(Equal(constants.WVADesiredReplicas), "HPA should use wva_desired_replicas metric")
+				Expect(hpa.Spec.ScaleTargetRef.Kind).To(Equal("LeaderWorkerSet"), "HPA should target LeaderWorkerSet")
+
+				By("Waiting for HPA to read the metric and update status")
+				Eventually(func(g Gomega) {
+					hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(hpa.Status.CurrentReplicas).To(BeNumerically(">=", 0), "HPA should have current replicas set")
+					g.Expect(hpa.Status.DesiredReplicas).To(BeNumerically(">=", 0), "HPA should have desired replicas set")
+				}).Should(Succeed())
+			}
+		})
+
+		It("should verify Prometheus is scraping LWS metrics", func() {
+			By("Checking that LWS pods are ready and reporting metrics")
+			Eventually(func(g Gomega) {
+				pods, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
+					LabelSelector: "app=" + modelServiceName + "-decode",
+				})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(pods.Items).NotTo(BeEmpty(), "Should have at least one pod")
+
+				// At least one pod should be ready
+				readyCount := 0
+				for _, pod := range pods.Items {
+					for _, condition := range pod.Status.Conditions {
+						if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+							readyCount++
+							break
+						}
+					}
+				}
+				g.Expect(readyCount).To(BeNumerically(">", 0), "At least one pod should be ready for metrics scraping")
+			}).Should(Succeed())
+		})
+
+		It("should collect saturation metrics without triggering scale-up", func() {
+			By("Verifying VA is reconciled and has conditions")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(va.Status.Conditions).NotTo(BeEmpty(), "VA should have status conditions")
+			}).Should(Succeed())
+
+			By("Verifying MetricsAvailable condition indicates metrics collection")
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			err := crClient.Get(ctx, client.ObjectKey{
+				Name:      vaName,
+				Namespace: cfg.LLMDNamespace,
+			}, va)
+			Expect(err).NotTo(HaveOccurred())
+
+			condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
+			Expect(condition).NotTo(BeNil(), "MetricsAvailable condition should exist")
+			if condition.Status == metav1.ConditionTrue {
+				Expect(condition.Reason).To(Equal(variantautoscalingv1alpha1.ReasonMetricsFound),
+					"When metrics are available, reason should be MetricsFound")
+			}
+
+			By("Checking if DesiredOptimizedAlloc is populated (best-effort)")
+			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
+				GinkgoWriter.Printf("DesiredOptimizedAlloc is populated: accelerator=%s, replicas=%d\n",
+					va.Status.DesiredOptimizedAlloc.Accelerator, *va.Status.DesiredOptimizedAlloc.NumReplicas)
+			} else {
+				GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
+			}
 		})
 
 		It("should verify LWS pods are created with leader and workers", func() {
@@ -1130,6 +1390,400 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		})
 	})
 
+	Context("Basic VA lifecycle with LeaderWorkerSet (single-node)", Serial, Ordered, func() {
+		var (
+			poolName         = "smoke-test-lws-single-pool"
+			modelServiceName = "smoke-test-lws-single-ms"
+			lwsName          = modelServiceName + "-decode"
+			vaName           = "smoke-test-lws-single-va"
+			hpaName          = "smoke-test-lws-single-hpa"
+			minReplicas      = int32(1)
+			lwsGroupSize     = int32(1) // 1 leader + 0 workers
+		)
+
+		BeforeAll(func() {
+			By("Cleaning up any existing smoke test resources")
+			cleanupSmokeTestResources()
+
+			By("Creating model service LeaderWorkerSet with single-node (leader only)")
+			err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
+
+			// Register cleanup for LWS (runs even if test fails)
+			DeferCleanup(func() {
+				cleanupResource(ctx, "LeaderWorkerSet", cfg.LLMDNamespace, lwsName,
+					func() error {
+						return fixtures.DeleteModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName)
+					},
+					func() bool {
+						lws := &unstructured.Unstructured{}
+						lws.SetAPIVersion("leaderworkerset.x-k8s.io/v1")
+						lws.SetKind("LeaderWorkerSet")
+						err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: cfg.LLMDNamespace}, lws)
+						return errors.IsNotFound(err)
+					})
+			})
+
+			By("Creating service to expose single-node LWS model server")
+			err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, lwsName, 8000)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create service")
+
+			// Register cleanup for service
+			DeferCleanup(func() {
+				serviceName := modelServiceName + "-service"
+				cleanupResource(ctx, "Service", cfg.LLMDNamespace, serviceName,
+					func() error {
+						return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
+					},
+					func() bool {
+						_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, serviceName, metav1.GetOptions{})
+						return errors.IsNotFound(err)
+					})
+			})
+
+			By("Creating ServiceMonitor for single-node LWS metrics scraping")
+			err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceName, lwsName)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceMonitor")
+
+			// Register cleanup for ServiceMonitor
+			DeferCleanup(func() {
+				serviceMonitorName := modelServiceName + "-monitor"
+				cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
+					func() error {
+						return crClient.Delete(ctx, &promoperator.ServiceMonitor{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      serviceMonitorName,
+								Namespace: cfg.MonitoringNS,
+							},
+						})
+					},
+					func() bool {
+						err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
+						return errors.IsNotFound(err)
+					})
+			})
+
+			By("Waiting for single-node LWS to be ready")
+			Eventually(func(g Gomega) {
+				lws := &unstructured.Unstructured{}
+				lws.SetAPIVersion("leaderworkerset.x-k8s.io/v1")
+				lws.SetKind("LeaderWorkerSet")
+				err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: cfg.LLMDNamespace}, lws)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				readyReplicas, found, _ := unstructured.NestedInt64(lws.Object, "status", "readyReplicas")
+				g.Expect(found).To(BeTrue(), "LWS should have status.readyReplicas")
+				g.Expect(readyReplicas).To(Equal(int64(1)), "LWS should have 1 ready replica")
+			}, time.Duration(cfg.PodReadyTimeout)*time.Second, 5*time.Second).Should(Succeed())
+
+			By("Creating VariantAutoscaling resource for single-node LWS")
+			err = fixtures.EnsureVariantAutoscaling(
+				ctx, crClient, cfg.LLMDNamespace, vaName,
+				lwsName, cfg.ModelID, cfg.AcceleratorType,
+				30.0, cfg.ControllerInstance,
+				fixtures.WithScaleTargetKind("LeaderWorkerSet"),
+			)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create VariantAutoscaling")
+
+			By("Creating scaler for the single-node LWS (HPA or ScaledObject per backend)")
+			if cfg.ScaleToZeroEnabled {
+				minReplicas = 0
+			}
+			if cfg.ScalerBackend == "keda" {
+				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
+				err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, minReplicas, 10, cfg.MonitoringNS,
+					fixtures.WithScaledObjectScaleTargetKind("LeaderWorkerSet"))
+				Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject")
+			} else {
+				err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, minReplicas, 10,
+					fixtures.WithScaleTargetRefKind("LeaderWorkerSet"))
+				Expect(err).NotTo(HaveOccurred(), "Failed to create HPA")
+			}
+		})
+
+		AfterAll(func() {
+			By("Cleaning up single-node LWS test resources")
+			if cfg.ScalerBackend == "keda" {
+				err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				hpaNameFull := hpaName + "-hpa"
+				cleanupResource(ctx, "HPA", cfg.LLMDNamespace, hpaNameFull,
+					func() error {
+						return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaNameFull, metav1.DeleteOptions{})
+					},
+					func() bool {
+						_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaNameFull, metav1.GetOptions{})
+						return errors.IsNotFound(err)
+					})
+			}
+
+			// Delete VA
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				},
+			}
+			cleanupResource(ctx, "VA", cfg.LLMDNamespace, vaName,
+				func() error {
+					return crClient.Delete(ctx, va)
+				},
+				func() bool {
+					err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
+					return errors.IsNotFound(err)
+				})
+		})
+
+		It("should reconcile the VA successfully with single-node LWS", func() {
+			By("Checking VA status conditions")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(va.Status.Conditions).NotTo(BeEmpty(), "VA should have status conditions")
+
+				// Check for TargetResolved condition
+				targetResolved := false
+				for _, cond := range va.Status.Conditions {
+					if cond.Type == "TargetResolved" && cond.Status == metav1.ConditionTrue {
+						targetResolved = true
+						break
+					}
+				}
+				g.Expect(targetResolved).To(BeTrue(), "VA should have TargetResolved=True condition")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("should expose external metrics for the VA with single-node LWS", func() {
+			By("Waiting for VA to be reconciled (TargetResolved condition)")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+				condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeTargetResolved)
+				g.Expect(condition).NotTo(BeNil(), "VA should have TargetResolved condition")
+				g.Expect(condition.Status).To(Equal(metav1.ConditionTrue), "TargetResolved should be True")
+			}).Should(Succeed())
+
+			if cfg.ScalerBackend == "keda" {
+				By("Verifying ScaledObject exists (KEDA backend; external metric name is KEDA-generated)")
+				soName := hpaName + "-so"
+				so := &unstructured.Unstructured{}
+				so.SetAPIVersion("keda.sh/v1alpha1")
+				so.SetKind("ScaledObject")
+				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: soName}, so)
+				Expect(err).NotTo(HaveOccurred(), "ScaledObject %s should exist", soName)
+			} else {
+				By("Querying external metrics API for wva_desired_replicas")
+				result, err := k8sClient.RESTClient().
+					Get().
+					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
+					DoRaw(ctx)
+				if err != nil {
+					if errors.IsNotFound(err) {
+						GinkgoWriter.Printf("External metrics API is accessible, but metric %s doesn't exist yet (Engine may not have run)\n", constants.WVADesiredReplicas)
+						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
+						Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
+					} else {
+						Expect(err).NotTo(HaveOccurred(), "Should be able to query external metrics API")
+					}
+				} else {
+					if strings.Contains(string(result), `"items":[]`) {
+						GinkgoWriter.Printf("External metrics API is accessible, but metric %s doesn't exist yet (Engine may not have run)\n", constants.WVADesiredReplicas)
+						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
+						Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
+					} else {
+						Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas), "Metric response should contain metric name")
+						GinkgoWriter.Printf("External metrics API returned metric: %s\n", constants.WVADesiredReplicas)
+					}
+				}
+			}
+
+			By("Verifying DesiredOptimizedAlloc is eventually populated (if Engine has run)")
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			getErr := crClient.Get(ctx, client.ObjectKey{
+				Name:      vaName,
+				Namespace: cfg.LLMDNamespace,
+			}, va)
+			Expect(getErr).NotTo(HaveOccurred())
+			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
+			} else {
+				GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
+			}
+		})
+
+		It("should verify single-node LWS structure with group size 1", func() {
+			By("Checking single-node LWS has group size 1")
+			lws := &unstructured.Unstructured{}
+			lws.SetAPIVersion("leaderworkerset.x-k8s.io/v1")
+			lws.SetKind("LeaderWorkerSet")
+			err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: cfg.LLMDNamespace}, lws)
+			Expect(err).NotTo(HaveOccurred())
+
+			size, found, _ := unstructured.NestedInt64(lws.Object, "spec", "leaderWorkerTemplate", "size")
+			Expect(found).To(BeTrue(), "LWS should have spec.leaderWorkerTemplate.size")
+			Expect(size).To(Equal(int64(lwsGroupSize)), fmt.Sprintf("LWS should have group size %d (leader only)", lwsGroupSize))
+		})
+
+		It("should have MetricsAvailable condition set when single-node LWS pods are ready", func() {
+			By("Waiting for MetricsAvailable condition to be set")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
+				g.Expect(condition).NotTo(BeNil(), "MetricsAvailable condition should exist")
+				g.Expect(condition.Status).To(BeElementOf(metav1.ConditionTrue, metav1.ConditionFalse),
+					"MetricsAvailable condition should have a valid status")
+			}, 3*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("should have scaling controlled by backend with single-node LWS", func() {
+			if cfg.ScalerBackend == "keda" {
+				By("Verifying ScaledObject exists and KEDA has created an HPA for single-node LWS")
+				soName := hpaName + "-so"
+				so := &unstructured.Unstructured{}
+				so.SetAPIVersion("keda.sh/v1alpha1")
+				so.SetKind("ScaledObject")
+				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: soName}, so)
+				Expect(err).NotTo(HaveOccurred(), "ScaledObject should exist")
+
+				Eventually(func(g Gomega) {
+					hpaList, listErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+					g.Expect(listErr).NotTo(HaveOccurred())
+					var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+					for i := range hpaList.Items {
+						h := &hpaList.Items[i]
+						if h.Spec.ScaleTargetRef.Name == lwsName {
+							kedaHPA = h
+							break
+						}
+					}
+					g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the single-node LWS")
+					g.Expect(kedaHPA.Status.DesiredReplicas).To(BeNumerically(">=", 0), "HPA should have desired replicas set")
+				}).Should(Succeed())
+			} else {
+				By("Verifying HPA exists and is configured for single-node LWS")
+				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
+				Expect(err).NotTo(HaveOccurred(), "HPA should exist")
+				Expect(hpa.Spec.Metrics).NotTo(BeEmpty(), "HPA should have metrics configured")
+				Expect(hpa.Spec.Metrics[0].Type).To(Equal(autoscalingv2.ExternalMetricSourceType), "HPA should use External metric type")
+				Expect(hpa.Spec.Metrics[0].External.Metric.Name).To(Equal(constants.WVADesiredReplicas), "HPA should use wva_desired_replicas metric")
+				Expect(hpa.Spec.ScaleTargetRef.Kind).To(Equal("LeaderWorkerSet"), "HPA should target LeaderWorkerSet")
+
+				By("Waiting for HPA to read the metric and update status")
+				Eventually(func(g Gomega) {
+					hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(hpa.Status.CurrentReplicas).To(BeNumerically(">=", 0), "HPA should have current replicas set")
+					g.Expect(hpa.Status.DesiredReplicas).To(BeNumerically(">=", 0), "HPA should have desired replicas set")
+				}).Should(Succeed())
+			}
+		})
+
+		It("should verify Prometheus is scraping single-node LWS metrics", func() {
+			By("Checking that single-node LWS pods are ready and reporting metrics")
+			Eventually(func(g Gomega) {
+				pods, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
+					LabelSelector: "app=" + modelServiceName + "-decode",
+				})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(pods.Items).NotTo(BeEmpty(), "Should have at least one pod")
+
+				// At least one pod should be ready
+				readyCount := 0
+				for _, pod := range pods.Items {
+					for _, condition := range pod.Status.Conditions {
+						if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+							readyCount++
+							break
+						}
+					}
+				}
+				g.Expect(readyCount).To(BeNumerically(">", 0), "At least one pod should be ready for metrics scraping")
+			}).Should(Succeed())
+		})
+
+		It("should collect saturation metrics without triggering scale-up", func() {
+			By("Verifying VA is reconciled and has conditions")
+			Eventually(func(g Gomega) {
+				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				err := crClient.Get(ctx, client.ObjectKey{
+					Name:      vaName,
+					Namespace: cfg.LLMDNamespace,
+				}, va)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(va.Status.Conditions).NotTo(BeEmpty(), "VA should have status conditions")
+			}).Should(Succeed())
+
+			By("Verifying MetricsAvailable condition indicates metrics collection")
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			err := crClient.Get(ctx, client.ObjectKey{
+				Name:      vaName,
+				Namespace: cfg.LLMDNamespace,
+			}, va)
+			Expect(err).NotTo(HaveOccurred())
+
+			condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
+			Expect(condition).NotTo(BeNil(), "MetricsAvailable condition should exist")
+			if condition.Status == metav1.ConditionTrue {
+				Expect(condition.Reason).To(Equal(variantautoscalingv1alpha1.ReasonMetricsFound),
+					"When metrics are available, reason should be MetricsFound")
+			}
+
+			By("Checking if DesiredOptimizedAlloc is populated (best-effort)")
+			if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+				Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+				Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+					"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
+				GinkgoWriter.Printf("DesiredOptimizedAlloc is populated: accelerator=%s, replicas=%d\n",
+					va.Status.DesiredOptimizedAlloc.Accelerator, *va.Status.DesiredOptimizedAlloc.NumReplicas)
+			} else {
+				GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
+			}
+		})
+
+		It("should verify single-node LWS pods are created (leader only)", func() {
+			By("Checking that single-node LWS created pods with leader only")
+			Eventually(func(g Gomega) {
+				pods, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
+					LabelSelector: "app=" + modelServiceName + "-decode",
+				})
+				g.Expect(err).NotTo(HaveOccurred())
+				// With 1 replica and group size 1, we expect 1 pod total (1 leader + 0 workers)
+				g.Expect(len(pods.Items)).To(Equal(int(lwsGroupSize)), fmt.Sprintf("Should have %d pod (1 replica × group size %d)", lwsGroupSize, lwsGroupSize))
+
+				// The leader should be ready
+				readyCount := 0
+				for _, pod := range pods.Items {
+					for _, condition := range pod.Status.Conditions {
+						if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+							readyCount++
+							break
+						}
+					}
+				}
+				g.Expect(readyCount).To(Equal(1), "The leader pod should be ready")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+	})
+
 	Context("Error handling and graceful degradation", Label("smoke", "full"), Ordered, func() {
 		var (
 			errorTestPoolName         = "error-test-pool"
@@ -1138,6 +1792,9 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 		)
 
 		BeforeAll(func() {
+			By("Cleaning up any existing smoke test resources")
+			cleanupSmokeTestResources()
+
 			deploymentName := errorTestModelServiceName + "-decode"
 
 			By("Creating model service deployment for error handling tests")
