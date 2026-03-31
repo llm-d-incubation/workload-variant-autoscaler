@@ -43,8 +43,6 @@ POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
 LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
 LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
 
-# Load generator image (guidellm) - pre-loaded into Kind for faster e2e test startup
-GUIDELLM_IMG=${GUIDELLM_IMG:-"ghcr.io/vllm-project/guidellm:latest"}
 LLM_D_MODELSERVICE_NAME="ms-$NAMESPACE_SUFFIX-llm-d-modelservice"
 LLM_D_MODELSERVICE_VALUES="ms-$NAMESPACE_SUFFIX/values.yaml"
 LLM_D_EPP_NAME="gaie-$NAMESPACE_SUFFIX-epp"
@@ -132,9 +130,6 @@ check_specific_prerequisites() {
     # Load WVA image into KIND cluster
     load_image
 
-    # Pre-load guidellm image so e2e load jobs don't need to pull at runtime
-    preload_e2e_images
-
     log_success "All Kind emulated deployment prerequisites met"
 }
 
@@ -212,42 +207,6 @@ load_image() {
     log_success "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' loaded into KIND cluster '$CLUSTER_NAME'"
 }
 
-# Pre-loads e2e test images (guidellm load generator) into the Kind cluster
-# so that load generation jobs start quickly without runtime image pulls.
-preload_e2e_images() {
-    if [ "${PRELOAD_E2E_IMAGES:-true}" = "false" ]; then
-        log_info "Skipping e2e image pre-loading (PRELOAD_E2E_IMAGES=false)"
-        return
-    fi
-
-    log_info "Pre-loading e2e test images into Kind cluster..."
-
-    local platform="${KIND_IMAGE_PLATFORM:-}"
-    if [ -z "$platform" ]; then
-        case "$(uname -m)" in
-            aarch64|arm64) platform="linux/arm64" ;;
-            *) platform="linux/amd64" ;;
-        esac
-    fi
-
-    # Pre-load guidellm image (used by CreateLoadJob in e2e tests)
-    if docker image inspect "$GUIDELLM_IMG" >/dev/null 2>&1; then
-        log_info "guidellm image already exists locally, loading into Kind..."
-    else
-        log_info "Pulling guidellm image '$GUIDELLM_IMG' (platform=$platform)..."
-        if ! docker pull --platform "$platform" "$GUIDELLM_IMG"; then
-            log_warning "Failed to pull guidellm image - e2e load jobs will pull at runtime (slower)"
-            return
-        fi
-    fi
-
-    if kind load docker-image "$GUIDELLM_IMG" --name "$CLUSTER_NAME"; then
-        log_success "guidellm image loaded into Kind cluster"
-    else
-        log_warning "Failed to load guidellm image into Kind - e2e load jobs will pull at runtime"
-    fi
-}
-
 #### REQUIRED FUNCTION used by deploy/install.sh ####
 create_namespaces() {
     log_info "Creating namespaces..."
@@ -269,7 +228,11 @@ deploy_prometheus_stack() {
     
     # Add helm repo
     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-    helm repo update
+    if [ "${SKIP_HELM_REPO_UPDATE:-}" = "true" ]; then
+        log_info "Skipping helm repo update (SKIP_HELM_REPO_UPDATE=true)"
+    else
+        helm repo update
+    fi
     
     # Create self-signed TLS certificate for Prometheus
     log_info "Creating self-signed TLS certificate for Prometheus"

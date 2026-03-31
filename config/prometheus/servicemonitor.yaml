@@ -8,6 +8,7 @@ metadata:
 spec:
   selector:
     matchLabels:
+      app.kubernetes.io/name: workload-variant-autoscaler
       control-plane: controller-manager
   namespaceSelector:
     matchNames:

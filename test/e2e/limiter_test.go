@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -106,7 +105,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			depB, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceB+"-decode", metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(depB.Status.ReadyReplicas).To(Equal(int32(1)))
-		}, time.Duration(cfg.PodReadyTimeout)*time.Second, 5*time.Second).Should(Succeed())
+		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Creating VAs with different accelerator types")
 
@@ -273,7 +272,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(va.Status.Conditions).NotTo(BeEmpty())
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}).Should(Succeed())
 
 			By("Checking VA B status")
 			Eventually(func(g Gomega) {
@@ -284,93 +283,13 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 				}, va)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(va.Status.Conditions).NotTo(BeEmpty())
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}).Should(Succeed())
 
 			GinkgoWriter.Println("Both VAs reconciled successfully")
 		})
 	})
 
 	Context("Accelerator-specific scaling", func() {
-		It("should correctly identify accelerator constraints for each VA", func() {
-			By("Generating load for both services")
-			loadCfg := fixtures.LoadConfig{
-				Strategy:     cfg.LoadStrategy,
-				RequestRate:  cfg.RequestRate,
-				NumPrompts:   500,
-				InputTokens:  cfg.InputTokens,
-				OutputTokens: cfg.OutputTokens,
-				ModelID:      cfg.ModelID,
-			}
-
-			// Create load for both services
-			targetA := fmt.Sprintf("http://%s-service:8000", modelServiceA)
-			err := fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "limiter-load-a", targetA, loadCfg)
-			Expect(err).NotTo(HaveOccurred())
-
-			targetB := fmt.Sprintf("http://%s-service:8000", modelServiceB)
-			err = fixtures.CreateLoadJob(ctx, k8sClient, cfg.LLMDNamespace, "limiter-load-b", targetB, loadCfg)
-			Expect(err).NotTo(HaveOccurred())
-
-			jobNameA := "limiter-load-a-load"
-			jobNameB := "limiter-load-b-load"
-
-			// Register cleanup for load jobs (runs even if test fails)
-			DeferCleanup(func() {
-				cleanupResource(ctx, "Job", cfg.LLMDNamespace, jobNameA,
-					func() error {
-						propagation := metav1.DeletePropagationBackground
-						return k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Delete(ctx, jobNameA, metav1.DeleteOptions{PropagationPolicy: &propagation})
-					},
-					func() bool {
-						_, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameA, metav1.GetOptions{})
-						return errors.IsNotFound(err)
-					})
-				cleanupResource(ctx, "Job", cfg.LLMDNamespace, jobNameB,
-					func() error {
-						propagation := metav1.DeletePropagationBackground
-						return k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Delete(ctx, jobNameB, metav1.DeleteOptions{PropagationPolicy: &propagation})
-					},
-					func() bool {
-						_, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameB, metav1.GetOptions{})
-						return errors.IsNotFound(err)
-					})
-			})
-
-			By("Waiting for both load jobs to complete")
-			Eventually(func(g Gomega) {
-				jobA, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameA, metav1.GetOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(jobA.Status.Succeeded).To(BeNumerically(">", 0), "Job A should complete successfully")
-			}, 5*time.Minute, 10*time.Second).Should(Succeed())
-
-			Eventually(func(g Gomega) {
-				jobB, err := k8sClient.BatchV1().Jobs(cfg.LLMDNamespace).Get(ctx, jobNameB, metav1.GetOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(jobB.Status.Succeeded).To(BeNumerically(">", 0), "Job B should complete successfully")
-			}, 5*time.Minute, 10*time.Second).Should(Succeed())
-
-			By("Verifying both VAs are independently managed")
-			// Use Eventually to handle transient API connectivity issues (e.g., TLS handshake timeouts)
-			vaAObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			Eventually(func(g Gomega) {
-				err = crClient.Get(ctx, client.ObjectKey{Name: vaA, Namespace: cfg.LLMDNamespace}, vaAObj)
-				g.Expect(err).NotTo(HaveOccurred(), "Should be able to get VA A")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-			vaBObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			Eventually(func(g Gomega) {
-				err = crClient.Get(ctx, client.ObjectKey{Name: vaB, Namespace: cfg.LLMDNamespace}, vaBObj)
-				g.Expect(err).NotTo(HaveOccurred(), "Should be able to get VA B")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-			// Both VAs should have status (limiter may constrain scale-up based on GPU availability)
-			Expect(vaAObj.Status.Conditions).NotTo(BeEmpty(), "VA A should have status conditions")
-			Expect(vaBObj.Status.Conditions).NotTo(BeEmpty(), "VA B should have status conditions")
-
-			GinkgoWriter.Printf("VA A status: %+v\n", vaAObj.Status)
-			GinkgoWriter.Printf("VA B status: %+v\n", vaBObj.Status)
-		})
-
 		It("should respect GPU resource constraints per accelerator type", func() {
 			By("Checking deployment replicas don't exceed expected limits")
 

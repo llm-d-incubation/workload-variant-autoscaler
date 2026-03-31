@@ -16,7 +16,19 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-//go:embed scripts/burst_load_generator.sh
+// Load-generation helpers build Kubernetes Jobs used by test/benchmark (parallel
+// curl workers, burst batches, optional guidellm). The e2e suite does not call
+// these APIs; e2e uses bounded, deterministic jobs (for example saturation
+// trigger flows) instead.
+//
+// This file lives under test/e2e/fixtures next to shared cluster helpers
+// (EnsureModelService, HPA, etc.) that benchmarks already import. A later
+// refactor may move load-only code and the embedded script into a dedicated
+// package such as test/loadgen for clearer ownership. The script lives in this
+// directory (not fixtures/scripts/) so //go:embed matches reliably for vet/gopls.
+// hack/burst_load_generator.sh is a symlink to this file for docs and CLI use.
+
+//go:embed burst_load_generator.sh
 var burstLoadGeneratorScript string
 
 // Burst load configuration constants

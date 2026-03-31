@@ -1,6 +1,9 @@
 #!/bin/sh
 # Burst Load Generator Script
-# Keep in sync with hack/burst_load_generator.sh (canonical copy for docs and manual use).
+#
+# Canonical copy (embedded via //go:embed in workload_builder.go). Benchmark load Jobs only;
+# not used by deterministic test/e2e. hack/burst_load_generator.sh is a symlink here so docs
+# and manual runs can keep using ./hack/burst_load_generator.sh.
 #
 # This script generates burst load by sending requests in parallel batches with sleep between batches.
 # This creates queue spikes that are more likely to trigger saturation detection.
@@ -12,7 +15,7 @@
 #   MAX_TOKENS: Maximum tokens for each request
 #   BATCH_SLEEP: Sleep duration between batches (seconds)
 #   MODEL_ID: Model ID to use in requests
-#   TARGET_URL: Target URL for requests (e.g., http://service:port/v1/completions)
+#   TARGET_URL: Target URL for requests (e.g. http://service:port/v1/chat/completions)
 
 set -e
 
@@ -39,8 +42,8 @@ echo "Sending $TOTAL_REQUESTS requests to $TARGET_URL in batches of $BATCH_SIZE"
 # Wait for service to be ready
 echo "Waiting for service to be ready..."
 CONNECTED=false
-# Extract base URL (remove /v1/completions or /v1/chat/completions)
-BASE_URL=$(echo $TARGET_URL | sed 's|/v1/.*||')
+# Strip path from first /v1/ onward so /v1/chat/completions and /v1/completions both work.
+BASE_URL=$(echo "$TARGET_URL" | sed 's|/v1/.*||')
 # Test with /v1/models endpoint (OpenAI-compatible endpoint that should return 200)
 HEALTH_CHECK_URL="${BASE_URL}/v1/models"
 for i in $(seq 1 $MAX_RETRIES); do
@@ -65,7 +68,7 @@ while [ $SENT -lt $TOTAL_REQUESTS ]; do
     if [ $SENT -ge $TOTAL_REQUESTS ]; then break; fi
     (curl -s -o /dev/null --max-time $CURL_TIMEOUT -X POST $TARGET_URL \
       -H "Content-Type: application/json" \
-      -d "{\"model\":\"$MODEL_ID\",\"prompt\":\"Write a detailed explanation of machine learning algorithms.\",\"max_tokens\":$MAX_TOKENS}" || true) &
+      -d "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a detailed explanation of machine learning algorithms.\"}],\"max_tokens\":$MAX_TOKENS}" || true) &
     SENT=$((SENT + 1))
   done
   echo "Sent $SENT / $TOTAL_REQUESTS requests..."

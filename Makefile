@@ -211,7 +211,7 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (infra-only: WVA + llm-d, no
 # Deploy e2e infrastructure with KEDA as scaler backend (installs KEDA, skips Prometheus Adapter).
 # Runs a subset of smoke tests from the e2e suite.
 .PHONY: test-e2e-smoke
-test-e2e-smoke: manifests generate fmt vet ## Run smoke e2e tests
+test-e2e-smoke: ## Run smoke e2e tests
 	@echo "Running smoke e2e tests..."
 	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
 	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
@@ -224,8 +224,6 @@ test-e2e-smoke: manifests generate fmt vet ## Run smoke e2e tests
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
-	REQUEST_RATE=$(REQUEST_RATE) \
-	NUM_PROMPTS=$(NUM_PROMPTS) \
 	go test ./test/e2e/ -timeout 20m -v -ginkgo.v \
 		-ginkgo.label-filter="smoke" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \
@@ -237,7 +235,7 @@ test-e2e-smoke: manifests generate fmt vet ## Run smoke e2e tests
 
 # Runs the complete e2e test suite (excluding flaky tests).
 .PHONY: test-e2e-full
-test-e2e-full: manifests generate fmt vet ## Run full e2e test suite
+test-e2e-full: ## Run full e2e test suite
 	@echo "Running full e2e test suite..."
 	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
 	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
@@ -248,8 +246,6 @@ test-e2e-full: manifests generate fmt vet ## Run full e2e test suite
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
-	REQUEST_RATE=$(REQUEST_RATE) \
-	NUM_PROMPTS=$(NUM_PROMPTS) \
 	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
 		-ginkgo.label-filter="full && !flaky" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \

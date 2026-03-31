@@ -14,7 +14,9 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// CreateModelService creates a model service deployment. Fails if the deployment already exists.
+// CreateModelService creates the model-server Deployment only (name + "-decode").
+// It does not create a Kubernetes Service; callers must use CreateService or EnsureService
+// (typically naming the Service name + "-service") to expose the deployment.
 func CreateModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
 	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
 	_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
@@ -31,7 +33,8 @@ func DeleteModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 	return nil
 }
 
-// EnsureModelService creates or replaces the model service deployment (idempotent for test setup).
+// EnsureModelService creates or replaces the model-server Deployment only (name + "-decode").
+// It does not create a Kubernetes Service; pair with EnsureService for a ClusterIP Service.
 func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
 	appLabel := name + "-decode"
 	deploymentName := appLabel
@@ -50,17 +53,8 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 				return fmt.Errorf("delete existing deployment %s: %w", deploymentName, deleteErr)
 			}
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		for {
-			_, checkErr := k8sClient.AppsV1().Deployments(namespace).Get(waitCtx, deploymentName, metav1.GetOptions{})
-			if errors.IsNotFound(checkErr) {
-				break
-			}
-			if waitCtx.Err() != nil {
-				return fmt.Errorf("timeout waiting for deployment %s to be deleted", deploymentName)
-			}
-			time.Sleep(2 * time.Second)
+		if err := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); err != nil {
+			return fmt.Errorf("timeout waiting for deployment %s to be deleted: %w", deploymentName, err)
 		}
 	} else if !errors.IsNotFound(err) {
 		return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
@@ -73,7 +67,9 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 		_ = k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		time.Sleep(2 * time.Second)
+		if waitErr := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); waitErr != nil {
+			return fmt.Errorf("timeout waiting for deployment %s to be deleted before recreate: %w", deploymentName, waitErr)
+		}
 		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	}
 	return err

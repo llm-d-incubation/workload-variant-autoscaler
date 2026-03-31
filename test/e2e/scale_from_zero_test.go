@@ -27,7 +27,7 @@ import (
 // on EPP and an InferenceObjective); deploy with E2E_TESTS_ENABLED=true or ENABLE_SCALE_TO_ZERO=true.
 // On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
 // so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
-var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature", Label("full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -60,7 +60,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 		Eventually(func(g Gomega) {
 			_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, eppServiceName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
-		}, 2*time.Minute, 5*time.Second).Should(Succeed(), "EPP service should exist")
+		}).Should(Succeed(), "EPP service should exist")
 
 		// Wait for EPP pods to be ready
 		Eventually(func(g Gomega) {
@@ -84,10 +84,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 				}
 			}
 			g.Expect(hasReadyPod).To(BeTrue(), "At least one EPP pod should be ready")
-		}, 2*time.Minute, 5*time.Second).Should(Succeed(), "EPP pods should be ready")
-
-		// Additional delay to ensure the datastore is fully populated after EPP is ready
-		time.Sleep(5 * time.Second)
+		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service deployment with 0 initial replicas")
 		// Create deployment with 0 replicas using the fixture
@@ -102,7 +99,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 			deployment.Spec.Replicas = ptr.To(int32(0))
 			_, err = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Update(ctx, deployment, metav1.UpdateOptions{})
 			g.Expect(err).NotTo(HaveOccurred(), "Should be able to update deployment to 0 replicas")
-		}, 30*time.Second, 2*time.Second).Should(Succeed(), "Should successfully scale deployment to 0 replicas")
+		}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalQuickSec)*time.Second).Should(Succeed(), "Should successfully scale deployment to 0 replicas")
 
 		By("Creating service to expose model server")
 		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, modelServiceName+"-decode", 8000)
@@ -156,21 +153,18 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 		}
 
-		// Wait for VA to be marked as inactive (replicas == 0) and for InferencePool to be available
-		// The scale-from-zero engine checks for inactive VAs, so we need to ensure:
-		// 1. The deployment is at 0 replicas (already verified above)
-		// 2. The InferencePool is registered in the datastore (controller should have reconciled it)
-		// 3. The VA is created and can be found by the scale-from-zero engine
-		By("Waiting for VA to be ready and InferencePool to be available in datastore")
-		// Note: The InferencePool should already be reconciled as part of infrastructure setup.
-		// However, if the controller was restarted, the datastore might be empty until the
-		// InferencePool reconciler runs again. We wait here to allow time for reconciliation.
-		// We wait longer to ensure the InferencePool reconciler has had time to register the pool
-		// in the datastore before the scale-from-zero engine runs.
-		// When running in the full smoke suite (not focused), other specs may have run first and the
-		// leader may have just been elected or cache may still be syncing; wait longer so the
-		// InferencePool reconciler on the leader has populated the datastore.
-		time.Sleep(60 * time.Second) // Allow time for VA reconciliation and InferencePool registration
+		By("Waiting for VA to reconcile (avoid fixed sleeps)")
+		// Historically this test used a long fixed sleep to allow the controller and its
+		// internal state (datastore/cache) to settle. Prefer an explicit, observable signal.
+		Eventually(func(g Gomega) {
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: vaName}, va)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(va.Status.Conditions).NotTo(BeEmpty(), "VA should have status conditions after reconciliation")
+
+			targetResolved := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeTargetResolved)
+			g.Expect(targetResolved).NotTo(BeNil(), "VA should have TargetResolved condition")
+		}).Should(Succeed())
 
 		GinkgoWriter.Println("Scale-from-zero test setup complete with deployment at 0 replicas")
 	})
@@ -308,13 +302,9 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 					Equal(corev1.PodRunning),
 					Equal(corev1.PodSucceeded),
 				), "Job pod should be running or succeeded")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}).Should(Succeed())
 
 			GinkgoWriter.Println("Job pod is running and sending requests")
-
-			// Give requests time to queue up in EPP before checking for scale-up
-			By("Waiting for requests to queue up in EPP flow control queue")
-			time.Sleep(10 * time.Second)
 
 			By("Monitoring VariantAutoscaling for scale-from-zero decision")
 			Eventually(func(g Gomega) {
@@ -345,7 +335,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 				g.Expect(optimized).To(BeNumerically(">", 0),
 					"VariantAutoscaling should recommend scaling up from zero due to pending requests")
 
-			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
 			GinkgoWriter.Println("Scale-from-zero engine detected pending requests and recommended scale-up")
 		})
@@ -370,7 +360,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 				g.Expect(readyReplicas).To(BeNumerically(">", 0),
 					"At least one pod should be ready after scale-up")
 
-			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
 			GinkgoWriter.Println("Deployment successfully scaled up from zero")
 		})
@@ -385,7 +375,7 @@ var _ = Describe("Scale-From-Zero Feature", Label("smoke", "full"), Ordered, fun
 				g.Expect(job.Status.Succeeded).To(BeNumerically(">", 0),
 					"Job should complete successfully after deployment scales up")
 
-			}, 10*time.Minute, 15*time.Second).Should(Succeed())
+			}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalVerySlowSec)*time.Second).Should(Succeed())
 
 			GinkgoWriter.Println("Requests processed successfully after scale-from-zero")
 		})
@@ -464,7 +454,7 @@ fi
 					Containers: []corev1.Container{
 						{
 							Name:  "curl-trigger",
-							Image: "curlimages/curl:latest",
+							Image: "quay.io/curl/curl:8.11.1",
 							Command: []string{
 								"sh", "-c", script,
 							},

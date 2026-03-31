@@ -156,6 +156,14 @@ log_error() {
     exit 1
 }
 
+# Helm repo update behavior:
+# - Default: DO NOT skip (`helm repo update` runs)
+# - Opt-in: set `SKIP_HELM_REPO_UPDATE=true` to skip (faster, but requires repo indexes to already exist)
+should_skip_helm_repo_update() {
+    local skip="${SKIP_HELM_REPO_UPDATE:-false}"
+    echo "$skip"
+}
+
 # APIService guard: background loop that continuously ensures the
 # v1beta1.external.metrics.k8s.io APIService points to prometheus-adapter.
 # On clusters with KEDA, the operator continuously reconciles the APIService
@@ -1077,13 +1085,37 @@ deploy_llm_d_infrastructure() {
         fi
     fi
 
-    # Model-serving pods (vLLM) can take several minutes to download and load
-    # large models into GPU memory. The startupProbe allows up to 30m, so the
-    # wait timeout here must be long enough for the model to finish loading.
-    local DEPLOY_WAIT_TIMEOUT="${DEPLOY_WAIT_TIMEOUT:-600s}"
-    log_info "Waiting for llm-d components to initialize (timeout=${DEPLOY_WAIT_TIMEOUT})..."
-    kubectl wait --for=condition=Available deployment --all -n $LLMD_NS --timeout="$DEPLOY_WAIT_TIMEOUT" || \
-        log_warning "llm-d components are not ready yet - check 'kubectl get pods -n $LLMD_NS'"
+    # For deterministic e2e infra-only runs, avoid waiting on all llm-d deployments.
+    # The full wait often blocks on modelservice decode/prefill readiness, which is
+    # unnecessary for the e2e suite because tests create/manage their own workloads.
+    if [ "$E2E_TESTS_ENABLED" = "true" ] && [ "$INFRA_ONLY" = "true" ]; then
+        local E2E_DEPLOY_WAIT_TIMEOUT="${E2E_DEPLOY_WAIT_TIMEOUT:-120s}"
+        log_info "E2E infra-only mode: waiting for essential llm-d components (timeout=${E2E_DEPLOY_WAIT_TIMEOUT})..."
+
+        if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &>/dev/null; then
+            kubectl wait --for=condition=Available "deployment/$LLM_D_EPP_NAME" -n "$LLMD_NS" --timeout="$E2E_DEPLOY_WAIT_TIMEOUT" || \
+                log_warning "EPP deployment not ready yet: $LLM_D_EPP_NAME"
+        else
+            log_warning "EPP deployment not found: $LLM_D_EPP_NAME"
+        fi
+
+        # Gateway deployment name includes release prefix and can vary by environment.
+        # Wait only if we can detect one, otherwise continue.
+        local gateway_deploy
+        gateway_deploy=$(kubectl get deployment -n "$LLMD_NS" -o name 2>/dev/null | grep "inference-gateway-istio" | head -1 || true)
+        if [ -n "$gateway_deploy" ]; then
+            kubectl wait --for=condition=Available "$gateway_deploy" -n "$LLMD_NS" --timeout="$E2E_DEPLOY_WAIT_TIMEOUT" || \
+                log_warning "Gateway deployment not ready yet: $gateway_deploy"
+        fi
+    else
+        # Model-serving pods (vLLM) can take several minutes to download and load
+        # large models into GPU memory. The startupProbe allows up to 30m, so the
+        # wait timeout here must be long enough for the model to finish loading.
+        local DEPLOY_WAIT_TIMEOUT="${DEPLOY_WAIT_TIMEOUT:-600s}"
+        log_info "Waiting for llm-d components to initialize (timeout=${DEPLOY_WAIT_TIMEOUT})..."
+        kubectl wait --for=condition=Available deployment --all -n $LLMD_NS --timeout="$DEPLOY_WAIT_TIMEOUT" || \
+            log_warning "llm-d components are not ready yet - check 'kubectl get pods -n $LLMD_NS'"
+    fi
 
     # Align WVA with the InferencePool API group in use (scale-from-zero requires WVA to watch the same group).
     # llm-d version determines whether pools are inference.networking.k8s.io (v1) or inference.networking.x-k8s.io (v1alpha2).
@@ -1130,7 +1162,11 @@ deploy_keda() {
     kubectl create namespace "$KEDA_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
     helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
-    helm repo update
+    if [ "$(should_skip_helm_repo_update)" = "true" ]; then
+        log_info "Skipping helm repo update for KEDA (SKIP_HELM_REPO_UPDATE=true)"
+    else
+        helm repo update
+    fi
 
     if ! helm upgrade -i keda kedacore/keda \
         --version "$KEDA_CHART_VERSION" \
@@ -1193,7 +1229,11 @@ deploy_prometheus_adapter() {
     # Add Prometheus community helm repo
     log_info "Adding Prometheus community helm repo"
     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-    helm repo update
+    if [ "$(should_skip_helm_repo_update)" = "true" ]; then
+        log_info "Skipping helm repo update for Prometheus Adapter (SKIP_HELM_REPO_UPDATE=true)"
+    else
+        helm repo update
+    fi
 
     # Create prometheus-ca ConfigMap from the CA certificate
     log_info "Creating prometheus-ca ConfigMap for Prometheus Adapter"
