@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
@@ -55,7 +56,9 @@ var _ = Describe("Indexers", Ordered, func() {
 
 		// Create a manager with indexes for testing
 		var err error
-		mgr, err = manager.New(cfg, manager.Options{})
+		mgr, err = manager.New(cfg, manager.Options{
+			Metrics: metricsserver.Options{BindAddress: "0"}, // disable metrics server in tests
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Setup indexes
