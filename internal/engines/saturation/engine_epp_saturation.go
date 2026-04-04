@@ -1,0 +1,159 @@
+/*
+Copyright 2025 The llm-d Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package saturation
+
+import (
+	"context"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	epp_saturation "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/epp_saturation"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+)
+
+// optimizeEPPSaturation runs the EPP saturation analyzer path.
+// Unlike V1/V2, this does not collect per-replica metrics from vLLM pods.
+// Instead, it queries the EPP's pre-computed pool saturation score and
+// translates it into scaling decisions via the optimizer pipeline.
+func (e *Engine) optimizeEPPSaturation(
+	ctx context.Context,
+	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	currentAllocations map[string]*interfaces.Allocation,
+) []interfaces.VariantDecision {
+	logger := ctrl.LoggerFrom(ctx)
+
+	var requests []pipeline.ModelScalingRequest
+
+	for groupKey, modelVAs := range modelGroups {
+		modelID := modelVAs[0].Spec.ModelID
+		namespace := modelVAs[0].Namespace
+		logger.Info("Processing model (EPP saturation)",
+			"modelID", modelID,
+			"namespace", namespace,
+			"variantCount", len(modelVAs),
+			"groupKey", groupKey)
+
+		// Get saturation config for threshold values
+		saturationConfigMap := e.Config.SaturationConfigForNamespace(namespace)
+		if len(saturationConfigMap) == 0 {
+			logger.Info("Saturation scaling config not loaded yet for namespace, skipping model",
+				"namespace", namespace, "modelID", modelID)
+			continue
+		}
+		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
+
+		// Prepare model data (scale targets, variant states) — same as V2 path
+		// but we skip per-replica metrics collection.
+		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
+		if err != nil {
+			logger.Error(err, "Model data preparation failed", "modelID", modelID)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
+			continue
+		}
+		if data == nil {
+			logger.V(logging.DEBUG).Info("Skipping model: no scale targets available", "modelID", modelID)
+			continue
+		}
+
+		// Build EPP saturation config from the saturation config thresholds
+		eppCfg := &epp_saturation.EPPSaturationConfig{
+			ScaleUpThreshold:  saturationConfig.ScaleUpThreshold,
+			ScaleDownBoundary: saturationConfig.ScaleDownBoundary,
+		}
+		eppCfg.ApplyDefaults()
+
+		// Run the EPP saturation analyzer (queries Prometheus for pool saturation)
+		input := interfaces.AnalyzerInput{
+			ModelID:       modelID,
+			Namespace:     namespace,
+			Config:        eppCfg,
+			VariantStates: data.variantStates,
+		}
+
+		result, err := e.eppSaturationAnalyzer.Analyze(ctx, input)
+		if err != nil {
+			logger.Error(err, "EPP saturation analysis failed", "modelID", modelID)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
+			continue
+		}
+
+		logger.Info("EPP saturation analysis result",
+			"modelID", modelID,
+			"saturation", result.Utilization,
+			"totalSupply", result.TotalSupply,
+			"totalDemand", result.TotalDemand,
+			"requiredCapacity", result.RequiredCapacity,
+			"spareCapacity", result.SpareCapacity)
+
+		requests = append(requests, pipeline.ModelScalingRequest{
+			ModelID:       modelID,
+			Namespace:     namespace,
+			Result:        result,
+			VariantStates: data.variantStates,
+			Priority:      saturationConfig.Priority,
+		})
+	}
+
+	if len(requests) == 0 {
+		return nil
+	}
+
+	// Run optimizer (same pipeline as V2)
+	var constraints []*pipeline.ResourceConstraints
+	if _, ok := e.optimizer.(*pipeline.GreedyByScoreOptimizer); ok {
+		currentUsage := computeCurrentGPUUsage(requests)
+		if limiter, ok := e.GPULimiter.(*pipeline.DefaultLimiter); ok {
+			constraint, err := limiter.ComputeConstraints(ctx, currentUsage)
+			if err != nil {
+				logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited")
+			} else {
+				constraints = append(constraints, constraint)
+			}
+		}
+	}
+	allDecisions := e.optimizer.Optimize(ctx, requests, constraints)
+
+	logger.Info("EPP saturation optimizer produced decisions",
+		"optimizer", e.optimizer.Name(),
+		"decisionCount", len(allDecisions),
+		"modelCount", len(requests))
+
+	// Apply enforcer per-model (scale-to-zero, min replicas)
+	for _, req := range requests {
+		if hasMinReplicasAboveZero(req.VariantStates) {
+			logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement (EPP saturation): variant has minReplicas > 0",
+				"modelID", req.ModelID)
+			continue
+		}
+
+		scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(req.Namespace)
+		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
+			ctx, req.ModelID, req.Namespace,
+			allDecisions, scaleToZeroConfig, e.optimizer.Name(),
+		)
+		if scaledToZero {
+			logger.Info("Scale-to-zero enforcement applied (EPP saturation)",
+				"modelID", req.ModelID)
+		}
+	}
+
+	return allDecisions
+}
+
