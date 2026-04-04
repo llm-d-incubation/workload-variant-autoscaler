@@ -44,3 +44,37 @@ spec:
     metadata:
     - pod
     - container
+---
+# The GMP collector ServiceAccount (gmp-system/collector) needs access to the
+# WVA token Secret in order to use it for Bearer auth when scraping the
+# metrics endpoint. Without this, the collector logs "watch: unknown (get secrets)"
+# and never marks the target active.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gmp-collector-wva-token-reader
+  namespace: workload-variant-autoscaler-system
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/part-of: google-cloud-managed-prometheus
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gmp-collector-wva-token-reader
+  namespace: workload-variant-autoscaler-system
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/part-of: google-cloud-managed-prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gmp-collector-wva-token-reader
+subjects:
+- kind: ServiceAccount
+  name: collector
+  namespace: gmp-system
