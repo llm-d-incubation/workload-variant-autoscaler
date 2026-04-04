@@ -145,6 +145,14 @@ deploy-wva-on-k8s: manifests kustomize ## Deploy WVA on Kubernetes with the spec
 	@echo "Target namespace: $(or $(NAMESPACE),workload-variant-autoscaler-system)"
 	NAMESPACE=$(or $(NAMESPACE),workload-variant-autoscaler-system) IMG=$(IMG) ENVIRONMENT=kubernetes DEPLOY_LLM_D=$(DEPLOY_LLM_D) ./deploy/install.sh
 
+## Deploy WVA with EPP saturation analyzer on GKE/Kubernetes.
+## Requires: EPP with saturation detector + Prometheus scraping it.
+## Override: IMG, PROMETHEUS_URL, SCALE_UP_THRESHOLD, SCALE_DOWN_BOUNDARY, MODEL_ID, etc.
+.PHONY: deploy-epp-saturation
+deploy-epp-saturation: ## Deploy WVA with EPP saturation analyzer
+	@echo "Deploying WVA with EPP saturation analyzer (image: $(IMG))"
+	IMG=$(IMG) ./deploy/deploy-epp-saturation.sh
+
 ## Undeploy WVA from Kubernetes.
 .PHONY: undeploy-wva-on-k8s
 undeploy-wva-on-k8s:
