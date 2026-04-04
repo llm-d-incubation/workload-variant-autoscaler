@@ -1,0 +1,46 @@
+# PodMonitoring for Google Managed Prometheus (GMP) on GKE.
+# Scrapes WVA metrics so they appear in Cloud Monitoring / managed Prometheus
+# queries, including:
+#   - wva_desired_replicas       (WVA's recommendation, what HPA consumes)
+#   - wva_current_replicas       (current actual replica count)
+#   - wva_desired_ratio          (desired/current)
+#   - wva_replica_scaling_total  (counter of scale decisions)
+#
+# The WVA metrics endpoint uses HTTPS + bearer token auth. GMP's PodMonitoring
+# supports authorization via secret references.
+#
+# Apply with:
+#   kubectl apply -f deploy/wva-podmonitoring.yaml
+#
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: wva-metrics
+  namespace: workload-variant-autoscaler-system
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/part-of: google-cloud-managed-prometheus
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: workload-variant-autoscaler
+  endpoints:
+  # Port name (not number) — matches container port name "https" in the WVA deployment.
+  # GMP PodMonitoring treats the port field as a name first, then number.
+  - port: https
+    path: /metrics
+    interval: 30s
+    scheme: https
+    tls:
+      insecureSkipVerify: true
+    authorization:
+      type: Bearer
+      credentials:
+        secret:
+          name: workload-variant-autoscaler-controller-manager-token
+          key: token
+  targetLabels:
+    metadata:
+    - pod
+    - container
