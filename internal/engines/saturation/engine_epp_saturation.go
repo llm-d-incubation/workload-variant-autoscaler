@@ -26,6 +26,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // optimizeEPPSaturation runs the EPP saturation analyzer path.
@@ -59,16 +61,30 @@ func (e *Engine) optimizeEPPSaturation(
 		}
 		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 
-		// Prepare model data (scale targets, variant states) — same as V2 path
-		// but we skip per-replica metrics collection.
-		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
-		if err != nil {
-			logger.Error(err, "Model data preparation failed", "modelID", modelID)
+		// Fetch scale targets and build variant states directly — skip per-replica
+		// vLLM metrics collection since EPP saturation is a pool-level signal.
+		scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
+		variantAccel := make(map[string]string, len(modelVAs))
+		for i := range modelVAs {
+			va := &modelVAs[i]
+			scaleTarget, err := scaletarget.FetchScaleTarget(ctx, e.client, va.Name, va.Spec.ScaleTargetRef.Kind, va.GetScaleTargetName(), va.Namespace)
+			if err != nil {
+				logger.V(logging.DEBUG).Info("Could not get scale target for VA",
+					"variant", va.Name, "error", err)
+				continue
+			}
+			scaleTargets[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())] = scaleTarget
+			variantAccel[va.Name] = utils.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+		}
+		if len(scaleTargets) == 0 {
+			logger.Info("Skipping model: no scale targets resolved", "modelID", modelID)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
-		if data == nil {
-			logger.V(logging.DEBUG).Info("Skipping model: no scale targets available", "modelID", modelID)
+		variantStates := e.BuildVariantStates(ctx, modelVAs, scaleTargets, e.client)
+		if len(variantStates) == 0 {
+			logger.Info("Skipping model: no variant states built", "modelID", modelID)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, scaleTargets)
 			continue
 		}
 
@@ -84,14 +100,21 @@ func (e *Engine) optimizeEPPSaturation(
 			ModelID:       modelID,
 			Namespace:     namespace,
 			Config:        eppCfg,
-			VariantStates: data.variantStates,
+			VariantStates: variantStates,
 		}
 
 		result, err := e.eppSaturationAnalyzer.Analyze(ctx, input)
 		if err != nil {
 			logger.Error(err, "EPP saturation analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, scaleTargets)
 			continue
+		}
+
+		// Fill in accelerator names on variant capacities (analyzer doesn't know them).
+		for i := range result.VariantCapacities {
+			if name, ok := variantAccel[result.VariantCapacities[i].VariantName]; ok {
+				result.VariantCapacities[i].AcceleratorName = name
+			}
 		}
 
 		logger.Info("EPP saturation analysis result",
@@ -106,7 +129,7 @@ func (e *Engine) optimizeEPPSaturation(
 			ModelID:       modelID,
 			Namespace:     namespace,
 			Result:        result,
-			VariantStates: data.variantStates,
+			VariantStates: variantStates,
 			Priority:      saturationConfig.Priority,
 		})
 	}
