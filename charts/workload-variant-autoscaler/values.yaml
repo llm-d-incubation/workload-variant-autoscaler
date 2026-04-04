@@ -68,10 +68,17 @@ wva:
   capacityScaling:
     # Global defaults applied to all variants unless overridden
     default:
+      # analyzerName selects the scaling analyzer:
+      #   "" (empty/omit): V1 percentage-based saturation (default)
+      #   "saturation": V2 token-based saturation
+      #   "epp-saturation": EPP latency-detector pool saturation signal
+      # analyzerName: ""
       kvCacheThreshold: 0.80      # Replica saturated if KV cache utilization >= threshold (0.0-1.0)
       queueLengthThreshold: 5     # Replica saturated if queue length >= threshold
       kvSpareTrigger: 0.1         # Scale-up if avg spare KV capacity < trigger (0.0-1.0)
       queueSpareTrigger: 3        # Scale-up if avg spare queue capacity < trigger
+      # scaleUpThreshold: 0.85    # V2/EPP: utilization above which scale-up triggers
+      # scaleDownBoundary: 0.50   # V2/EPP: utilization below which scale-down is safe
     
     # Per-model/namespace overrides (optional)
     # Example:
