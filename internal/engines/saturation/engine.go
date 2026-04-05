@@ -152,11 +152,15 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		optimizer:               scalingOptimizer,
 	}
 
+	pollInterval := cfg.OptimizationInterval()
+	if pollInterval <= 0 {
+		pollInterval = 30 * time.Second
+	}
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
 		Config: executor.Config{
 			OptimizeFunc: engine.optimize,
 		},
-		Interval:     30 * time.Second,
+		Interval:     pollInterval,
 		RetryBackoff: 100 * time.Millisecond,
 	})
 
