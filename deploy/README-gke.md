@@ -187,7 +187,7 @@ If an older version is already installed, this upgrades it. Existing
 
 ---
 
-## Step 6: Deploy WVA via Helm (observe-only mode)
+## Step 6: Deploy WVA via Helm
 
 ```bash
 helm upgrade -i workload-variant-autoscaler \
@@ -209,8 +209,40 @@ Notes:
   (it assumes a specific namespace that may not exist on your cluster)
 - `vllmService.enabled=false` disables the chart's sample vLLM service
 - `hpa.enabled=false` runs in **observe-only mode** — WVA emits
-  recommendations to the VA status and to Prometheus, but does not trigger
-  actual scaling
+  recommendations to the VA status and to Prometheus, but no HPA is
+  created, so no actual scaling happens. This is useful for first-time
+  validation before enabling the scaling loop.
+
+### Enabling active scaling (after validation)
+
+To wire the recommendations into actual replica changes, enable the HPA
+in the chart:
+
+```bash
+helm upgrade workload-variant-autoscaler ./charts/workload-variant-autoscaler \
+  -n workload-variant-autoscaler-system --reuse-values \
+  --set hpa.enabled=true \
+  --set hpa.minReplicas=1 \
+  --set hpa.maxReplicas=20
+```
+
+The chart creates an HPA that reads `wva_desired_replicas` as an
+**external metric**. For the external metrics API to be served, you also
+need a **metrics adapter**:
+
+- **prometheus-adapter** — translates Prometheus metrics into the external
+  metrics API
+- **KEDA** — alternative, uses a `ScaledObject` CR
+
+The repo's installer (`deploy/install.sh`) sets this up automatically
+including the APIService guard that prevents KEDA from reclaiming the
+external metrics endpoint from prometheus-adapter. See
+[deploy/lib/scaler_runtime.sh](lib/scaler_runtime.sh) for the
+reference flow.
+
+**Active scaling with prometheus-adapter/KEDA has not been validated in
+this guide.** Follow the main [deploy README](README.md) or use
+`deploy/install.sh` for that path.
 
 ---
 
