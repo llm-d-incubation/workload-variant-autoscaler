@@ -20,6 +20,9 @@ var (
 	currentReplicas     *prometheus.GaugeVec
 	desiredRatio        *prometheus.GaugeVec
 
+	optimizationDuration *prometheus.HistogramVec
+	modelsProcessedTotal prometheus.Counter
+
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
 	controllerInstance string
@@ -77,6 +80,21 @@ func InitMetrics(registry prometheus.Registerer) error {
 		baseLabels,
 	)
 
+	optimizationDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    constants.WVAOptimizationDurationSeconds,
+			Help:    "Duration of optimization loop cycles in seconds",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{constants.LabelStatus},
+	)
+	modelsProcessedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: constants.WVAModelsProcessedTotal,
+			Help: "Total number of models processed across optimization cycles",
+		},
+	)
+
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
 		return fmt.Errorf("failed to register replicaScalingTotal metric: %w", err)
@@ -89,6 +107,12 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(desiredRatio); err != nil {
 		return fmt.Errorf("failed to register desiredRatio metric: %w", err)
+	}
+	if err := registry.Register(optimizationDuration); err != nil {
+		return fmt.Errorf("failed to register optimizationDuration metric: %w", err)
+	}
+	if err := registry.Register(modelsProcessedTotal); err != nil {
+		return fmt.Errorf("failed to register modelsProcessedTotal metric: %w", err)
 	}
 
 	return nil
@@ -132,6 +156,23 @@ func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmd
 
 	replicaScalingTotal.With(labels).Inc()
 	return nil
+}
+
+// ObserveOptimizationDuration records the duration of an optimization cycle with the given status.
+// Status should be one of: "success", "error", "partial".
+func (m *MetricsEmitter) ObserveOptimizationDuration(durationSeconds float64, status string) {
+	if optimizationDuration == nil {
+		return
+	}
+	optimizationDuration.With(prometheus.Labels{constants.LabelStatus: status}).Observe(durationSeconds)
+}
+
+// IncrModelsProcessed increments the models-processed counter by the given count.
+func (m *MetricsEmitter) IncrModelsProcessed(count int) {
+	if modelsProcessedTotal == nil {
+		return
+	}
+	modelsProcessedTotal.Add(float64(count))
 }
 
 // EmitReplicaMetrics emits current and desired replica metrics

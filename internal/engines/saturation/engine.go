@@ -43,6 +43,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -102,6 +103,9 @@ type Engine struct {
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
 	// CostAwareOptimizer (unlimited) or GreedyByScoreOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
+
+	// metricsEmitter emits optimization loop performance metrics (duration, models processed).
+	metricsEmitter *metrics.MetricsEmitter
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -144,6 +148,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
+		metricsEmitter:          metrics.NewMetricsEmitter(),
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -181,6 +186,21 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) error {
+	start := time.Now()
+	var optimizeErr error
+	var modelsProcessed int
+	defer func() {
+		duration := time.Since(start).Seconds()
+		status := "success"
+		if optimizeErr != nil {
+			status = "error"
+		}
+		e.metricsEmitter.ObserveOptimizationDuration(duration, status)
+		if modelsProcessed > 0 {
+			e.metricsEmitter.IncrModelsProcessed(modelsProcessed)
+		}
+	}()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Get optimization interval from Config (already a time.Duration)
@@ -203,6 +223,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client)
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
+		optimizeErr = err
 		return err
 	}
 
@@ -217,6 +238,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 		if err != nil {
 			logger.Error(err, "Failed to collect cluster inventory")
 			// do not proceed to optimization if inventory collection fails in limited mode
+			optimizeErr = err
 			return err
 		}
 		// always print inventory until optimizer consumes it
@@ -304,8 +326,11 @@ func (e *Engine) optimize(ctx context.Context) error {
 	}
 	if err := e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations); err != nil {
 		logger.Error(err, "Failed to apply saturation decisions")
+		optimizeErr = err
 		return err
 	}
+
+	modelsProcessed = len(modelGroups)
 
 	logger.Info("Optimization completed successfully",
 		"mode", "saturation-only",
