@@ -1,9 +1,13 @@
 # WVA with EPP Saturation Analyzer
 
-Scripts for deploying WVA using the **EPP saturation analyzer** — an autoscaling
-mode that consumes the pool-level saturation signal emitted by the
-gateway-api-inference-extension (EPP) latency detector, instead of computing
-saturation from per-pod vLLM metrics.
+Guide for the **EPP saturation analyzer** — an autoscaling mode that consumes
+the pool-level saturation signal emitted by the gateway-api-inference-extension
+(EPP) latency detector, instead of computing saturation from per-pod vLLM
+metrics.
+
+For GKE-specific cluster setup (Prometheus, TLS, GMP), see
+[README-gke.md](README-gke.md). For the general deployment guide (all
+platforms), see [README.md](README.md).
 
 ## When to use this
 
@@ -30,7 +34,24 @@ Semantics:
 - `>= 1.0` = at or over SLO
 - Score is unbounded (can be > 1.0 when heavily overloaded)
 
-## The two scripts
+## How WVA uses the signal
+
+With `N` current replicas and saturation `S`, WVA uses a normalized capacity
+model: `supply = 1.0` (pool's full SLO budget), `demand = S`, and each replica
+contributes `1/N` of the supply. This makes the replica recommendation
+proportional to pool size:
+
+```
+desired_replicas =
+  min(ceil(S × N / scaleUpThreshold),   maxReplicas)  if S > scaleUpThreshold
+  N                                                    if scaleDownBoundary ≤ S ≤ scaleUpThreshold
+  max(ceil(S × N / scaleDownBoundary), minReplicas)   if S < scaleDownBoundary
+```
+
+The hysteresis band between `scaleDownBoundary` (default `0.50`) and
+`scaleUpThreshold` (default `0.85`) absorbs minor signal noise.
+
+## The scripts
 
 ### `deploy-epp-saturation.sh`
 
@@ -68,45 +89,17 @@ CR for your model.
 
 ### `deploy-prometheus-tls-proxy.sh`
 
-Helper that deploys an **nginx TLS-terminating proxy** in front of an HTTP-only
-Prometheus. WVA enforces HTTPS for `PROMETHEUS_BASE_URL` — if your Prometheus
-only serves HTTP (e.g., the standalone `prometheus-community/prometheus` chart),
-use this to add a TLS front.
+Helper for HTTP-only Prometheus backends. See [README-gke.md](README-gke.md)
+for usage.
 
-**What it creates:**
-- A self-signed TLS cert (if not already present)
-- ConfigMap with nginx proxy config
-- Deployment running `nginx:1.25-alpine`
-- Service exposing port `9443`
+## Quickstart (assumes cluster is already set up)
 
-After running it, set `PROMETHEUS_URL=https://<service>.<ns>.svc.cluster.local:9443`
-in `deploy-epp-saturation.sh`.
-
-## End-to-end deployment on GKE
-
-### Prerequisites
-
-- GKE cluster with: EPP deployed + vLLM (or simulator) model pods + Prometheus
-- EPP has the latency detector plugin configured and `SaturationDetector`
-  bound to it in the plugins config
-- Prometheus scrape config for EPP's `/metrics` endpoint
-- Verify the metric exists:
-  ```bash
-  kubectl port-forward -n <prom-ns> svc/<prom-svc> 19090:<port>
-  curl 'http://localhost:19090/api/v1/query?query=inference_extension_latency_detector_pool_saturation'
-  ```
-
-### Flow
+Follow [README-gke.md](README-gke.md) first to get Prometheus + scrape configs
+in place, then:
 
 ```bash
-# 1. (If Prometheus is HTTP-only) Deploy TLS proxy
-NAMESPACE=wva-monitoring \
-BACKEND_HOST=prometheus-server.wva-monitoring.svc.cluster.local \
-BACKEND_PORT=80 \
-  ./deploy/deploy-prometheus-tls-proxy.sh
-
-# 2. Deploy WVA in observe-only mode (no actual scaling)
-IMG=us-docker.pkg.dev/my-project/my-repo/wva:epp-saturation \
+# Deploy WVA in observe-only mode (no actual scaling)
+IMG=us-docker.pkg.dev/<PROJECT>/<REPO>/wva:epp-saturation \
 PROMETHEUS_URL=https://prometheus-tls.wva-monitoring.svc.cluster.local:9443 \
 OBSERVE_ONLY=true \
 MODEL_ID="Qwen/Qwen3-32B" \
@@ -116,16 +109,16 @@ HPA_MIN_REPLICAS=1 \
 HPA_MAX_REPLICAS=50 \
   ./deploy/deploy-epp-saturation.sh
 
-# 3. Watch recommendations live
+# Watch recommendations live
 kubectl logs -n workload-variant-autoscaler-system -l control-plane=controller-manager -f | \
   grep -E 'EPP pool saturation|analysis result|action.*target'
 
-# 4. Check VA status for the recommended replica count
+# Check VA status for the recommended replica count
 kubectl get variantautoscaling <name>-va -n <ns> -o yaml
 #   .status.desiredOptimizedAlloc.numReplicas is WVA's recommendation
 ```
 
-### Switching to active scaling
+## Switching to active scaling
 
 Once you've validated the recommendations look correct, switch from
 observe-only to active scaling by redeploying with `OBSERVE_ONLY=false` (or
@@ -145,7 +138,7 @@ Three key metrics:
 
 The WVA-emitted metrics are on `workload-variant-autoscaler-metrics:8443/metrics`
 (HTTPS, bearer token auth). Add a Prometheus scrape config pointing there to
-make them queryable.
+make them queryable (see [README-gke.md](README-gke.md)).
 
 ## Troubleshooting
 
@@ -153,10 +146,6 @@ make them queryable.
 - Happens if WVA can't query the EPP saturation metric from Prometheus
 - Check the EPP target in Prometheus is `up` and the metric is present
 - Check WVA can reach Prometheus at `PROMETHEUS_URL`
-
-**"TLS configuration validation failed - HTTPS is required"**
-- `PROMETHEUS_URL` must start with `https://`
-- Deploy the TLS proxy if your Prometheus is HTTP-only
 
 **VA status shows `MetricsAvailable: False` even with EPP metric present**
 - Make sure the saturation scaling ConfigMap has `analyzerName: epp-saturation`
