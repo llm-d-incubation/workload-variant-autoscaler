@@ -66,29 +66,21 @@ This gives you `prometheus-server.wva-monitoring.svc.cluster.local:80` (HTTP).
 **WVA validates that `PROMETHEUS_BASE_URL` uses `https://`** — connections over
 plain HTTP are rejected at startup.
 
-### For GMP
+### For GMP (untested — outline only)
 
 GMP stores data in Cloud Monitoring — there's no in-cluster Prometheus API
-to query directly. Deploy the **managed Prometheus frontend** to get a
-Prometheus-compatible HTTPS endpoint backed by Cloud Monitoring:
+to query directly. You'd need to deploy the **managed Prometheus frontend**
+(from the `GoogleCloudPlatform/prometheus-engine` repo) which provides a
+PromQL-compatible endpoint backed by Cloud Monitoring. The frontend
+authenticates to Cloud Monitoring via Workload Identity
+(`roles/monitoring.viewer` on the project).
 
-```bash
-kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/prometheus-engine/v0.15.1/examples/frontend.yaml
-```
+Since the frontend typically serves HTTP, you'd also need the TLS proxy in
+front of it for WVA's HTTPS requirement.
 
-This creates a `frontend` Deployment + Service in the `gmp-system` namespace
-that serves the Prometheus Query API. Authenticate via Workload Identity —
-the frontend SA needs `roles/monitoring.viewer` on the project.
-
-For WVA to query it, point `PROMETHEUS_URL` at:
-
-```
-https://frontend.gmp-system.svc.cluster.local:9090
-```
-
-Note: the GMP frontend actually serves HTTP on port 9090 by default. Either
-add TLS to the frontend deployment (sidecar/ingress) or use the TLS proxy
-below with `BACKEND_HOST=frontend.gmp-system.svc.cluster.local BACKEND_PORT=9090`.
+**This path has not been validated end-to-end in this repo.** If you try it,
+please open an issue with what worked / didn't. For now, the verified path
+is the self-managed Prometheus flow below.
 
 ### For self-managed Prometheus (HTTP-only)
 
