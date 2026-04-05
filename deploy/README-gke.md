@@ -1,12 +1,17 @@
 # Deploying WVA on GKE
 
 Step-by-step guide for deploying the Workload-Variant-Autoscaler (WVA) on
-Google Kubernetes Engine. Covers the GKE-specific plumbing around Prometheus,
-TLS, and Google Managed Prometheus (GMP).
+Google Kubernetes Engine. Covers the GKE-specific plumbing around Prometheus
+and TLS.
 
 For the **EPP saturation analyzer** specifically, see
 [README-epp-saturation.md](README-epp-saturation.md).
 For the **general deployment guide** (all platforms), see [README.md](README.md).
+
+> This guide only documents steps that have been verified end-to-end on a
+> GKE cluster. Other GKE options (GMP frontend, kube-prometheus-stack,
+> active HPA scaling with prometheus-adapter/KEDA) are possible but not
+> covered here.
 
 ---
 
@@ -15,33 +20,11 @@ For the **general deployment guide** (all platforms), see [README.md](README.md)
 - GKE cluster with at least one GPU node pool
 - `kubectl` configured for the cluster
 - Helm 3 installed
-- Docker + write access to a container registry (Artifact Registry recommended)
 - Your inference workload (vLLM, llm-d, etc.) already running in the cluster
 
 ---
 
-## Step 1: Choose a Prometheus setup
-
-WVA queries Prometheus for metrics. GKE clusters typically have one of:
-
-### Option A: Google Managed Prometheus (GMP)
-
-GMP is enabled by default on GKE Autopilot and available on Standard clusters.
-It uses `PodMonitoring` / `ClusterPodMonitoring` CRDs from
-`monitoring.googleapis.com/v1`. Check if it's running:
-
-```bash
-kubectl get pods -n gmp-system -l app.kubernetes.io/name=collector
-```
-
-GMP collectors run as a DaemonSet and store data in Cloud Monitoring. WVA cannot
-query GMP directly from within the cluster — you'd need to deploy the
-**managed Prometheus frontend** or run a separate in-cluster Prometheus that
-scrapes the same targets.
-
-### Option B: Self-managed Prometheus (kube-prometheus-stack or standalone)
-
-Simpler for development. Deploy the standalone Prometheus chart:
+## Step 1: Deploy a standalone Prometheus
 
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -61,31 +44,11 @@ This gives you `prometheus-server.wva-monitoring.svc.cluster.local:80` (HTTP).
 
 ---
 
-## Step 2: Expose Prometheus over HTTPS (required by WVA)
+## Step 2: Expose Prometheus over HTTPS
 
-**WVA validates that `PROMETHEUS_BASE_URL` uses `https://`** — connections over
-plain HTTP are rejected at startup.
-
-### For GMP (untested — outline only)
-
-GMP stores data in Cloud Monitoring — there's no in-cluster Prometheus API
-to query directly. You'd need to deploy the **managed Prometheus frontend**
-(from the `GoogleCloudPlatform/prometheus-engine` repo) which provides a
-PromQL-compatible endpoint backed by Cloud Monitoring. The frontend
-authenticates to Cloud Monitoring via Workload Identity
-(`roles/monitoring.viewer` on the project).
-
-Since the frontend typically serves HTTP, you'd also need the TLS proxy in
-front of it for WVA's HTTPS requirement.
-
-**This path has not been validated end-to-end in this repo.** If you try it,
-please open an issue with what worked / didn't. For now, the verified path
-is the self-managed Prometheus flow below.
-
-### For self-managed Prometheus (HTTP-only)
-
-If your Prometheus is HTTP-only (like the standalone chart above), deploy
-the TLS proxy:
+**WVA validates that `PROMETHEUS_BASE_URL` uses `https://`** — connections
+over plain HTTP are rejected at startup. Since the standalone chart serves
+HTTP only, deploy the TLS proxy:
 
 ```bash
 NAMESPACE=wva-monitoring \
@@ -102,26 +65,28 @@ This creates:
 Use `https://prometheus-tls.wva-monitoring.svc.cluster.local:9443` as the
 `PROMETHEUS_URL` for WVA.
 
-If you're using kube-prometheus-stack with TLS enabled, skip this step and
-point WVA directly at the managed Prometheus service.
-
 ---
 
-## Step 3: Configure Prometheus to scrape your workload metrics
+## Step 3: Configure Prometheus to scrape workload + WVA metrics
 
-WVA needs metrics from your inference workload and (optionally) from the EPP.
-Typical metrics to scrape:
+WVA needs metrics from the EPP (for saturation) and emits its own metrics
+that Prometheus should scrape back.
 
-- **vLLM pods** (`:8000/metrics` or custom port) — KV cache, queue depth,
-  request latency
-- **EPP** (`:9090/metrics`) — saturation signals, scheduler metrics
-- **WVA itself** (`:8443/metrics`) — `wva_desired_replicas` etc.
-
-### For self-managed Prometheus
-
-Add `extraScrapeConfigs` to your Helm values:
+Write the values file:
 
 ```yaml
+# prom-values.yaml
+server:
+  persistentVolume:
+    enabled: false
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
 extraScrapeConfigs: |
   - job_name: epp-metrics
     scheme: http
@@ -131,7 +96,7 @@ extraScrapeConfigs: |
       credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
     static_configs:
       - targets:
-          - my-epp.default.svc.cluster.local:9090
+          - <your-epp-service>.<ns>.svc.cluster.local:9090
   - job_name: wva-metrics
     scheme: https
     scrape_interval: 5s
@@ -145,9 +110,12 @@ extraScrapeConfigs: |
           - workload-variant-autoscaler-metrics.workload-variant-autoscaler-system.svc.cluster.local:8443
 ```
 
-Then `helm upgrade prometheus prometheus-community/prometheus -n wva-monitoring -f values.yaml`.
+```bash
+helm upgrade prometheus prometheus-community/prometheus \
+  -n wva-monitoring -f prom-values.yaml --wait --timeout 60s
+```
 
-Also grant the Prometheus SA permission to access token-authenticated endpoints:
+Grant the Prometheus SA permission to access token-authenticated endpoints:
 
 ```bash
 kubectl create clusterrolebinding prometheus-auth-delegator \
@@ -161,40 +129,45 @@ kubectl create clusterrolebinding prometheus-metrics-reader \
   --serviceaccount=wva-monitoring:prometheus-server
 ```
 
-### For GMP
+If the EPP has `--metrics-endpoint-auth=true` (the default), the scrape will
+fail with `401 Unauthorized` unless the Prometheus SA's bearer token is
+accepted. Either:
+- Keep auth on and rely on the ClusterRoleBinding above (preferred), or
+- Add `--metrics-endpoint-auth=false --secure-serving=false` to the EPP
+  deployment's container args (simpler for dev)
 
-Apply a `PodMonitoring` (namespaced) or `ClusterPodMonitoring` (cluster-wide)
-resource. See [wva-podmonitoring.yaml](wva-podmonitoring.yaml) for a working
-example (includes RBAC for GMP to read the WVA bearer token secret).
+Restart the Prometheus deployment to pick up the new config:
 
 ```bash
-kubectl apply -f deploy/wva-podmonitoring.yaml
+kubectl rollout restart deployment prometheus-server -n wva-monitoring
 ```
 
-GMP's `port` field matches the **container port name** (e.g., `https` for port
-8443), not the number.
+Verify the targets are healthy (port-forward + curl):
+
+```bash
+kubectl port-forward -n wva-monitoring svc/prometheus-server 19090:80 &
+curl -s 'http://localhost:19090/api/v1/targets?state=active' | \
+  python3 -c "import json,sys; \
+    [print(f\"{t['labels']['job']:20s} {t['health']}\") for t in json.load(sys.stdin)['data']['activeTargets']]"
+```
+
+Both `epp-metrics` and `wva-metrics` jobs should show `up`.
 
 ---
 
 ## Step 4: (Optional) build and push a custom WVA image
 
 The default chart uses the upstream image
-(`ghcr.io/llm-d/llm-d-workload-variant-autoscaler`), so you can skip this step
-and go straight to Step 5.
-
-Only build your own image if you need to test local changes:
+(`ghcr.io/llm-d/llm-d-workload-variant-autoscaler`), so skip to Step 5 unless
+you need local changes:
 
 ```bash
-# Authenticate to Artifact Registry
 gcloud auth configure-docker us-docker.pkg.dev
-
-# Build and push
 export IMG=us-docker.pkg.dev/<PROJECT>/<REPO>/wva:latest
 make docker-build docker-push IMG=$IMG
 ```
 
 Then override the image in Step 6:
-
 ```
 --set wva.image.repository=us-docker.pkg.dev/<PROJECT>/<REPO>/wva \
 --set wva.image.tag=latest
@@ -208,16 +181,13 @@ Then override the image in Step 6:
 kubectl apply -f charts/workload-variant-autoscaler/crds/llmd.ai_variantautoscalings.yaml
 ```
 
-If an older version of the CRD is already installed from a previous deploy,
-this will upgrade it. Existing `VariantAutoscaling` resources may become
-incompatible with the new schema — check `kubectl get variantautoscaling -A`
-and recreate if needed.
+If an older version is already installed, this upgrades it. Existing
+`VariantAutoscaling` resources may become incompatible with the new schema
+— check `kubectl get variantautoscaling -A` and recreate if needed.
 
 ---
 
-## Step 6: Deploy WVA via Helm
-
-Uses the default upstream image from the chart's `values.yaml`:
+## Step 6: Deploy WVA via Helm (observe-only mode)
 
 ```bash
 helm upgrade -i workload-variant-autoscaler \
@@ -226,7 +196,6 @@ helm upgrade -i workload-variant-autoscaler \
   --set wva.prometheus.baseURL=https://prometheus-tls.wva-monitoring.svc.cluster.local:9443 \
   --set wva.prometheus.tls.insecureSkipVerify=true \
   --set wva.namespaceScoped=false \
-  --set wva.reconcileInterval=30s \
   --set controller.enabled=true \
   --set va.enabled=false \
   --set vllmService.enabled=false \
@@ -235,14 +204,13 @@ helm upgrade -i workload-variant-autoscaler \
 
 Notes:
 - Uses the default `ghcr.io/llm-d/llm-d-workload-variant-autoscaler` image
-  pinned in the chart's `values.yaml`. Override with `wva.image.repository` /
-  `wva.image.tag` if you built a custom image in Step 4.
+  from the chart's `values.yaml`
 - `va.enabled=false` disables the chart's sample VariantAutoscaling
   (it assumes a specific namespace that may not exist on your cluster)
 - `vllmService.enabled=false` disables the chart's sample vLLM service
-- `hpa.enabled=false` runs in observe-only mode (WVA emits recommendations,
-  no actual scaling). Enable later with `hpa.enabled=true` + `hpa.minReplicas`,
-  `hpa.maxReplicas`.
+- `hpa.enabled=false` runs in **observe-only mode** — WVA emits
+  recommendations to the VA status and to Prometheus, but does not trigger
+  actual scaling
 
 ---
 
@@ -282,7 +250,7 @@ kubectl logs -n workload-variant-autoscaler-system \
   -l control-plane=controller-manager -f | \
   grep -E 'Processing model|action.*target'
 
-# VA status updated?
+# VA status shows a recommendation?
 kubectl get variantautoscaling -A -o custom-columns=\
 NAME:.metadata.name,\
 DESIRED:.status.desiredOptimizedAlloc.numReplicas,\
@@ -292,56 +260,23 @@ METRICS:.status.conditions[?(@.type=='MetricsAvailable')].status
 
 ---
 
-## Switching to active scaling
+## Troubleshooting
 
-When you've validated the recommendations look right, enable the HPA:
-
-```bash
-helm upgrade workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system --reuse-values \
-  --set hpa.enabled=true \
-  --set hpa.minReplicas=1 \
-  --set hpa.maxReplicas=20
-```
-
-For the HPA to actually scale the Deployment, you also need a metrics adapter
-that exposes `wva_desired_replicas` via the external metrics API:
-**prometheus-adapter** or **KEDA**. See the main [README.md](README.md) for
-adapter setup details.
-
----
-
-## Troubleshooting (GKE-specific)
-
-**`ImagePullBackOff` from Artifact Registry**
-- Make sure nodes have Workload Identity or the right IAM role
-  (`roles/artifactregistry.reader`)
-- Check `gcloud auth configure-docker` was run in the same region
-
-**Prometheus pod crash-loops after reinstalling kube-prometheus-stack**
-- Old ClusterRoles / webhooks may have stale `meta.helm.sh/release-namespace`
-  annotations. Either re-annotate them to the new namespace or `helm uninstall`
-  completely first and then reinstall.
-
-**GMP collector logs `watch: unknown (get secrets)`**
-- The collector ServiceAccount needs permission to read the bearer token
-  Secret referenced in PodMonitoring `authorization.credentials.secret`.
-  Add a Role + RoleBinding (see
-  [wva-podmonitoring.yaml](wva-podmonitoring.yaml) for the pattern).
+**Stale Helm ownership after a previous `kube-prometheus-stack` install**
+Cluster-scoped resources (ClusterRoles, Services, webhooks) can retain
+`meta.helm.sh/release-namespace` annotations from the old release and
+block a new install in a different namespace. Either re-annotate them to
+the new namespace or `helm uninstall` completely first and then reinstall.
 
 **WVA logs `TLS configuration validation failed - HTTPS is required`**
-- `PROMETHEUS_URL` must start with `https://`. Use the TLS proxy
-  (Step 2) if your Prometheus only serves HTTP.
+`PROMETHEUS_URL` must start with `https://`. Use the TLS proxy from Step 2
+if your Prometheus only serves HTTP.
 
-**WVA logs `server returned HTTP status 401 Unauthorized`**
-- The EPP or target metrics endpoint requires authentication. Add bearer
-  token auth to the scrape config, or disable auth on the target
-  (`--metrics-endpoint-auth=false` for EPP).
+**Prometheus scrape shows `server returned HTTP status 401 Unauthorized`**
+The target's metrics endpoint requires authentication. Either add the
+bearer token scrape config + ClusterRoleBindings from Step 3, or disable
+auth on the target (e.g., `--metrics-endpoint-auth=false` on EPP).
 
-**`wva_desired_replicas` not appearing in Prometheus**
-- Check the `wva-metrics` scrape target is healthy (`up == 1`)
-- The WVA metrics endpoint is HTTPS + bearer token — confirm your scrape
-  config has `tls_config.insecure_skip_verify: true` and the
-  `credentials_file` or equivalent auth
-- Only the **leader** WVA pod emits metrics (leader election via lease);
-  verify at least one pod holds the lease
+**Prometheus scrape shows `http: server gave HTTP response to HTTPS client`**
+The scrape config uses `scheme: https` but the target serves HTTP. Change
+to `scheme: http` in the scrape config.
