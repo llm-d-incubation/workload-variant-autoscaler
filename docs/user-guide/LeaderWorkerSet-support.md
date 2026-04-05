@@ -28,7 +28,7 @@ There's no additional configuration needed in WVA controller to enable LWS suppo
 ```
 2026-03-21T09:02:09-04:00	INFO	setup	cmd/main.go:202	LeaderWorkerSet CRD detected - support enabled
 ```
-Otherwise, the log shoud contain:
+Otherwise, the log should contain:
 ```
 2026-03-21T09:13:31-04:00	INFO	setup	cmd/main.go:204	LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)
 
