@@ -156,15 +156,28 @@ GMP's `port` field matches the **container port name** (e.g., `https` for port
 
 ---
 
-## Step 4: Build and push the WVA image to Artifact Registry
+## Step 4: (Optional) build and push a custom WVA image
+
+The default chart uses the upstream image
+(`ghcr.io/llm-d/llm-d-workload-variant-autoscaler`), so you can skip this step
+and go straight to Step 5.
+
+Only build your own image if you need to test local changes:
 
 ```bash
-# Authenticate
+# Authenticate to Artifact Registry
 gcloud auth configure-docker us-docker.pkg.dev
 
 # Build and push
 export IMG=us-docker.pkg.dev/<PROJECT>/<REPO>/wva:latest
 make docker-build docker-push IMG=$IMG
+```
+
+Then override the image in Step 6:
+
+```
+--set wva.image.repository=us-docker.pkg.dev/<PROJECT>/<REPO>/wva \
+--set wva.image.tag=latest
 ```
 
 ---
@@ -184,12 +197,12 @@ and recreate if needed.
 
 ## Step 6: Deploy WVA via Helm
 
+Uses the default upstream image from the chart's `values.yaml`:
+
 ```bash
 helm upgrade -i workload-variant-autoscaler \
   ./charts/workload-variant-autoscaler \
   -n workload-variant-autoscaler-system --create-namespace \
-  --set wva.image.repository=us-docker.pkg.dev/<PROJECT>/<REPO>/wva \
-  --set wva.image.tag=latest \
   --set wva.prometheus.baseURL=https://prometheus-tls.wva-monitoring.svc.cluster.local:9443 \
   --set wva.prometheus.tls.insecureSkipVerify=true \
   --set wva.namespaceScoped=false \
@@ -201,6 +214,9 @@ helm upgrade -i workload-variant-autoscaler \
 ```
 
 Notes:
+- Uses the default `ghcr.io/llm-d/llm-d-workload-variant-autoscaler` image
+  pinned in the chart's `values.yaml`. Override with `wva.image.repository` /
+  `wva.image.tag` if you built a custom image in Step 4.
 - `va.enabled=false` disables the chart's sample VariantAutoscaling
   (it assumes a specific namespace that may not exist on your cluster)
 - `vllmService.enabled=false` disables the chart's sample vLLM service
