@@ -54,6 +54,12 @@ type SaturationScalingConfig struct {
 	// Default: 1.0 (neutral).
 	Priority float64 `yaml:"priority,omitempty"`
 
+	// SmoothingAlpha is the EMA smoothing factor applied to the raw saturation
+	// signal by the epp-saturation analyzer. Range (0.0, 1.0]: 1.0 = no smoothing,
+	// 0.3 = moderate (default), 0.1 = heavy.
+	// Ignored by other analyzers.
+	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
+
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].

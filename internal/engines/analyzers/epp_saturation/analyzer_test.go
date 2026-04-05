@@ -83,6 +83,7 @@ func TestAnalyze_LowSaturation_ScaleDown(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -114,6 +115,7 @@ func TestAnalyze_HighSaturation_ScaleUp(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -142,6 +144,7 @@ func TestAnalyze_HighSaturation_LargePool(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -168,6 +171,7 @@ func TestAnalyze_LowSaturation_LargePool(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -193,6 +197,7 @@ func TestAnalyze_Overloaded(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -220,6 +225,7 @@ func TestAnalyze_InHysteresisZone_NoAction(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -245,6 +251,7 @@ func TestAnalyze_PendingReplicas(t *testing.T) {
 	cfg := &EPPSaturationConfig{
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -289,6 +296,7 @@ func TestConfig_Defaults(t *testing.T) {
 	cfg.ApplyDefaults()
 	assert.Equal(t, DefaultEPPScaleUpThreshold, cfg.ScaleUpThreshold)
 	assert.Equal(t, DefaultEPPScaleDownBoundary, cfg.ScaleDownBoundary)
+	assert.Equal(t, DefaultEPPSmoothingAlpha, cfg.SmoothingAlpha)
 }
 
 func TestConfig_Validate(t *testing.T) {
@@ -297,10 +305,13 @@ func TestConfig_Validate(t *testing.T) {
 		cfg     EPPSaturationConfig
 		wantErr bool
 	}{
-		{"valid", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50}, false},
-		{"up <= down", EPPSaturationConfig{ScaleUpThreshold: 0.50, ScaleDownBoundary: 0.85}, true},
-		{"up zero", EPPSaturationConfig{ScaleUpThreshold: 0, ScaleDownBoundary: 0.50}, true},
-		{"down zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0}, true},
+		{"valid", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3}, false},
+		{"up <= down", EPPSaturationConfig{ScaleUpThreshold: 0.50, ScaleDownBoundary: 0.85, SmoothingAlpha: 0.3}, true},
+		{"up zero", EPPSaturationConfig{ScaleUpThreshold: 0, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3}, true},
+		{"down zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0, SmoothingAlpha: 0.3}, true},
+		{"alpha zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0}, true},
+		{"alpha too high", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.5}, true},
+		{"alpha one ok", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.0}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -311,5 +322,81 @@ func TestConfig_Validate(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+// setupAnalyzerMutable returns the analyzer plus a pointer to the fake
+// source's saturation value so tests can change it between calls.
+func setupAnalyzerMutable(initial float64) (*EPPSaturationAnalyzer, *fakePrometheusSource) {
+	registry := source.NewSourceRegistry()
+	fakeProm := newFakePrometheusSource(initial, nil)
+	registry.MustRegister("prometheus", fakeProm)
+	registration.RegisterEPPSaturationQueries(registry)
+	return NewEPPSaturationAnalyzer(registry), fakeProm
+}
+
+func TestAnalyze_EMASmoothing(t *testing.T) {
+	analyzer, src := setupAnalyzerMutable(0.5)
+	cfg := &EPPSaturationConfig{
+		ScaleUpThreshold:  0.85,
+		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    0.3,
+	}
+	input := interfaces.AnalyzerInput{
+		ModelID:   "test-model",
+		Namespace: "default",
+		Config:    cfg,
+		VariantStates: []interfaces.VariantReplicaState{
+			{VariantName: "variant-a", CurrentReplicas: 10, PendingReplicas: 0},
+		},
+	}
+
+	// First sample: no smoothing — use raw value as-is.
+	result, err := analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.5, result.Utilization, 0.001, "first sample should be raw")
+
+	// Second sample: spike to 1.0. EMA(0.3): 0.3*1.0 + 0.7*0.5 = 0.65
+	src.saturation = 1.0
+	result, err = analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.65, result.Utilization, 0.001, "after one spike, smoothed should be 0.65")
+
+	// Third sample: still 1.0. EMA: 0.3*1.0 + 0.7*0.65 = 0.755
+	result, err = analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.755, result.Utilization, 0.001)
+
+	// Fourth sample: dip to 0.1. EMA: 0.3*0.1 + 0.7*0.755 = 0.5585
+	src.saturation = 0.1
+	result, err = analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.5585, result.Utilization, 0.001, "single dip should not push smoothed below scaleDownBoundary")
+	assert.Equal(t, 0.0, result.SpareCapacity, "single dip should not trigger scale-down")
+}
+
+func TestAnalyze_NoSmoothing_AlphaOne(t *testing.T) {
+	analyzer, src := setupAnalyzerMutable(0.5)
+	cfg := &EPPSaturationConfig{
+		ScaleUpThreshold:  0.85,
+		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing
+	}
+	input := interfaces.AnalyzerInput{
+		ModelID:   "test-model",
+		Namespace: "default",
+		Config:    cfg,
+		VariantStates: []interfaces.VariantReplicaState{
+			{VariantName: "variant-a", CurrentReplicas: 10, PendingReplicas: 0},
+		},
+	}
+
+	// Each sample should be used raw.
+	for _, raw := range []float64{0.2, 0.9, 0.1, 1.5} {
+		src.saturation = raw
+		result, err := analyzer.Analyze(context.Background(), input)
+		require.NoError(t, err)
+		// Utilization is capped at 1.0 internally, so compare the total demand instead.
+		assert.InDelta(t, raw, result.TotalDemand, 0.001, "alpha=1.0 should not smooth (raw=%v)", raw)
 	}
 }

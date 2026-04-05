@@ -92,6 +92,7 @@ func (e *Engine) optimizeEPPSaturation(
 		eppCfg := &epp_saturation.EPPSaturationConfig{
 			ScaleUpThreshold:  saturationConfig.ScaleUpThreshold,
 			ScaleDownBoundary: saturationConfig.ScaleDownBoundary,
+			SmoothingAlpha:    saturationConfig.SmoothingAlpha,
 		}
 		eppCfg.ApplyDefaults()
 

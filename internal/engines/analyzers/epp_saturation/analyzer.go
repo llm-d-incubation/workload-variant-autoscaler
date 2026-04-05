@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
@@ -45,13 +46,36 @@ const AnalyzerName = "epp-saturation"
 // pool-level saturation signal. It assumes a single model per pool.
 type EPPSaturationAnalyzer struct {
 	metricsRegistry *source.SourceRegistry
+
+	// mu protects smoothedByKey.
+	mu sync.Mutex
+	// smoothedByKey holds the per-model EMA state, keyed by "namespace/modelID".
+	// A missing key means no prior observation (first sample is used as-is).
+	smoothedByKey map[string]float64
 }
 
 // NewEPPSaturationAnalyzer creates a new EPP saturation analyzer.
 func NewEPPSaturationAnalyzer(registry *source.SourceRegistry) *EPPSaturationAnalyzer {
 	return &EPPSaturationAnalyzer{
 		metricsRegistry: registry,
+		smoothedByKey:   make(map[string]float64),
 	}
+}
+
+// smooth applies an EMA update to the per-model saturation state and returns
+// the new smoothed value. The first sample for a key is used as-is (no warmup
+// required). Safe for concurrent use.
+func (a *EPPSaturationAnalyzer) smooth(key string, raw, alpha float64) float64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	prev, ok := a.smoothedByKey[key]
+	if !ok {
+		a.smoothedByKey[key] = raw
+		return raw
+	}
+	next := alpha*raw + (1.0-alpha)*prev
+	a.smoothedByKey[key] = next
+	return next
 }
 
 // Name implements interfaces.Analyzer.
@@ -71,14 +95,22 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	}
 
 	// Query the EPP pool saturation metric
-	saturationScore, err := a.queryPoolSaturation(ctx)
+	rawSaturation, err := a.queryPoolSaturation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query EPP pool saturation: %w", err)
 	}
 
+	// Apply EMA smoothing to absorb single-cycle spikes/dips before the signal
+	// drives scaling decisions. First observation per (namespace, modelID) is
+	// used as-is (no warmup).
+	smoothingKey := input.Namespace + "/" + input.ModelID
+	saturationScore := a.smooth(smoothingKey, rawSaturation, cfg.SmoothingAlpha)
+
 	logger.Info("EPP pool saturation score",
 		"modelID", input.ModelID,
-		"saturation", saturationScore,
+		"rawSaturation", rawSaturation,
+		"smoothedSaturation", saturationScore,
+		"smoothingAlpha", cfg.SmoothingAlpha,
 		"scaleUpThreshold", cfg.ScaleUpThreshold,
 		"scaleDownBoundary", cfg.ScaleDownBoundary)
 

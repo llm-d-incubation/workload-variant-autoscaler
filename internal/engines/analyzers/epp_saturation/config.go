@@ -28,6 +28,13 @@ const (
 	// is safe. At 0.50 saturation (50% of SLO), there is enough headroom to
 	// remove capacity without risking SLO violations.
 	DefaultEPPScaleDownBoundary = 0.50
+
+	// DefaultEPPSmoothingAlpha is the EMA smoothing factor applied to the raw
+	// saturation signal. Range (0.0, 1.0]: 1.0 = no smoothing, 0.1 = heavy
+	// smoothing (only ~10% of a new sample flows into the smoothed value per cycle).
+	// Lower values reduce reaction to transient spikes/dips at the cost of
+	// slower response to real load changes.
+	DefaultEPPSmoothingAlpha = 0.3
 )
 
 // EPPSaturationConfig holds configuration for the EPP saturation analyzer.
@@ -43,6 +50,18 @@ type EPPSaturationConfig struct {
 	// ScaleDownBoundary is the saturation score below which scale-down is safe.
 	// Must be less than ScaleUpThreshold to create a hysteresis band.
 	ScaleDownBoundary float64 `yaml:"scaleDownBoundary,omitempty"`
+
+	// SmoothingAlpha is the EMA smoothing factor applied to the raw saturation
+	// signal before it drives scaling decisions. Range (0.0, 1.0]:
+	//   1.0  = no smoothing (use raw signal)
+	//   0.3  = moderate smoothing (default)
+	//   0.1  = heavy smoothing
+	// The smoothed value evolves as: smoothed = alpha*raw + (1-alpha)*smoothed_prev.
+	// At alpha=0.3 with a cycle every 5s, the effective window is ~17s (1/alpha × cycle).
+	// Helps absorb signal volatility from the EPP latency detector (which updates
+	// every probeInterval based on the input-profile-tracker's percentile samples)
+	// so transient single-cycle spikes/dips don't translate directly into replica churn.
+	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
 }
 
 // GetAnalyzerName implements interfaces.AnalyzerConfig.
@@ -58,6 +77,9 @@ func (c *EPPSaturationConfig) ApplyDefaults() {
 	if c.ScaleDownBoundary == 0 {
 		c.ScaleDownBoundary = DefaultEPPScaleDownBoundary
 	}
+	if c.SmoothingAlpha == 0 {
+		c.SmoothingAlpha = DefaultEPPSmoothingAlpha
+	}
 }
 
 // Validate checks for invalid threshold values.
@@ -71,6 +93,9 @@ func (c *EPPSaturationConfig) Validate() error {
 	if c.ScaleUpThreshold <= c.ScaleDownBoundary {
 		return fmt.Errorf("scaleUpThreshold (%.2f) must be > scaleDownBoundary (%.2f)",
 			c.ScaleUpThreshold, c.ScaleDownBoundary)
+	}
+	if c.SmoothingAlpha <= 0 || c.SmoothingAlpha > 1.0 {
+		return fmt.Errorf("smoothingAlpha must be in (0, 1], got %.2f", c.SmoothingAlpha)
 	}
 	return nil
 }
