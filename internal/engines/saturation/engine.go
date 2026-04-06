@@ -103,9 +103,6 @@ type Engine struct {
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
 	// CostAwareOptimizer (unlimited) or GreedyByScoreOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
-
-	// metricsEmitter emits optimization loop performance metrics (duration, models processed).
-	metricsEmitter *metrics.MetricsEmitter
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -148,7 +145,6 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
-		metricsEmitter:          metrics.NewMetricsEmitter(),
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -185,19 +181,17 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 }
 
 // optimize performs the optimization logic.
-func (e *Engine) optimize(ctx context.Context) error {
+func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	start := time.Now()
-	var optimizeErr error
 	var modelsProcessed int
 	defer func() {
-		duration := time.Since(start).Seconds()
 		status := "success"
-		if optimizeErr != nil {
+		if retErr != nil {
 			status = "error"
 		}
-		e.metricsEmitter.ObserveOptimizationDuration(duration, status)
+		metrics.ObserveOptimizationDuration(time.Since(start).Seconds(), status)
 		if modelsProcessed > 0 {
-			e.metricsEmitter.IncrModelsProcessed(modelsProcessed)
+			metrics.SetModelsProcessed(modelsProcessed)
 		}
 	}()
 
@@ -223,7 +217,6 @@ func (e *Engine) optimize(ctx context.Context) error {
 	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client)
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
-		optimizeErr = err
 		return err
 	}
 
@@ -238,7 +231,6 @@ func (e *Engine) optimize(ctx context.Context) error {
 		if err != nil {
 			logger.Error(err, "Failed to collect cluster inventory")
 			// do not proceed to optimization if inventory collection fails in limited mode
-			optimizeErr = err
 			return err
 		}
 		// always print inventory until optimizer consumes it
@@ -247,6 +239,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 
 	// Group VAs by model for per-model capacity analysis
 	modelGroups := utils.GroupVariantAutoscalingByModel(activeVAs)
+	modelsProcessed = len(modelGroups)
 	logger.Info("Grouped VAs by model",
 		"modelCount", len(modelGroups),
 		"totalVAs", len(activeVAs))
@@ -326,11 +319,8 @@ func (e *Engine) optimize(ctx context.Context) error {
 	}
 	if err := e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations); err != nil {
 		logger.Error(err, "Failed to apply saturation decisions")
-		optimizeErr = err
 		return err
 	}
-
-	modelsProcessed = len(modelGroups)
 
 	logger.Info("Optimization completed successfully",
 		"mode", "saturation-only",

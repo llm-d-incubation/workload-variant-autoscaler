@@ -29,13 +29,12 @@ func TestObserveOptimizationDuration(t *testing.T) {
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
 	}
-	emitter := NewMetricsEmitter()
 
 	// Observe a successful optimization
-	emitter.ObserveOptimizationDuration(0.15, "success")
+	ObserveOptimizationDuration(0.15, "success")
 
 	// Observe a failed optimization
-	emitter.ObserveOptimizationDuration(2.5, "error")
+	ObserveOptimizationDuration(2.5, "error")
 
 	// Verify the histogram was recorded
 	metrics, err := registry.Gather()
@@ -82,18 +81,17 @@ func TestObserveOptimizationDuration(t *testing.T) {
 	}
 }
 
-func TestIncrModelsProcessed(t *testing.T) {
+func TestSetModelsProcessed(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
 	}
-	emitter := NewMetricsEmitter()
 
-	// Increment models processed
-	emitter.IncrModelsProcessed(3)
-	emitter.IncrModelsProcessed(5)
+	// Set models processed (gauge should reflect the last value, not a sum)
+	SetModelsProcessed(3)
+	SetModelsProcessed(5)
 
-	// Verify the counter
+	// Verify the gauge
 	metrics, err := registry.Gather()
 	if err != nil {
 		t.Fatalf("Failed to gather metrics: %v", err)
@@ -106,11 +104,11 @@ func TestIncrModelsProcessed(t *testing.T) {
 			if len(mf.GetMetric()) != 1 {
 				t.Errorf("Expected 1 metric series, got %d", len(mf.GetMetric()))
 			}
-			c := mf.GetMetric()[0].GetCounter()
-			if c == nil {
-				t.Error("Expected counter metric")
-			} else if c.GetValue() != 8 {
-				t.Errorf("Expected counter value 8 (3+5), got %f", c.GetValue())
+			g := mf.GetMetric()[0].GetGauge()
+			if g == nil {
+				t.Error("Expected gauge metric")
+			} else if g.GetValue() != 5 {
+				t.Errorf("Expected gauge value 5 (last set), got %f", g.GetValue())
 			}
 		}
 	}
@@ -119,22 +117,20 @@ func TestIncrModelsProcessed(t *testing.T) {
 	}
 }
 
-func TestObserveOptimizationDuration_NilSafety(t *testing.T) {
+func TestOptimizationMetrics_NilSafety(t *testing.T) {
 	// Reset the package-level vars to nil to simulate uninitialized state
 	savedDuration := optimizationDuration
-	savedCounter := modelsProcessedTotal
+	savedGauge := modelsProcessedGauge
 	optimizationDuration = nil
-	modelsProcessedTotal = nil
+	modelsProcessedGauge = nil
 	defer func() {
 		optimizationDuration = savedDuration
-		modelsProcessedTotal = savedCounter
+		modelsProcessedGauge = savedGauge
 	}()
 
-	emitter := NewMetricsEmitter()
-
 	// Should not panic when metrics are not initialized
-	emitter.ObserveOptimizationDuration(1.0, "success")
-	emitter.IncrModelsProcessed(5)
+	ObserveOptimizationDuration(1.0, "success")
+	SetModelsProcessed(5)
 }
 
 // getLabelValue returns the value of a label by name from a metric.

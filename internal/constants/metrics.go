@@ -110,10 +110,10 @@ const (
 	WVADesiredRatio = "wva_desired_ratio"
 
 	// WVAOptimizationDurationSeconds is a histogram that tracks the duration of each optimization cycle.
-	// Labels: status (success, error, partial)
+	// Labels: status (success, error)
 	WVAOptimizationDurationSeconds = "wva_optimization_duration_seconds"
 
-	// WVAModelsProcessedTotal is a counter that tracks the total number of models processed across optimization cycles.
+	// WVAModelsProcessedTotal is a gauge that tracks the number of models processed in the last optimization cycle.
 	WVAModelsProcessedTotal = "wva_models_processed_total"
 )
 
