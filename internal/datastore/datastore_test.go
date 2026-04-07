@@ -106,7 +106,8 @@ func TestDatastore(t *testing.T) {
 					t.Errorf("Unexpected InferencePoolToEndpointPool error: %v", err)
 				}
 
-				gotPoolMatch, err := ds.PoolGetFromLabels(tt.labels)
+				// Pass the namespace from the wantPool to match the pool in the same namespace
+				gotPoolMatch, err := ds.PoolGetFromLabels(tt.wantPool.Namespace, tt.labels)
 				if err != nil {
 					t.Errorf("Unexpected PoolGetFromLabels error: %v", err)
 				}
@@ -123,7 +124,7 @@ func TestDatastore(t *testing.T) {
 					t.Errorf("Unexpected InferencePoolToEndpointPool error: %v", err)
 				}
 
-				gotPool, err := ds.PoolGet(ep.Name)
+				gotPool, err := ds.PoolGet(ep.Namespace + "/" + ep.Name)
 				if err != nil {
 					t.Errorf("failed to add endpoint into the datastore: %v", err)
 				}
@@ -132,9 +133,18 @@ func TestDatastore(t *testing.T) {
 					t.Errorf("Unexpected pool diff (+got/-want): %s", diff)
 				}
 
+				// Verify metrics source exists before deletion
+				namespacedName := ep.Namespace + "/" + ep.Name
+				metricsSource := ds.PoolGetMetricsSource(namespacedName)
+				assert.NotNil(t, metricsSource, "Metrics source should exist in registry before deletion")
+
 				// Test Delete & PoolList
-				ds.PoolDelete(ep.Name)
+				ds.PoolDelete(namespacedName)
 				assert.Equal(t, len(ds.PoolList()), tt.clearDeleteResultLen, "Pools map should have the expected length after item deleted")
+
+				// Verify metrics source is cleaned up from registry after deletion
+				metricsSourceAfterDelete := ds.PoolGetMetricsSource(namespacedName)
+				assert.Nil(t, metricsSourceAfterDelete, "Metrics source should be removed from registry after pool deletion")
 
 				if err := ds.PoolSet(ctx, fakeClient, ep); err != nil {
 					t.Errorf("failed to add endpoint into the datastore: %v", err)

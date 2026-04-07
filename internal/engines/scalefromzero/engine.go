@@ -24,10 +24,8 @@ import (
 	"sync"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,6 +44,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // Constants for condition
@@ -72,7 +71,7 @@ type Engine struct {
 // cfg must be non-nil (validated in main.go before engine creation).
 func NewEngine(client client.Client, mapper meta.RESTMapper, restConfig *rest.Config, ds datastore.Datastore, cfg *config.Config) (*Engine, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil in NewEngine - this should not happen")
+		return nil, errors.New("config is nil in NewEngine - this should not happen")
 	}
 
 	maxConcurrency := cfg.ScaleFromZeroMaxConcurrency()
@@ -123,7 +122,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
 	// Get all inactive (replicas == 0) VAs
-	inactiveVAs, deployments, err := utils.InactiveVariantAutoscaling(ctx, e.client)
+	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, e.client)
 	if err != nil {
 		return err
 	}
@@ -166,7 +165,7 @@ variantLoop:
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			err := e.processInactiveVariant(ctx, deployments, variant, 1)
+			err := e.processInactiveVariant(ctx, scaleTargets, variant, 1)
 			if err != nil {
 				logger.V(logging.DEBUG).Error(err, "Error Processing variant", "name", variant.Name)
 				errorCh <- err
@@ -195,7 +194,7 @@ variantLoop:
 }
 
 // ProcessInactiveVariant processes a single inactive VariantAutoscaling resource.
-func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[string]*appsv1.Deployment, va wvav1alpha1.VariantAutoscaling, targetWorkloadReplicas int) error {
+func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[string]scaletarget.ScaleTargetAccessor, va wvav1alpha1.VariantAutoscaling, targetWorkloadReplicas int) error {
 	logger := log.FromContext(ctx)
 	objAPI := va.GetScaleTargetAPI()
 	objKind := va.GetScaleTargetKind()
@@ -213,12 +212,22 @@ func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[str
 	}
 
 	// Extract Labels for the pods created by the ScaleTarget object
-	labels, found, err := unstructured.NestedStringMap(unstructuredObj.Object, "spec", "template", "metadata", "labels")
-	if err != nil {
-		return err
-	}
-
+	// Use ScaleTargetAccessor to handle both Deployment and LeaderWorkerSet uniformly
+	key := utils.GetNamespacedKey(va.Namespace, objName)
+	scaleTarget, found := scaleTargets[key]
 	if !found {
+		// Fetch on-demand if not in the cache
+		scaleTarget, err = scaletarget.FetchScaleTarget(ctx, e.client, va.Name, objKind, objName, va.Namespace)
+		if err != nil {
+			return err
+		}
+	}
+	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+	if podTemplateSpec == nil {
+		return errors.New("pod template spec is missing for target workload object")
+	}
+	labels := podTemplateSpec.Labels
+	if labels == nil {
 		return errors.New("labels are missing for target workload object")
 	}
 
@@ -229,21 +238,36 @@ func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[str
 		return nil
 	}
 
-	// Find target EPP for metrics collection
-	pool, err := e.Datastore.PoolGetFromLabels(labels)
+	// Find target EPP for metrics collection in the same namespace as the VA
+	pool, err := e.Datastore.PoolGetFromLabels(va.Namespace, labels)
 	if err != nil {
-		logger.Error(err, "Error finding target EPP", "variant", va.Name, "target VA model", va.Spec.ModelID)
+		// Only skip on "not found" errors - return other errors to surface real datastore failures
+		if errors.Is(err, datastore.ErrPoolNotSynced) {
+			logger.V(logging.DEBUG).Info("Skipping variant, target EPP not found in datastore",
+				"variant", va.Name,
+				"namespace", va.Namespace,
+				"modelID", va.Spec.ModelID)
+			return nil
+		}
+		// Unexpected error - log and return to surface the issue
+		logger.Error(err, "Unexpected error finding target EPP",
+			"variant", va.Name,
+			"namespace", va.Namespace,
+			"modelID", va.Spec.ModelID)
 		return err
 	}
 
 	// Use EPP source from registry
-	eppSource := e.Datastore.PoolGetMetricsSource(pool.Name)
+	namespacedPoolName := pool.Namespace + "/" + pool.Name
+	eppSource := e.Datastore.PoolGetMetricsSource(namespacedPoolName)
 	if eppSource == nil {
-		logger.Info("Scale-from-zero: skipping VA, EPP metrics source not found in datastore",
-			"va", va.Name,
+		// This is unexpected - pool exists but metrics source is missing
+		err := fmt.Errorf("EPP metrics source not found in registry for pool %s", namespacedPoolName)
+		logger.Error(err, "Datastore inconsistency detected",
+			"variant", va.Name,
 			"namespace", va.Namespace,
-			"pool", pool.Name)
-		return errors.New("endpointpicker metrics source not found in datastore")
+			"pool", namespacedPoolName)
+		return err
 	}
 
 	results, err := eppSource.Refresh(ctx, source.RefreshSpec{})
@@ -291,13 +315,13 @@ func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[str
 	var accelerator string
 	accelerator = va.Status.DesiredOptimizedAlloc.Accelerator
 	if accelerator == "" {
-		// Try to get from deployment nodeSelector/nodeAffinity, or VA labels
-		deploymentKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
-		if deployment, found := deployments[deploymentKey]; found {
-			accelerator = utils.GetAcceleratorNameFromDeployment(&va, deployment)
+		// Try to get from deployment/LWS nodeSelector/nodeAffinity, or VA labels
+		key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+		if scaleTarget, found := scaleTargets[key]; found {
+			accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget)
 		} else {
-			// Deployment not cached, fall back to VA label via nil deployment
-			accelerator = utils.GetAcceleratorNameFromDeployment(&va, nil)
+			// Deployment/LWS not cached, fall back to VA label via nil deployment/LWS
+			accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, nil)
 		}
 	}
 
@@ -358,7 +382,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, deployments map[str
 		wvav1alpha1.TypeOptimizationReady,
 		metav1.ConditionTrue,
 		"ScaleFromZeroMode",
-		fmt.Sprintf("scalefromzero decision: %s", reason))
+		"scalefromzero decision: "+reason)
 
 	va.Status.Actuation.Applied = true
 

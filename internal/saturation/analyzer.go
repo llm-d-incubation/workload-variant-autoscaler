@@ -372,7 +372,8 @@ func (a *Analyzer) CalculateSaturationTargets(
 	}
 
 	// STEP 4: Model is stable - proceed with scaling decisions
-	if saturationAnalysis.ShouldScaleUp {
+	switch {
+	case saturationAnalysis.ShouldScaleUp:
 		// Find cheapest variant for scale-up, skipping variants with pending replicas
 		var cheapestVariant *interfaces.VariantSaturationAnalysis
 		for i := range saturationAnalysis.VariantAnalyses {
@@ -403,7 +404,7 @@ func (a *Analyzer) CalculateSaturationTargets(
 				"readyReplicas", cheapestVariant.ReplicaCount, "baseTarget", baseTarget, "target", targets[cheapestVariant.VariantName], "reason", saturationAnalysis.ScaleUpReason)
 		}
 
-	} else if saturationAnalysis.ScaleDownSafe {
+	case saturationAnalysis.ScaleDownSafe:
 		// Find most expensive variant for scale-down
 		var mostExpensiveVariant *interfaces.VariantSaturationAnalysis
 		for i := range saturationAnalysis.VariantAnalyses {
@@ -429,7 +430,7 @@ func (a *Analyzer) CalculateSaturationTargets(
 				"variant", mostExpensiveVariant.VariantName, "cost", mostExpensiveVariant.Cost, "currentReplicas", state.CurrentReplicas,
 				"readyReplicas", mostExpensiveVariant.ReplicaCount, "baseTarget", baseTarget, "target", targets[mostExpensiveVariant.VariantName])
 		}
-	} else {
+	default:
 		// No scaling action needed - Saturation is adequate and stable
 		logger.V(logging.DEBUG).Info("Saturation targets: no scaling needed",
 			"avgSpareKvCapacity", saturationAnalysis.AvgSpareKvCapacity,

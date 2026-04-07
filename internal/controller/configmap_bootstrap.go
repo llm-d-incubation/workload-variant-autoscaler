@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -18,7 +19,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 	logger := log.FromContext(ctx)
 
 	if r.Config == nil {
-		err := fmt.Errorf("config is nil")
+		err := errors.New("config is nil")
 		logger.Error(err, "Config is nil in ConfigMapReconciler bootstrap")
 		return err
 	}
@@ -60,7 +61,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 			if ns.Name != systemNamespace {
 				if ns.Annotations != nil {
 					if value, ok := ns.Annotations[constants.NamespaceExcludeAnnotationKey]; ok {
-						if value == "true" {
+						if value == constants.AnnotationValueTrue {
 							continue // Skip excluded namespaces. Only for all-namespaces mode.
 						}
 					}
@@ -68,7 +69,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 				}
 				if ns.Labels != nil {
 					if value, ok := ns.Labels[constants.NamespaceConfigEnabledLabelKey]; ok {
-						if value == "true" {
+						if value == constants.AnnotationValueTrue {
 							namespacesToScan = append(namespacesToScan, ns.Name)
 						}
 					}

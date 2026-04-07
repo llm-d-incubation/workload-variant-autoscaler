@@ -75,6 +75,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	envKindVal         = "kind"
+	envKindEmulatorVal = "kind-emulator"
+)
+
 //go:embed scripts/in_cluster_pod_scraping_test.sh
 var inClusterPodScrapingTestScript string
 
@@ -184,7 +189,7 @@ func TestPodScrapingPodDiscovery(ctx context.Context, config PodScrapingTestConf
 
 // TestPodScrapingMetricsCollection tests that PodScrapingSource can scrape metrics from pods.
 func TestPodScrapingMetricsCollection(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment == "kind" || config.Environment == "kind-emulator" {
+	if config.Environment == envKindVal || config.Environment == envKindEmulatorVal {
 		ginkgo.Skip("Skipping metrics collection test on Kind - tests run from outside cluster where pod IPs are not accessible. Use in-cluster scraping tests instead.")
 	}
 
@@ -297,8 +302,8 @@ func DiscoverMetricsReaderSecret(ctx context.Context, k8sClient *kubernetes.Clie
 			if saName != "" {
 				// Try common service account token secret patterns
 				secretPatterns := []string{
-					fmt.Sprintf("%s-token", saName),
-					fmt.Sprintf("%s-metrics-reader-secret", saName),
+					saName + "-token",
+					saName + "-metrics-reader-secret",
 					"inference-gateway-sa-metrics-reader-secret",
 				}
 				for _, pattern := range secretPatterns {
@@ -315,8 +320,8 @@ func DiscoverMetricsReaderSecret(ctx context.Context, k8sClient *kubernetes.Clie
 	// Strategy 3: Try common naming patterns
 	commonNames := []string{
 		"inference-gateway-sa-metrics-reader-secret",
-		fmt.Sprintf("%s-metrics-reader-secret", eppServiceName),
-		fmt.Sprintf("%s-epp-metrics-reader-secret", eppServiceName),
+		eppServiceName + "-metrics-reader-secret",
+		eppServiceName + "-epp-metrics-reader-secret",
 	}
 	for _, name := range commonNames {
 		_, err := k8sClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -373,7 +378,7 @@ func TestPodScrapingAuthentication(ctx context.Context, config PodScrapingTestCo
 
 // TestPodScrapingCaching tests that PodScrapingSource caches results
 func TestPodScrapingCaching(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment == "kind" || config.Environment == "kind-emulator" {
+	if config.Environment == envKindVal || config.Environment == envKindEmulatorVal {
 		ginkgo.Skip("Skipping caching test on Kind - tests run from outside cluster where pod IPs are not accessible. Use in-cluster scraping tests instead.")
 	}
 
@@ -413,7 +418,7 @@ func TestPodScrapingCaching(ctx context.Context, config PodScrapingTestConfig, g
 
 // TestPodScrapingFromController verifies that PodScrapingSource can scrape metrics when running inside the cluster.
 func TestPodScrapingFromController(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	if config.Environment != "kind" && config.Environment != "kind-emulator" {
+	if config.Environment != envKindVal && config.Environment != envKindEmulatorVal {
 		ginkgo.Skip("Skipping controller verification test - only needed for Kind")
 	}
 
@@ -548,7 +553,7 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 
 	// Get job logs to verify scraping worked
 	podList, err := config.K8sClient.CoreV1().Pods(config.ServiceNamespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+		LabelSelector: "job-name=" + jobName,
 	})
 	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to list job pods")
 	g.Expect(podList.Items).NotTo(gom.BeEmpty(), "Should have job pod")
@@ -683,7 +688,7 @@ func VerifyEPPPodMetricsEndpoint(
 	}
 
 	if bearerToken != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", bearerToken))
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 
 	client := &http.Client{

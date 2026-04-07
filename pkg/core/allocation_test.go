@@ -7,6 +7,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
 )
 
+const testNameScaleUp = "valid server requiring scale up (inc > 0)"
+
 // Helper function to setup a complete test system
 func setupCompleteTestSystem() {
 	system := &System{
@@ -800,7 +802,7 @@ func TestAllocation_Scale(t *testing.T) {
 			wantInc:    0,    // no scaling needed
 		},
 		{
-			name:       "valid server requiring scale up (inc > 0)",
+			name:       testNameScaleUp,
 			serverName: "test-server",
 			setupFunc: func() {
 				setupCompleteTestSystem()
@@ -839,12 +841,12 @@ func TestAllocation_Scale(t *testing.T) {
 
 			// Create initial allocation with the current setup
 			origAlloc := CreateAllocation(tt.serverName, "test-gpu")
-			if origAlloc == nil && tt.name == "valid server requiring scale up (inc > 0)" {
+			if origAlloc == nil && tt.name == testNameScaleUp {
 				t.Fatal("Failed to create initial allocation for scale up test")
 			}
 
 			// For scale up test, now increase the load after creating initial allocation
-			if tt.name == "valid server requiring scale up (inc > 0)" {
+			if tt.name == testNameScaleUp {
 				if server, exists := TheSystem.servers["test-server"]; exists {
 					server.load = &config.ServerLoadSpec{
 						ArrivalRate:  360, // higher load
@@ -863,7 +865,7 @@ func TestAllocation_Scale(t *testing.T) {
 			}
 
 			// Check increment value - for scale up test, we expect positive increment
-			if tt.name == "valid server requiring scale up (inc > 0)" {
+			if tt.name == testNameScaleUp {
 				if inc <= 0 {
 					t.Errorf("Scale() inc = %v, want positive value (> 0)", inc)
 				}

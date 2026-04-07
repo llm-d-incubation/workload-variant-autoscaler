@@ -2,6 +2,7 @@ package tuner
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
@@ -32,7 +33,7 @@ func NewTuner(configData *TunerConfigData, env *Environment) (tuner *Tuner, err 
 
 	// Validate inputs
 	if env == nil {
-		return nil, fmt.Errorf("environment cannot be nil")
+		return nil, errors.New("environment cannot be nil")
 	}
 	if !env.Valid() {
 		return nil, fmt.Errorf("invalid environment: %v", env)
@@ -168,7 +169,7 @@ func (t *Tuner) String() string {
 
 func (t *Tuner) UpdateEnvironment(env *Environment) error {
 	if env == nil {
-		return fmt.Errorf("environment cannot be nil")
+		return errors.New("environment cannot be nil")
 	}
 	if !env.Valid() {
 		return fmt.Errorf("invalid environment: %v", env)
@@ -227,7 +228,7 @@ func (t *Tuner) makeObservationFunc() func(x *mat.VecDense) *mat.VecDense {
 func (t *Tuner) extractTunedResults() (*TunedResults, error) {
 	stateVec := mat.VecDenseCopyOf(t.X())
 	if stateVec == nil {
-		return nil, fmt.Errorf("tuner returned nil state vector")
+		return nil, errors.New("tuner returned nil state vector")
 	}
 	innovation := mat.VecDenseCopyOf(t.Y())
 	covariance := mat.DenseCopyOf(t.P())
@@ -246,7 +247,7 @@ func (t *Tuner) extractTunedResults() (*TunedResults, error) {
 func (t *Tuner) validateTunedResults() (float64, error) {
 	stateVec := mat.VecDenseCopyOf(t.X())
 	if stateVec == nil {
-		return -1.0, fmt.Errorf("tuner returned nil state vector")
+		return -1.0, errors.New("tuner returned nil state vector")
 	}
 
 	// 1. check parms are positive

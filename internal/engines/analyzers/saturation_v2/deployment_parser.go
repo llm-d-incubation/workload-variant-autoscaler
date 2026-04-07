@@ -4,11 +4,11 @@ import (
 	"strconv"
 	"strings"
 
-	appsv1 "k8s.io/api/apps/v1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // VLLMEngineParams holds vLLM configuration parameters parsed from a
-// Deployment's container args and environment variables. These are used
+// Deployment/LWS's container args and environment variables. These are used
 // to derive compute-bound capacity (k2) when no live metrics are available.
 type VLLMEngineParams struct {
 	GpuMemoryUtilization  float64 // default: 0.9
@@ -43,7 +43,7 @@ func defaultVLLMEngineParams() VLLMEngineParams {
 	}
 }
 
-// ParseVLLMArgs scans a Deployment's containers for vLLM CLI arguments
+// ParseVLLMArgs scans a Deployment/LWS's containers for vLLM CLI arguments
 // and environment variables, returning the parsed parameters.
 //
 // It handles:
@@ -52,14 +52,20 @@ func defaultVLLMEngineParams() VLLMEngineParams {
 //   - Shell commands: ["/bin/sh", "-c", "vllm serve model --arg=val"]
 //   - Boolean flags: --enforce-eager (no value)
 //   - VLLM_USE_V1 environment variable for V1 engine detection
-func ParseVLLMArgs(deploy *appsv1.Deployment) VLLMEngineParams {
+func ParseVLLMArgs(scaleTarget scaletarget.ScaleTargetAccessor) VLLMEngineParams {
 	params := defaultVLLMEngineParams()
-	if deploy == nil || len(deploy.Spec.Template.Spec.Containers) == 0 {
+	if scaleTarget == nil {
 		resolveEffectiveMaxBatchedTokens(&params)
 		return params
 	}
 
-	for _, container := range deploy.Spec.Template.Spec.Containers {
+	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
+	if podTemplateSpec == nil || len(podTemplateSpec.Spec.Containers) == 0 {
+		resolveEffectiveMaxBatchedTokens(&params)
+		return params
+	}
+
+	for _, container := range podTemplateSpec.Spec.Containers {
 		// Check environment variables first
 		for _, env := range container.Env {
 			if env.Name == "VLLM_USE_V1" {

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -126,7 +127,7 @@ func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmd
 
 	// These operations are local and should never fail, but we handle errors for debugging
 	if replicaScalingTotal == nil {
-		return fmt.Errorf("replicaScalingTotal metric not initialized")
+		return errors.New("replicaScalingTotal metric not initialized")
 	}
 
 	replicaScalingTotal.With(labels).Inc()
@@ -148,7 +149,7 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 
 	// These operations are local and should never fail, but we handle errors for debugging
 	if currentReplicas == nil || desiredReplicas == nil || desiredRatio == nil {
-		return fmt.Errorf("replica metrics not initialized")
+		return errors.New("replica metrics not initialized")
 	}
 
 	currentReplicas.With(baseLabels).Set(float64(current))

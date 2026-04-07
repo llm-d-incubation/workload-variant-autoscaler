@@ -7,6 +7,12 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
 )
 
+const (
+	testAccTypeGPUA100   = "GPU_A100"
+	testModelNameLlama7b = "llama-7b"
+	testSvcClassDefault  = "default"
+)
+
 func TestNewSystem(t *testing.T) {
 	system := NewSystem()
 
@@ -63,7 +69,7 @@ func TestSystem_SetFromSpec(t *testing.T) {
 		Models: config.ModelData{
 			PerfData: []config.ModelAcceleratorPerfData{
 				{
-					Name:         "llama-7b",
+					Name:         testModelNameLlama7b,
 					Acc:          "A100",
 					AccCount:     1,
 					MaxBatchSize: 16,
@@ -88,7 +94,7 @@ func TestSystem_SetFromSpec(t *testing.T) {
 			Spec: []config.ServerSpec{
 				{
 					Name:  "server1",
-					Model: "llama-7b",
+					Model: testModelNameLlama7b,
 					Class: "default",
 					CurrentAlloc: config.AllocationData{
 						Load: config.ServerLoadSpec{
@@ -109,7 +115,7 @@ func TestSystem_SetFromSpec(t *testing.T) {
 					Priority: 1,
 					ModelTargets: []config.ModelTarget{
 						{
-							Model:    "llama-7b",
+							Model:    testModelNameLlama7b,
 							SLO_ITL:  100,
 							SLO_TTFT: 1000,
 							SLO_TPS:  50,
@@ -159,16 +165,16 @@ func TestSystem_SetFromSpec(t *testing.T) {
 	if acc == nil {
 		t.Fatal("A100 accelerator should exist")
 	}
-	if acc.Type() != "GPU_A100" {
+	if acc.Type() != testAccTypeGPUA100 {
 		t.Errorf("Expected accelerator type GPU_A100, got %s", acc.Type())
 	}
 
 	// Validate model properties
-	model := system.models["llama-7b"]
+	model := system.models[testModelNameLlama7b]
 	if model == nil {
 		t.Fatal("llama-7b model should exist")
 	}
-	if model.Name() != "llama-7b" {
+	if model.Name() != testModelNameLlama7b {
 		t.Errorf("Expected model name llama-7b, got %s", model.Name())
 	}
 
@@ -180,7 +186,7 @@ func TestSystem_SetFromSpec(t *testing.T) {
 	if server.Name() != "server1" {
 		t.Errorf("Expected server name server1, got %s", server.Name())
 	}
-	if server.ModelName() != "llama-7b" {
+	if server.ModelName() != testModelNameLlama7b {
 		t.Errorf("Expected server model llama-7b, got %s", server.ModelName())
 	}
 
@@ -189,7 +195,7 @@ func TestSystem_SetFromSpec(t *testing.T) {
 	if svcClass == nil {
 		t.Fatal("default service class should exist")
 	}
-	if svcClass.Name() != "default" {
+	if svcClass.Name() != testSvcClassDefault {
 		t.Errorf("Expected service class name default, got %s", svcClass.Name())
 	}
 	if svcClass.Priority() != 1 {
@@ -317,7 +323,7 @@ func TestSystem_AddAcceleratorFromSpec(t *testing.T) {
 		t.Errorf("Expected accelerator name A100, got %s", acc.Name())
 	}
 
-	if acc.Type() != "GPU_A100" {
+	if acc.Type() != testAccTypeGPUA100 {
 		t.Errorf("Expected accelerator type GPU_A100, got %s", acc.Type())
 	}
 
@@ -435,7 +441,7 @@ func TestSystem_SetModelsFromSpec(t *testing.T) {
 	modelData := &config.ModelData{
 		PerfData: []config.ModelAcceleratorPerfData{
 			{
-				Name:         "llama-7b",
+				Name:         testModelNameLlama7b,
 				Acc:          "A100",
 				AccCount:     1,
 				MaxBatchSize: 16,
@@ -468,11 +474,11 @@ func TestSystem_SetModelsFromSpec(t *testing.T) {
 	}
 
 	// Validate llama-7b model
-	model7b := system.models["llama-7b"]
+	model7b := system.models[testModelNameLlama7b]
 	if model7b == nil {
 		t.Fatal("llama-7b model should exist")
 	}
-	if model7b.Name() != "llama-7b" {
+	if model7b.Name() != testModelNameLlama7b {
 		t.Errorf("Expected model name llama-7b, got %s", model7b.Name())
 	}
 	perfData7b := model7b.PerfData("A100")
@@ -581,7 +587,7 @@ func TestSystem_SetServersFromSpec(t *testing.T) {
 		Spec: []config.ServerSpec{
 			{
 				Name:  "server1",
-				Model: "llama-7b",
+				Model: testModelNameLlama7b,
 				Class: "default",
 				CurrentAlloc: config.AllocationData{
 					Load: config.ServerLoadSpec{
@@ -624,7 +630,7 @@ func TestSystem_SetServersFromSpec(t *testing.T) {
 	if server1.Name() != "server1" {
 		t.Errorf("Expected server name server1, got %s", server1.Name())
 	}
-	if server1.ModelName() != "llama-7b" {
+	if server1.ModelName() != testModelNameLlama7b {
 		t.Errorf("Expected model name llama-7b for server1, got %s", server1.ModelName())
 	}
 	if server1.ServiceClassName() != "default" {
@@ -803,7 +809,7 @@ func TestSystem_SetServiceClassesFromSpec(t *testing.T) {
 				Priority: 1,
 				ModelTargets: []config.ModelTarget{
 					{
-						Model:    "llama-7b",
+						Model:    testModelNameLlama7b,
 						SLO_ITL:  100,
 						SLO_TTFT: 1000,
 						SLO_TPS:  50,
@@ -842,7 +848,7 @@ func TestSystem_SetServiceClassesFromSpec(t *testing.T) {
 	if highPriority.Priority() != 1 {
 		t.Errorf("Expected priority 1 for high-priority, got %d", highPriority.Priority())
 	}
-	target1 := highPriority.ModelTarget("llama-7b")
+	target1 := highPriority.ModelTarget(testModelNameLlama7b)
 	if target1 == nil {
 		t.Fatal("high-priority should have llama-7b target")
 	}

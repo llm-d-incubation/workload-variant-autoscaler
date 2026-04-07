@@ -58,7 +58,7 @@
 
 ### E2E and infra-only deploys
 
-For e2e and infra-only deploys, the install script enables EPP flow control and optionally applies an InferenceObjective when `E2E_TESTS_ENABLED=true` or `ENABLE_SCALE_TO_ZERO=true`. See [deploy/install.sh](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/install.sh) and [deploy/inference-objective-e2e.yaml](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/inference-objective-e2e.yaml).
+For e2e and infra-only deploys, the install script enables EPP flow control when `E2E_TESTS_ENABLED=true` or `ENABLE_SCALE_TO_ZERO=true`. The **InferenceObjective** `e2e-default` is applied by scale-from-zero e2e code when the API exists; non-e2e scale-to-zero still uses `install.sh` with [deploy/inference-objective-e2e.yaml](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/inference-objective-e2e.yaml). See [deploy/install.sh](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/install.sh).
 
 ## Slow Scale-Up Response
 

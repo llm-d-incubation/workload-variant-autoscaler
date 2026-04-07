@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -88,7 +89,7 @@ func IsScaleToZeroEnabled(configData ScaleToZeroConfigData, modelID string) bool
 // Returns the parsed duration and an error if validation fails.
 func ValidateRetentionPeriod(retentionPeriod string) (time.Duration, error) {
 	if retentionPeriod == "" {
-		return 0, fmt.Errorf("retention period cannot be empty")
+		return 0, errors.New("retention period cannot be empty")
 	}
 
 	duration, err := time.ParseDuration(retentionPeriod)

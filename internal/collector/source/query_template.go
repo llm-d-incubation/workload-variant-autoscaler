@@ -1,6 +1,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -68,7 +69,7 @@ func (r *QueryList) Register(query QueryTemplate) error {
 	defer r.mu.Unlock()
 
 	if query.Name == "" {
-		return fmt.Errorf("query name is required")
+		return errors.New("query name is required")
 	}
 	if query.Template == "" {
 		return fmt.Errorf("query template is required for %q", query.Name)

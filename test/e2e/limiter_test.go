@@ -126,7 +126,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VA B")
 
 		By("Creating scalers for both deployments (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaA+"-hpa", metav1.DeleteOptions{})
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaB+"-hpa", metav1.DeleteOptions{})
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10, cfg.MonitoringNS)
@@ -149,7 +149,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		// Delete in reverse dependency order: scaler -> VA -> Service -> Deployment
 		// ServiceMonitor cleanup is handled by DeferCleanup registered in BeforeAll
 
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA)
 			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaB)
 		} else {

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workload-variant-autoscaler-wva-saturation-scaling-config
+  labels:
+    app.kubernetes.io/instance: workload-variant-autoscaler
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/managed-by: Helm
+data:
+  default: |
+    # Lowered from 0.80. A larger safety buffer is needed because decode 
+    # requests hold onto KV cache for a long duration. This prevents 
+    # request preemption/swapping while a new pod boots up.
+    kvCacheThreshold: 0.75
+    
+    # Lowered from 5. Decode requests take a long time to clear. 
+    # Lowering the queue threshold mathematically protects your TTFT 
+    # SLOs by aggressively adding pods before a massive backlog forms.
+    queueLengthThreshold: 3
+    
+    # Increased from 0.10. Since KV cache drains very slowly during 
+    # decode workloads, we force a wider buffer (15% clustered spare capacity) 
+    # before ripping away a pod to prevent yo-yoing.
+    kvSpareTrigger: 0.15
+    
+    # Increased from 3. We want absolute certainty the system can absorb 
+    # a sudden burst of long-running requests before scaling down.
+    queueSpareTrigger: 5

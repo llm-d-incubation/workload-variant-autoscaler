@@ -8,9 +8,18 @@ metadata:
     {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
+    {{- if eq .Values.llmd.scaleTargetKind "LeaderWorkerSet" }}
+    apiVersion: leaderworkerset.x-k8s.io/v1
+    kind: LeaderWorkerSet
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ printf "%s-decode" .Values.llmd.modelName }}
+    {{- end }}
+    {{- if .Values.llmd.scaleTargetName }}
+    name: {{ .Values.llmd.scaleTargetName }}
+    {{- else }}
+    name: {{ .Values.llmd.deploymentName | default (printf "%s-decode" .Values.llmd.modelName) }}
+    {{- end }}
   minReplicas: {{ .Values.hpa.minReplicas }}
   maxReplicas: {{ .Values.hpa.maxReplicas }}
   behavior:

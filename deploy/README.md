@@ -139,8 +139,8 @@ export DEPLOY_PROMETHEUS=true               # Deploy Prometheus stack
 export DEPLOY_WVA=true                      # Deploy WVA controller
 export DEPLOY_LLM_D=true                    # Deploy llm-d infrastructure
 export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
-export DEPLOY_VA=true                       # Deploy VariantAutoscaling CR
-export DEPLOY_HPA=true                      # Deploy HPA
+export DEPLOY_VA=true                       # Chart-managed VariantAutoscaling (default off; e2e often creates its own)
+export DEPLOY_HPA=true                      # Chart-managed HPA (default off; enable with DEPLOY_VA for demos)
 
 # HPA Configuration
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window (default: 240s)
@@ -188,6 +188,9 @@ bash install.sh
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
+# Optional: chart-managed VA + HPA for a single-variant demo (install.sh defaults skip these)
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
@@ -198,6 +201,8 @@ export HF_TOKEN="hf_xxxxx"
 export MODEL_ID="meta-llama/Llama-2-7b-hf"
 export SLO_TPOT=5
 export SLO_TTFT=500
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
@@ -208,6 +213,7 @@ export DEPLOY_WVA=true
 export DEPLOY_LLM_D=false
 export DEPLOY_PROMETHEUS=true  # Prometheus is needed for metrics - disable if it is already installed in your cluster
 export DEPLOY_PROMETHEUS_ADAPTER=false
+export DEPLOY_VA=true          # Create a VariantAutoscaling CR for the existing model service
 export DEPLOY_HPA=false
 make deploy-wva-on-k8s
 ```
@@ -216,6 +222,8 @@ make deploy-wva-on-k8s
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 export HPA_STABILIZATION_SECONDS=30  # Fast scaling for dev/test (default: 240)
 make deploy-wva-on-k8s
 ```
@@ -224,9 +232,10 @@ make deploy-wva-on-k8s
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-export HPA_STABILIZATION_SECONDS=0   # Immediate scaling for e2e tests
-export VLLM_MAX_NUM_SEQS=8          # Low batch size for easy saturation
 export E2E_TESTS_ENABLED=true
+export INFRA_ONLY=true               # Tests create VA/HPA; see also make deploy-e2e-infra
+export HPA_STABILIZATION_SECONDS=0   # Only applies if chart HPA is enabled
+export VLLM_MAX_NUM_SEQS=8           # Low batch size for easy saturation
 make deploy-wva-on-k8s
 ```
 
@@ -236,6 +245,8 @@ make deploy-wva-on-k8s
 export HF_TOKEN="hf_xxxxx"
 export VLLM_MAX_NUM_SEQS=64         # Match desired max batch size
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
@@ -650,8 +661,8 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_WVA` | Deploy WVA controller | `true` |
 | `DEPLOY_LLM_D` | Deploy llm-d infrastructure | `true` |
 | `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter | `true` |
-| `DEPLOY_VA` | Deploy VariantAutoscaling CR | `true` |
-| `DEPLOY_HPA` | Deploy HPA | `true` |
+| `DEPLOY_VA` | Deploy VariantAutoscaling CR via WVA Helm chart | `false` |
+| `DEPLOY_HPA` | Deploy HPA via WVA Helm chart | `false` |
 | `INFRA_ONLY` | Deploy only infrastructure (skip VA/HPA) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
 

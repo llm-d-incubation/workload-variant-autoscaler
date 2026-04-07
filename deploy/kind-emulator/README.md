@@ -72,7 +72,8 @@ export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
 export DEPLOY_WVA=true                # Deploy WVA controller
 export DEPLOY_LLM_D=true              # Deploy llm-d infrastructure (emulated)
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-export DEPLOY_HPA=true                # Deploy HPA
+export DEPLOY_VA=true                 # Opt in: chart VariantAutoscaling (default in script: false)
+export DEPLOY_HPA=true                # Opt in: chart HPA (default in script: false)
 ```
 
 ### Step-by-Step Setup
@@ -97,6 +98,7 @@ export DEPLOY_LLM_D=false
 export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
 export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
+export DEPLOY_VA=false
 export DEPLOY_HPA=false
 make deploy-wva-emulated-on-kind
 ```
@@ -110,6 +112,8 @@ make deploy-wva-emulated-on-kind
 **4. Testing configuration with fast saturation:**
 
 ```bash
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 export VLLM_MAX_NUM_SEQS=8              # Low batch size for easy saturation
 export HPA_STABILIZATION_SECONDS=30     # Fast scaling for testing
 make deploy-wva-emulated-on-kind

@@ -3,6 +3,7 @@ package fixtures
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -83,11 +84,13 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 	}
 	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
 	labels := map[string]string{
-		"app":                       appLabel,
-		"llm-d.ai/inferenceServing": "true",
-		"llm-d.ai/model":            "ms-sim-llm-d-modelservice",
-		"llm-d.ai/model-pool":       poolName,
-		"test-resource":             "true",
+		"app":                        appLabel,
+		"llm-d.ai/inferenceServing":  "true",
+		"llm-d.ai/model":             "ms-sim-llm-d-modelservice",
+		"llm-d.ai/model-pool":        poolName,
+		"test-resource":              "true",
+		"llm-d.ai/guide":             "workload-autoscaling",
+		"llm-d.ai/inference-serving": "true",
 	}
 
 	envVars := []corev1.EnvVar{
@@ -131,10 +134,12 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app":                       appLabel,
-					"llm-d.ai/inferenceServing": "true",
-					"llm-d.ai/model":            "ms-sim-llm-d-modelservice",
-					"llm-d.ai/model-pool":       poolName,
+					"app":                        appLabel,
+					"llm-d.ai/inferenceServing":  "true",
+					"llm-d.ai/model":             "ms-sim-llm-d-modelservice",
+					"llm-d.ai/model-pool":        poolName,
+					"llm-d.ai/guide":             "workload-autoscaling",
+					"llm-d.ai/inference-serving": "true",
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -217,20 +222,20 @@ func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int) []s
 		return []string{
 			"--model", modelID,
 			"--port", "8000",
-			fmt.Sprintf("--time-to-first-token=%s", simulatorTTFT),
-			fmt.Sprintf("--inter-token-latency=%s", simulatorITL),
+			"--time-to-first-token=" + simulatorTTFT,
+			"--inter-token-latency=" + simulatorITL,
 			"--mode=random",
 			"--enable-kvcache",
 			fmt.Sprintf("--kv-cache-size=%d", simulatorKVCacheSize),
 			fmt.Sprintf("--block-size=%d", simulatorBlockSize),
 			"--tokenizers-cache-dir=/tmp",
-			"--max-num-seqs", fmt.Sprintf("%d", maxNumSeqs),
-			"--max-model-len", fmt.Sprintf("%d", simulatorMaxModelLen),
+			"--max-num-seqs", strconv.Itoa(maxNumSeqs),
+			"--max-model-len", strconv.Itoa(simulatorMaxModelLen),
 		}
 	}
 	return []string{
 		"--model", modelID,
-		"--max-num-seqs", fmt.Sprintf("%d", maxNumSeqs),
+		"--max-num-seqs", strconv.Itoa(maxNumSeqs),
 		"--max-model-len", "1024",
 		"--served-model-name", modelID,
 		"--disable-log-requests",

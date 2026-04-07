@@ -30,7 +30,6 @@ import (
 	"strconv"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -42,6 +41,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // ReplicaMetricsCollector collects replica-level metrics for both saturation
@@ -67,13 +67,13 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 //   - Queueing model metrics: scheduler dispatch rate (arrival rate), max batch size
 //
 // Prometheus-sourced metrics are fetched via registered query templates.
-// MaxBatchSize is parsed from the Deployment's container args (--max-num-seqs).
+// MaxBatchSize is parsed from the Deployment/LWS's container args (--max-num-seqs).
 //
 // Parameters:
 //   - ctx: Context for the operation
 //   - modelID: The model identifier to collect metrics for
 //   - namespace: The namespace where the model is deployed
-//   - deployments: Map of Deployment namespace/name to Deployment
+//   - scaleTargets: Map of Deployment/LWS namespace/name to Deployment/LWS
 //   - variantAutoscalings: Map of VariantAutoscaling namespace/name to VariantAutoscaling object
 //   - variantCosts: Map of VariantAutoscaling namespace/name to cost value
 //
@@ -84,7 +84,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	ctx context.Context,
 	modelID string,
 	namespace string,
-	deployments map[string]*appsv1.Deployment,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	variantCosts map[string]float64,
 ) ([]interfaces.ReplicaMetrics, error) {
@@ -391,14 +391,14 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		}
 	}
 
-	// Pre-compute MaxBatchSize per deployment from container args.
+	// Pre-compute MaxBatchSize per scale target from container args.
 	// MaxBatchSize (--max-num-seqs) is not a Prometheus metric; it is parsed
-	// from the Deployment spec using the vLLM argument parser.
-	// Map key is deployment key (namespace/name).
-	deployMaxBatchSize := make(map[string]int64, len(deployments))
-	for key, deploy := range deployments {
-		params := saturation_v2.ParseVLLMArgs(deploy)
-		deployMaxBatchSize[key] = params.MaxNumSeqs
+	// from the Deployment/LWS spec using the vLLM argument parser.
+	// Map key is scale target key (namespace/name).
+	scaleTargetMaxBatchSize := make(map[string]int64, len(scaleTargets))
+	for key, scaleTarget := range scaleTargets {
+		params := saturation_v2.ParseVLLMArgs(scaleTarget)
+		scaleTargetMaxBatchSize[key] = params.MaxNumSeqs
 	}
 
 	// Build replica metrics from pod data
@@ -430,26 +430,26 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		}
 
 		// Match Pod to VariantAutoscaling using indexed lookup
-		vaName := c.podVAMapper.FindVAForPod(ctx, podName, namespace, deployments)
+		vaName := c.podVAMapper.FindVAForPod(ctx, podName, namespace, scaleTargets)
 
 		if vaName == "" {
-			logger.Info("Skipping pod that doesn't match any deployment",
+			logger.Info("Skipping pod that doesn't match any scale target",
 				"pod", podName,
-				"deployments", getDeploymentNames(deployments))
+				"scale targets", getScaleTargetNames(scaleTargets))
 			continue
 		}
 		variantKey := utils.GetNamespacedKey(namespace, vaName)
-		// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
+		// Get accelerator name from Deployment/LWS nodeSelector/nodeAffinity or VA label
 		acceleratorName := ""
 		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
-			// Find the deployment for this VA
-			deploymentKey := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
-			if deployment, found := deployments[deploymentKey]; found {
-				// Get accelerator name from Deployment nodeSelector/nodeAffinity or VA label
-				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, deployment)
+			// Find the scale target for this VA
+			key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+			if scaleTarget, found := scaleTargets[key]; found {
+				// Get accelerator name from Deployment/LWS nodeSelector/nodeAffinity or VA label
+				acceleratorName = utils.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 			} else {
-				// Deployment not cached, fall back to VA label via nil deployment
-				acceleratorName = utils.GetAcceleratorNameFromDeployment(va, nil)
+				// Deployment/LWS not cached, fall back to VA label via nil scale target
+				acceleratorName = utils.GetAcceleratorNameFromScaleTarget(va, nil)
 			}
 		}
 
@@ -481,11 +481,11 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			tokensInUse = int64(rounded)
 		}
 
-		// Look up MaxBatchSize from the deployment's vLLM args via the VA's ScaleTargetRef
+		// Look up MaxBatchSize from the scale target's vLLM args via the VA's ScaleTargetRef
 		var maxBatchSize int64
 		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
-			deployKey := utils.GetNamespacedKey(namespace, va.Spec.ScaleTargetRef.Name)
-			if mbs, ok := deployMaxBatchSize[deployKey]; ok {
+			key := utils.GetNamespacedKey(namespace, va.Spec.ScaleTargetRef.Name)
+			if mbs, ok := scaleTargetMaxBatchSize[key]; ok {
 				maxBatchSize = mbs
 			}
 		}
@@ -597,11 +597,11 @@ func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 	}
 }
 
-// getDeploymentNames extracts deployment names from the deployments map.
-func getDeploymentNames(deployments map[string]*appsv1.Deployment) []string {
-	names := make([]string, 0, len(deployments))
-	for _, deploy := range deployments {
-		names = append(names, deploy.Name)
+// getScaleTargetNames extracts scale target names from the scale target map.
+func getScaleTargetNames(scaleTargets map[string]scaletarget.ScaleTargetAccessor) []string {
+	names := make([]string, 0, len(scaleTargets))
+	for _, scaleTarget := range scaleTargets {
+		names = append(names, scaleTarget.GetName())
 	}
 	return names
 }

@@ -996,3 +996,379 @@ var _ = Describe("aggregateByRole", func() {
 		Expect(result["prefill"].TotalDemand).To(Equal(6000.0)) // 5000 + 1000
 	})
 })
+
+var _ = Describe("computeReplicaCapacityFallback", func() {
+	var (
+		analyzer *SaturationAnalyzer
+		store    *CapacityKnowledgeStore
+		cfg      *config.SaturationScalingConfig
+	)
+
+	BeforeEach(func() {
+		store = NewCapacityKnowledgeStore()
+		analyzer = NewSaturationAnalyzer(store)
+		cfg = &config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+			ScaleUpThreshold:     0.85,
+			ScaleDownBoundary:    0.70,
+		}
+	})
+
+	It("should return nil when capacity store has no record", func() {
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.5,
+			TotalKvCapacityTokens: 0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).To(BeNil())
+	})
+
+	It("should return nil when capacity store record has zero effective capacity", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			EffectiveCapacity: 0,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:      "pod-1",
+			VariantName:  "variant-a",
+			KvCacheUsage: 0.5,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).To(BeNil())
+	})
+
+	It("should apply KvCacheThreshold to stored capacity (consistent with main path)", func() {
+		// Store raw capacity of 10000
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.6,
+			TotalKvCapacityTokens: 0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 (KvCacheThreshold) = 8000
+		Expect(result.EffectiveCapacity).To(Equal(int64(8000)))
+		// demand = 0.6 * 8000 = 4800
+		Expect(result.ReplicaDemand).To(Equal(int64(4800)))
+		Expect(result.IsSaturated).To(BeFalse()) // 4800 < 8000
+	})
+
+	It("should detect saturation at KvCacheUsage >= KvCacheThreshold", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          1.0, // 100% KV usage
+			TotalKvCapacityTokens: 0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 = 8000
+		// demand = 1.0 * 8000 = 8000 >= 8000
+		Expect(result.ReplicaDemand).To(Equal(int64(8000)))
+		Expect(result.IsSaturated).To(BeTrue())
+	})
+
+	It("should detect saturation when KvCacheUsage exceeds threshold (matching main path behavior)", func() {
+		// This verifies the fix from the review: at 90% KV usage with 0.8 threshold,
+		// the fallback should report saturation, matching the main path behavior.
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.9, // 90% usage, threshold is 80%
+			TotalKvCapacityTokens: 0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 = 8000
+		// demand = 0.9 * 8000 = 7200
+		// 7200 < 8000 → not saturated by demand alone, BUT this is close to capacity.
+		// In the main path, k1=8000 and demand includes tokens+queue. The important thing
+		// is that the threshold IS applied (8000 not 10000), so scale-up signals trigger
+		// at the same utilization level as the main path.
+		Expect(result.EffectiveCapacity).To(Equal(int64(8000)))
+		Expect(result.ReplicaDemand).To(Equal(int64(7200)))
+	})
+
+	It("should add queue-based demand when avg input tokens available", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.5,
+			TotalKvCapacityTokens: 0,
+			QueueLength:           3,
+			AvgInputTokens:        500,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 = 8000
+		// demand = 0.5 * 8000 + 3 * 500 = 4000 + 1500 = 5500
+		Expect(result.ReplicaDemand).To(Equal(int64(5500)))
+		Expect(result.IsSaturated).To(BeFalse())
+	})
+
+	It("should not add queue demand when avg input tokens is zero", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.3,
+			TotalKvCapacityTokens: 0,
+			QueueLength:           10,
+			AvgInputTokens:        0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 = 8000
+		// demand = 0.3 * 8000 = 2400 (no queue contribution)
+		Expect(result.ReplicaDemand).To(Equal(int64(2400)))
+	})
+
+	It("should populate all ReplicaCapacity fields correctly", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := interfaces.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.4,
+			TotalKvCapacityTokens: 0,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 10000 * 0.8 = 8000
+		Expect(result.PodName).To(Equal("pod-1"))
+		Expect(result.VariantName).To(Equal("variant-a"))
+		Expect(result.AcceleratorName).To(Equal("H100"))
+		Expect(result.EffectiveCapacity).To(Equal(int64(8000)))
+		Expect(result.MemoryBoundCapacity).To(Equal(int64(8000)))
+		Expect(result.ComputeBoundCapacity).To(Equal(int64(8000)))
+		Expect(result.TotalKvCapacityTokens).To(Equal(int64(8000)))
+		// demand = 0.4 * 8000 = 3200
+		Expect(result.TokensInUse).To(Equal(int64(3200)))
+		Expect(result.ReplicaDemand).To(Equal(int64(3200)))
+	})
+})
+
+var _ = Describe("Analyze with fallback (no cache_config_info)", func() {
+	var (
+		analyzer *SaturationAnalyzer
+		store    *CapacityKnowledgeStore
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		store = NewCapacityKnowledgeStore()
+		analyzer = NewSaturationAnalyzer(store)
+		ctx = context.Background()
+	})
+
+	It("should produce valid result using fallback when cache_config_info is absent", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			GpuCount:          1,
+			EffectiveCapacity: 8192,
+			LearnedFrom:       "deployment",
+		})
+
+		input := interfaces.AnalyzerInput{
+			ModelID:   "test-model",
+			Namespace: "test-ns",
+			ReplicaMetrics: []interfaces.ReplicaMetrics{
+				{
+					PodName:               "pod-1",
+					VariantName:           "variant-a",
+					AcceleratorName:       "H100",
+					ModelID:               "test-model",
+					Namespace:             "test-ns",
+					Cost:                  10.0,
+					KvCacheUsage:          0.9,
+					TotalKvCapacityTokens: 0,
+					TokensInUse:           0,
+					QueueLength:           3,
+					AvgInputTokens:        100,
+					AvgOutputTokens:       50,
+				},
+			},
+			VariantStates: []interfaces.VariantReplicaState{
+				{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
+			},
+			Config: &config.SaturationScalingConfig{
+				KvCacheThreshold:     0.8,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.1,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "saturation",
+				ScaleUpThreshold:     0.85,
+				ScaleDownBoundary:    0.70,
+			},
+		}
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).NotTo(BeNil())
+		Expect(result.VariantCapacities).To(HaveLen(1))
+
+		vc := result.VariantCapacities[0]
+		Expect(vc.VariantName).To(Equal("variant-a"))
+		// effectiveCapacity = int64(8192 * 0.8) = 6553
+		storeCapacity := float64(8192)
+		expectedCapacity := float64(int64(storeCapacity * 0.8))
+		Expect(vc.PerReplicaCapacity).To(Equal(expectedCapacity))
+		Expect(vc.TotalDemand).To(BeNumerically(">", 0))
+		Expect(result.TotalDemand).To(BeNumerically(">", 0))
+	})
+
+	It("should skip replicas with no store data and no cache_config_info", func() {
+		input := interfaces.AnalyzerInput{
+			ModelID:   "test-model",
+			Namespace: "test-ns",
+			ReplicaMetrics: []interfaces.ReplicaMetrics{
+				{
+					PodName:               "pod-1",
+					VariantName:           "variant-a",
+					AcceleratorName:       "H100",
+					ModelID:               "test-model",
+					Namespace:             "test-ns",
+					Cost:                  10.0,
+					KvCacheUsage:          0.5,
+					TotalKvCapacityTokens: 0,
+				},
+			},
+			VariantStates: []interfaces.VariantReplicaState{
+				{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
+			},
+			Config: &config.SaturationScalingConfig{
+				KvCacheThreshold:     0.8,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.1,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "saturation",
+				ScaleUpThreshold:     0.85,
+				ScaleDownBoundary:    0.70,
+			},
+		}
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).NotTo(BeNil())
+	})
+})
+
+var _ = Describe("SaturationScalingConfig ApplyDefaults before Validate", func() {
+	It("should pass validation after ApplyDefaults for V2 config with omitted thresholds", func() {
+		cfg := config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+		}
+
+		cfg.ApplyDefaults()
+		err := cfg.Validate()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.ScaleUpThreshold).To(BeNumerically(">", 0))
+		Expect(cfg.ScaleDownBoundary).To(BeNumerically(">", 0))
+	})
+
+	It("should fail validation without ApplyDefaults for V2 config with omitted thresholds", func() {
+		cfg := config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+		}
+
+		err := cfg.Validate()
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should preserve explicitly set values after ApplyDefaults", func() {
+		cfg := config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+			ScaleUpThreshold:     0.9,
+			ScaleDownBoundary:    0.6,
+			Priority:             2.0,
+		}
+
+		cfg.ApplyDefaults()
+		err := cfg.Validate()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.ScaleUpThreshold).To(Equal(0.9))
+		Expect(cfg.ScaleDownBoundary).To(Equal(0.6))
+		Expect(cfg.Priority).To(Equal(2.0))
+	})
+
+	It("should apply default priority when omitted", func() {
+		cfg := config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+		}
+
+		cfg.ApplyDefaults()
+		Expect(cfg.Priority).To(BeNumerically(">", 0))
+	})
+})

@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strconv"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -123,7 +124,7 @@ func buildLoadGeneratorArgs(targetURL string, cfg LoadConfig) []string {
 		"benchmark",
 		"--target", targetURL,
 		"--rate-type", "constant",
-		"--rate", fmt.Sprintf("%d", cfg.RequestRate),
+		"--rate", strconv.Itoa(cfg.RequestRate),
 		"--model", cfg.ModelID,
 	}
 
@@ -131,7 +132,7 @@ func buildLoadGeneratorArgs(targetURL string, cfg LoadConfig) []string {
 	// For constant rate: max-seconds should be enough to send all prompts
 	// Add buffer to ensure all requests are sent
 	maxSeconds := (cfg.NumPrompts / cfg.RequestRate) + 10 // Add 10s buffer
-	args = append(args, "--max-seconds", fmt.Sprintf("%d", maxSeconds))
+	args = append(args, "--max-seconds", strconv.Itoa(maxSeconds))
 
 	switch cfg.Strategy {
 	case "synthetic":
@@ -234,19 +235,19 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 							Env: []corev1.EnvVar{
 								{
 									Name:  "TOTAL_REQUESTS",
-									Value: fmt.Sprintf("%d", loadCfg.NumPrompts),
+									Value: strconv.Itoa(loadCfg.NumPrompts),
 								},
 								{
 									Name:  "BATCH_SIZE",
-									Value: fmt.Sprintf("%d", burstBatchSize),
+									Value: strconv.Itoa(burstBatchSize),
 								},
 								{
 									Name:  "CURL_TIMEOUT",
-									Value: fmt.Sprintf("%d", burstCurlTimeoutSeconds),
+									Value: strconv.Itoa(burstCurlTimeoutSeconds),
 								},
 								{
 									Name:  "MAX_TOKENS",
-									Value: fmt.Sprintf("%d", loadCfg.OutputTokens),
+									Value: strconv.Itoa(loadCfg.OutputTokens),
 								},
 								{
 									Name:  "BATCH_SLEEP",
@@ -366,7 +367,7 @@ exit 0
 			Namespace: namespace,
 			Labels: map[string]string{
 				"experiment":    experimentLabel,
-				"worker":        fmt.Sprintf("%d", workerID),
+				"worker":        strconv.Itoa(workerID),
 				"test-resource": "true",
 			},
 		},
@@ -376,7 +377,7 @@ exit 0
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"experiment":    experimentLabel,
-						"worker":        fmt.Sprintf("%d", workerID),
+						"worker":        strconv.Itoa(workerID),
 						"test-resource": "true",
 					},
 				},
@@ -390,23 +391,23 @@ exit 0
 							Env: []corev1.EnvVar{
 								{
 									Name:  "WORKER_ID",
-									Value: fmt.Sprintf("%d", workerID),
+									Value: strconv.Itoa(workerID),
 								},
 								{
 									Name:  "TOTAL_REQUESTS",
-									Value: fmt.Sprintf("%d", loadCfg.NumPrompts),
+									Value: strconv.Itoa(loadCfg.NumPrompts),
 								},
 								{
 									Name:  "BATCH_SIZE",
-									Value: fmt.Sprintf("%d", parallelBatchSize),
+									Value: strconv.Itoa(parallelBatchSize),
 								},
 								{
 									Name:  "CURL_TIMEOUT",
-									Value: fmt.Sprintf("%d", parallelCurlTimeoutSeconds),
+									Value: strconv.Itoa(parallelCurlTimeoutSeconds),
 								},
 								{
 									Name:  "MAX_TOKENS",
-									Value: fmt.Sprintf("%d", loadCfg.OutputTokens),
+									Value: strconv.Itoa(loadCfg.OutputTokens),
 								},
 								{
 									Name:  "BATCH_SLEEP",

@@ -188,7 +188,8 @@ func TestServer_Getters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.getter()
-			if tt.name == "Load" {
+			switch tt.name {
+			case "Load":
 				resultLoad := result.(*config.ServerLoadSpec)
 				expectedLoad := tt.expected.(*config.ServerLoadSpec)
 				if resultLoad.ArrivalRate != expectedLoad.ArrivalRate ||
@@ -196,13 +197,15 @@ func TestServer_Getters(t *testing.T) {
 					resultLoad.AvgOutTokens != expectedLoad.AvgOutTokens {
 					t.Errorf("%s() = %v, want %v", tt.name, result, tt.expected)
 				}
-			} else if tt.name == "AllAllocations" {
+			case "AllAllocations":
 				resultMap := result.(map[string]*Allocation)
 				if resultMap == nil {
 					t.Errorf("%s() should not be nil", tt.name)
 				}
-			} else if result != tt.expected {
-				t.Errorf("%s() = %v, want %v", tt.name, result, tt.expected)
+			default:
+				if result != tt.expected {
+					t.Errorf("%s() = %v, want %v", tt.name, result, tt.expected)
+				}
 			}
 		})
 	}
@@ -716,10 +719,8 @@ func TestServer_UpdateDesiredAlloc(t *testing.T) {
 				if server.Spec().DesiredAlloc.Load.ArrivalRate != server.Load().ArrivalRate {
 					t.Error("UpdateDesiredAlloc() should copy current load to DesiredAlloc")
 				}
-			} else {
-				if server.Spec().DesiredAlloc.Accelerator != "" {
-					t.Error("UpdateDesiredAlloc() should clear DesiredAlloc when no allocation")
-				}
+			} else if server.Spec().DesiredAlloc.Accelerator != "" {
+				t.Error("UpdateDesiredAlloc() should clear DesiredAlloc when no allocation")
 			}
 		})
 	}

@@ -14,14 +14,41 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	kindLeaderWorkerSet = "LeaderWorkerSet"
+	kindDeployment      = "Deployment"
+	apiVersionLWS       = "leaderworkerset.x-k8s.io/v1"
+	apiVersionAppsV1    = "apps/v1"
+)
+
+// HPAOption is a functional option for configuring HPA resources.
+type HPAOption func(*autoscalingv2.HorizontalPodAutoscaler)
+
+// WithScaleTargetRefKind sets the Kind and APIVersion on the HPA's ScaleTargetRef.
+func WithScaleTargetRefKind(kind string) HPAOption {
+	return func(hpa *autoscalingv2.HorizontalPodAutoscaler) {
+		hpa.Spec.ScaleTargetRef.Kind = kind
+		// Set appropriate APIVersion based on kind
+		switch kind {
+		case kindLeaderWorkerSet:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionLWS
+		case kindDeployment:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
+		default:
+			// Keep existing APIVersion for unknown kinds
+		}
+	}
+}
+
 // CreateHPA creates a HorizontalPodAutoscaler for WVA integration. Fails if it already exists.
 func CreateHPA(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	namespace, name, deploymentName, vaName string,
 	minReplicas, maxReplicas int32,
+	opts ...HPAOption,
 ) error {
-	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas)
+	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, opts...)
 	_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Create(ctx, hpa, metav1.CreateOptions{})
 	return err
 }
@@ -42,8 +69,9 @@ func EnsureHPA(
 	k8sClient *kubernetes.Clientset,
 	namespace, name, deploymentName, vaName string,
 	minReplicas, maxReplicas int32,
+	opts ...HPAOption,
 ) error {
-	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas)
+	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, opts...)
 	existing, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
 	if err == nil && existing != nil {
 		deleteErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
@@ -64,7 +92,7 @@ func EnsureHPA(
 	return err
 }
 
-func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxReplicas int32) *autoscalingv2.HorizontalPodAutoscaler {
+func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxReplicas int32, opts ...HPAOption) *autoscalingv2.HorizontalPodAutoscaler {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-hpa",
@@ -73,7 +101,7 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-				APIVersion: "apps/v1",
+				APIVersion: apiVersionAppsV1,
 				Kind:       "Deployment",
 				Name:       deploymentName,
 			},
@@ -110,6 +138,10 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 	}
 	if minReplicas == 0 {
 		hpa.Annotations = map[string]string{"autoscaling.alpha.kubernetes.io/feature-gates": "HPAScaleToZero=true"}
+	}
+	// Apply functional options
+	for _, opt := range opts {
+		opt(hpa)
 	}
 	return hpa
 }

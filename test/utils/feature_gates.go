@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,7 +79,7 @@ func IsHPAScaleToZeroEnabled(ctx context.Context, k8sClient *kubernetes.Clientse
 		for _, pod := range pods.Items {
 			for _, container := range pod.Spec.Containers {
 				// Check both Command and Args as feature gates can be in either
-				allArgs := append(container.Command, container.Args...)
+				allArgs := slices.Concat(container.Command, container.Args)
 				for _, arg := range allArgs {
 					if strings.Contains(arg, "HPAScaleToZero=true") {
 						_, _ = fmt.Fprintf(w, "HPAScaleToZero feature gate is enabled\n")
@@ -95,7 +96,7 @@ func IsHPAScaleToZeroEnabled(ctx context.Context, k8sClient *kubernetes.Clientse
 		for _, pod := range pods.Items {
 			if strings.HasPrefix(pod.Name, "kube-controller-manager") {
 				for _, container := range pod.Spec.Containers {
-					allArgs := append(container.Command, container.Args...)
+					allArgs := slices.Concat(container.Command, container.Args)
 					for _, arg := range allArgs {
 						if strings.Contains(arg, "HPAScaleToZero=true") {
 							_, _ = fmt.Fprintf(w, "HPAScaleToZero feature gate is enabled (found by name)\n")

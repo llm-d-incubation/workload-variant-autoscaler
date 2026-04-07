@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -154,7 +155,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	// Prometheus connection config from config file / env
 	promBaseURL := v.GetString("PROMETHEUS_BASE_URL")
 	if promBaseURL == "" {
-		return fmt.Errorf("prometheus configuration is required but not found. " +
+		return errors.New("prometheus configuration is required but not found. " +
 			"set PROMETHEUS_BASE_URL in config file or environment variable")
 	}
 	cfg.prometheus.baseURL = promBaseURL

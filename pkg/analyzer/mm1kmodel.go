@@ -15,11 +15,11 @@ type MM1KModel struct {
 	throughput float32   // effective (departure) rate
 }
 
-func NewMM1KModel(K int) *MM1KModel {
+func NewMM1KModel(k int) *MM1KModel {
 	m := &MM1KModel{
 		QueueModel: QueueModel{},
-		K:          K,
-		p:          make([]float64, K+1),
+		K:          k,
+		p:          make([]float64, k+1),
 		throughput: 0,
 	}
 	m.QueueModel.GetRhoMax = m.GetRhoMax

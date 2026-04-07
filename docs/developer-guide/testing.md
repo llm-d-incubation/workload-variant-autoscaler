@@ -163,7 +163,7 @@ This deploys:
 - Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
 - **No** VariantAutoscaling, HPA, or model services (tests create these)
 
-When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script also enables **GIE queuing** so scale-from-zero tests can run: it patches the EPP with `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER=true` and applies an **InferenceObjective** (`e2e-default`) that references the default InferencePool. This ensures the metric `inference_extension_flow_control_queue_size` is populated when requests hit the gateway.
+When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script enables **GIE queuing** by adding the `flowControl` feature gate to the EPP ConfigMap and updating the EPP image to a version that supports flow control. For **e2e**, the **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by `install.sh`. For non-e2e scale-to-zero (`ENABLE_SCALE_TO_ZERO=true` without e2e), `install.sh` still applies `deploy/inference-objective-e2e.yaml`. Queuing helps populate `inference_extension_flow_control_queue_size` when requests hit the gateway.
 
 **Install script tuning (optional, same variables as `deploy/install.sh`):**
 

@@ -157,7 +157,7 @@ func TestInferencePoolReconcile(t *testing.T) {
 }
 
 func diffStore(store datastore.Datastore, ep *poolutil.EndpointPool) string {
-	gotPool, _ := store.PoolGet(ep.Name)
+	gotPool, _ := store.PoolGet(ep.Namespace + "/" + ep.Name)
 	if diff := cmp.Diff(ep, gotPool); diff != "" {
 		return "inferencePool:" + diff
 	}

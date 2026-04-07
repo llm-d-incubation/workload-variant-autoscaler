@@ -324,7 +324,9 @@ func TestDiscoverUsage_MixedVendors(t *testing.T) {
 		},
 	}
 
-	allObjects := append(nodes, pods...)
+	allObjects := make([]runtime.Object, 0, len(nodes)+len(pods))
+	allObjects = append(allObjects, nodes...)
+	allObjects = append(allObjects, pods...)
 	client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(allObjects...).Build()
 	discoverer := NewK8sWithGpuOperator(client)
 

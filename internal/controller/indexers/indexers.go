@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -39,21 +40,20 @@ const (
 // scaleTargetIndexKey returns the composite index key for a scale target reference.
 // Format: Namespace/APIVersion/Kind/Name (e.g., "default/apps/v1/Deployment/my-app")
 func scaleTargetIndexKey(namespace string, ref autoscalingv2.CrossVersionObjectReference) string {
-
 	if ref.APIVersion == "" {
 		switch ref.Kind {
-		case "Deployment":
-			ref.APIVersion = "apps/v1"
-
+		case constants.DeploymentKind:
+			ref.APIVersion = constants.DeploymentAPIVersion
+		case constants.LeaderWorkerSetKind:
+			ref.APIVersion = constants.LeaderWorkerSetAPIVersion
 		// Note: add other Kinds when support to other scaleTargetRefs is added
 		// By default, assume 'apps/v1' for unsupported Kinds
 		default:
 			logger := ctrl.LoggerFrom(context.TODO())
 			logger.V(logging.DEBUG).Info("APIVersion not specified for scale target; defaulting to apps/v1", "kind", ref.Kind, "name", ref.Name)
-			ref.APIVersion = "apps/v1"
+			ref.APIVersion = constants.DeploymentAPIVersion
 		}
 	}
-
 	return fmt.Sprintf("%s/%s/%s/%s", namespace, ref.APIVersion, ref.Kind, ref.Name)
 }
 
@@ -104,8 +104,19 @@ func FindVAForScaleTarget(ctx context.Context, c client.Client, ref autoscalingv
 // This is a wrapper around FindVAForScaleTarget for the Deployment scale target.
 func FindVAForDeployment(ctx context.Context, c client.Client, deploymentName, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
 	return FindVAForScaleTarget(ctx, c, autoscalingv2.CrossVersionObjectReference{
-		APIVersion: "apps/v1",
-		Kind:       "Deployment",
+		APIVersion: constants.DeploymentAPIVersion,
+		Kind:       constants.DeploymentKind,
 		Name:       deploymentName,
+	}, namespace)
+}
+
+// FindVAForLeaderWorkerSet returns the VariantAutoscaling that targets a LeaderWorkerSet with the given name.
+// Returns nil if no VariantAutoscaling targets a LeaderWorkerSet with the given name.
+// This is a wrapper around FindVAForScaleTarget for the LeaderWorkerSet scale target.
+func FindVAForLeaderWorkerSet(ctx context.Context, c client.Client, leaderWorkerSetName, namespace string) (*llmdVariantAutoscalingV1alpha1.VariantAutoscaling, error) {
+	return FindVAForScaleTarget(ctx, c, autoscalingv2.CrossVersionObjectReference{
+		APIVersion: constants.LeaderWorkerSetAPIVersion,
+		Kind:       constants.LeaderWorkerSetKind,
+		Name:       leaderWorkerSetName,
 	}, namespace)
 }

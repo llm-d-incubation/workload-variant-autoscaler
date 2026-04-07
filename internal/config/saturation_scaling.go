@@ -67,7 +67,7 @@ type AnalyzerScoreConfig struct {
 	Name              string   `yaml:"name"`
 	Enabled           *bool    `yaml:"enabled,omitempty"`           // default true
 	Score             float64  `yaml:"score,omitempty"`             // default 1.0
-	ScaleUpThreshold  *float64 `yaml:"scaleUpThreshold,omitempty"` // overrides global
+	ScaleUpThreshold  *float64 `yaml:"scaleUpThreshold,omitempty"`  // overrides global
 	ScaleDownBoundary *float64 `yaml:"scaleDownBoundary,omitempty"` // overrides global
 }
 

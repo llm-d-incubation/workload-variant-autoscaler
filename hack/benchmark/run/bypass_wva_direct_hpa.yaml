@@ -1,0 +1,52 @@
+# 1. Scale WVA down to 0 to bypass it
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload-variant-autoscaler-controller-manager
+spec:
+  replicas: 0
+
+---
+# 2. Deploy Direct HPA using Prometheus Adapter Metrics
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: workload-variant-autoscaler-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    # This is the model server (decode) deployment we want to scale
+    name: TARGET_DEPLOYMENT_NAME
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: External
+    external:
+      metric:
+        # OpenShift prometheus-adapter extracts raw metric names natively
+        name: "inference_extension_flow_control_queue_size"
+      target:
+        type: Value
+        value: "250"
+  - type: External
+    external:
+      metric:
+        name: "inference_objective_running_requests"
+      target:
+        type: AverageValue
+        averageValue: "250"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      # Wait 4 mins before scaling down to avoid flapping
+      stabilizationWindowSeconds: 240 
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15

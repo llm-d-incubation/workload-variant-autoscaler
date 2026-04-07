@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,15 +138,15 @@ func expectAnalyzerPathLog(mode, modelID string) {
 func createSaturationThresholdTriggerJob(name, namespace, targetService, modelID string, targetPort int, numRequests int, maxTokens int) *batchv1.Job {
 	backoffLimit := int32(1)
 	env := []corev1.EnvVar{
-		{Name: "NUM_REQUESTS", Value: fmt.Sprintf("%d", numRequests)},
+		{Name: "NUM_REQUESTS", Value: strconv.Itoa(numRequests)},
 		{Name: "TARGET_SERVICE", Value: targetService},
-		{Name: "TARGET_PORT", Value: fmt.Sprintf("%d", targetPort)},
+		{Name: "TARGET_PORT", Value: strconv.Itoa(targetPort)},
 		{Name: "MODEL_ID", Value: modelID},
-		{Name: "MAX_TOKENS", Value: fmt.Sprintf("%d", maxTokens)},
-		{Name: "MAX_RETRIES", Value: fmt.Sprintf("%d", saturationTriggerServicePreflightTries)},
-		{Name: "RETRY_DELAY", Value: fmt.Sprintf("%d", saturationTriggerServicePreflightDelay)},
-		{Name: "PREFLIGHT_TIMEOUT", Value: fmt.Sprintf("%d", saturationTriggerPreflightTimeoutSec)},
-		{Name: "REQUEST_TIMEOUT", Value: fmt.Sprintf("%d", saturationTriggerRequestTimeoutSec)},
+		{Name: "MAX_TOKENS", Value: strconv.Itoa(maxTokens)},
+		{Name: "MAX_RETRIES", Value: strconv.Itoa(saturationTriggerServicePreflightTries)},
+		{Name: "RETRY_DELAY", Value: strconv.Itoa(saturationTriggerServicePreflightDelay)},
+		{Name: "PREFLIGHT_TIMEOUT", Value: strconv.Itoa(saturationTriggerPreflightTimeoutSec)},
+		{Name: "REQUEST_TIMEOUT", Value: strconv.Itoa(saturationTriggerRequestTimeoutSec)},
 	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -205,7 +206,7 @@ func runThresholdTriggerJob(ctx context.Context, namespace, targetService, model
 		created, getErr := k8sClient.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
 		if errors.IsNotFound(getErr) {
 			pods, listErr := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+				LabelSelector: "job-name=" + jobName,
 			})
 			g.Expect(listErr).NotTo(HaveOccurred())
 			if len(pods.Items) == 0 {
@@ -249,7 +250,7 @@ func runThresholdTriggerJob(ctx context.Context, namespace, targetService, model
 		}
 
 		pods, listErr := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+			LabelSelector: "job-name=" + jobName,
 		})
 		g.Expect(listErr).NotTo(HaveOccurred())
 		for _, pod := range pods.Items {

@@ -40,7 +40,8 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 			logger.Error(err, "Failed to parse saturation scaling config entry", "key", key)
 			continue
 		}
-		// Validate
+		// Apply defaults before validation (handles omitempty zero-values like scaleUpThreshold)
+		satConfig.ApplyDefaults()
 		if err := satConfig.Validate(); err != nil {
 			logger.Error(err, "Invalid saturation scaling config entry", "key", key)
 			continue
@@ -94,7 +95,7 @@ func isNamespaceConfigEnabled(ctx context.Context, c client.Reader, namespace st
 	}
 
 	value, exists := labels[constants.NamespaceConfigEnabledLabelKey]
-	return exists && value == "true"
+	return exists && value == constants.AnnotationValueTrue
 }
 
 // isNamespaceExcluded checks if a namespace has the exclude annotation.
@@ -119,5 +120,5 @@ func isNamespaceExcluded(ctx context.Context, c client.Reader, namespace string)
 	}
 
 	value, exists := annotations[constants.NamespaceExcludeAnnotationKey]
-	return exists && value == "true"
+	return exists && value == constants.AnnotationValueTrue
 }

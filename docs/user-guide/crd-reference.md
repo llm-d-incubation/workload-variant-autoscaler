@@ -44,7 +44,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `lastRunTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#time-v1-meta)_ | LastRunTime is the timestamp of the last optimization run. |  |  |
-| `accelerator` _string_ | Accelerator is the type of accelerator for the optimized allocation. |  | MinLength: 2 <br /> |
+| `accelerator` _string_ | Accelerator is the type of accelerator for the optimized allocation. This field is deprecated and will be removed in a future version. Use node selector or node affinity from scale target instead. |  | |
 | `numReplicas` _integer_ | NumReplicas is the number of replicas for the optimized allocation.<br />nil means no optimization decision has been made yet. |  | Minimum: 0 <br /> |
 
 

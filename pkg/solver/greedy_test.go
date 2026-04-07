@@ -1417,7 +1417,7 @@ func TestBestEffort(t *testing.T) {
 		server2.RemoveAllocation()
 		server3.RemoveAllocation()
 
-		var allEntries []*serverEntry
+		allEntries := make([]*serverEntry, 0, 3)
 
 		// Create entries for different servers with different priorities
 		for i, server := range []*core.Server{server1, server2, server3} {

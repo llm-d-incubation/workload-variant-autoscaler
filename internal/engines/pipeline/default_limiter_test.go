@@ -206,7 +206,7 @@ var _ = Describe("DefaultLimiter", func() {
 				err := limiter.Limit(ctx, decisions)
 				Expect(err).NotTo(HaveOccurred())
 
-				Expect(len(decisions[0].DecisionSteps)).To(BeNumerically(">=", 1))
+				Expect(decisions[0].DecisionSteps).ToNot(BeEmpty())
 				lastStep := decisions[0].DecisionSteps[len(decisions[0].DecisionSteps)-1]
 				Expect(lastStep.Name).To(Equal("gpu-limiter"))
 			})

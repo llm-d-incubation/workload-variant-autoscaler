@@ -143,22 +143,22 @@ func EventFilter() predicate.Funcs {
 	}
 }
 
-// DeploymentPredicate returns a predicate that filters Deployment events.
-// It allows Create and Delete events for all Deployments to trigger VA reconciliation:
-// - Create: handles the race condition where VA is created before its target deployment
-// - Delete: allows VA to update status and clear metrics when target deployment is removed
-func DeploymentPredicate() predicate.Predicate {
+// ScaleTargetPredicate returns a predicate that filters Deployment/LeaderWorkerSet events.
+// It allows Create and Delete events for all Deployments/LeaderWorkerSet to trigger VA reconciliation:
+// - Create: handles the race condition where VA is created before its target deployment/leaderWorkerSet
+// - Delete: allows VA to update status and clear metrics when target deployment/leaderWorkerSet is removed
+func ScaleTargetPredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
-			// Allow all Deployment create events to trigger reconciliation
+			// Allow all Deployment/LeaderWorkerSet create events to trigger reconciliation
 			return true
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			return false
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
-			// Allow all Deployment delete events to trigger reconciliation
-			// so VAs can update their status when target deployment is removed
+			// Allow all Deployment/LeaderWorkerSet delete events to trigger reconciliation
+			// so VAs can update their status when target deployment/leaderWorkerSet is removed
 			return true
 		},
 		GenericFunc: func(e event.GenericEvent) bool {
@@ -215,7 +215,7 @@ func VariantAutoscalingPredicate(k8sClient client.Client, cfg *config.Config) pr
 			if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: namespace}, &ns); err == nil {
 				annotations := ns.GetAnnotations()
 				if annotations != nil {
-					if value, exists := annotations[constants.NamespaceExcludeAnnotationKey]; exists && value == "true" {
+					if value, exists := annotations[constants.NamespaceExcludeAnnotationKey]; exists && value == constants.AnnotationValueTrue {
 						// Namespace is excluded - filter out this VA
 						return false
 					}

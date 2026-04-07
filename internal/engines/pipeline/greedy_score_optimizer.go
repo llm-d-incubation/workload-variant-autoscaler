@@ -74,7 +74,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	o.fairShareScaleUp(ctx, scaleUpWork, available)
 
 	// Build all decisions
-	var allDecisions []interfaces.VariantDecision
+	allDecisions := make([]interfaces.VariantDecision, 0, len(scaleUpWork))
 
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)

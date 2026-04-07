@@ -5,10 +5,9 @@ import (
 	"fmt"
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -25,73 +24,71 @@ func NewActuator(k8sClient client.Client) *Actuator {
 	}
 }
 
-// GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
-func (a *Actuator) GetCurrentDeploymentReplicasFromVA(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
-	var deploy appsv1.Deployment
-	// Use ScaleTargetRef to get the deployment name
-	err := utils.GetDeploymentWithBackoff(ctx, a.Client, va.GetScaleTargetName(), va.Namespace, &deploy)
+// GetCurrentScaleTargetReplicasFromVA gets the real current replica count from the actual Deployment/LWS
+func (a *Actuator) GetCurrentScaleTargetReplicasFromVA(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling) (int32, error) {
+	// Use ScaleTargetRef to get the scale target name
+	scaleTarget, err := scaletarget.FetchScaleTarget(ctx, a.Client, va.Name, va.Spec.ScaleTargetRef.Kind, va.GetScaleTargetName(), va.Namespace)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get Deployment %s/%s: %w", va.Namespace, va.GetScaleTargetName(), err)
+		return 0, fmt.Errorf("failed to get scale target %s/%s: %w", va.Namespace, va.GetScaleTargetName(), err)
 	}
-
-	return a.GetCurrentDeploymentReplicasFromDeployment(va, &deploy)
+	return a.GetCurrentScaleTargetReplicasFromScaleTarget(va, scaleTarget)
 }
 
-// GetCurrentDeploymentReplicas gets the real current replica count from the actual Deployment
-func (a *Actuator) GetCurrentDeploymentReplicasFromDeployment(va *llmdOptv1alpha1.VariantAutoscaling, deployment *appsv1.Deployment) (int32, error) {
-	if deployment == nil {
-		return 0, fmt.Errorf("deployment cannot be nil for %s/%s", va.Namespace, va.GetScaleTargetName())
+// GetCurrentScaleTargetReplicasFromScaleTarget gets the real current replica count from the actual Deployment/LWS
+func (a *Actuator) GetCurrentScaleTargetReplicasFromScaleTarget(va *llmdOptv1alpha1.VariantAutoscaling, scaleTarget scaletarget.ScaleTargetAccessor) (int32, error) {
+	if scaleTarget == nil {
+		return 0, fmt.Errorf("scale target cannot be nil for %s/%s", va.Namespace, va.GetScaleTargetName())
 	}
 
 	// Prefer status replicas (actual current state)
-	if deployment.Status.Replicas >= 0 {
-		return deployment.Status.Replicas, nil
+	if scaleTarget.GetStatusReplicas() >= 0 {
+		return scaleTarget.GetStatusReplicas(), nil
 	}
 
 	// Fallback to spec if status not ready
-	if deployment.Spec.Replicas != nil {
-		return *deployment.Spec.Replicas, nil
+	if scaleTarget.GetReplicas() != nil {
+		return *scaleTarget.GetReplicas(), nil
 	}
 
 	// Final fallback
 	return 1, nil
 }
 
-func (a *Actuator) EmitMetrics(ctx context.Context, VariantAutoscaling *llmdOptv1alpha1.VariantAutoscaling) error {
+func (a *Actuator) EmitMetrics(ctx context.Context, variantAutoscaling *llmdOptv1alpha1.VariantAutoscaling) error {
 	logger := log.FromContext(ctx)
-	if VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas == nil {
+	if variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas == nil {
 		logger.Info("Skipping EmitReplicaMetrics - no optimization decision yet",
-			"variantName", VariantAutoscaling.Name)
+			"variantName", variantAutoscaling.Name)
 		return nil
 	}
 
-	desiredReplicas := *VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
+	desiredReplicas := *variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
 
-	// Get real current replicas from Deployment (not stale VariantAutoscaling status)
-	currentReplicas, err := a.GetCurrentDeploymentReplicasFromVA(ctx, VariantAutoscaling)
+	// Get real current replicas from Deployment (not stale variantAutoscaling status)
+	currentReplicas, err := a.GetCurrentScaleTargetReplicasFromVA(ctx, variantAutoscaling)
 	if err != nil {
-		logger.Error(err, "Could not get current deployment replicas, using VariantAutoscaling status",
-			"variantName", VariantAutoscaling.Name)
+		logger.Error(err, "Could not get current scale target replicas, using variantAutoscaling status",
+			"variantName", variantAutoscaling.Name)
 		currentReplicas = 0 // Fallback to 0 since CurrentAlloc is removed
 	}
 
 	if err := a.MetricsEmitter.EmitReplicaMetrics(
 		ctx,
-		VariantAutoscaling,
+		variantAutoscaling,
 		currentReplicas,
 		desiredReplicas, // Inferno's optimization target
-		VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
+		variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
 	); err != nil {
 		logger.Error(err, "Failed to emit optimization signals for variantAutoscaling",
-			"variantName", VariantAutoscaling.Name)
+			"variantName", variantAutoscaling.Name)
 		// Don't fail the reconciliation for metric emission errors
 		// Metrics are critical for HPA, but emission failures shouldn't break core functionality
 		return nil
 	}
 	logger.Info("EmitReplicaMetrics completed",
-		"variantName", VariantAutoscaling.Name,
+		"variantName", variantAutoscaling.Name,
 		"currentReplicas", currentReplicas,
 		"desiredReplicas", desiredReplicas,
-		"accelerator", VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
+		"accelerator", variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
 	return nil
 }

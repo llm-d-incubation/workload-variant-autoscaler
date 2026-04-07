@@ -34,7 +34,8 @@ import (
 )
 
 var (
-	errPoolNotSynced = errors.New("EndpointPool not found in datastore")
+	// ErrPoolNotSynced is returned when an EndpointPool is not found in the datastore
+	ErrPoolNotSynced = errors.New("EndpointPool not found in datastore")
 	errPoolIsNull    = errors.New("EndpointPool object is nil, does not exist")
 )
 
@@ -75,7 +76,7 @@ type Datastore interface {
 	PoolGet(name string) (*poolutil.EndpointPool, error)
 	PoolGetMetricsSource(name string) source.MetricsSource
 	PoolList() []*poolutil.EndpointPool
-	PoolGetFromLabels(labels map[string]string) (*poolutil.EndpointPool, error)
+	PoolGetFromLabels(namespace string, labels map[string]string) (*poolutil.EndpointPool, error)
 	PoolDelete(name string)
 
 	// Clears the store state, happens when the pool gets deleted.
@@ -117,68 +118,72 @@ func (ds *datastore) PoolSet(ctx context.Context, client client.Client, pool *po
 		return errPoolIsNull
 	}
 
-	if ds.registry.Get(pool.Name) == nil {
-		// Create pod source using the EPP metrics token read by getEPPMetricsToken()
-		// from the mounted token file at /var/run/secrets/epp-metrics/token. This token
-		// is mounted from the epp-metrics service account with minimal privileges and is
-		// used for authenticating with EPP pods when scraping metrics.
-		podConfig := pod.PodScrapingSourceConfig{
-			ServiceName:      pool.EndpointPicker.ServiceName,
-			ServiceNamespace: pool.EndpointPicker.Namespace,
-			MetricsPort:      pool.EndpointPicker.MetricsPortNumber,
-			BearerToken:      getEPPMetricsToken(),
-		}
+	namespacedName := pool.Namespace + "/" + pool.Name
 
-		podSource, err := pod.NewPodScrapingSource(ctx, client, podConfig)
-		if err != nil {
-			return err
-		}
-
-		// Register in registry
-		// TODO: We need to be able to update or delete a pod source object in the registry at internal/collector/source/registry.go
-		if err := ds.registry.Register(pool.Name, podSource); err != nil {
-			return err
-		}
+	// Create or update pod source using the EPP metrics token read by getEPPMetricsToken()
+	// from the mounted token file at /var/run/secrets/epp-metrics/token. This token
+	// is mounted from the epp-metrics service account with minimal privileges and is
+	// used for authenticating with EPP pods when scraping metrics.
+	podConfig := pod.PodScrapingSourceConfig{
+		ServiceName:      pool.EndpointPicker.ServiceName,
+		ServiceNamespace: pool.EndpointPicker.Namespace,
+		MetricsPort:      pool.EndpointPicker.MetricsPortNumber,
+		BearerToken:      getEPPMetricsToken(),
 	}
 
-	// Store in the datastore
-	ds.pools.Store(pool.Name, pool)
+	podSource, err := pod.NewPodScrapingSource(ctx, client, podConfig)
+	if err != nil {
+		return err
+	}
+
+	// Update or register in registry (idempotent operation)
+	if err := ds.registry.Update(namespacedName, podSource); err != nil {
+		return err
+	}
+
+	// Store in the datastore with namespace-scoped key
+	ds.pools.Store(pool.Namespace+"/"+pool.Name, pool)
 	return nil
 }
 
-func (ds *datastore) PoolGet(name string) (*poolutil.EndpointPool, error) {
+func (ds *datastore) PoolGet(namespacedName string) (*poolutil.EndpointPool, error) {
 
-	pool, exist := ds.pools.Load(name)
+	pool, exist := ds.pools.Load(namespacedName)
 	if !exist {
-		return nil, errPoolNotSynced
+		return nil, ErrPoolNotSynced
 	}
 
 	epp := pool.(*poolutil.EndpointPool)
 	return epp, nil
 }
 
-func (ds *datastore) PoolGetMetricsSource(name string) source.MetricsSource {
-	source := ds.registry.Get(name)
+func (ds *datastore) PoolGetMetricsSource(namespacedName string) source.MetricsSource {
+	source := ds.registry.Get(namespacedName)
 	return source
 }
 
-func (ds *datastore) PoolGetFromLabels(labels map[string]string) (*poolutil.EndpointPool, error) {
+func (ds *datastore) PoolGetFromLabels(namespace string, labels map[string]string) (*poolutil.EndpointPool, error) {
 	exist := false
 	var ep *poolutil.EndpointPool
 
 	ds.pools.Range(func(k, v any) bool {
 		ep = v.(*poolutil.EndpointPool)
 
+		// Filter by namespace first to avoid cross-namespace matches
+		if ep.Namespace != namespace {
+			return true // Continue iteration
+		}
+
 		found := poolutil.IsSubset(ep.Selector, labels)
 		if found {
 			exist = true
-			return false
+			return false // Stop iteration - found a match
 		}
 		return true
 	})
 
 	if !exist {
-		return nil, errPoolNotSynced
+		return nil, ErrPoolNotSynced
 	}
 	return ep, nil
 }
@@ -193,8 +198,12 @@ func (ds *datastore) PoolList() []*poolutil.EndpointPool {
 	return res
 }
 
-func (ds *datastore) PoolDelete(name string) {
-	ds.pools.Delete(name)
+func (ds *datastore) PoolDelete(namespacedName string) {
+	ds.pools.Delete(namespacedName)
+	// Clean up the metrics source from the registry
+	if err := ds.registry.Unregister(namespacedName); err != nil {
+		ctrl.Log.V(logging.DEBUG).Info("Failed to unregister metrics source", "namespacedName", namespacedName, "error", err)
+	}
 }
 
 func (ds *datastore) Clear() {

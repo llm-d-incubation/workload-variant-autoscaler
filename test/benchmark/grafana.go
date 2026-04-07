@@ -151,7 +151,7 @@ func (g *GrafanaClient) CreateSnapshot(scenarioStart time.Time) (*SnapshotResult
 
 	snapReq := snapshotRequest{
 		Dashboard: modifiedDash,
-		Name:      fmt.Sprintf("Benchmark %s", time.Now().UTC().Format("2006-01-02T15:04:05Z")),
+		Name:      "Benchmark " + time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		Expires:   0,
 	}
 	payload, err := json.Marshal(snapReq)
@@ -257,7 +257,7 @@ func (g *GrafanaClient) RenderAllPanels(from, to time.Time, outputDir string) ([
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
-	var rendered []string
+	rendered := make([]string, 0, len(benchmarkPanels))
 	var renderErrors []string
 
 	for _, p := range benchmarkPanels {

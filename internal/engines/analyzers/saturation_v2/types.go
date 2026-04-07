@@ -1,5 +1,8 @@
 package saturation_v2
 
+// learnedFromLive indicates a capacity record was derived from live metrics.
+const learnedFromLive = "live"
+
 // ReplicaCapacity holds the per-replica capacity breakdown computed by
 // the V2 saturation analyzer. It is internal to the analyzer and not
 // part of the public interfaces package.

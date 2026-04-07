@@ -599,7 +599,7 @@ func TestSolver_SolveUnlimited_MinValueSelection(t *testing.T) {
 	}
 
 	// Set different values and verify minimum is selected
-	var allocs []*core.Allocation
+	allocs := make([]*core.Allocation, 0, len(allocations))
 	for _, alloc := range allocations {
 		allocs = append(allocs, alloc)
 	}
@@ -614,11 +614,9 @@ func TestSolver_SolveUnlimited_MinValueSelection(t *testing.T) {
 	selectedAlloc := server.Allocation()
 	if selectedAlloc == nil {
 		t.Error("Expected server to have an allocation after SolveUnlimited")
-	} else {
+	} else if selectedAlloc.Value() > 50.0 {
 		// The allocation with minimum value should be selected
-		if selectedAlloc.Value() > 50.0 {
-			t.Errorf("Expected allocation with minimum value to be selected, got value %f", selectedAlloc.Value())
-		}
+		t.Errorf("Expected allocation with minimum value to be selected, got value %f", selectedAlloc.Value())
 	}
 }
 

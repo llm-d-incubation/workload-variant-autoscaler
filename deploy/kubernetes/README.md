@@ -118,7 +118,8 @@ export DEPLOY_PROMETHEUS=true         # Deploy kube-prometheus-stack
 export DEPLOY_WVA=true                # Deploy WVA controller
 export DEPLOY_LLM_D=true              # Deploy llm-d infrastructure
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-export DEPLOY_HPA=true                # Deploy HPA
+export DEPLOY_VA=true                 # Opt in: chart VariantAutoscaling (install.sh default: false)
+export DEPLOY_HPA=true                # Opt in: chart HPA (install.sh default: false)
 ```
 
 ## Usage Examples
@@ -127,6 +128,8 @@ export DEPLOY_HPA=true                # Deploy HPA
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
@@ -136,6 +139,8 @@ make deploy-wva-on-k8s
 export HF_TOKEN="hf_xxxxx"
 export BASE_NAME="my-inference"
 export MODEL_ID="meta-llama/Llama-2-7b-hf"
+export DEPLOY_VA=true
+export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
@@ -143,9 +148,10 @@ make deploy-wva-on-k8s
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-export HPA_STABILIZATION_SECONDS=30  # Fast scaling for testing
-export VLLM_MAX_NUM_SEQS=8          # Low batch size for easy saturation
 export E2E_TESTS_ENABLED=true
+export INFRA_ONLY=true
+export HPA_STABILIZATION_SECONDS=30  # Only if chart HPA enabled
+export VLLM_MAX_NUM_SEQS=8          # Low batch size for easy saturation
 make deploy-wva-on-k8s
 ```
 
@@ -157,6 +163,7 @@ export DEPLOY_LLM_D=false
 export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
 export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
+export DEPLOY_VA=true
 export DEPLOY_HPA=false
 make deploy-wva-on-k8s
 ```

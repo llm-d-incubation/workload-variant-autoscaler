@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strconv"
 
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -141,7 +142,7 @@ func CreateLlmdSimDeploymentWithGPU(namespace, deployName, modelName, appLabel, 
 
 	// Add GPU resource requests if specified
 	if gpusPerReplica > 0 {
-		gpuQty := resource.MustParse(fmt.Sprintf("%d", gpusPerReplica))
+		gpuQty := resource.MustParse(strconv.Itoa(gpusPerReplica))
 		container.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				gpuResourceName: gpuQty,

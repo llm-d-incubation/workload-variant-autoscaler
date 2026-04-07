@@ -967,10 +967,10 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					ModelID:   "model-1",
 					Namespace: "default",
 					Result: &interfaces.AnalyzerResult{
-						ModelID:          "model-1",
-						Namespace:        "default",
-						AnalyzedAt:       time.Now(),
-						SpareCapacity:    50000,
+						ModelID:       "model-1",
+						Namespace:     "default",
+						AnalyzedAt:    time.Now(),
+						SpareCapacity: 50000,
 						VariantCapacities: []interfaces.VariantCapacity{
 							{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
 							{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
@@ -998,10 +998,10 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					ModelID:   "model-1",
 					Namespace: "default",
 					Result: &interfaces.AnalyzerResult{
-						ModelID:          "model-1",
-						Namespace:        "default",
-						AnalyzedAt:       time.Now(),
-						SpareCapacity:    80000, // enough to remove all
+						ModelID:       "model-1",
+						Namespace:     "default",
+						AnalyzedAt:    time.Now(),
+						SpareCapacity: 80000, // enough to remove all
 						VariantCapacities: []interfaces.VariantCapacity{
 							{VariantName: "keep-alive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 							{VariantName: "expendable", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},

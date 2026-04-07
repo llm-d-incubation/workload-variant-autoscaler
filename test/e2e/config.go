@@ -10,7 +10,9 @@ type E2EConfig struct {
 	testconfig.SharedConfig
 
 	// Feature gates
-	ScaleToZeroEnabled bool // HPAScaleToZero feature gate
+	// ScaleToZeroEnabled: env SCALE_TO_ZERO_ENABLED — assume native HPA may use minReplicas=0
+	// ("scale-to-zero" via HPAScaleToZero). Distinct from scale-from-zero (scale up from zero replicas).
+	ScaleToZeroEnabled bool
 
 	// Timeouts (seconds unless noted)
 	PodReadyTimeout int // Wait for deployment/model pods ready
@@ -53,10 +55,10 @@ func LoadConfigFromEnv() E2EConfig {
 		PrometheusAdapterProbeSec: testconfig.GetEnvInt("E2E_PROM_ADAPTER_PROBE_SEC", 90),
 	}
 
-	// OpenShift clusters typically don't have the HPAScaleToZero feature gate
-	// enabled, so attempting to create HPAs with minReplicas=0 will fail with:
-	//   "spec.minReplicas: Invalid value: 0: must be greater than or equal to 1"
-	// Override the env var to prevent test failures on OpenShift.
+	// OpenShift clusters typically don't have the HPAScaleToZero feature gate enabled, so native HPAs
+	// cannot use minReplicas=0 ("scale-to-zero" on the HPA). Ignore SCALE_TO_ZERO_ENABLED there so e2e
+	// does not assume that path (creation fails with: minReplicas must be >= 1).
+	// Scale-from-zero (scaling workloads up from zero replicas) is separate; this block does not configure SCALER_BACKEND.
 	if cfg.Environment == "openshift" && cfg.ScaleToZeroEnabled {
 		cfg.ScaleToZeroEnabled = false
 	}

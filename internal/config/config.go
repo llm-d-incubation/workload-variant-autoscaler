@@ -19,7 +19,7 @@ type Config struct {
 	infrastructure infrastructureConfig
 	tls            tlsConfig
 	prometheus     prometheusConfig
-	//epp            eppConfig
+	// epp            eppConfig
 	features    featureFlagsConfig
 	saturation  saturationConfig  // namespace-aware
 	qmAnalyzer  qmAnalyzerConfig  // namespace-aware

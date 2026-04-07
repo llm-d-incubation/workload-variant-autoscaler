@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -44,7 +45,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -205,7 +206,7 @@ func generateTLSCertificates() error {
 }
 
 // createTLSCertificateSecret creates a Kubernetes secret for TLS certificates
-func createTLSCertificateSecret() error {
+func createTLSCertificateSecret() error { //nolint:unparam // error return kept for interface consistency
 	certFile := "hack/tls-certs/prometheus-cert.pem"
 	keyFile := "hack/tls-certs/prometheus-key.pem"
 
@@ -312,7 +313,7 @@ func CheckIfClusterExistsOrCreate(maxGPUs int, gpuType string) (string, error) {
 	// Create the kind cluster if it doesn't exist
 	expectedVersion := os.Getenv("K8S_EXPECTED_VERSION")
 	if !clusterExists {
-		scriptCmd := exec.Command("bash", "deploy/kind-emulator/setup.sh", "-g", fmt.Sprintf("%d", maxGPUs), "-t", gpuType, "K8S_VERSION="+expectedVersion)
+		scriptCmd := exec.Command("bash", "deploy/kind-emulator/setup.sh", "-g", strconv.Itoa(maxGPUs), "-t", gpuType, "K8S_VERSION="+expectedVersion)
 		if _, err := Run(scriptCmd); err != nil {
 			return "", fmt.Errorf("failed to create kind cluster: %v", err)
 		}
@@ -336,7 +337,7 @@ func checkKubernetesVersion(expectedVersion string) {
 	}
 
 	// Extract server version
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(output, "\n")
 	var serverVersion string
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Server Version: v") {
@@ -474,10 +475,10 @@ func startPortForwarding(service *corev1.Service, namespace string, localPort, s
 	}
 
 	portForwardCmd := exec.Command("kubectl", "port-forward",
-		fmt.Sprintf("service/%s", service.Name),
+		"service/"+service.Name,
 		fmt.Sprintf("%d:%d", localPort, servicePort), "-n", namespace)
 	err := portForwardCmd.Start()
-	gom.Expect(err).NotTo(gom.HaveOccurred(), fmt.Sprintf("Port-forward command should start successfully for service: %s", service.Name))
+	gom.Expect(err).NotTo(gom.HaveOccurred(), "Port-forward command should start successfully for service: "+service.Name)
 
 	// Check if the port-forward process is still running
 	gom.Eventually(func() error {
@@ -545,7 +546,7 @@ func CreateLoadGeneratorJob(namespace, targetURL, modelName string, rate, maxSec
 func WaitForJobPodRunning(ctx context.Context, job *batchv1.Job, k8sClient *kubernetes.Clientset, timeout time.Duration, w io.Writer) error {
 	return wait.PollUntilContextTimeout(ctx, 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		pods, err := k8sClient.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("job-name=%s", job.Name),
+			LabelSelector: "job-name=" + job.Name,
 		})
 		if err != nil {
 			_, _ = fmt.Fprintf(w, "Warning: failed to list pods for job %s: %v\n", job.Name, err)
@@ -656,7 +657,7 @@ func StopJob(namespace string, job *batchv1.Job, k8sClient *kubernetes.Clientset
 // StopCmd attempts to gracefully stop the provided command, handling early exits and timeouts.
 func StopCmd(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
-		return fmt.Errorf("command or process is nil")
+		return errors.New("command or process is nil")
 	}
 
 	// Check if process has already exited
@@ -754,7 +755,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any pods exist with the specified app label
 	podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing pods for label uniqueness: %v", err))
@@ -762,7 +763,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any deployments exist with the specified app label
 	deploymentList, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing deployments for label uniqueness: %v", err))
@@ -770,7 +771,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any services exist with the specified app label
 	serviceList, err := k8sClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing services for label uniqueness: %v", err))
@@ -788,25 +789,25 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	if len(podList.Items) > 0 {
 		for _, pod := range podList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Pod: %s", pod.Name))
+			conflicting = append(conflicting, "Pod: "+pod.Name)
 		}
 	}
 
 	if len(deploymentList.Items) > 0 {
 		for _, deployment := range deploymentList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Deployment: %s", deployment.Name))
+			conflicting = append(conflicting, "Deployment: "+deployment.Name)
 		}
 	}
 
 	if len(serviceList.Items) > 0 {
 		for _, service := range serviceList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Service: %s", service.Name))
+			conflicting = append(conflicting, "Service: "+service.Name)
 		}
 	}
 
 	if len(serviceMonitorList.Items) > 0 {
 		for _, serviceMonitor := range serviceMonitorList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("ServiceMonitor: %s", serviceMonitor.Name))
+			conflicting = append(conflicting, "ServiceMonitor: "+serviceMonitor.Name)
 		}
 	}
 
@@ -835,7 +836,7 @@ func ValidateVariantAutoscalingUniqueness(namespace, modelId, acc string, crClie
 		for _, va := range variantAutoscalingList.Items {
 			// check for same modelId
 			if va.Spec.ModelID == modelId {
-				conflicting = append(conflicting, fmt.Sprintf("VariantAutoscaling: %s", va.Name))
+				conflicting = append(conflicting, "VariantAutoscaling: "+va.Name)
 			}
 		}
 		// Fails if any conflicts are found
@@ -856,7 +857,7 @@ func LogVariantAutoscalingStatus(ctx context.Context, vaName, namespace string, 
 
 	replicas := "<nil>"
 	if nr := variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
-		replicas = fmt.Sprintf("%d", *nr)
+		replicas = strconv.Itoa(int(*nr))
 	}
 	_, err = fmt.Fprintf(writer, "Desired Optimized Allocation for VA: %s - Replicas: %s, Accelerator: %s\n",
 		variantAutoscaling.Name,
@@ -1062,7 +1063,7 @@ func extractValueFromResult(result model.Value) (float64, error) {
 	switch v := result.(type) {
 	case model.Vector:
 		if len(v) == 0 {
-			return 0, fmt.Errorf("no data returned from prometheus query")
+			return 0, errors.New("no data returned from prometheus query")
 		}
 		return float64(v[0].Value), nil
 	case *model.Scalar:
@@ -1149,13 +1150,13 @@ var namespaceRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 // validateNamespace checks if a namespace name is valid to prevent PromQL injection.
 func validateNamespace(namespace string) error {
 	if namespace == "" {
-		return fmt.Errorf("namespace cannot be empty")
+		return errors.New("namespace cannot be empty")
 	}
 	if len(namespace) > 63 {
 		return fmt.Errorf("namespace too long: %d characters (max 63)", len(namespace))
 	}
 	if !namespaceRegex.MatchString(namespace) {
-		return fmt.Errorf("invalid namespace name: must be lowercase alphanumeric with optional dashes")
+		return errors.New("invalid namespace name: must be lowercase alphanumeric with optional dashes")
 	}
 	return nil
 }
@@ -1236,8 +1237,8 @@ func SetupTestEnvironment(image string, numNodes, gpusPerNode int, gpuTypes stri
 	// Note: These use setEnvIfNotSet to allow CI workflow to override with different values
 	gom.Expect(os.Setenv("IMG", image)).To(gom.Succeed())
 	gom.Expect(os.Setenv("CLUSTER_NAME", clusterName)).To(gom.Succeed())
-	setEnvIfNotSet("CLUSTER_NODES", fmt.Sprintf("%d", numNodes))
-	setEnvIfNotSet("CLUSTER_GPUS", fmt.Sprintf("%d", gpusPerNode))
+	setEnvIfNotSet("CLUSTER_NODES", strconv.Itoa(numNodes))
+	setEnvIfNotSet("CLUSTER_GPUS", strconv.Itoa(gpusPerNode))
 	setEnvIfNotSet("CLUSTER_GPU_TYPE", gpuTypes)                                     // Use CLUSTER_GPU_TYPE to match Makefile
 	gom.Expect(os.Setenv("WVA_IMAGE_PULL_POLICY", "IfNotPresent")).To(gom.Succeed()) // The image is built locally by the tests
 	gom.Expect(os.Setenv("CREATE_CLUSTER", "true")).To(gom.Succeed())                // Always create a new cluster for E2E tests
@@ -1274,7 +1275,7 @@ func DeleteAllVariantAutoscalings(ctx context.Context, crClient client.Client, n
 	for i := range vaList.Items {
 		va := &vaList.Items[i]
 		if err := crClient.Delete(ctx, va); err != nil {
-			if errors.IsNotFound(err) {
+			if k8serrors.IsNotFound(err) {
 				continue // Already deleted
 			}
 			return deletedCount, fmt.Errorf("failed to delete VA %s: %w", va.Name, err)

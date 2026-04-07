@@ -62,3 +62,26 @@ func (r *SourceRegistry) List() []string {
 	}
 	return names
 }
+
+// Unregister removes a source from the registry.
+// This operation is idempotent - it succeeds even if the source is not registered.
+// This makes deletion paths clean and idempotent, especially useful for reconcile
+// retries and race conditions where PoolDelete may be called multiple times.
+func (r *SourceRegistry) Unregister(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Idempotent: no-op if source doesn't exist
+	delete(r.sources, name)
+	return nil
+}
+
+// Update replaces an existing source or registers a new one.
+// Unlike Register, this method does not return an error if the source already exists.
+func (r *SourceRegistry) Update(name string, source MetricsSource) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.sources[name] = source
+	return nil
+}

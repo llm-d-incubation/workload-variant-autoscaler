@@ -49,23 +49,18 @@ var _ = Describe("Saturation Engine", func() {
 		data := map[string]string{}
 
 		// Build premium.yaml with all models
-		premiumModels := ""
-		freemiumModels := ""
+		var premiumBuilder, freemiumBuilder strings.Builder
 
 		for _, model := range models {
-			premiumModels += fmt.Sprintf("  - model: %s\n    slo-tpot: 24\n    slo-ttft: 500\n", model)
-			freemiumModels += fmt.Sprintf("  - model: %s\n    slo-tpot: 200\n    slo-ttft: 2000\n", model)
+			fmt.Fprintf(&premiumBuilder, "  - model: %s\n    slo-tpot: 24\n    slo-ttft: 500\n", model)
+			fmt.Fprintf(&freemiumBuilder, "  - model: %s\n    slo-tpot: 200\n    slo-ttft: 2000\n", model)
 		}
+		premiumModels := premiumBuilder.String()
+		freemiumModels := freemiumBuilder.String()
 
-		data["premium.yaml"] = fmt.Sprintf(`name: Premium
-priority: 1
-data:
-%s`, premiumModels)
+		data["premium.yaml"] = "name: Premium\npriority: 1\ndata:\n" + premiumModels
 
-		data["freemium.yaml"] = fmt.Sprintf(`name: Freemium
-priority: 10
-data:
-%s`, freemiumModels)
+		data["freemium.yaml"] = "name: Freemium\npriority: 10\ndata:\n" + freemiumModels
 
 		return &v1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -93,7 +88,7 @@ data:
 
 			By("creating the required configmaps")
 			// Use custom configmap creation function
-			var modelNames []string
+			modelNames := make([]string, 0, totalVAs)
 			for i := range totalVAs {
 				modelNames = append(modelNames, fmt.Sprintf("model-%d-model-%d", i, i))
 			}
@@ -238,7 +233,7 @@ data:
 					if metricsCondition != nil && metricsCondition.Status == metav1.ConditionTrue {
 						optimizationCondition := llmdVariantAutoscalingV1alpha1.GetCondition(&va, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
 						Expect(optimizationCondition).NotTo(BeNil(),
-							fmt.Sprintf("OptimizationReady condition should be set for %s", va.Name))
+							"OptimizationReady condition should be set for "+va.Name)
 					}
 				}
 			}
@@ -283,7 +278,7 @@ data:
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
-			Expect(len(decisions)).To(Equal(3), "All 3 variants should have decisions including ActionNoChange")
+			Expect(decisions).To(HaveLen(3), "All 3 variants should have decisions including ActionNoChange")
 
 			By("Verifying ActionNoChange decisions are present")
 			decisionMap := make(map[string]interfaces.VariantDecision)
@@ -330,7 +325,7 @@ data:
 
 			By("creating the required configmaps")
 			// Use custom configmap creation function
-			var modelNames []string
+			modelNames := make([]string, 0, totalVAs)
 			for i := range totalVAs {
 				modelNames = append(modelNames, fmt.Sprintf("v2-model-%d-model-%d", i, i))
 			}

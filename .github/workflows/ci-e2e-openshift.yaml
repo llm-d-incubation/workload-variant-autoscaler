@@ -656,10 +656,14 @@ jobs:
           # may be owned by another namespace's release, causing Helm ownership conflicts.
           # Fix: adopt them for our namespace so helmfile can proceed. Post-cleanup will
           # delete them, and the next user's helmfile run will recreate them fresh.
+          # Only adopt legacy helmfile-style names (release "workload-variant-autoscaler").
+          # PR-specific Helm releases use names like wva-e2e-<run_id>; those live in WVA_NAMESPACE.
+          # Re-annotating them to LLMD_NAMESPACE breaks Helm ownership and can leave the controller
+          # ServiceAccount bound to a wrong or unmanaged ClusterRole (cluster-wide list/watch denied).
           echo "Adopting shared WVA cluster-scoped resources for namespace $LLMD_NAMESPACE..."
           for kind in clusterrole clusterrolebinding; do
             kubectl get "$kind" -o json 2>/dev/null | \
-              jq -r '.items[] | select(.metadata.name | contains("workload-variant-autoscaler")) | select(.metadata.annotations["meta.helm.sh/release-namespace"] != null) | .metadata.name' 2>/dev/null | \
+              jq -r '.items[] | select(.metadata.name | contains("workload-variant-autoscaler")) | select(.metadata.name | startswith("wva-e2e-") | not) | select(.metadata.annotations["meta.helm.sh/release-namespace"] != null) | .metadata.name' 2>/dev/null | \
               while read -r name; do
                 current_ns=$(kubectl get "$kind" "$name" -o json 2>/dev/null | jq -r '.metadata.annotations["meta.helm.sh/release-namespace"] // ""')
                 if [ "$current_ns" != "$LLMD_NAMESPACE" ]; then
@@ -688,6 +692,9 @@ jobs:
           ENVIRONMENT: openshift
           INSTALL_GATEWAY_CTRLPLANE: "false"
           E2E_TESTS_ENABLED: "true"
+          # OpenShift typically lacks HPAScaleToZero; e2e forces SCALE_TO_ZERO_ENABLED off for openshift
+          # (see test/e2e/config.go). KEDA ScaledObjects support minReplicas=0 for scale-from-zero tests.
+          SCALER_BACKEND: keda
           NAMESPACE_SCOPED: "false"
           # Pass PR-specific namespaces to install script
           LLMD_NS: ${{ env.LLMD_NAMESPACE }}
@@ -793,6 +800,7 @@ jobs:
           ENVIRONMENT: openshift
           INSTALL_GATEWAY_CTRLPLANE: "false"
           E2E_TESTS_ENABLED: "true"
+          SCALER_BACKEND: keda
           NAMESPACE_SCOPED: "false"
           # Override namespaces for Model B stack
           LLMD_NS: ${{ env.LLMD_NAMESPACE_B }}

@@ -32,6 +32,22 @@ func WithMaxReplicas(max int32) VAOption {
 	}
 }
 
+// WithScaleTargetKind sets the Kind and APIVersion fields on the ScaleTargetRef.
+func WithScaleTargetKind(kind string) VAOption {
+	return func(va *variantautoscalingv1alpha1.VariantAutoscaling) {
+		va.Spec.ScaleTargetRef.Kind = kind
+		// Set appropriate APIVersion based on kind
+		switch kind {
+		case "LeaderWorkerSet":
+			va.Spec.ScaleTargetRef.APIVersion = "leaderworkerset.x-k8s.io/v1"
+		case "Deployment":
+			va.Spec.ScaleTargetRef.APIVersion = "apps/v1"
+		default:
+			// Keep existing APIVersion for unknown kinds
+		}
+	}
+}
+
 // CreateVariantAutoscaling creates a VariantAutoscaling resource. Fails if it already exists.
 func CreateVariantAutoscaling(
 	ctx context.Context,

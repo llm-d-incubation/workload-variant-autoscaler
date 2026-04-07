@@ -4,9 +4,7 @@ import (
 	"math"
 )
 
-/**
- * Parameters
- */
+// Parameters
 
 // Tolerated percentile for SLOs
 var SLOPercentile = 0.95

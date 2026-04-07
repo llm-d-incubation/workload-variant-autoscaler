@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -142,7 +143,7 @@ func (i *TypeInventory) Name() string {
 // Returns an error if usage discovery is not configured (use Refresh + SetUsed instead).
 func (i *TypeInventory) RefreshAll(ctx context.Context) error {
 	if i.usageDiscovery == nil {
-		return fmt.Errorf("usage discovery not configured; use SetUsed() or NewTypeInventoryWithUsage()")
+		return errors.New("usage discovery not configured; use SetUsed() or NewTypeInventoryWithUsage()")
 	}
 
 	// Refresh limits first

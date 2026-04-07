@@ -64,7 +64,7 @@ func (e *Engine) optimizeQueueingModel(
 			data.replicaMetrics, qConfig, data.variantStates)
 		if err != nil {
 			logger.Error(err, "Queueing model analysis failed", "modelID", modelID)
-			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.deployments)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			continue
 		}
 

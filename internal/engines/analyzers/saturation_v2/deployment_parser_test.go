@@ -4,6 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -13,19 +14,19 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("Argument formats", func() {
 		It("should parse hyphen format (--gpu-memory-utilization=0.85)", func() {
 			deploy := makeTestDeployment("--gpu-memory-utilization=0.85")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
 		})
 
 		It("should parse underscore format (--gpu_memory_utilization=0.85)", func() {
 			deploy := makeTestDeployment("--gpu_memory_utilization=0.85")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
 		})
 
 		It("should parse space-separated format (--gpu-memory-utilization 0.85)", func() {
 			deploy := makeTestDeployment("--gpu-memory-utilization", "0.85")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
 		})
 	})
@@ -46,7 +47,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 					},
 				},
 			}
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
 			Expect(params.MaxNumSeqs).To(Equal(int64(128)))
 		})
@@ -55,7 +56,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("Default values", func() {
 		It("should return vLLM defaults when no args are provided", func() {
 			deploy := makeTestDeployment() // no args
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 
 			Expect(params.GpuMemoryUtilization).To(Equal(0.9))
 			Expect(params.BlockSize).To(Equal(int64(16)))
@@ -84,7 +85,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 				"--max-num-seqs=128",
 				"--max-model-len=8192",
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
 			Expect(params.BlockSize).To(Equal(int64(32)))
@@ -100,7 +101,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("Boolean flag detection", func() {
 		It("should detect --enforce-eager as a boolean flag", func() {
 			deploy := makeTestDeployment("--enforce-eager", "--gpu-memory-utilization=0.85")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 
 			Expect(params.EnforceEager).To(BeTrue())
 			Expect(params.GpuMemoryUtilization).To(Equal(0.85))
@@ -110,7 +111,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("NumGpuBlocksOverride", func() {
 		It("should parse --num-gpu-blocks-override", func() {
 			deploy := makeTestDeployment("--num-gpu-blocks-override=5000")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.NumGpuBlocksOverride).To(Equal(int64(5000)))
 		})
 	})
@@ -118,7 +119,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("V1 engine detection", func() {
 		It("should default to V1 engine when no VLLM_USE_V1 env var is set", func() {
 			deploy := makeTestDeployment()
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.IsV1Engine).To(BeTrue())
 			Expect(params.ChunkedPrefillEnabled).To(BeTrue())
 		})
@@ -127,7 +128,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 			deploy := makeDeploymentWithEnv(
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "1"}},
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.IsV1Engine).To(BeTrue())
 			Expect(params.ChunkedPrefillEnabled).To(BeTrue())
 		})
@@ -136,7 +137,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 			deploy := makeDeploymentWithEnv(
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "0"}},
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.IsV1Engine).To(BeFalse())
 			Expect(params.ChunkedPrefillEnabled).To(BeFalse())
 		})
@@ -146,7 +147,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "0"}},
 				"--enable-chunked-prefill",
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.IsV1Engine).To(BeFalse())
 			Expect(params.ChunkedPrefillEnabled).To(BeTrue())
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(2048)))
@@ -156,13 +157,13 @@ var _ = Describe("ParseVLLMArgs", func() {
 	Describe("EffectiveMaxBatchedTokens resolution", func() {
 		It("should use explicit --max-num-batched-tokens when set", func() {
 			deploy := makeTestDeployment("--max-num-batched-tokens=4096")
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(4096)))
 		})
 
 		It("should default to 8192 for V1 engine chunked prefill", func() {
 			deploy := makeTestDeployment() // V1 default → chunked
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(8192)))
 		})
 
@@ -171,7 +172,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "0"}},
 				"--enable-chunked-prefill",
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(2048)))
 		})
 
@@ -180,7 +181,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "0"}},
 				"--max-model-len=8192",
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.ChunkedPrefillEnabled).To(BeFalse())
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(8192)))
 		})
@@ -190,7 +191,7 @@ var _ = Describe("ParseVLLMArgs", func() {
 				[]corev1.EnvVar{{Name: "VLLM_USE_V1", Value: "0"}},
 				"--max-model-len=1024",
 			)
-			params := ParseVLLMArgs(deploy)
+			params := ParseVLLMArgs(scaletarget.NewDeploymentAccessor(deploy))
 			Expect(params.EffectiveMaxBatchedTokens).To(Equal(int64(2048)))
 		})
 	})

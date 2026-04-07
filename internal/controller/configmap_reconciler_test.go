@@ -46,7 +46,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 
 	BeforeEach(func() {
 		setup := setupConfigMapReconcilerTest("workload-variant-autoscaler-system", "test-namespace")
-		ctx = setup.ctx
+		ctx = setup.ctx //nolint:fatcontext // shared across BeforeEach/It blocks
 		cfg = setup.cfg
 		ds = setup.ds
 		reconciler = setup.reconciler

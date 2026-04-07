@@ -18,6 +18,7 @@ If a test needs **high traffic**, long “wait and see” timing, or performance
 2. **Infrastructure Separation**: Tests require "infra-only" deployment (WVA controller + llm-d infrastructure)
 3. **Dynamic Resource Management**: Each test creates VA, HPA, and model services as part of the test workflow
 4. **Tiered Testing**: Smoke tests for quick validation, full suite for comprehensive coverage
+5. **Serialize If Needed**: Since the scope is **deterministic correctness**, if there are tests that should be run serially then make them as such, and make sure the environment is clean in each `BeforeAll`. Running tests such as for Deployment, LWS with 1 leader+1 worker, LWS with 1 leader+0 worker in parallel pointing to the same model can have issues with conflicting resources and can be hard to track.
 
 ## Prerequisites
 
@@ -227,7 +228,7 @@ ginkgo -v --label-filter="smoke" ./test/e2e/
 
 **Tests:**
 1. **Scale-From-Zero** (~7 min)
-   - Requires EPP flow control enabled so the metric `inference_extension_flow_control_queue_size` is populated (InferenceObjective is not required for this metric). When deploying infra with `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the install script enables flow control on the EPP and optionally applies an InferenceObjective for e2e.
+   - Requires EPP flow control (`E2E_TESTS_ENABLED=true` or `ENABLE_SCALE_TO_ZERO=true` patches EPP). The scale-from-zero spec applies **InferenceObjective** `e2e-default` via `test/e2e/fixtures` when the CRD exists (install.sh no longer applies it for e2e).
    - Create HPA (or KEDA ScaledObject) with minReplicas=0
    - Verify deployment scales to 0 when idle
    - Generate first request, verify scale-up from 0 → 1

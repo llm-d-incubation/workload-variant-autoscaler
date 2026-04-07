@@ -2,6 +2,7 @@ package solver
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,7 +24,7 @@ func NewOptimizerFromSpec(spec *config.OptimizerSpec) *Optimizer {
 
 func (o *Optimizer) Optimize() error {
 	if o.spec == nil {
-		return fmt.Errorf("missing optimizer spec")
+		return errors.New("missing optimizer spec")
 	}
 	o.solver = NewSolver(o.spec)
 

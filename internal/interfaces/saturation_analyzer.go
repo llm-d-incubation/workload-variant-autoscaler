@@ -8,6 +8,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// SaturationAnalyzerName is the canonical name for the saturation analyzer.
+const SaturationAnalyzerName = "saturation"
+
+// RoleBoth represents the default role when a variant serves both prefill and decode.
+const RoleBoth = "both"
+
 // ReplicaMetrics holds per-replica metrics used by both the saturation analyzer
 // and the queueing model analyzer. Saturation analysis uses KV cache, queue, and
 // token-capacity fields, while the queueing model analyzer uses

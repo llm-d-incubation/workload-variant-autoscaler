@@ -2,6 +2,7 @@ package queueingmodel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -701,7 +702,7 @@ func buildEnvironmentsFromMetrics(
 func guessInitState(env *tuner.Environment) ([]float64, error) {
 	// Validate environment
 	if env == nil || !env.Valid() {
-		return nil, fmt.Errorf("invalid environment for guessing initial state")
+		return nil, errors.New("invalid environment for guessing initial state")
 	}
 
 	// Extract observed metrics

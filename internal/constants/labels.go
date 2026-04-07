@@ -26,3 +26,6 @@ const (
 	// This provides explicit control to exclude namespaces from WVA management.
 	NamespaceExcludeAnnotationKey = "wva.llmd.ai/exclude"
 )
+
+// AnnotationValueTrue is the canonical string value for boolean annotations and labels.
+const AnnotationValueTrue = "true"

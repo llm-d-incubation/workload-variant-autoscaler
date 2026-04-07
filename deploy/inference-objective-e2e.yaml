@@ -1,5 +1,5 @@
-# InferenceObjective for GIE queuing (scale-from-zero e2e and flow control).
-# Applied when E2E_TESTS_ENABLED or ENABLE_SCALE_TO_ZERO is true.
+# InferenceObjective for GIE queuing (scale-from-zero flow control).
+# install.sh applies this when ENABLE_SCALE_TO_ZERO=true and not E2E (e2e applies e2e-default from Go).
 # poolRef.name is templated by install.sh to match the deployed InferencePool.
 apiVersion: inference.networking.x-k8s.io/v1alpha2
 kind: InferenceObjective

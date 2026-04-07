@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	goflag "flag"
 	"fmt"
 	"net/http"
@@ -30,10 +31,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/go-logr/logr"
 	flag "github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
@@ -48,6 +52,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
@@ -63,7 +68,8 @@ import (
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	inferencePoolV1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	inferencePoolV1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
-	//+kubebuilder:scaffold:imports
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -76,7 +82,42 @@ func init() {
 	utilruntime.Must(promoperator.AddToScheme(scheme))
 	utilruntime.Must(inferencePoolV1.Install(scheme))
 	utilruntime.Must(inferencePoolV1alpha2.Install(scheme))
-	//+kubebuilder:scaffold:scheme
+	// Note: LeaderWorkerSet scheme is added conditionally in main() after checking if CRD exists
+	// +kubebuilder:scaffold:scheme
+}
+
+// checkLeaderWorkerSetCRD checks if the LeaderWorkerSet CRD is installed in the cluster
+// TODO: this is checked once at start up for now. We should handle LWS installed after controller starts.
+func checkLeaderWorkerSetCRD(restConfig *rest.Config, logger logr.Logger) bool {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		logger.Error(err, "failed to create discovery client for CRD detection - assuming LWS not installed")
+		return false
+	}
+
+	// Check if leaderworkersets.leaderworkerset.x-k8s.io CRD exists
+	_, apiLists, err := discoveryClient.ServerGroupsAndResources()
+	if err != nil {
+		// Partial errors are common (e.g., unavailable API services), so check if we got any results
+		if apiLists == nil {
+			logger.Error(err, "failed to discover API resources - assuming LWS not installed")
+			return false
+		}
+		// Log but continue with partial results
+		logger.V(1).Info("partial error discovering API resources (this is usually fine)", "error", err)
+	}
+
+	for _, apiList := range apiLists {
+		if apiList.GroupVersion == constants.LeaderWorkerSetAPIVersion {
+			for _, resource := range apiList.APIResources {
+				if resource.Kind == constants.LeaderWorkerSetKind {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // nolint:gocyclo
@@ -149,9 +190,22 @@ func main() {
 	cfg, err := config.Load(flag.CommandLine, *configFilePath)
 	if err != nil {
 		setupLog.Error(err, "failed to load configuration - this is a fatal error")
-		os.Exit(1)
+		logging.Sync() //nolint:errcheck
+		os.Exit(1)     //nolint:gocritic // exitAfterDefer: Sync() called explicitly above
 	}
 	setupLog.Info("Configuration loaded successfully")
+
+	// Conditionally add LeaderWorkerSet scheme if CRD exists
+	lwsEnabled := checkLeaderWorkerSetCRD(restConfig, setupLog)
+	if lwsEnabled {
+		if err := lwsv1.AddToScheme(scheme); err != nil {
+			setupLog.Error(err, "failed to add LeaderWorkerSet scheme")
+			os.Exit(1)
+		}
+		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
+	} else {
+		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -425,13 +479,14 @@ func main() {
 	}
 
 	// Create the reconciler with unified Config and datastore
-	reconciler := &controller.VariantAutoscalingReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
-		Config:    cfg, // Pass unified Config to reconciler
-		Datastore: ds,  // Pass datastore for namespace tracking
-	}
+	reconciler := controller.NewVariantAutoscalingReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
+		cfg,
+		ds,
+		lwsEnabled,
+	)
 
 	// Setup the controller with the manager
 	if err = reconciler.SetupWithManager(mgr); err != nil {
@@ -491,7 +546,7 @@ func main() {
 		if syncErr != "" {
 			return fmt.Errorf("initial ConfigMap bootstrap not complete: %s", syncErr)
 		}
-		return fmt.Errorf("initial ConfigMap bootstrap not complete")
+		return errors.New("initial ConfigMap bootstrap not complete")
 	}); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

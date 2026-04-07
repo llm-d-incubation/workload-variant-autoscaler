@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -74,7 +75,7 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 // Ensures HTTPS is used and certificate files exist when verification is enabled.
 func ValidateTLSConfig(cfg *config.Config) error {
 	if cfg == nil {
-		return fmt.Errorf("config is nil")
+		return errors.New("config is nil")
 	}
 
 	baseURL := cfg.PrometheusBaseURL()

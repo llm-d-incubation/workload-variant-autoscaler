@@ -115,13 +115,14 @@ func (r *ConfigMapReconciler) handleConfigMapDeletion(ctx context.Context, name,
 	}
 
 	// Remove namespace-local config on deletion
-	if name == config.SaturationConfigMapName() {
+	switch name {
+	case config.SaturationConfigMapName():
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local saturation config on ConfigMap deletion", "namespace", namespace)
-	} else if name == config.DefaultScaleToZeroConfigMapName {
+	case config.DefaultScaleToZeroConfigMapName:
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local scale-to-zero config on ConfigMap deletion", "namespace", namespace)
-	} else if name == config.QMAnalyzerConfigMapName() {
+	case config.QMAnalyzerConfigMapName():
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local queueing model config on ConfigMap deletion", "namespace", namespace)
 	}

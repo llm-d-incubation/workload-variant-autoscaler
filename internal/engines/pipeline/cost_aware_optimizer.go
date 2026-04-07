@@ -106,7 +106,7 @@ func costAwareScaleUp(
 			}
 		}
 
-		targets[vc.VariantName] = targets[vc.VariantName] + replicasNeeded
+		targets[vc.VariantName] += replicasNeeded
 		remaining -= float64(replicasNeeded) * vc.PerReplicaCapacity
 
 		logger.V(logging.DEBUG).Info("Scale-up allocation",

@@ -19,7 +19,6 @@ package utils
 import (
 	"context"
 
-	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,10 +27,11 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // VariantFilter is a function that determines if a VA should be included.
-type VariantFilter func(deploy *appsv1.Deployment) bool
+type VariantFilter func(scaletarget.ScaleTargetAccessor) bool
 
 // ActiveVariantAutoscalingByModel retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
@@ -77,32 +77,31 @@ func GroupVariantAutoscalingByModel(
 // ActiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
 // Returns a slice of deep-copied VariantAutoscaling objects.
-// It also returns a map of deployments keyed by "namespace/deploymentName".
-func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
-	return filterVariantsByDeployment(ctx, client, isActive, "active")
+// It also returns a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
+func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
+	return filterVariantsByScaleTargetAccessor(ctx, client, isActive, "active")
 }
 
 // InactiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have no target replicas.
 // Returns a slice of deep-copied VariantAutoscaling objects.
-// It also returns a map of deployments keyed by "namespace/deploymentName".
-func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
-	return filterVariantsByDeployment(ctx, client, isInactive, "inactive")
+// It also returns a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
+func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
+	return filterVariantsByScaleTargetAccessor(ctx, client, isInactive, "inactive")
 }
 
-// filterVariantsByDeployment is a generic function to filter VAs based on deployment state.
-// Returns filtered VAs and a map of deployments keyed by "namespace/deploymentName".
-func filterVariantsByDeployment(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, map[string]*appsv1.Deployment, error) {
+// filterVariantsByScaleTargetAccessors is a generic function to filter VAs based on scaleTarget state.
+// Returns filtered VAs and a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
+func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
 	readyVAs, err := readyVariantAutoscalings(ctx, client)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	filteredVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(readyVAs))
-	deployments := make(map[string]*appsv1.Deployment)
+	scaleTargetAccessors := make(map[string]scaletarget.ScaleTargetAccessor)
 
 	for _, va := range readyVAs {
-
 		// Check if the context is done
 		select {
 		case <-ctx.Done():
@@ -119,45 +118,44 @@ func filterVariantsByDeployment(ctx context.Context, client client.Client, filte
 			continue
 		}
 
-		// TODO: Generalize to other scale target kinds in future
-		deployName := va.Spec.ScaleTargetRef.Name
-		var deploy appsv1.Deployment
-		if err := GetDeploymentWithBackoff(ctx, client, deployName, va.Namespace, &deploy); err != nil {
+		scaleTargetName := va.Spec.ScaleTargetRef.Name
+		var scaleTargetAccessor scaletarget.ScaleTargetAccessor
+		if scaleTargetAccessor, err = scaletarget.FetchScaleTarget(ctx, client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err != nil {
 			if apierrors.IsNotFound(err) {
-				// Deployment doesn't exist yet, this is expected for VAs without corresponding deployments
-				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Deployment not found for VariantAutoscaling, skipping",
+				// Deployment/LWS doesn't exist yet, this is expected for VAs without corresponding scale targets
+				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Scale target not found for VariantAutoscaling, skipping",
 					"namespace", va.Namespace,
-					"deploymentName", deployName,
+					"scaleTargetName", scaleTargetName,
 					"vaName", va.Name)
 			} else {
 				// Unexpected error (permissions, network issues, etc.)
-				ctrl.LoggerFrom(ctx).Error(err, "Failed to get deployment",
+				ctrl.LoggerFrom(ctx).Error(err, "Failed to get scale target",
 					"namespace", va.Namespace,
-					"deploymentName", deployName,
+					"scaleTargetName", scaleTargetName,
 					"vaName", va.Name)
 			}
 			continue
 		}
 
-		// Skip deleted deployments
-		if !deploy.DeletionTimestamp.IsZero() {
-			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Skipping deleted deployment", "namespace", va.Namespace, "deploymentName", deployName)
+		// Skip deleted scaleTargetAccessor
+		if scaleTargetAccessor.GetDeletionTimestamp() != nil && !scaleTargetAccessor.GetDeletionTimestamp().IsZero() {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Skipping deleted scale target", "namespace", va.Namespace, "scaleTargetName", scaleTargetName)
 			continue
 		}
 
 		// Apply the filter function
-		if filter(&deploy) {
+		if filter(scaleTargetAccessor) {
 			filteredVAs = append(filteredVAs, va)
-			// Store deployment in map using namespace/deploymentName as key
-			deployKey := GetNamespacedKey(va.Namespace, deployName)
-			deployments[deployKey] = &deploy
+			// Store scaleTargetAccessor in map using namespace/scaleTargetName as key
+			key := GetNamespacedKey(va.Namespace, scaleTargetName)
+			scaleTargetAccessors[key] = scaleTargetAccessor
 		}
 	}
 	ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Found filtered VariantAutoscaling resources",
 		"filterType", filterName,
 		"count", len(filteredVAs))
 
-	return filteredVAs, deployments, nil
+	return filteredVAs, scaleTargetAccessors, nil
 }
 
 // readyVariantAutoscalings retrieves all VariantAutoscaling resources that are ready for optimization
@@ -201,21 +199,21 @@ func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) ([]w
 }
 
 // isActive explicitly requires that replicas > 0
-func isActive(deploy *appsv1.Deployment) bool {
-	return GetDesiredReplicas(deploy) > 0
+func isActive(scaleTargetAccessor scaletarget.ScaleTargetAccessor) bool {
+	return GetDesiredReplicas(scaleTargetAccessor) > 0
 }
 
 // isInactive explicitly requires that replicas == 0
-func isInactive(deploy *appsv1.Deployment) bool {
-	return GetDesiredReplicas(deploy) == 0
+func isInactive(scaleTargetAccessor scaletarget.ScaleTargetAccessor) bool {
+	return GetDesiredReplicas(scaleTargetAccessor) == 0
 }
 
 // Helper function makes behavior explicit
-func GetDesiredReplicas(deploy *appsv1.Deployment) int32 {
-	if deploy == nil || deploy.Spec.Replicas == nil {
+func GetDesiredReplicas(scaleTargetAccessor scaletarget.ScaleTargetAccessor) int32 {
+	if scaleTargetAccessor.GetReplicas() == nil {
 		return 1 // Kubernetes default
 	}
-	return *deploy.Spec.Replicas
+	return *scaleTargetAccessor.GetReplicas()
 }
 
 // GetNamespacedKey is a helper for building namespaced resource keys.

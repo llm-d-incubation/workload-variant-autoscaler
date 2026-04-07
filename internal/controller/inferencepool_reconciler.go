@@ -60,7 +60,7 @@ func (c *InferencePoolReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := c.Get(ctx, req.NamespacedName, obj); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("InferencePool not found. Removing pool from datastore")
-			c.Datastore.PoolDelete(req.Name)
+			c.Datastore.PoolDelete(req.Namespace + "/" + req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("unable to get InferencePool - %w", err)
@@ -69,7 +69,7 @@ func (c *InferencePoolReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// 3. Perform common checks using the client.Object interface.
 	if !obj.GetDeletionTimestamp().IsZero() {
 		logger.Info("InferencePool is marked for deletion. Removing pool from datastore")
-		c.Datastore.PoolDelete(obj.GetName()) // remove the pool from the datastore
+		c.Datastore.PoolDelete(obj.GetNamespace() + "/" + obj.GetName()) // remove the pool from the datastore
 		return ctrl.Result{}, nil
 	}
 

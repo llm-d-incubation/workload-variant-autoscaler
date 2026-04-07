@@ -101,7 +101,7 @@ func SaturationConfigMapName() string {
 // QMAnalyzerConfigMapName returns the queueing model config ConfigMap name from environment variable or default.
 func QMAnalyzerConfigMapName() string {
 	if name := os.Getenv("QUEUEING_MODEL_CONFIG_MAP_NAME"); name != "" {
-		return name //TODO: check setting QUEUEING_MODEL_CONFIG_MAP_NAME
+		return name // TODO: check setting QUEUEING_MODEL_CONFIG_MAP_NAME
 	}
 	return DefaultQMAnalyzerConfigMapName
 }

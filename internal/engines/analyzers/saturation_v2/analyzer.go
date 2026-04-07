@@ -99,7 +99,7 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		// Track active roles for queue demand attribution
 		role := vc.Role
 		if role == "" {
-			role = "both"
+			role = interfaces.RoleBoth
 		}
 		activeRoles[role] = true
 	}
@@ -159,7 +159,12 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	gpuCount int,
 ) *ReplicaCapacity {
 	if rm.TotalKvCapacityTokens <= 0 {
-		return nil
+		// TODO: implement proper demand estimation when vllm:cache_config_info is absent.
+		// Currently we fall back to percentage-based demand using the deployment-derived
+		// capacity from the capacity store. A better approach would be to estimate
+		// TotalKvCapacityTokens from deployment args (num_gpu_blocks_override, block_size)
+		// or use a dedicated percentage-based demand signal.
+		return a.computeReplicaCapacityFallback(rm, config, modelID, namespace)
 	}
 
 	// Compute demand
@@ -206,7 +211,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
 		EffectiveCapacity:     effectiveCapacity,
 		VLLMParams:            existingParams,
-		LearnedFrom:           "live",
+		LearnedFrom:           learnedFromLive,
 	})
 
 	return &ReplicaCapacity{
@@ -217,6 +222,55 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
 		MemoryBoundCapacity:   k1,
 		ComputeBoundCapacity:  k2,
+		EffectiveCapacity:     effectiveCapacity,
+		IsSaturated:           isSaturated,
+		ReplicaDemand:         replicaDemand,
+	}
+}
+
+// computeReplicaCapacityFallback handles the case where vllm:cache_config_info
+// is not available (TotalKvCapacityTokens == 0). It uses the deployment-derived
+// capacity from the capacity store and estimates demand from KvCacheUsage percentage.
+// This allows V2 to work with model servers that don't emit cache_config_info
+// (e.g., the llm-d-inference-sim).
+func (a *SaturationAnalyzer) computeReplicaCapacityFallback(
+	rm interfaces.ReplicaMetrics,
+	cfg *config.SaturationScalingConfig,
+	modelID, namespace string,
+) *ReplicaCapacity {
+	rec := a.capacityStore.Get(namespace, modelID, rm.VariantName)
+	if rec == nil || rec.EffectiveCapacity <= 0 {
+		return nil
+	}
+
+	// Apply KvCacheThreshold to match the main path (where k1 = totalTokens * threshold).
+	// For deployment-derived records, EffectiveCapacity is the raw estimate; the threshold
+	// reduces it to the usable portion, consistent with the normal code path.
+	effectiveCapacity := int64(float64(rec.EffectiveCapacity) * cfg.KvCacheThreshold)
+	if effectiveCapacity <= 0 {
+		return nil
+	}
+
+	// Estimate demand from KV cache usage percentage applied to the thresholded capacity.
+	// This is a coarse approximation — KvCacheUsage reflects memory pressure, not
+	// exact token demand — but it's sufficient when token-level metrics are absent.
+	replicaDemand := int64(rm.KvCacheUsage * float64(effectiveCapacity))
+
+	// Add queue-based demand if we have average input token info
+	if rm.AvgInputTokens > 0 {
+		replicaDemand += int64(rm.QueueLength) * int64(rm.AvgInputTokens)
+	}
+
+	isSaturated := replicaDemand >= effectiveCapacity
+
+	return &ReplicaCapacity{
+		PodName:               rm.PodName,
+		VariantName:           rm.VariantName,
+		AcceleratorName:       rm.AcceleratorName,
+		TokensInUse:           replicaDemand,
+		TotalKvCapacityTokens: effectiveCapacity, // synthetic: store-derived
+		MemoryBoundCapacity:   effectiveCapacity,
+		ComputeBoundCapacity:  effectiveCapacity,
 		EffectiveCapacity:     effectiveCapacity,
 		IsSaturated:           isSaturated,
 		ReplicaDemand:         replicaDemand,
@@ -374,7 +428,7 @@ func (a *SaturationAnalyzer) aggregateByRole(
 	// Check if any variant has a non-"both" role
 	hasDisaggregation := false
 	for _, vc := range variantCapacities {
-		if vc.Role != "" && vc.Role != "both" {
+		if vc.Role != "" && vc.Role != interfaces.RoleBoth {
 			hasDisaggregation = true
 			break
 		}
@@ -393,7 +447,7 @@ func (a *SaturationAnalyzer) aggregateByRole(
 	for _, vc := range variantCapacities {
 		role := vc.Role
 		if role == "" {
-			role = "both"
+			role = interfaces.RoleBoth
 		}
 		ra, ok := roles[role]
 		if !ok {
@@ -457,7 +511,7 @@ func (a *SaturationAnalyzer) lookupCompatibleCapacity(namespace, modelID, varian
 }
 
 // estimateStoredCapacity returns a capacity estimate for a zero-replica variant
-// using its stored CapacityRecord. For "live" records (from a previously running
+// using its stored CapacityRecord. For learnedFromLive records (from a previously running
 // pod), the stored EffectiveCapacity is authoritative. For "deployment" records,
 // it tries to compute a better estimate using the k2 derivation formula with
 // model-level workload averages, bounded by:
@@ -472,7 +526,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 	}
 
 	// Live records have observed capacity — use directly
-	if rec.LearnedFrom == "live" {
+	if rec.LearnedFrom == learnedFromLive {
 		return float64(rec.EffectiveCapacity)
 	}
 
@@ -490,7 +544,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 			}
 
 			// Bound by compatible variant's live EffectiveCapacity (already min(k1,k2))
-			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.VLLMParams); compatible != nil && compatible.LearnedFrom == "live" && compatible.EffectiveCapacity > 0 {
+			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.VLLMParams); compatible != nil && compatible.LearnedFrom == learnedFromLive && compatible.EffectiveCapacity > 0 {
 				if compatible.EffectiveCapacity < bounded {
 					bounded = compatible.EffectiveCapacity
 				}

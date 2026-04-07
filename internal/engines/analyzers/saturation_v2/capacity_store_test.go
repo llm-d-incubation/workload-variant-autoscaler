@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -60,10 +61,10 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 		})
 	})
 
-	Describe("LoadFromDeployment", func() {
+	Describe("LoadFromScaleTarget", func() {
 		It("should populate VLLMParams from deployment args", func() {
 			deploy := makeTestDeployment("--gpu-memory-utilization=0.85", "--max-num-batched-tokens=4096")
-			store.LoadFromDeployment("ns-1", "model-a", "variant-a100", "A100", 2, deploy)
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-a100", "A100", 2, scaletarget.NewDeploymentAccessor(deploy))
 
 			got := store.Get("ns-1", "model-a", "variant-a100")
 			Expect(got).NotTo(BeNil())
@@ -82,22 +83,22 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 			})
 
 			deploy := makeTestDeployment("--gpu-memory-utilization=0.85")
-			store.LoadFromDeployment("ns-1", "model-a", "variant-h100", "H100", 1, deploy)
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-h100", "H100", 1, scaletarget.NewDeploymentAccessor(deploy))
 
 			got := store.Get("ns-1", "model-a", "variant-h100")
 			Expect(got.LearnedFrom).To(Equal("live"))
 			Expect(got.TotalKvCapacityTokens).To(Equal(int64(16000)))
 		})
 
-		It("should handle nil deployment gracefully", func() {
-			store.LoadFromDeployment("ns-1", "model-a", "variant-h100", "H100", 1, nil)
+		It("should handle nil scale target gracefully", func() {
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-h100", "H100", 1, nil)
 			Expect(store.Get("ns-1", "model-a", "variant-h100")).To(BeNil())
 		})
 
 		It("should set conservative EffectiveCapacity from EffectiveMaxBatchedTokens", func() {
 			// Default vLLM V1 deployment (no overrides)
 			deploy := makeTestDeployment()
-			store.LoadFromDeployment("ns-1", "model-a", "variant-h100", "H100", 1, deploy)
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-h100", "H100", 1, scaletarget.NewDeploymentAccessor(deploy))
 
 			got := store.Get("ns-1", "model-a", "variant-h100")
 			Expect(got).NotTo(BeNil())
@@ -108,13 +109,13 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 
 		It("should use num_gpu_blocks_override for k1 without overriding EffectiveCapacity", func() {
 			deploy := makeTestDeployment("--num-gpu-blocks-override=5000", "--block-size=16")
-			store.LoadFromDeployment("ns-1", "model-a", "variant-h100", "H100", 1, deploy)
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-h100", "H100", 1, scaletarget.NewDeploymentAccessor(deploy))
 
 			got := store.Get("ns-1", "model-a", "variant-h100")
 			Expect(got).NotTo(BeNil())
 			Expect(got.TotalKvCapacityTokens).To(Equal(int64(80000))) // 5000 * 16
 			// EffectiveCapacity should NOT be overwritten since TotalKvCapacityTokens is set
-			// but LoadFromDeployment doesn't compute k1 from TotalKvCapacityTokens directly,
+			// but LoadFromScaleTarget doesn't compute k1 from TotalKvCapacityTokens directly,
 			// it only sets EffectiveCapacity from EffectiveMaxBatchedTokens as a fallback
 			// Since num_gpu_blocks_override doesn't set EffectiveCapacity,
 			// the fallback EffectiveMaxBatchedTokens (8192) is used

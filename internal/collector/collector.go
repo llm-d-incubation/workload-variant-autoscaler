@@ -14,7 +14,7 @@ package collector
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -33,7 +33,7 @@ type AcceleratorModelInfo = discovery.AcceleratorModelInfo
 func CollectInventoryK8S(ctx context.Context, r interface{}) (map[string]map[string]AcceleratorModelInfo, error) {
 	c, ok := r.(client.Client)
 	if !ok {
-		return nil, fmt.Errorf("invalid client type: expected client.Client")
+		return nil, errors.New("invalid client type: expected client.Client")
 	}
 
 	// Use the K8sWithGpuOperator discovery mechanism

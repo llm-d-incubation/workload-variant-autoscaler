@@ -59,10 +59,20 @@ llmd:
   namespace: llm-d-autoscaler
   modelName: ms-workload-autoscaler-llm-d-modelservice
   modelID: "Qwen/Qwen3-0.6B"
+
+  # scaleTargetKind: Optional. If not specified or empty, it will be set to "Deployment". 
+  # Valid values are "Deployment", "LeaderWorkerSet" - case sensitive.
+  #scaleTargetKind: "Deployment"
+  
+  # scaleTargetName: Name of the scale target resource.
+  # For "Deployment": name of the Deployment.
+  # For "LeaderWorkerSet": name of the LeaderWorkerSet.
+  #scaleTargetName: 
+  
 va:
   enabled: true
   # accelerator: Optional. If not specified, it will be auto-discovered
-  # from target deployment. If specified, it will be used as fall-back value if it can't 
+  # from scale target. If specified, it will be used as fall-back value if it can't 
   # be discovered.
   accelerator: H100
   sloTpot: 10

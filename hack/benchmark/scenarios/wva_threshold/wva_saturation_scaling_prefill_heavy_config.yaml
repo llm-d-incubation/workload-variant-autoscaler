@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workload-variant-autoscaler-wva-saturation-scaling-config
+  labels:
+    app.kubernetes.io/instance: workload-variant-autoscaler
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/managed-by: Helm
+data:
+  default: |
+    # Increased from 0.80. Prefill-heavy workloads don't incrementally grow 
+    # their KV cache footprint over a long time (unlike decode). This means 
+    # we can pack replicas tighter (e.g., up to 90%) without fear of 
+    # spontaneous preemption/swapping.
+    kvCacheThreshold: 0.90
+    
+    # Increased from 5. Prefills are compute-bound but clear relatively quickly. 
+    # Tolerating a longer queue allows vLLM to form larger, highly efficient 
+    # prefill batches, maximizing GPU utilization before forcing a scale-up.
+    queueLengthThreshold: 10
+    
+    # Lowered from 0.10. Since there's very little risk of ongoing requests 
+    # suddenly expanding their KV cache, we don't need a massive safety buffer. 
+    # A 5-10% buffer is plenty safe for scaling down.
+    kvSpareTrigger: 0.05
+    
+    # Lowered from 3. Because requests clear the system rapidly, we don't 
+    # need to keep a large number of empty queue slots "on reserve" to 
+    # absorb sudden bursts.
+    queueSpareTrigger: 2
