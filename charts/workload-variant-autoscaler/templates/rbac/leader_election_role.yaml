@@ -1,5 +1,7 @@
 {{- if .Values.controller.enabled }}
 # permissions to do leader election.
+# Leader election uses coordination.k8s.io/v1.Lease (default in controller-runtime v0.12+)
+# ConfigMap-based leader election permissions have been removed as they are no longer used.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -8,18 +10,6 @@ metadata:
   labels:
     {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
 rules:
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
 - apiGroups:
   - coordination.k8s.io
   resources:

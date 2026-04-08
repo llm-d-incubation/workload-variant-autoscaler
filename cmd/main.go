@@ -33,6 +33,7 @@ import (
 
 	"github.com/go-logr/logr"
 	flag "github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
@@ -41,6 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -65,6 +67,7 @@ import (
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	corev1 "k8s.io/api/core/v1"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	inferencePoolV1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	inferencePoolV1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
@@ -348,6 +351,28 @@ func main() {
 				watchNS: {},
 			},
 		}
+	} else {
+		// Multi-namespace mode: Use label selector to filter ConfigMaps in the cache
+		// This significantly reduces memory usage by only caching WVA-related configmaps
+		wvaConfigSelector := labels.SelectorFromSet(labels.Set{
+			"app.kubernetes.io/name":      "workload-variant-autoscaler",
+			"app.kubernetes.io/component": "configuration",
+		})
+
+		setupLog.Info("Configuring cache with label selector for ConfigMaps",
+			"labelSelector", wvaConfigSelector.String())
+
+		// Configure cache to only watch configmaps with the WVA labels
+		// Other resource types are cached normally without filtering
+		mgrOptions.Cache = cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {
+					// Empty map means cache all namespaces, but filter by label
+					Namespaces: map[string]cache.Config{},
+					Label:      wvaConfigSelector,
+				},
+			},
+		}
 	}
 
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
@@ -516,6 +541,42 @@ func main() {
 	if err = configMapReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create configmap controller")
 		os.Exit(1)
+	}
+
+	if watchNS == "" {
+		// only inspect for cluster-scoped. There should only be WVA specific configmaps shown.
+		// Add cache inspector runnable to log ConfigMaps after cache starts
+		err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			// Wait for cache to sync before inspecting
+			if !mgr.GetCache().WaitForCacheSync(ctx) {
+				return errors.New("failed to sync cache")
+			}
+
+			setupLog.Info("Cache synced, inspecting ConfigMaps in cache")
+
+			// Now the cache is started, list ConfigMaps from it
+			var configMaps corev1.ConfigMapList
+			if err := mgr.GetClient().List(ctx, &configMaps); err != nil {
+				setupLog.Error(err, "failed to list cached configmaps")
+			} else {
+				setupLog.Info("ConfigMaps in cache", "count", len(configMaps.Items))
+				for _, cm := range configMaps.Items {
+					setupLog.Info("Cached ConfigMap",
+						"namespace", cm.Namespace,
+						"name", cm.Name,
+						"labels", cm.Labels)
+				}
+			}
+
+			// Keep running until context is cancelled
+			<-ctx.Done()
+			return nil
+		}))
+
+		if err != nil {
+			// Log error and continue
+			setupLog.Error(err, "unable to add cache inspector to manager")
+		}
 	}
 
 	if metricsCertWatcher != nil {

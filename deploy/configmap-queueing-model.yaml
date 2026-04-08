@@ -16,6 +16,7 @@ metadata:
   namespace: workload-variant-autoscaler-system
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/component: configuration
     app.kubernetes.io/managed-by: kustomize
 data:
   # Global defaults applied to all models unless overridden.

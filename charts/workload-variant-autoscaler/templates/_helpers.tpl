@@ -65,3 +65,11 @@ Create the name of the service account to use
 {{- define "workload-variant-autoscaler.serviceAccountName" -}}
 {{- default (include "workload-variant-autoscaler.fullname" .) .Values.serviceAccount.name }}
 {{- end }}
+
+{{/*
+ConfigMap labels - includes component label for cache filtering
+*/}}
+{{- define "workload-variant-autoscaler.configMapLabels" -}}
+{{ include "workload-variant-autoscaler.labels" . }}
+app.kubernetes.io/component: configuration
+{{- end }}
