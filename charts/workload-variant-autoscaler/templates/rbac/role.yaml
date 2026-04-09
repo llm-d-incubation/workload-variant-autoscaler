@@ -12,13 +12,25 @@ rules:
   resources:
   - configmaps
   verbs:
-  - get
   - list
-  - update
   - watch
   # Note: This broad permission is required for namespace-local ConfigMap overrides.
   # The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config)
   # in its predicate logic, providing effective access control.
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  {{- if not .Values.wva.namespaceScoped }}
+  resourceNames:
+  - {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
+  - {{ include "workload-variant-autoscaler.fullname" . }}-wva-saturation-scaling-config
+  - wva-model-scale-to-zero-config
+  - wva-queueing-model-config
+{{- end }}
+  verbs:
+  - get
+  - update
 - apiGroups:
   - ""
   resources:
