@@ -1,12 +1,22 @@
 name: CI - Benchmark
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+    && format('Benchmark: {0} | {1} | {2}',
+        inputs.platform,
+        inputs.model_id || 'unsloth/Meta-Llama-3.1-8B',
+        github.ref_name)
+    || format('Benchmark: PR #{0} | {1}',
+        github.event.issue.number,
+        github.event.comment.body) }}
 
 concurrency:
   group: >-
     ${{
       github.event_name == 'issue_comment' &&
-      !contains(github.event.comment.body, '/benchmark kind')
+      !contains(github.event.comment.body, '/benchmark kind') &&
+      !contains(github.event.comment.body, '/benchmark openshift')
       && format('benchmark-isolated-{0}', github.run_id)
-      || format('benchmark-kind-{0}',
+      || format('benchmark-{0}',
            github.event.issue.number
            || github.run_id)
     }}
@@ -15,6 +25,19 @@ concurrency:
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform: kind or openshift'
+        required: true
+        default: 'kind'
+        type: choice
+        options: [kind, openshift]
+      model_id:
+        description: 'Model to benchmark (HuggingFace ID)'
+        required: false
+        default: 'unsloth/Meta-Llama-3.1-8B'
+        type: string
 
 jobs:
   gate:
@@ -24,6 +47,7 @@ jobs:
       pull-requests: write
     outputs:
       run_benchmark: ${{ steps.check.outputs.run_benchmark }}
+      platform: ${{ steps.check.outputs.platform }}
       pr_number: ${{ steps.check.outputs.pr_number }}
       pr_head_sha: ${{ steps.check.outputs.pr_head_sha }}
       pr_head_repo: ${{ steps.check.outputs.pr_head_repo }}
@@ -48,8 +72,34 @@ jobs:
               }
             }
 
-            if (context.eventName !== 'issue_comment') {
+            if (context.eventName !== 'issue_comment' && context.eventName !== 'workflow_dispatch') {
               core.setOutput('run_benchmark', 'false');
+              return;
+            }
+
+            if (context.eventName === 'workflow_dispatch') {
+              const platform = context.payload.inputs.platform;
+              const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              console.log(`Manual benchmark dispatch for ${platform}`);
+              
+              core.setOutput('run_benchmark', 'true');
+              core.setOutput('platform', platform);
+
+              // Try to find a PR for the current branch so we can post results
+              const branch = context.ref.replace('refs/heads/', '');
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: `${context.repo.owner}:${branch}`,
+                state: 'open',
+              });
+              if (prs.length > 0) {
+                core.setOutput('pr_number', prs[0].number.toString());
+                core.setOutput('pr_head_sha', prs[0].head.sha);
+                console.log(`Found open PR #${prs[0].number} for branch ${branch}`);
+              } else {
+                console.log(`No open PR found for branch ${branch}, skipping PR outputs`);
+              }
               return;
             }
 
@@ -62,7 +112,7 @@ jobs:
               return;
             }
 
-            const validCommands = ['/benchmark kind'];
+            const validCommands = ['/benchmark kind', '/benchmark openshift'];
             if (!validCommands.includes(comment)) {
               console.log(`Comment "${comment}" is not a valid benchmark command, skipping`);
               core.setOutput('run_benchmark', 'false');
@@ -97,22 +147,59 @@ jobs:
             });
 
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const platform = comment.includes('openshift') ? 'OpenShift' : 'Kind';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
-              body: `🚀 **Benchmark (Kind)** triggered by \`/benchmark kind\`\n\n[View the benchmark workflow run](${runUrl})`
+              body: `🚀 **Benchmark (${platform})** triggered by \`${comment}\`\n\n[View the benchmark workflow run](${runUrl})`
             });
 
             core.setOutput('run_benchmark', 'true');
+            core.setOutput('platform', platform.toLowerCase());
             core.setOutput('pr_number', issue.number.toString());
             core.setOutput('pr_head_sha', pr.head.sha);
             core.setOutput('pr_head_repo', headRepo);
 
+  build-image:
+    needs: gate
+    if: needs.gate.outputs.run_benchmark == 'true' && (needs.gate.outputs.platform == 'openshift' || github.event.inputs.platform == 'openshift')
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.CR_USER }}
+          password: ${{ secrets.CR_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ghcr.io
+          IMAGE_NAME: ${{ github.repository }}
+          GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
+        run: |
+          IMAGE_TAG="bench-$(printf '%s' "$GIT_REF" | cut -c1-8)"
+          FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "Building image: $FULL_IMAGE"
+          
+          make docker-build IMG="$FULL_IMAGE"
+          make docker-push IMG="$FULL_IMAGE"
+          
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
   benchmark-kind:
     runs-on: ubuntu-latest
     needs: [gate]
-    if: needs.gate.outputs.run_benchmark == 'true'
+    if: needs.gate.outputs.run_benchmark == 'true' && (needs.gate.outputs.platform == 'kind' || github.event.inputs.platform == 'kind')
     timeout-minutes: 45
     permissions:
       contents: write
@@ -121,6 +208,7 @@ jobs:
       actions: read
     steps:
       - name: Set pending status on PR head
+        if: github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
@@ -135,6 +223,7 @@ jobs:
             });
 
       - name: Validate PR head SHA
+        if: github.event_name == 'issue_comment'
         run: |
           if [ -z "${{ needs.gate.outputs.pr_head_sha }}" ]; then
             echo "::error::pr_head_sha is empty — refusing to fall back to main"
@@ -146,7 +235,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.gate.outputs.pr_head_repo || github.repository }}
-          ref: ${{ needs.gate.outputs.pr_head_sha }}
+          ref: ${{ needs.gate.outputs.pr_head_sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Go version from go.mod
@@ -198,8 +287,8 @@ jobs:
           E2E_TESTS_ENABLED: "true"
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
+          KV_SPARE_TRIGGER: "0.1"
+          QUEUE_SPARE_TRIGGER: "3"
           INSTALL_GRAFANA: "true"
         run: make deploy-e2e-infra
 
@@ -213,8 +302,8 @@ jobs:
           BENCHMARK_GRAFANA_SNAPSHOT_FILE: /tmp/benchmark-grafana-snapshot.txt
           BENCHMARK_GRAFANA_SNAPSHOT_JSON: /tmp/benchmark-grafana-snapshot.json
           BENCHMARK_GRAFANA_PANEL_DIR: /tmp/benchmark-panels
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
+          KV_SPARE_TRIGGER: "0.1"
+          QUEUE_SPARE_TRIGGER: "3"
         run: make test-benchmark
 
       - name: Upload benchmark results
@@ -224,13 +313,14 @@ jobs:
           name: benchmark-results
           path: |
             /tmp/benchmark-results.json
+            /tmp/prefill-benchmark-results.json
             /tmp/benchmark-grafana-snapshot.txt
             /tmp/benchmark-grafana-snapshot.json
             /tmp/benchmark-panels/
           if-no-files-found: warn
 
       - name: Post benchmark results as PR comment
-        if: always()
+        if: always() && github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
@@ -361,9 +451,749 @@ jobs:
         if: always()
         run: kind delete cluster --name kind-wva-gpu-cluster || true
 
+  benchmark-openshift:
+    runs-on: [self-hosted, openshift, vllm-d]
+    needs: [gate, build-image]
+    if: needs.gate.outputs.run_benchmark == 'true' && (needs.gate.outputs.platform == 'openshift' || github.event.inputs.platform == 'openshift')
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      statuses: write
+      pull-requests: write
+      actions: read
+    env:
+      MODEL_ID: ${{ inputs.model_id || 'unsloth/Meta-Llama-3.1-8B' }}
+      ACCELERATOR_TYPE: 'H100'
+      GOTOOLCHAIN: auto
+      LLMD_NAMESPACE: llm-d-benchmark-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
+      WVA_NAMESPACE: wva-benchmark-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
+      WVA_RELEASE_NAME: wva-bench-${{ github.run_id }}
+      WVA_IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
+    steps:
+      - name: Set pending status on PR head
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.gate.outputs.pr_head_sha }}',
+              state: 'pending',
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Benchmark running on OpenShift...',
+              context: '${{ github.workflow }} / benchmark-openshift'
+            });
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.gate.outputs.pr_head_repo || github.repository }}
+          ref: ${{ needs.gate.outputs.pr_head_sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: ./go.sum
+
+      - name: Install tools (kubectl, oc, helm, make)
+        run: |
+          sudo apt-get update && sudo apt-get install -y make
+          KUBECTL_VERSION="v1.31.0"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          curl -fsSL --retry 3 --retry-delay 5 -O "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
+          tar -xzf openshift-client-linux.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f openshift-client-linux.tar.gz kubectl README.md
+          curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Verify cluster access
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Get HF token from cluster secret
+        id: hf-token
+        run: |
+          HF_TOKEN=$(kubectl get secret llm-d-hf-token -n default -o jsonpath='{.data.HF_TOKEN}' | base64 -d)
+          echo "::add-mask::$HF_TOKEN"
+          echo "HF_TOKEN=$HF_TOKEN" >> $GITHUB_ENV
+
+      - name: Clean up resources for this PR
+        run: |
+          for ns in "$LLMD_NAMESPACE" "$WVA_NAMESPACE"; do
+            if kubectl get namespace "$ns" &>/dev/null; then
+              kubectl delete hpa -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
+              kubectl delete variantautoscaling -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
+              for release in $(helm list -n "$ns" -q 2>/dev/null); do
+                helm uninstall "$release" -n "$ns" --ignore-not-found --wait --timeout 60s || true
+              done
+              kubectl delete namespace "$ns" --ignore-not-found --timeout=60s || true
+            fi
+          done
+
+      - name: Apply latest CRDs
+        run: kubectl apply -f charts/workload-variant-autoscaler/crds/
+
+      - name: Deploy WVA and llm-d infrastructure
+        env:
+          ENVIRONMENT: openshift
+          INSTALL_GATEWAY_CTRLPLANE: "false"
+          E2E_TESTS_ENABLED: "true"
+          NAMESPACE_SCOPED: "false"
+          LLMD_NS: ${{ env.LLMD_NAMESPACE }}
+          WVA_NS: ${{ env.WVA_NAMESPACE }}
+          CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
+          DEPLOY_VA: "false"
+          DEPLOY_HPA: "false"
+          DECODE_REPLICAS: "1"
+          MONITORING_NAMESPACE: openshift-user-workload-monitoring
+          WVA_METRICS_SECURE: "false"
+          KV_CACHE_THRESHOLD: "0.90"
+          QUEUE_LENGTH_THRESHOLD: "10"
+          KV_SPARE_TRIGGER: "0.05"
+          QUEUE_SPARE_TRIGGER: "2"
+          VLLM_SVC_PORT: "8000"
+          VLLM_MAX_NUM_SEQS: "1024"
+          VLLM_GPU_MEM_UTIL: "0.95"
+          VLLM_MAX_MODEL_LEN: "16000"
+          VLLM_BLOCK_SIZE: "64"
+          VLLM_ENFORCE_EAGER: "true"
+          INSTALL_GRAFANA: "true"
+        run: |
+          ./deploy/install.sh --model "$MODEL_ID" --accelerator "$ACCELERATOR_TYPE" --release-name "$WVA_RELEASE_NAME" --environment openshift
+
+      - name: Label namespaces for OpenShift monitoring
+        run: |
+          kubectl label namespace "$LLMD_NAMESPACE" openshift.io/user-monitoring=true --overwrite
+          kubectl label namespace "$WVA_NAMESPACE" openshift.io/user-monitoring=true --overwrite
+
+      - name: Wait for infrastructure to be ready
+        run: |
+          kubectl rollout status deployment -l app.kubernetes.io/name=workload-variant-autoscaler -n "$WVA_NAMESPACE" --timeout=300s || true
+          kubectl rollout status deployment/ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE" --timeout=1500s || true
+          echo "--- Services in openshift-user-workload-monitoring ---"
+          kubectl get svc -n openshift-user-workload-monitoring
+          echo "--- Services in openshift-monitoring ---"
+          kubectl get svc -n openshift-monitoring
+
+      - name: Run benchmark
+        env:
+          ENVIRONMENT: openshift
+          USE_SIMULATOR: "false"
+          SCALER_BACKEND: prometheus-adapter
+          CONTROLLER_NAMESPACE: ${{ env.WVA_NAMESPACE }}
+          E2E_MONITORING_NAMESPACE: openshift-user-workload-monitoring
+          E2E_EMULATED_LLMD_NAMESPACE: ${{ env.LLMD_NAMESPACE }}
+          CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
+          BENCHMARK_RESULTS_FILE: /tmp/benchmark-results.json
+          BENCHMARK_GRAFANA_ENABLED: "true"
+          BENCHMARK_GRAFANA_SNAPSHOT_FILE: /tmp/benchmark-grafana-snapshot.txt
+          BENCHMARK_GRAFANA_SNAPSHOT_JSON: /tmp/benchmark-grafana-snapshot.json
+          BENCHMARK_GRAFANA_PANEL_DIR: /tmp/benchmark-panels
+          KV_CACHE_THRESHOLD: "0.90"
+          QUEUE_LENGTH_THRESHOLD: "10"
+          KV_SPARE_TRIGGER: "0.05"
+          QUEUE_SPARE_TRIGGER: "2"
+        run: |
+          # Get token for Thanos querier
+          export PROMETHEUS_TOKEN=$(kubectl create token prometheus-k8s -n openshift-monitoring --duration=24h 2>/dev/null || echo "")
+
+          # Start APIService guard: KEDA on this cluster continuously reclaims the
+          # external.metrics.k8s.io APIService. This background loop re-patches it
+          # every 8 seconds so the HPA can read wva_desired_replicas during the benchmark.
+          # Key fix: caBundle must be set to null because KEDA sets it, and Kubernetes
+          # rejects insecureSkipTLSVerify=true when caBundle is present.
+          MONITORING_NS="openshift-user-workload-monitoring"
+          (
+            while true; do
+              sleep 8
+              current_svc=$(kubectl get apiservice v1beta1.external.metrics.k8s.io -o jsonpath='{.spec.service.name}' 2>/dev/null)
+              current_ns=$(kubectl get apiservice v1beta1.external.metrics.k8s.io -o jsonpath='{.spec.service.namespace}' 2>/dev/null)
+              if [ "$current_svc" != "prometheus-adapter" ] || [ "$current_ns" != "$MONITORING_NS" ]; then
+                echo "[apiservice-guard] KEDA reclaimed (now: $current_svc/$current_ns), re-patching..."
+                kubectl patch apiservice v1beta1.external.metrics.k8s.io --type=merge -p "{
+                  \"spec\": {
+                    \"caBundle\": null,
+                    \"insecureSkipTLSVerify\": true,
+                    \"service\": {
+                      \"name\": \"prometheus-adapter\",
+                      \"namespace\": \"$MONITORING_NS\"
+                    }
+                  }
+                }" 2>&1 || true
+              fi
+            done
+          ) &
+          GUARD_PID=$!
+          echo "APIService guard started (PID=$GUARD_PID)"
+
+          # Give guard time to do initial patch if needed
+          sleep 12
+          echo "Checking external metrics API..."
+          kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1" | head -1 && echo "External metrics API: OK" || echo "WARNING: External metrics API not available"
+
+          TEST_EXIT=0
+          make test-benchmark || TEST_EXIT=$?
+
+          kill $GUARD_PID 2>/dev/null || true
+          exit $TEST_EXIT
+
+      - name: Generate benchmark plots
+        if: always()
+        run: |
+          echo "Installing matplotlib and numpy..."
+          if python3 -m venv /tmp/plot-venv 2>&1; then
+            /tmp/plot-venv/bin/pip install --quiet matplotlib numpy 2>&1
+            PYTHON=/tmp/plot-venv/bin/python3
+          else
+            echo "venv failed, using PIP_BREAK_SYSTEM_PACKAGES fallback..."
+            curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+            PIP_BREAK_SYSTEM_PACKAGES=1 python3 /tmp/get-pip.py --user 2>&1
+            PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user matplotlib numpy 2>&1
+            PYTHON=python3
+          fi
+          $PYTHON - <<'PLOTEOF'
+          import json, os, sys
+          try:
+              import matplotlib
+              matplotlib.use('Agg')
+              import matplotlib.pyplot as plt
+              import matplotlib.ticker as ticker
+              import numpy as np
+          except ImportError:
+              print("matplotlib not available, skipping plot generation")
+              sys.exit(0)
+
+          PANEL_DIR = '/tmp/benchmark-panels'
+          PREFILL_FILE = '/tmp/prefill-benchmark-results.json'
+          os.makedirs(PANEL_DIR, exist_ok=True)
+
+          if not os.path.exists(PREFILL_FILE):
+              print("No prefill results found, skipping plots")
+              sys.exit(0)
+
+          with open(PREFILL_FILE) as f:
+              results = json.load(f)
+
+          if not isinstance(results, list) or len(results) == 0:
+              print("No prefill results found")
+              sys.exit(0)
+
+          plt.rcParams.update({
+              'figure.facecolor': 'white', 'axes.facecolor': '#f8f9fa',
+              'axes.grid': True, 'grid.alpha': 0.3, 'font.size': 12,
+              'axes.titlesize': 14, 'axes.labelsize': 12, 'figure.dpi': 150,
+          })
+          WVA_C = '#2ecc71'
+          EMPTY_METRIC = {'mean': 0, 'count': 0, 'percentiles': {k: 0 for k in ['p05','p10','p25','p50','p75','p90','p95','p99']}}
+
+          def m(data, key):
+              v = data.get(key)
+              if isinstance(v, dict):
+                  if 'percentiles' not in v:
+                      v['percentiles'] = EMPTY_METRIC['percentiles']
+                  return v
+              return EMPTY_METRIC
+
+          from matplotlib.backends.backend_pdf import PdfPages
+
+          model_id = os.environ.get('MODEL_ID', 'unknown')
+          model_short = model_id.split('/')[-1]
+
+          for data in results:
+              atype = data.get('autoscaler_type', 'WVA')
+              color = WVA_C
+
+              tp_obj = m(data, 'throughput')
+              ttft_obj = m(data, 'ttft')
+              itl_obj = m(data, 'itl')
+              tp_mean = tp_obj.get('mean', 0)
+              ttft_mean = ttft_obj.get('mean', 0)
+              ttft_p50 = ttft_obj.get('percentiles', {}).get('p50', 0)
+              ttft_p99 = ttft_obj.get('percentiles', {}).get('p99', 0)
+              itl_mean = itl_obj.get('mean', 0)
+              itl_p50 = itl_obj.get('percentiles', {}).get('p50', 0)
+              itl_p99 = itl_obj.get('percentiles', {}).get('p99', 0)
+              completed = ttft_obj.get('count', 0)
+              error_count = data.get('error_count', 0)
+              incomplete_count = data.get('incomplete_count', 0)
+              achieved_rps = data.get('achieved_rps', 0)
+              error_rps = error_count / max(data.get('duration_sec', 1), 1)
+
+              # --- Generate standalone PNG charts ---
+              mt = data.get('metrics_timeline', [])
+              tl = data.get('replica_timeline', [])
+
+              if mt and tl:
+                  times_m = [s['elapsed_sec'] for s in mt]
+                  kv = [s['kv_cache']*100 for s in mt]
+                  qd = [s['queue_depth'] for s in mt]
+                  epp = [s.get('epp_queue_depth', 0) for s in mt]
+                  times_r = [s['elapsed_sec'] for s in tl]
+                  ready = [s['ready_replicas'] for s in tl]
+
+                  fig, ax = plt.subplots(figsize=(14, 5))
+                  ax.step(times_r, ready, where='post', color=color, linewidth=2.5, label='Ready Replicas')
+                  ax.fill_between(times_r, ready, step='post', alpha=0.15, color=color)
+                  ax.set_title(f'Replica Count Over Time (Unified Prefill+Decode) — {model_short}', fontsize=14, fontweight='bold')
+                  ax.set_xlabel('Time (seconds)'); ax.set_ylabel('Replicas')
+                  ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+                  ax.legend(fontsize=11)
+                  fig.tight_layout()
+                  fig.savefig(os.path.join(PANEL_DIR, 'panel-prefill-replica-timeline.png'), bbox_inches='tight', dpi=150)
+                  plt.close()
+
+                  fig, (ax_kv, ax_qd, ax_epp) = plt.subplots(3, 1, figsize=(14, 11), sharex=True)
+                  fig.suptitle(f'Metrics Over Time (Unified Prefill+Decode) — {model_short}', fontsize=15, fontweight='bold')
+                  ax_kv.plot(times_m, kv, color=color, linewidth=2); ax_kv.fill_between(times_m, kv, alpha=0.15, color=color)
+                  ax_kv.set_ylabel('KV Cache (%)'); ax_kv.set_title('KV Cache Usage')
+                  ax_qd.plot(times_m, qd, color='#e67e22', linewidth=2); ax_qd.fill_between(times_m, qd, alpha=0.15, color='#e67e22')
+                  ax_qd.set_ylabel('Requests Waiting'); ax_qd.set_title('vLLM Requests Waiting')
+                  ax_epp.plot(times_m, epp, color='#3498db', linewidth=2); ax_epp.fill_between(times_m, epp, alpha=0.15, color='#3498db')
+                  ax_epp.set_ylabel('EPP Queue Size'); ax_epp.set_xlabel('Time (seconds)'); ax_epp.set_title('EPP Flow Control Queue')
+                  fig.tight_layout()
+                  fig.savefig(os.path.join(PANEL_DIR, 'panel-prefill-metrics-timeline.png'), bbox_inches='tight', dpi=150)
+                  plt.close()
+
+              print(f"Generated PNG charts in {PANEL_DIR}")
+              for f in sorted(os.listdir(PANEL_DIR)):
+                  if f.endswith('.png'):
+                      print(f"  {f}")
+
+              # --- Generate PDF report (colleague format, 3 pages) ---
+              pdf_path = os.path.join(PANEL_DIR, f'report_{atype.lower()}_{model_short}.pdf')
+              with PdfPages(pdf_path) as pdf:
+                  # ===== PAGE 1: Configuration & Results Summary =====
+                  fig, ax = plt.subplots(figsize=(11, 8.5))
+                  ax.axis('off')
+                  sep = '='*90
+                  dash = '-'*90
+                  lines = []
+
+                  va_cfg = data.get('va_config', 'N/A')
+                  hpa_cfg = data.get('hpa_config', 'N/A')
+                  data_model = data.get('model_id', model_id)
+
+                  lines.append(sep)
+                  lines.append(f'AUTOSCALER TYPE : Workload Variant Autoscaler (WVA)')
+                  lines.append(f'MODEL           : {data_model}')
+                  lines.append(sep)
+
+                  pods = data.get('pods', [])
+                  if pods:
+                      lines.append(f'{"Pod Name":<55} {"Node":<20} {"GPU":<25} {"Startup"}')
+                      lines.append(sep)
+                      for p in pods:
+                          startup = f'{p["startup_sec"]:.0f}s' if p['startup_sec'] > 0 else 'N/A'
+                          lines.append(f'{p["name"]:<55} {p["node"]:<20} {p["gpu"]:<25} {startup}')
+                      lines.append(sep)
+
+                  lines.append('EPP Configuration (Feature Gates & Scorer Weights)')
+                  lines.append(dash)
+                  lines.append('  featureGates: [flowControl]')
+                  lines.append('  queue-scorer: weight=2')
+                  lines.append('  kv-cache-utilization-scorer: weight=2')
+                  lines.append('  prefix-cache-scorer: weight=3')
+                  lines.append(sep)
+                  lines.append('Benchmark Load Generator Configuration')
+                  lines.append(dash)
+                  lines.append(f'  Profile: poisson | Rate: 20 req/s | Max seconds: 600')
+                  lines.append(f'  Prompt tokens: 4000 | Output tokens: 1000 | Seed: 42')
+                  lines.append(sep)
+                  lines.append('WVA Saturation Scaling Configuration')
+                  lines.append(dash)
+                  kv_thresh = os.environ.get('KV_CACHE_THRESHOLD', '0.80')
+                  queue_thresh = os.environ.get('QUEUE_LENGTH_THRESHOLD', '5')
+                  kv_spare = os.environ.get('KV_SPARE_TRIGGER', '0.1')
+                  queue_spare = os.environ.get('QUEUE_SPARE_TRIGGER', '3')
+                  lines.append(f'  kvCacheThreshold: {kv_thresh}  | queueLengthThreshold: {queue_thresh}')
+                  lines.append(f'  kvSpareTrigger: {kv_spare}   | queueSpareTrigger: {queue_spare}')
+                  lines.append(sep)
+                  lines.append('Autoscaling Configuration (HPA & VA)')
+                  lines.append(dash)
+                  lines.append(f'  Variant (VA): {va_cfg}')
+                  lines.append(f'  HPA: {hpa_cfg}')
+                  lines.append(sep)
+                  lines.append('True Serving Capacity Analysis (GuideLLM)')
+                  lines.append(dash)
+                  lines.append(f'  Rate: 20.0 RPS | Achieved: {achieved_rps:.2f} RPS | Errors: {error_rps:.2f} RPS | Tokens/s: {tp_mean:.2f}')
+                  lines.append(sep)
+
+                  sla_ttft = 50.0
+                  sla_itl = 50.0
+                  cost = 10.0
+                  ttft_penalty = ttft_p99 / sla_ttft if sla_ttft > 0 else 0
+                  itl_penalty = itl_p99 / sla_itl if sla_itl > 0 else 0
+                  avg_rep = data.get('avg_replicas', 0)
+                  latency_sub = ttft_penalty + itl_penalty
+                  resource_mult = avg_rep * cost
+                  score = resource_mult * latency_sub
+
+                  lines.append('Autoscaling Run Score (Lower is Better)')
+                  lines.append(dash)
+                  lines.append(f'  Worst-Case P99 TTFT: {ttft_p99:.2f} ms')
+                  lines.append(f'  Worst-Case P99 ITL : {itl_p99:.2f} ms')
+                  lines.append(f'  Average Replicas   : {avg_rep:.2f}')
+                  lines.append(f'  Average EPP Queue  : {data.get("avg_epp_queue_depth", 0):.2f}')
+                  lines.append(f'  Target SLAs: TTFT = {sla_ttft:.0f}ms | ITL = {sla_itl:.0f}ms')
+                  lines.append(f'  Latency Penalty = ({ttft_p99:.2f}/{sla_ttft:.0f}) + ({itl_p99:.2f}/{sla_itl:.0f}) = {latency_sub:.2f}')
+                  lines.append(f'  Resource Mult   = {avg_rep:.2f} x {cost:.1f} = {resource_mult:.2f}')
+                  lines.append(f'  => Final Score  = {resource_mult:.2f} x {latency_sub:.2f} = {score:.2f}')
+                  lines.append(sep)
+
+                  ax.text(0.02, 0.98, '\n'.join(lines), transform=ax.transAxes, fontsize=7,
+                          verticalalignment='top', fontfamily='monospace',
+                          bbox=dict(boxstyle='round', facecolor='#f0f0f0', alpha=0.8))
+                  fig.suptitle(f'WVA Benchmark Report (Saturation V1, Unified Prefill+Decode) — {model_short}', fontsize=14, fontweight='bold')
+                  pdf.savefig(fig, bbox_inches='tight')
+                  plt.close()
+
+                  # ===== PAGE 2: Time-series charts =====
+                  if mt and tl:
+                      fig, axes = plt.subplots(4, 1, figsize=(11, 14), sharex=True)
+                      fig.suptitle(f'Saturation V1 — Metrics Over Time (Unified Prefill+Decode, {model_short})', fontsize=14, fontweight='bold')
+
+                      axes[0].plot(times_m, kv, color=color, linewidth=2)
+                      axes[0].fill_between(times_m, kv, alpha=0.15, color=color)
+                      axes[0].set_ylabel('KV Cache Usage (%)')
+                      axes[0].set_title('Inference Pool Average KV Cache Usage Over Time')
+
+                      axes[1].plot(times_m, qd, color='#e67e22', linewidth=2)
+                      axes[1].fill_between(times_m, qd, alpha=0.15, color='#e67e22')
+                      axes[1].set_ylabel('Requests Waiting')
+                      axes[1].set_title('Number of Requests Waiting Over Time')
+
+                      axes[2].step(times_r, ready, where='post', color=color, linewidth=2.5, label='Actual Replicas')
+                      axes[2].fill_between(times_r, ready, step='post', alpha=0.1, color=color)
+                      ax2b = axes[2].twinx()
+                      ax2b.plot(times_m, epp, color='#3498db', linewidth=1.5, alpha=0.7, label='EPP Queue')
+                      ax2b.set_ylabel('EPP Queue Size', color='#3498db')
+                      axes[2].set_ylabel('Replica Count')
+                      axes[2].set_title('Decode Replica Count & EPP Queue Over Time')
+                      axes[2].yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+                      axes[2].legend(loc='upper left', fontsize=9)
+                      ax2b.legend(loc='upper right', fontsize=9)
+
+                      total_rps = achieved_rps + error_rps
+                      incomplete_rps = incomplete_count / max(data.get('duration_sec', 1), 1)
+                      axes[3].axhline(y=20, color='gray', linestyle='--', linewidth=1, label='Target 20.0 RPS')
+                      axes[3].bar(['Successful', 'Failed', 'Incomplete'],
+                                  [achieved_rps, error_rps, incomplete_rps],
+                                  color=[color, '#e74c3c', '#f39c12'], alpha=0.85, width=0.5)
+                      axes[3].set_ylabel('Requests/Second (RPS)')
+                      axes[3].set_title(f'GuideLLM Requests (Succeeded: {completed}, Failed: {error_count}, Incomplete: {incomplete_count})')
+                      axes[3].legend(fontsize=9)
+
+                      fig.tight_layout()
+                      pdf.savefig(fig, bbox_inches='tight')
+                      plt.close()
+
+                  # ===== PAGE 3: Latency & Throughput charts =====
+                  has_pcts = isinstance(ttft_obj, dict) and 'percentiles' in ttft_obj
+                  if has_pcts:
+                      fig = plt.figure(figsize=(11, 14))
+                      fig.suptitle(f'Saturation V1 — GuideLLM Latency & Throughput (Unified Prefill+Decode, {model_short})', fontsize=14, fontweight='bold')
+                      gs = fig.add_gridspec(3, 2, hspace=0.35, wspace=0.3)
+
+                      ax_ttft = fig.add_subplot(gs[0, :])
+                      ax_ttft.set_yscale('log')
+                      ttft_vals_mean = [ttft_mean]
+                      ttft_vals_p99 = [ttft_p99]
+                      x_t = np.arange(1)
+                      w = 0.3
+                      ax_ttft.bar(x_t - w/2, ttft_vals_mean, w, label='Mean TTFT', color=color, alpha=0.85)
+                      ax_ttft.bar(x_t + w/2, ttft_vals_p99, w, label='P99 TTFT', color='#e74c3c', alpha=0.85)
+                      ax_ttft.set_xticks(x_t); ax_ttft.set_xticklabels([f'{20.0} RPS'])
+                      ax_ttft.set_title('Time To First Token (TTFT) per Run', fontweight='bold')
+                      ax_ttft.set_ylabel('TTFT (ms, log scale)')
+                      ax_ttft.legend(fontsize=9)
+
+                      ax_itl = fig.add_subplot(gs[1, 0])
+                      ax_itl.set_yscale('log')
+                      itl_vals_mean = [itl_mean]
+                      itl_vals_p99 = [itl_p99]
+                      ax_itl.bar(x_t - w/2, itl_vals_mean, w, label='Mean ITL', color=color, alpha=0.85)
+                      ax_itl.bar(x_t + w/2, itl_vals_p99, w, label='P99 ITL', color='#e74c3c', alpha=0.85)
+                      ax_itl.set_xticks(x_t); ax_itl.set_xticklabels([f'{20.0} RPS'])
+                      ax_itl.set_title('Inter-Token Latency (ITL) per Run', fontweight='bold')
+                      ax_itl.set_ylabel('ITL (ms, log scale)')
+                      ax_itl.legend(fontsize=9)
+
+                      ax_tp = fig.add_subplot(gs[1, 1])
+                      ax_tp.bar([f'{20.0} RPS'], [tp_mean], color=color, alpha=0.85, width=0.4)
+                      ax_tp.set_title('Overall Token Throughput per Run', fontweight='bold')
+                      ax_tp.set_ylabel('Tokens / Second')
+                      for i, v in enumerate([tp_mean]):
+                          ax_tp.text(i, v + tp_mean*0.02, f'{v:.0f}', ha='center', fontweight='bold')
+
+                      ax_conc = fig.add_subplot(gs[2, 0])
+                      if mt:
+                          conc_epp = [s.get('epp_queue_depth', 0) for s in mt]
+                          ax_conc.plot(times_m, conc_epp, color='#3498db', linewidth=2)
+                          ax_conc.fill_between(times_m, conc_epp, alpha=0.15, color='#3498db')
+                      ax_conc.set_title('Request Concurrency (EPP Queue)', fontweight='bold')
+                      ax_conc.set_ylabel('EPP Flow Control Queue Size')
+                      ax_conc.set_xlabel('Time (seconds)')
+
+                      ax_sum = fig.add_subplot(gs[2, 1])
+                      ax_sum.axis('off')
+                      summary_lines = [
+                          f'Completed : {completed}',
+                          f'Failed    : {error_count}',
+                          f'Incomplete: {incomplete_count}',
+                          f'RPS       : {achieved_rps:.2f}',
+                          f'',
+                          f'Throughput: {tp_mean:.0f} tok/s',
+                          f'TTFT mean : {ttft_mean/1000:.2f}s  p99: {ttft_p99/1000:.2f}s',
+                          f'ITL mean  : {itl_mean:.2f}ms  p99: {itl_p99:.2f}ms',
+                          f'',
+                          f'Avg Replicas: {avg_rep:.2f}',
+                          f'Max Replicas: {data["max_replicas"]}',
+                          f'Avg KV Cache: {data["avg_kv_cache"]*100:.2f}%',
+                          f'Avg EPP Queue: {data.get("avg_epp_queue_depth", 0):.1f}',
+                          f'',
+                          f'Score: {score:.2f}',
+                      ]
+                      ax_sum.text(0.1, 0.9, '\n'.join(summary_lines), transform=ax_sum.transAxes,
+                                  fontsize=11, verticalalignment='top', fontfamily='monospace',
+                                  bbox=dict(boxstyle='round', facecolor='#f0f0f0', alpha=0.8))
+                      ax_sum.set_title('Summary', fontweight='bold')
+
+                      pdf.savefig(fig, bbox_inches='tight')
+                      plt.close()
+
+              print(f"  Generated PDF report: {pdf_path}")
+
+          print(f"Generated all artifacts in {PANEL_DIR}")
+          for f in sorted(os.listdir(PANEL_DIR)):
+              if f.endswith('.png') or f.endswith('.pdf'):
+                  print(f"  {f}")
+          PLOTEOF
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-openshift
+          path: |
+            /tmp/benchmark-results.json
+            /tmp/prefill-benchmark-results.json
+            /tmp/benchmark-grafana-snapshot.txt
+            /tmp/benchmark-grafana-snapshot.json
+            /tmp/benchmark-panels/
+          if-no-files-found: warn
+
+      - name: Post benchmark results as PR comment
+        if: always() && (github.event_name == 'issue_comment' || needs.gate.outputs.pr_number != '')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const prNumber = parseInt('${{ needs.gate.outputs.pr_number }}');
+            const sha = '${{ needs.gate.outputs.pr_head_sha }}';
+            const runId = context.runId;
+            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
+
+            let artifactUrl = `${repoUrl}/actions/runs/${runId}`;
+            try {
+              const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId
+              });
+              const benchArtifact = artifacts.find(a => a.name === 'benchmark-results-openshift');
+              if (benchArtifact) {
+                artifactUrl = `${repoUrl}/actions/runs/${runId}/artifacts/${benchArtifact.id}`;
+              }
+            } catch (e) {
+              console.log(`Could not look up artifact: ${e.message}`);
+            }
+
+            let resultsTable = '';
+            try {
+              const data = JSON.parse(fs.readFileSync('/tmp/benchmark-results.json', 'utf8'));
+              const fmtTime = (v) => v < 0 ? 'N/A' : `${v.toFixed(1)}s`;
+              resultsTable = `\n### Scale-Up Latency\n\n| Metric | Value |
+            |--------|-------|
+            | Scale-up time | ${fmtTime(data.scaleUpTimeSec)} |
+            | Scale-down time | ${fmtTime(data.scaleDownTimeSec)} |
+            | Max replicas | ${data.maxReplicas} |
+            | Avg KV cache usage | ${data.avgKVCacheUsage.toFixed(3)} |
+            | Avg queue depth | ${data.avgQueueDepth.toFixed(1)} |
+            | Replica oscillation (σ) | ${data.replicaOscillation.toFixed(2)} |
+            | Total duration | ${data.totalDurationSec.toFixed(0)}s |`;
+            } catch (e) {
+              console.log(`Scale-up latency results not found (skipped or not run): ${e.message}`);
+            }
+
+            let prefillSection = '';
+            try {
+              const prefillData = JSON.parse(fs.readFileSync('/tmp/prefill-benchmark-results.json', 'utf8'));
+              if (Array.isArray(prefillData) && prefillData.length > 0) {
+                const fmtP = (obj, key, div=1) => obj && obj.percentiles ? (obj.percentiles[key]/div).toFixed(1) : 'N/A';
+                const fmtM = (obj, div=1, prec=1) => obj ? (obj.mean/div).toFixed(prec) : 'N/A';
+
+                for (const r of prefillData) {
+                  const atype = r.autoscaler_type || 'WVA';
+                  const modelId = r.model_id || process.env.MODEL_ID || 'unknown';
+
+                  let table = `| Metric | Value |
+            |--------|-------|
+            | **Model** | ${modelId} |
+            | **Duration** | ${r.duration_sec.toFixed(0)}s |
+            | **Max Replicas** | ${r.max_replicas} |
+            | **Avg Replicas** | ${r.avg_replicas.toFixed(2)} |
+            | **Avg vLLM Queue Depth** | ${r.avg_queue_depth.toFixed(1)} |
+            | **Avg EPP Queue Depth** | ${(r.avg_epp_queue_depth||0).toFixed(1)} |
+            | **Avg KV Cache** | ${(r.avg_kv_cache*100).toFixed(2)}% |
+            | **TTFT mean** | ${fmtM(r.ttft, 1000)}s |
+            | **TTFT p50** | ${fmtP(r.ttft, 'p50', 1000)}s |
+            | **TTFT p99** | ${fmtP(r.ttft, 'p99', 1000)}s |
+            | **ITL mean** | ${fmtM(r.itl, 1, 2)}ms |
+            | **ITL p99** | ${fmtP(r.itl, 'p99')}ms |
+            | **Throughput mean** | ${fmtM(r.throughput)} tok/s |
+            | **Completed Requests** | ${r.ttft ? r.ttft.count : 'N/A'} |
+            | **Failed Requests** | ${r.error_count || 0} |
+            | **Incomplete Requests** | ${r.incomplete_count || 0} |
+            | **Achieved RPS** | ${(r.achieved_rps || 0).toFixed(2)} |`;
+
+                  let podTable = '';
+                  if (r.pods && r.pods.length > 0) {
+                    podTable = `\n\n<details>\n<summary>Pod Placement (${r.pods.length} pods)</summary>\n\n| Pod | Node | GPU | Startup |\n|-----|------|-----|---------|\n`;
+                    for (const p of r.pods) {
+                      const startup = p.startup_sec > 0 ? `${p.startup_sec.toFixed(0)}s` : 'N/A';
+                      podTable += `| ${p.name} | ${p.node} | ${p.gpu} | ${startup} |\n`;
+                    }
+                    podTable += `\n</details>`;
+                  }
+
+                  let timeline = '';
+                  if (r.replica_timeline && r.replica_timeline.length > 0) {
+                    timeline = `\n\n<details>\n<summary>Replica Timeline (${r.replica_timeline.length} snapshots)</summary>\n\n| Time (s) | Spec | Ready |\n|----------|------|-------|\n`;
+                    for (const s of r.replica_timeline) {
+                      timeline += `| ${s.elapsed_sec.toFixed(0)} | ${s.spec_replicas} | ${s.ready_replicas} |\n`;
+                    }
+                    timeline += `\n</details>`;
+                  }
+
+                  let configSection = `\n\n<details>\n<summary>Configuration</summary>\n\n`;
+                  configSection += `**Scaling Engine:** Saturation V1 (unified prefill+decode pods)\n\n`;
+                  configSection += `**WVA Saturation Scaling Config:**\n`;
+                  configSection += `| Parameter | Value |\n|-----------|-------|\n`;
+                  configSection += `| kvCacheThreshold | ${process.env.KV_CACHE_THRESHOLD || '0.80'} |\n`;
+                  configSection += `| queueLengthThreshold | ${process.env.QUEUE_LENGTH_THRESHOLD || '5'} |\n`;
+                  configSection += `| kvSpareTrigger | ${process.env.KV_SPARE_TRIGGER || '0.1'} |\n`;
+                  configSection += `| queueSpareTrigger | ${process.env.QUEUE_SPARE_TRIGGER || '3'} |\n\n`;
+                  configSection += `**Autoscaling:**\n`;
+                  configSection += `- **VA**: ${r.va_config || 'N/A'}\n`;
+                  configSection += `- **HPA**: ${r.hpa_config || 'N/A'}\n\n`;
+                  configSection += `**EPP Configuration:**\n`;
+                  configSection += `- Feature Gates: flowControl\n`;
+                  configSection += `- Scorers: queue-scorer (weight=2), kv-cache-utilization-scorer (weight=2), prefix-cache-scorer (weight=3)\n\n`;
+                  configSection += `**Load Generator (GuideLLM):**\n`;
+                  configSection += `- Profile: poisson @ 20 req/s | Duration: 600s\n`;
+                  configSection += `- Prompt tokens: 4000 | Output tokens: 1000 | Seed: 42\n`;
+                  configSection += `\n</details>`;
+
+                  prefillSection += `\n\n---\n\n## WVA Benchmark: Prefill-Heavy Workload — Unified Prefill+Decode (${atype}, Saturation V1)\n\n${table}${podTable}${configSection}${timeline}`;
+                }
+              }
+            } catch (e) {
+              console.log(`Could not read prefill results: ${e.message}`);
+            }
+
+            let panelImages = '';
+            const panelDir = '/tmp/benchmark-panels';
+            const hasPanels = fs.existsSync(panelDir) && fs.readdirSync(panelDir).some(f => f.endsWith('.png'));
+
+            if (hasPanels) {
+              const pngs = fs.readdirSync(panelDir).filter(f => f.endsWith('.png')).sort();
+              const tag = `benchmark-run-os-${runId}`;
+              try {
+                const release = await github.rest.repos.createRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tag,
+                  name: `Benchmark panels OpenShift (PR #${prNumber}, ${sha.substring(0, 7)})`,
+                  body: `Auto-generated by benchmark CI run #${runId}`,
+                  draft: false,
+                  prerelease: true
+                });
+
+                const imageUrls = [];
+                for (const png of pngs) {
+                  const filePath = path.join(panelDir, png);
+                  const fileData = fs.readFileSync(filePath);
+                  const asset = await github.rest.repos.uploadReleaseAsset({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.data.id,
+                    name: png,
+                    data: fileData,
+                    headers: { 'content-type': 'image/png' }
+                  });
+                  const title = png.replace('panel-', '').replace('.png', '').replace(/-/g, ' ');
+                  imageUrls.push(`#### ${title}\n![${title}](${asset.data.browser_download_url})`);
+                }
+
+                if (imageUrls.length > 0) {
+                  panelImages = `\n\n<details>\n<summary>Dashboard Panels (${imageUrls.length})</summary>\n\n${imageUrls.join('\n\n')}\n\n</details>`;
+                }
+              } catch (e) {
+                console.log(`Could not upload panel images: ${e.message}`);
+              }
+            }
+
+            const hasSnapshotJson = fs.existsSync('/tmp/benchmark-grafana-snapshot.json');
+            let artifactsSection = '';
+            if (hasSnapshotJson || hasPanels) {
+              const items = [];
+              if (hasSnapshotJson) items.push('Grafana snapshot JSON');
+              artifactsSection = `\n\n📎 **[Download artifacts](${artifactUrl})**${items.length ? ' — ' + items.join(', ') : ''}`;
+            }
+
+            const body = `## WVA Benchmark Results (OpenShift)
+
+            ${resultsTable}${prefillSection}${panelImages}${artifactsSection}
+
+            <details>
+            <summary>Environment</summary>
+
+            - Cluster: OpenShift (Real GPUs)
+            - Model: ${process.env.MODEL_ID || 'unsloth/Meta-Llama-3.1-8B'}
+            - Accelerator: H100
+            - Commit: ${sha.substring(0, 7)}
+            - Scaler: prometheus-adapter
+            - [Workflow run](${repoUrl}/actions/runs/${runId})
+
+            </details>`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body
+            });
+
+      - name: Cleanup infrastructure
+        if: always()
+        run: |
+          helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do
+            helm uninstall "$release" -n "$LLMD_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          done
+          kubectl delete namespace "$LLMD_NAMESPACE" --ignore-not-found --timeout=120s || true
+          kubectl delete namespace "$WVA_NAMESPACE" --ignore-not-found --timeout=120s || true
+
   report-status:
     runs-on: ubuntu-latest
-    needs: [gate, benchmark-kind]
+    needs: [gate, benchmark-kind, benchmark-openshift]
     if: always() && needs.gate.outputs.run_benchmark == 'true'
     permissions:
       statuses: write
@@ -373,7 +1203,14 @@ jobs:
         with:
           script: |
             const prHeadSha = '${{ needs.gate.outputs.pr_head_sha }}';
-            const benchResult = '${{ needs.benchmark-kind.result }}';
+            const platform = '${{ needs.gate.outputs.platform }}';
+            
+            let benchResult;
+            if (platform === 'openshift') {
+              benchResult = '${{ needs.benchmark-openshift.result }}';
+            } else {
+              benchResult = '${{ needs.benchmark-kind.result }}';
+            }
 
             if (!prHeadSha) {
               console.log('No PR head SHA available, skipping status report');

@@ -100,6 +100,8 @@ deploy_wva_controller() {
         --set wva.scaleToZero="$ENABLE_SCALE_TO_ZERO" \
         ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
         ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP} \
+        ${KV_CACHE_THRESHOLD:+--set wva.capacityScaling.default.kvCacheThreshold=$KV_CACHE_THRESHOLD} \
+        ${QUEUE_LENGTH_THRESHOLD:+--set wva.capacityScaling.default.queueLengthThreshold=$QUEUE_LENGTH_THRESHOLD} \
         ${KV_SPARE_TRIGGER:+--set wva.capacityScaling.default.kvSpareTrigger=$KV_SPARE_TRIGGER} \
         ${QUEUE_SPARE_TRIGGER:+--set wva.capacityScaling.default.queueSpareTrigger=$QUEUE_SPARE_TRIGGER}
 

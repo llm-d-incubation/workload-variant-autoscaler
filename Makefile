@@ -281,8 +281,8 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-late
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
-	go test ./test/benchmark/ -timeout 30m -v -ginkgo.v \
-		-ginkgo.label-filter="benchmark"; \
+	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
+		-ginkgo.label-filter="phase3a"; \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
 	echo "=========================================="; \

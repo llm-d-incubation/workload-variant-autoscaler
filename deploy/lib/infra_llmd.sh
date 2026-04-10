@@ -101,10 +101,41 @@ deploy_llm_d_infrastructure() {
         log_info "Skipping llm-d-inference-simulator deployment (DEPLOY_LLM_D_INFERENCE_SIM=false)"
     fi
 
+    # Override llm-d container image tags if set (e.g. upgrade from v0.3.0 to v0.6.0)
+    if [ -n "$LLMD_IMAGE_TAG" ]; then
+      log_info "Overriding llm-d image tags to $LLMD_IMAGE_TAG"
+      yq eval ".decode.containers[0].image = \"ghcr.io/llm-d/llm-d-cuda:${LLMD_IMAGE_TAG}\"" -i "$LLM_D_MODELSERVICE_VALUES"
+      yq eval ".routing.proxy.image = \"ghcr.io/llm-d/llm-d-routing-sidecar:${LLMD_IMAGE_TAG}\"" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
     # Configure vLLM max-num-seqs if set (useful for e2e testing to force saturation)
     if [ -n "$VLLM_MAX_NUM_SEQS" ]; then
       log_info "Setting vLLM max-num-seqs to $VLLM_MAX_NUM_SEQS for decode containers"
       yq eval ".decode.containers[0].args += [\"--max-num-seqs=$VLLM_MAX_NUM_SEQS\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM GPU memory utilization if set
+    if [ -n "$VLLM_GPU_MEM_UTIL" ]; then
+      log_info "Setting vLLM gpu-memory-utilization to $VLLM_GPU_MEM_UTIL"
+      yq eval ".decode.containers[0].args += [\"--gpu-memory-utilization=$VLLM_GPU_MEM_UTIL\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM max-model-len if set
+    if [ -n "$VLLM_MAX_MODEL_LEN" ]; then
+      log_info "Setting vLLM max-model-len to $VLLM_MAX_MODEL_LEN"
+      yq eval ".decode.containers[0].args += [\"--max-model-len=$VLLM_MAX_MODEL_LEN\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM block-size if set
+    if [ -n "$VLLM_BLOCK_SIZE" ]; then
+      log_info "Setting vLLM block-size to $VLLM_BLOCK_SIZE"
+      yq eval ".decode.containers[0].args += [\"--block-size=$VLLM_BLOCK_SIZE\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM enforce-eager if set
+    if [ -n "$VLLM_ENFORCE_EAGER" ] && [ "$VLLM_ENFORCE_EAGER" = "true" ]; then
+      log_info "Setting vLLM enforce-eager"
+      yq eval ".decode.containers[0].args += [\"--enforce-eager\"]" -i "$LLM_D_MODELSERVICE_VALUES"
     fi
 
     # Configure decode replicas if set (useful for e2e testing with limited GPUs)
