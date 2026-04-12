@@ -532,6 +532,8 @@ helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
 
 If you don't create VariantAutoscaling via Helm, create it manually:
 
+> **ℹ️ Accelerator name resolution:** WVA needs an accelerator name (e.g., `A100`) for each VA. It first auto-discovers this from the target Deployment's `nodeSelector` / `nodeAffinity` (`nvidia.com/gpu.product`, `amd.com/gpu.product-name`, or `cloud.google.com/gke-accelerator`), then falls back to the `inference.optimization/acceleratorName` label shown below. If both are missing, WVA silently skips metric emission for this VA. See [Accelerator Name Resolution](../docs/user-guide/configuration.md#accelerator-name-resolution).
+
 ```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: llmd.ai/v1alpha1
@@ -540,6 +542,7 @@ metadata:
   name: my-vllm-deployment-decode
   namespace: llm-d-inference-scheduler
   labels:
+    # Fallback if the target Deployment has no GPU nodeSelector/nodeAffinity
     inference.optimization/acceleratorName: A100
 spec:
   # Model identifier

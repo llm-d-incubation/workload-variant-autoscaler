@@ -45,6 +45,47 @@ Choose between the following approaches:
 - [With HPA](hpa-integration.md) - Use Kubernetes HPA for autoscaling based on WVA's custom metrics
 - [With KEDA](keda-integration.md) - Use KEDA for autoscaling based on WVA's custom metrics
 
+### Accelerator Name Resolution
+
+Every `VariantAutoscaling` must resolve to an **accelerator name** (e.g., `A100`, `H100`, `L40S`) so WVA can build allocations, match against cluster inventory, and label emitted Prometheus metrics. WVA resolves the accelerator name in the following order:
+
+1. **Auto-discovery from the scale target** (preferred). WVA inspects the target `Deployment`/`LeaderWorkerSet` pod template for these `nodeSelector` / `nodeAffinity` keys:
+   - `nvidia.com/gpu.product`
+   - `amd.com/gpu.product-name`
+   - `cloud.google.com/gke-accelerator`
+
+   The first matching value is used.
+
+2. **`inference.optimization/acceleratorName` label on the VariantAutoscaling** (fallback). Used if auto-discovery fails or the scale target has no GPU node selector.
+
+If **both** fail, WVA cannot build an allocation and will skip status updates and metric emission for the variant — HPA/KEDA will never receive a scaling signal. The failure is silent at the API level (the VA is accepted), but WVA controller logs contain:
+
+```
+accelerator name not found in scale target nodeSelector/nodeAffinity or VA label
+```
+
+> **Helm users:** The chart injects the label automatically from `.Values.va.accelerator` (used as a fallback) but the comment in `values.yaml` notes it is optional — auto-discovery takes priority.
+
+**Recommendation:** For deployments that pin GPU type via `nodeSelector` or `nodeAffinity`, auto-discovery works out of the box. For deployments without GPU node selectors (e.g., simulators, tests, or shared clusters), set the label explicitly:
+
+```yaml
+apiVersion: llmd.ai/v1alpha1
+kind: VariantAutoscaling
+metadata:
+  name: my-variant
+  namespace: llm-d
+  labels:
+    # Fallback used if the target Deployment has no nvidia.com/gpu.product
+    # (or equivalent AMD/GKE) nodeSelector/nodeAffinity entry.
+    inference.optimization/acceleratorName: A100
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-vllm-deployment
+  modelID: "meta-llama/Llama-3.1-8B"
+```
+
 ## Operating Mode
 
 WVA operates in **saturation mode**.

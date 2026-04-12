@@ -6,6 +6,10 @@ metadata:
   name: sample-deployment
   namespace: llm-d-sim
   labels:
+    # Accelerator type fallback. WVA first auto-discovers the accelerator
+    # from the target Deployment's nodeSelector/nodeAffinity (nvidia.com/gpu.product,
+    # amd.com/gpu.product-name, cloud.google.com/gke-accelerator). This label
+    # is only used if auto-discovery fails (e.g., a simulator with no GPU node pins).
     inference.optimization/acceleratorName: A100
 spec:
   scaleTargetRef:

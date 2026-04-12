@@ -154,7 +154,67 @@ Fix the validation errors and reapply the resource.
 
 ---
 
-### 6. Controller Not Running
+### 6. Accelerator Name Cannot Be Resolved
+
+WVA needs to determine the accelerator (GPU) type for each `VariantAutoscaling`. It resolves this in two steps:
+
+1. **Auto-discovery** from the target `Deployment`/`LeaderWorkerSet` pod template by reading `nodeSelector` / `nodeAffinity` keys: `nvidia.com/gpu.product`, `amd.com/gpu.product-name`, or `cloud.google.com/gke-accelerator`.
+2. **Fallback** to the `inference.optimization/acceleratorName` label on the VA.
+
+If **both** fail, WVA silently skips status updates and metric emission for this variant — HPA/KEDA never receives a scaling signal. The VA appears healthy (no error events), but the resource effectively does nothing.
+
+**Check the scale target's node selector:**
+
+```bash
+# Get the scale target name from the VA
+TARGET=$(kubectl get va <va-name> -n <namespace> -o jsonpath='{.spec.scaleTargetRef.name}')
+
+# Inspect the deployment's nodeSelector for any GPU product keys
+kubectl get deployment "$TARGET" -n <namespace> \
+  -o jsonpath='{.spec.template.spec.nodeSelector}'
+```
+
+**Check the VA fallback label:**
+
+```bash
+kubectl get va <va-name> -n <namespace> \
+  -o jsonpath='{.metadata.labels.inference\.optimization/acceleratorName}'
+```
+
+**Controller log signature:**
+
+```
+accelerator name not found in scale target nodeSelector/nodeAffinity or VA label
+```
+
+or
+
+```
+Safety net: skipping metric emission - no accelerator name available
+```
+
+**Resolution:**
+
+Either pin GPU type via the target deployment's `nodeSelector`:
+
+```yaml
+# Deployment spec.template.spec.nodeSelector
+nodeSelector:
+  nvidia.com/gpu.product: A100
+```
+
+or set the label on the VA as an explicit override:
+
+```bash
+kubectl label va <va-name> -n <namespace> \
+  inference.optimization/acceleratorName=A100
+```
+
+See [Accelerator Name Resolution](configuration.md#accelerator-name-resolution) for details.
+
+---
+
+### 7. Controller Not Running
 
 The controller itself may not be running or may be experiencing errors.
 
