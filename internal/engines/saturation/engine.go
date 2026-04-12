@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -35,12 +36,14 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
+	eventsHelper "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/events"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -102,6 +105,11 @@ type Engine struct {
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
 	// CostAwareOptimizer (unlimited) or GreedyByScoreOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
+
+	// eventRecorder wraps Recorder with per-cycle rate limiting to emit
+	// Kubernetes events on VariantAutoscaling resources without flooding the
+	// API server.
+	eventRecorder *eventsHelper.RateLimitedRecorder
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -144,6 +152,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
+		eventRecorder:           eventsHelper.New(recorder),
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -182,6 +191,10 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) error {
 	logger := ctrl.LoggerFrom(ctx)
+
+	// Reset per-cycle rate limit state so events emitted in this cycle
+	// are not suppressed by state from the previous cycle.
+	e.eventRecorder.ResetCycle()
 
 	// Get optimization interval from Config (already a time.Duration)
 	interval := e.Config.OptimizationInterval()
@@ -1081,6 +1094,9 @@ func (e *Engine) applySaturationDecisions(
 			metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
 		}
 
+		// Emit Kubernetes events for observability (rate-limited per cycle).
+		e.emitScalingEvents(&updateVa, decision, hasDecision, metricsAvailable, targetReplicas)
+
 		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
 			VariantName:       vaName,
 			Namespace:         va.Namespace,
@@ -1109,6 +1125,65 @@ func (e *Engine) applySaturationDecisions(
 	}
 
 	return nil
+}
+
+// emitScalingEvents emits Kubernetes events on the VariantAutoscaling for
+// observability of scaling decisions and error conditions. Events are
+// rate-limited to at most one per (VA, reason) per optimization cycle.
+func (e *Engine) emitScalingEvents(
+	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	decision interfaces.VariantDecision,
+	hasDecision, metricsAvailable bool,
+	targetReplicas int,
+) {
+	if va == nil || e.eventRecorder == nil {
+		return
+	}
+
+	// MetricsUnavailable: emit regardless of whether we have a decision.
+	if !metricsAvailable {
+		e.eventRecorder.Eventf(va, va.Namespace, va.Name,
+			corev1.EventTypeWarning, constants.EventReasonMetricsUnavailable,
+			"Failed to collect metrics for variant %q in namespace %q", va.Name, va.Namespace)
+	}
+
+	if !hasDecision {
+		return
+	}
+
+	currentReplicas := decision.CurrentReplicas
+
+	// ScaledToZero takes precedence over ScaledDown so operators see the
+	// distinct "scaled to zero by enforcer" signal rather than a generic
+	// scale-down.
+	if targetReplicas == 0 && currentReplicas > 0 {
+		e.eventRecorder.Eventf(va, va.Namespace, va.Name,
+			corev1.EventTypeNormal, constants.EventReasonScaledToZero,
+			"Scaled variant %q to 0 replicas (from %d): %s",
+			va.Name, currentReplicas, decision.Reason)
+	} else if targetReplicas > currentReplicas {
+		e.eventRecorder.Eventf(va, va.Namespace, va.Name,
+			corev1.EventTypeNormal, constants.EventReasonScaledUp,
+			"Scaled up variant %q from %d to %d replicas: %s",
+			va.Name, currentReplicas, targetReplicas, decision.Reason)
+	} else if targetReplicas < currentReplicas {
+		e.eventRecorder.Eventf(va, va.Namespace, va.Name,
+			corev1.EventTypeNormal, constants.EventReasonScaledDown,
+			"Scaled down variant %q from %d to %d replicas: %s",
+			va.Name, currentReplicas, targetReplicas, decision.Reason)
+	}
+
+	// ResourceConstrained: decision was limited by GPU availability.
+	if decision.WasLimited {
+		limitedBy := decision.LimitedBy
+		if limitedBy == "" {
+			limitedBy = "resource limiter"
+		}
+		e.eventRecorder.Eventf(va, va.Namespace, va.Name,
+			corev1.EventTypeWarning, constants.EventReasonResourceConstrained,
+			"Scaling decision for variant %q constrained by %s (original target: %d, final target: %d)",
+			va.Name, limitedBy, decision.OriginalTargetReplicas, targetReplicas)
+	}
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
