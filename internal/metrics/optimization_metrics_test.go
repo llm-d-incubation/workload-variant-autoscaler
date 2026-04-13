@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The llm-d Authors
+Copyright 2026 The llm-d Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -99,7 +99,7 @@ func TestSetModelsProcessed(t *testing.T) {
 
 	var found bool
 	for _, mf := range metrics {
-		if mf.GetName() == constants.WVAModelsProcessedTotal {
+		if mf.GetName() == constants.WVAModelsProcessed {
 			found = true
 			if len(mf.GetMetric()) != 1 {
 				t.Errorf("Expected 1 metric series, got %d", len(mf.GetMetric()))
@@ -113,7 +113,7 @@ func TestSetModelsProcessed(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("Metric %s not found in gathered metrics", constants.WVAModelsProcessedTotal)
+		t.Errorf("Metric %s not found in gathered metrics", constants.WVAModelsProcessed)
 	}
 }
 

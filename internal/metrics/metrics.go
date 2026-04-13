@@ -21,7 +21,7 @@ var (
 	desiredRatio        *prometheus.GaugeVec
 
 	optimizationDuration *prometheus.HistogramVec
-	modelsProcessedGauge prometheus.Gauge
+	modelsProcessedGauge *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -92,11 +92,16 @@ func InitMetrics(registry prometheus.Registerer) error {
 		},
 		optimizationDurationLabels,
 	)
-	modelsProcessedGauge = prometheus.NewGauge(
+	modelsProcessedLabels := []string{}
+	if controllerInstance != "" {
+		modelsProcessedLabels = append(modelsProcessedLabels, constants.LabelControllerInstance)
+	}
+	modelsProcessedGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: constants.WVAModelsProcessedTotal,
+			Name: constants.WVAModelsProcessed,
 			Help: "Number of models processed in the last optimization cycle",
 		},
+		modelsProcessedLabels,
 	)
 
 	// Register metrics with the registry
@@ -180,7 +185,11 @@ func SetModelsProcessed(count int) {
 	if modelsProcessedGauge == nil {
 		return
 	}
-	modelsProcessedGauge.Set(float64(count))
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	modelsProcessedGauge.With(labels).Set(float64(count))
 }
 
 // EmitReplicaMetrics emits current and desired replica metrics

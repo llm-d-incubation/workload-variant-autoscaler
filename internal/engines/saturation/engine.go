@@ -190,9 +190,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 			status = "error"
 		}
 		metrics.ObserveOptimizationDuration(time.Since(start).Seconds(), status)
-		if modelsProcessed > 0 {
-			metrics.SetModelsProcessed(modelsProcessed)
-		}
+		metrics.SetModelsProcessed(modelsProcessed)
 	}()
 
 	logger := ctrl.LoggerFrom(ctx)

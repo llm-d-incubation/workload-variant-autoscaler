@@ -113,8 +113,8 @@ const (
 	// Labels: status (success, error)
 	WVAOptimizationDurationSeconds = "wva_optimization_duration_seconds"
 
-	// WVAModelsProcessedTotal is a gauge that tracks the number of models processed in the last optimization cycle.
-	WVAModelsProcessedTotal = "wva_models_processed_total"
+	// WVAModelsProcessed is a gauge that tracks the number of models processed in the last optimization cycle.
+	WVAModelsProcessed = "wva_models_processed"
 )
 
 // Metric Label Names
