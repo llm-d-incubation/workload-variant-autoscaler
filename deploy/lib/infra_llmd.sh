@@ -202,6 +202,16 @@ deploy_llm_d_infrastructure() {
       helmfile apply -e "$GATEWAY_PROVIDER" -n "${LLMD_NS}"
     fi
 
+    # Post-deploy workaround: Upstream EPP chart (v1.0.1) is missing RBAC for inferencemodelrewrites
+    log_info "Patching Role $LLM_D_EPP_NAME to include inferencemodelrewrites"
+    if kubectl get role "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
+        kubectl patch role "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[{"op": "add", "path": "/rules/0/resources/-", "value": "inferencemodelrewrites"}]' && \
+            log_success "Patched Role $LLM_D_EPP_NAME successfully" || \
+            log_warning "Failed to patch Role $LLM_D_EPP_NAME"
+    else
+        log_warning "Role $LLM_D_EPP_NAME not found, skipping RBAC patch"
+    fi
+
     if [ "$E2E_TESTS_ENABLED" = "true" ] && [ "$INFRA_ONLY" = "true" ]; then
       if helm list -n "$LLMD_NS" --short 2>/dev/null | grep -q '^ms-'; then
         log_warning "Modelservice release still present in $LLMD_NS despite e2e selector; tests may need extra cleanup"

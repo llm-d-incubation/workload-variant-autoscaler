@@ -194,6 +194,8 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (infra-only: WVA + llm-d, no
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		INSTALL_GATEWAY_CTRLPLANE=true \
 		NAMESPACE_SCOPED=false \
+		DECODE_REPLICAS=$(DECODE_REPLICAS) \
+		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		WVA_IMAGE_REPO=$$IMAGE_REPO \
 		WVA_IMAGE_TAG=$$IMAGE_TAG \
 		WVA_IMAGE_PULL_POLICY=IfNotPresent \
