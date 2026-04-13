@@ -58,7 +58,7 @@ Every `VariantAutoscaling` must resolve to an **accelerator name** (e.g., `A100`
 
 2. **`inference.optimization/acceleratorName` label on the VariantAutoscaling** (fallback). Used if auto-discovery fails or the scale target has no GPU node selector.
 
-If **both** fail, WVA cannot build an allocation and will skip status updates and metric emission for the variant — HPA/KEDA will never receive a scaling signal. The failure is silent at the API level (the VA is accepted), but WVA controller logs contain:
+If **both** fail, WVA cannot build a full allocation. It will still set the `MetricsAvailable=False` condition on the VA (visible via `kubectl get va <name> -o yaml`), but it skips the full target-replicas calculation and does not emit scaling metrics — HPA/KEDA will never receive a scaling signal. The WVA controller logs contain:
 
 ```
 accelerator name not found in scale target nodeSelector/nodeAffinity or VA label

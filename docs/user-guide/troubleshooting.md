@@ -161,9 +161,16 @@ WVA needs to determine the accelerator (GPU) type for each `VariantAutoscaling`.
 1. **Auto-discovery** from the target `Deployment`/`LeaderWorkerSet` pod template by reading `nodeSelector` / `nodeAffinity` keys: `nvidia.com/gpu.product`, `amd.com/gpu.product-name`, or `cloud.google.com/gke-accelerator`.
 2. **Fallback** to the `inference.optimization/acceleratorName` label on the VA.
 
-If **both** fail, WVA silently skips status updates and metric emission for this variant — HPA/KEDA never receives a scaling signal. The VA appears healthy (no error events), but the resource effectively does nothing.
+If **both** fail, WVA cannot build a full allocation. It will still set the `MetricsAvailable=False` condition on the VA (which is a useful diagnostic signal — see below), but it skips the target-replicas calculation and does not emit scaling metrics — HPA/KEDA never receives a scaling signal.
 
-**Check the scale target's node selector:**
+**Check the VA condition first:**
+
+```bash
+kubectl get va <va-name> -n <namespace> -o jsonpath='{.status.conditions}' | jq .
+# Look for: type=MetricsAvailable, status=False, reason=MetricsMissing
+```
+
+**Check the scale target's node selector and node affinity:**
 
 ```bash
 # Get the scale target name from the VA
@@ -172,6 +179,10 @@ TARGET=$(kubectl get va <va-name> -n <namespace> -o jsonpath='{.spec.scaleTarget
 # Inspect the deployment's nodeSelector for any GPU product keys
 kubectl get deployment "$TARGET" -n <namespace> \
   -o jsonpath='{.spec.template.spec.nodeSelector}'
+
+# Also check nodeAffinity (the code checks both requiredDuringScheduling and preferredDuringScheduling)
+kubectl get deployment "$TARGET" -n <namespace> \
+  -o jsonpath='{.spec.template.spec.affinity.nodeAffinity}'
 ```
 
 **Check the VA fallback label:**
@@ -203,7 +214,7 @@ nodeSelector:
   nvidia.com/gpu.product: A100
 ```
 
-or set the label on the VA as an explicit override:
+or set the label on the VA as a fallback:
 
 ```bash
 kubectl label va <va-name> -n <namespace> \
