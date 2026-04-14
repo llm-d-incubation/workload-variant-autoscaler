@@ -315,10 +315,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	} else {
 		logger.Info("No scaling decisions to apply, updating VA status with metrics")
 	}
-	if err := e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations); err != nil {
-		logger.Error(err, "Failed to apply saturation decisions")
-		return err
-	}
+	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
 
 	logger.Info("Optimization completed successfully",
 		"mode", "saturation-only",
@@ -889,7 +886,7 @@ func (e *Engine) applySaturationDecisions(
 	decisions []interfaces.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*interfaces.Allocation,
-) error {
+) {
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
@@ -1120,8 +1117,6 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
-
-	return nil
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
