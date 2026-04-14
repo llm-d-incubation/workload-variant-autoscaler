@@ -215,7 +215,7 @@ load_image() {
     # Only fall back to the crictl/ctr path for the known containerd image store
     # issue (docker save fails on multi-platform manifests, kubernetes-sigs/kind#3795).
     # For any other error, report it and abort.
-    if ! echo "$load_stderr" | grep -qi "docker save"; then
+    if ! echo "$load_stderr" | grep -qiE "docker save|multi-?platform|manifest|content digest|no such image|not found"; then
         log_error "'kind load docker-image' failed:"
         log_error "$load_stderr"
         exit 1
@@ -237,36 +237,59 @@ load_image() {
         exit 1
     fi
 
-    local failed=false
+    # Detect if an image reference is qualified with an explicit registry hostname.
+    # Heuristic used by Docker/containerd/podman:
+    # If the first '/'-separated segment contains a '.', a ':', or equals 'localhost',
+    # it is treated as a registry hostname (e.g., quay.io/foo, registry.k8s.io/pause,
+    # localhost:5000/myimg).
+    local first_segment
+    first_segment="${full_image%%/*}"
+    local has_explicit_registry=false
+    case "$first_segment" in
+        *.*|*:*|localhost) has_explicit_registry=true ;;
+    esac
+
+    local successful_nodes=()
     for node in $nodes; do
         log_info "Pulling image on node '$node'..."
         local pull_stderr
         if pull_stderr="$(docker exec "$node" crictl pull "$full_image" 2>&1)"; then
+            successful_nodes+=("$node")
             continue
         fi
         log_warning "crictl pull failed on node '$node': $pull_stderr"
 
         # crictl may not resolve short names; try with docker.io prefix, but
-        # only for unqualified image names (no registry prefix like ghcr.io/).
-        if echo "$full_image" | grep -q '/.*/' ; then
-            # Image is fully qualified (e.g., ghcr.io/org/repo:tag) — docker.io prefix would be wrong
-            log_warning "Failed to pull image on node '$node' (image is fully qualified, skipping docker.io fallback)"
-            failed=true
-        elif pull_stderr="$(docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>&1)"; then
-            # Tag so kubelet can find it by the original name
-            docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" || true
+        # only for unqualified image names (no registry hostname prefix like quay.io/).
+        if [ "$has_explicit_registry" = true ]; then
+            log_error "Failed to pull image on node '$node' (image has explicit registry, skipping docker.io fallback): $pull_stderr"
+            # Best-effort rollback to avoid partial cluster state.
+            for ok_node in "${successful_nodes[@]}"; do
+                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+            done
+            exit 1
+        fi
+
+        if pull_stderr="$(docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>&1)"; then
+            # Tag so kubelet can find it by the original name, but only if it doesn't already exist.
+            if ! docker exec "$node" ctr --namespace=k8s.io images ls -q | grep -Fxq "$full_image"; then
+                if ! docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" >/dev/null 2>&1; then
+                    log_error "Failed to tag image on node '$node' (docker.io/$full_image -> $full_image)"
+                    for ok_node in "${successful_nodes[@]}"; do
+                        docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+                    done
+                    exit 1
+                fi
+            fi
+            successful_nodes+=("$node")
         else
-            log_warning "Failed to pull image on node '$node': $pull_stderr"
-            failed=true
+            log_error "Failed to pull image on node '$node': $pull_stderr"
+            for ok_node in "${successful_nodes[@]}"; do
+                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+            done
+            exit 1
         fi
     done
-
-    if [ "$failed" = true ]; then
-        log_error "Could not load image into all KIND nodes. Options:"
-        log_error " 1. Build locally: make docker-build IMG=$full_image"
-        log_error " 2. Disable containerd image store in Docker Desktop settings"
-        exit 1
-    fi
 
     log_success "Image '$full_image' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
 }
