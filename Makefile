@@ -285,6 +285,7 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-late
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
+	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
 	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
 		-ginkgo.label-filter="phase3a"; \
 	TEST_EXIT_CODE=$$?; \
