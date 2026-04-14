@@ -209,6 +209,8 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (infra-only: WVA + llm-d, no
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		INSTALL_GATEWAY_CTRLPLANE=true \
 		NAMESPACE_SCOPED=false \
+		DECODE_REPLICAS=$(DECODE_REPLICAS) \
+		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		./deploy/install.sh; \
 	fi
 
