@@ -19,7 +19,7 @@ metadata:
   name: {{ include "workload-variant-autoscaler.fullname" . }}-wva-saturation-scaling-config
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "workload-variant-autoscaler.configMapLabels" . | nindent 4 }}
+    {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
 data:
   # Global defaults applied to all variants unless overridden
   default: |

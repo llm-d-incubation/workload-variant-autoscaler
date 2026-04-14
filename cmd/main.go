@@ -355,8 +355,7 @@ func main() {
 		// Multi-namespace mode: Use label selector to filter ConfigMaps in the cache
 		// This significantly reduces memory usage by only caching WVA-related configmaps
 		wvaConfigSelector := labels.SelectorFromSet(labels.Set{
-			"app.kubernetes.io/name":      "workload-variant-autoscaler",
-			"app.kubernetes.io/component": "configuration",
+			"app.kubernetes.io/name": "workload-variant-autoscaler",
 		})
 
 		setupLog.Info("Configuring cache with label selector for ConfigMaps",
@@ -541,42 +540,6 @@ func main() {
 	if err = configMapReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create configmap controller")
 		os.Exit(1)
-	}
-
-	if watchNS == "" {
-		// only inspect for cluster-scoped. There should only be WVA specific configmaps shown.
-		// Add cache inspector runnable to log ConfigMaps after cache starts
-		err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-			// Wait for cache to sync before inspecting
-			if !mgr.GetCache().WaitForCacheSync(ctx) {
-				return errors.New("failed to sync cache")
-			}
-
-			setupLog.Info("Cache synced, inspecting ConfigMaps in cache")
-
-			// Now the cache is started, list ConfigMaps from it
-			var configMaps corev1.ConfigMapList
-			if err := mgr.GetClient().List(ctx, &configMaps); err != nil {
-				setupLog.Error(err, "failed to list cached configmaps")
-			} else {
-				setupLog.Info("ConfigMaps in cache", "count", len(configMaps.Items))
-				for _, cm := range configMaps.Items {
-					setupLog.Info("Cached ConfigMap",
-						"namespace", cm.Namespace,
-						"name", cm.Name,
-						"labels", cm.Labels)
-				}
-			}
-
-			// Keep running until context is cancelled
-			<-ctx.Done()
-			return nil
-		}))
-
-		if err != nil {
-			// Log error and continue
-			setupLog.Error(err, "unable to add cache inspector to manager")
-		}
 	}
 
 	if metricsCertWatcher != nil {

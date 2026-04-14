@@ -5,7 +5,7 @@ metadata:
   name: {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "workload-variant-autoscaler.configMapLabels" . | nindent 4 }}
+    {{- include "workload-variant-autoscaler.labels" . | nindent 4 }}
 {{- if and .Values.wva.configMap .Values.wva.configMap.immutable }}
 immutable: true
 {{- end }}
