@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 	)
 
 	BeforeAll(func() {
-		testCtx, testCancel = context.WithCancel(context.Background())
+		testCtx, testCancel = context.WithCancel(context.Background()) //nolint:fatcontext // top-level BeforeAll, not nested
 
 		// Parse MODELS env var (comma-separated list of model IDs)
 		modelsEnv := testconfig.GetEnv("MODELS", "")
@@ -125,7 +126,7 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 				}
 			}
 			Expect(models[i].DeploymentName).NotTo(BeEmpty(),
-				fmt.Sprintf("No decode deployment found for model slug %s", slug))
+				"No decode deployment found for model slug "+slug)
 		}
 	}
 
@@ -340,7 +341,7 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 					snap := MetricSnap{ElapsedSec: elapsed}
 					qdQuery := fmt.Sprintf(`avg(vllm:num_requests_waiting{namespace="%s",model_name="%s"})`, benchCfg.LLMDNamespace, m.ModelID)
 					kvQuery := fmt.Sprintf(`avg(vllm:kv_cache_usage_perc{namespace="%s",model_name="%s"})`, benchCfg.LLMDNamespace, m.ModelID)
-					eppPoolName := fmt.Sprintf("gaie-%s", m.Slug)
+					eppPoolName := "gaie-" + m.Slug
 					eppQDQuery := fmt.Sprintf(`sum(inference_extension_flow_control_queue_size{namespace="%s",inference_pool="%s"})`, benchCfg.LLMDNamespace, eppPoolName)
 
 					if qdResult, _, qdErr := promClient.API().Query(testCtx, qdQuery, time.Now()); qdErr == nil {
@@ -371,14 +372,14 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 					va := &variantautoscalingv1alpha1.VariantAutoscaling{}
 					if vaErr := crClient.Get(testCtx, client.ObjectKey{Namespace: benchCfg.LLMDNamespace, Name: m.VAName}, va); vaErr == nil {
 						if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
-							vaDesired = fmt.Sprintf("%d", *va.Status.DesiredOptimizedAlloc.NumReplicas)
+							vaDesired = strconv.FormatInt(int64(*va.Status.DesiredOptimizedAlloc.NumReplicas), 10)
 						}
 					}
 					hpaCurrent, hpaDesired := "?", "?"
 					hpa, hpaErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(benchCfg.LLMDNamespace).Get(testCtx, m.HPAName+"-hpa", metav1.GetOptions{})
 					if hpaErr == nil {
-						hpaCurrent = fmt.Sprintf("%d", hpa.Status.CurrentReplicas)
-						hpaDesired = fmt.Sprintf("%d", hpa.Status.DesiredReplicas)
+						hpaCurrent = strconv.FormatInt(int64(hpa.Status.CurrentReplicas), 10)
+						hpaDesired = strconv.FormatInt(int64(hpa.Status.DesiredReplicas), 10)
 					}
 
 					GinkgoWriter.Printf("  [%s %.0fs] replicas: spec=%d ready=%d | va=%s hpa=%s→%s | kv=%.4f qd=%.1f epp_qd=%.1f\n",
@@ -478,7 +479,7 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 			job, jobErr := k8sClient.BatchV1().Jobs(benchCfg.LLMDNamespace).Get(testCtx, jobName, metav1.GetOptions{})
 			if jobErr == nil {
 				for _, cond := range job.Status.Conditions {
-					if cond.Status == "True" {
+					if cond.Status == conditionStatusTrue {
 						jobStatus = string(cond.Type)
 						break
 					}

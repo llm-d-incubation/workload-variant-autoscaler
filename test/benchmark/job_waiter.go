@@ -17,6 +17,9 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+// conditionStatusTrue is the Kubernetes condition status value for a condition that is met.
+const conditionStatusTrue = "True"
+
 // WaitForJobCompletion waits for a job to complete successfully
 func WaitForJobCompletion(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, jobName string, timeout time.Duration) error {
 	return wait.PollUntilContextTimeout(ctx, 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
@@ -26,10 +29,10 @@ func WaitForJobCompletion(ctx context.Context, k8sClient *kubernetes.Clientset, 
 		}
 
 		for _, cond := range job.Status.Conditions {
-			if cond.Type == batchv1.JobComplete && cond.Status == "True" {
+			if cond.Type == batchv1.JobComplete && cond.Status == conditionStatusTrue {
 				return true, nil
 			}
-			if cond.Type == batchv1.JobFailed && cond.Status == "True" {
+			if cond.Type == batchv1.JobFailed && cond.Status == conditionStatusTrue {
 				return false, fmt.Errorf("job failed: %s", cond.Message)
 			}
 		}
