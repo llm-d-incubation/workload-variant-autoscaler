@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -560,7 +561,7 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 				currentVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
 				if vaErr := crClient.Get(ctx, client.ObjectKey{Namespace: benchCfg.LLMDNamespace, Name: res.VAName}, currentVA); vaErr == nil {
 					if currentVA.Status.DesiredOptimizedAlloc.NumReplicas != nil {
-						vaDesired = fmt.Sprintf("%d", *currentVA.Status.DesiredOptimizedAlloc.NumReplicas)
+						vaDesired = strconv.FormatInt(int64(*currentVA.Status.DesiredOptimizedAlloc.NumReplicas), 10)
 					}
 				}
 
@@ -570,8 +571,8 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 				if hpaErr == nil {
 					for i := range hpaList.Items {
 						hpa := &hpaList.Items[i]
-						hpaCurrent = fmt.Sprintf("%d", hpa.Status.CurrentReplicas)
-						hpaDesired = fmt.Sprintf("%d", hpa.Status.DesiredReplicas)
+						hpaCurrent = strconv.FormatInt(int64(hpa.Status.CurrentReplicas), 10)
+						hpaDesired = strconv.FormatInt(int64(hpa.Status.DesiredReplicas), 10)
 					}
 				}
 
