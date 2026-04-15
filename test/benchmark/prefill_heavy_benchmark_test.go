@@ -522,15 +522,15 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 				break monitorLoop
 			case <-ticker.C:
 				elapsed := time.Since(loadStart).Seconds()
+				var spec, ready int32
 				deployment, depErr := k8sClient.AppsV1().Deployments(benchCfg.LLMDNamespace).Get(ctx, res.DeploymentName, metav1.GetOptions{})
 				if depErr == nil {
-					spec := *deployment.Spec.Replicas
-					ready := deployment.Status.ReadyReplicas
+					spec = *deployment.Spec.Replicas
+					ready = deployment.Status.ReadyReplicas
 					if spec > maxReplicas {
 						maxReplicas = spec
 					}
 					timeline = append(timeline, ReplicaSnap{ElapsedSec: elapsed, SpecReplicas: spec, ReadyReplicas: ready})
-					GinkgoWriter.Printf("  [%.0fs] replicas: spec=%d ready=%d\n", elapsed, spec, ready)
 				}
 
 				// Sample KV cache, vLLM queue depth, and EPP queue depth from Prometheus
@@ -554,7 +554,31 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 					}
 				}
 				metricsTimeline = append(metricsTimeline, snap)
-				GinkgoWriter.Printf("  [%.0fs] queue_depth=%.1f epp_queue=%.1f kv_cache=%.3f\n", elapsed, snap.QueueDepth, snap.EPPQueueDepth, snap.KVCache)
+
+				// VA desired replicas
+				vaDesired := "?"
+				currentVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
+				if vaErr := crClient.Get(ctx, client.ObjectKey{Namespace: benchCfg.LLMDNamespace, Name: res.VAName}, currentVA); vaErr == nil {
+					if currentVA.Status.DesiredOptimizedAlloc.NumReplicas != nil {
+						vaDesired = fmt.Sprintf("%d", *currentVA.Status.DesiredOptimizedAlloc.NumReplicas)
+					}
+				}
+
+				// HPA status
+				hpaCurrent, hpaDesired := "?", "?"
+				hpaList, hpaErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(benchCfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+				if hpaErr == nil {
+					for i := range hpaList.Items {
+						hpa := &hpaList.Items[i]
+						hpaCurrent = fmt.Sprintf("%d", hpa.Status.CurrentReplicas)
+						hpaDesired = fmt.Sprintf("%d", hpa.Status.DesiredReplicas)
+					}
+				}
+
+				// Consolidated single-line output matching test-multi-model-scaling format
+				GinkgoWriter.Printf("  [%s] replicas: spec=%d ready=%d | va=%s hpa=%s→%s | kv=%.4f qd=%.1f epp_qd=%.1f\n",
+					fmt.Sprintf("%.0fs", elapsed), spec, ready, vaDesired, hpaCurrent, hpaDesired,
+					snap.KVCache, snap.QueueDepth, snap.EPPQueueDepth)
 
 				// Pod-level health check for crash detection
 				pods, podErr := k8sClient.CoreV1().Pods(benchCfg.LLMDNamespace).List(ctx, metav1.ListOptions{
@@ -574,14 +598,6 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 								GinkgoWriter.Printf("  [%.0fs] Pod %s: restarts=%d state=%s\n", elapsed, p.Name, cs.RestartCount, reason)
 							}
 						}
-					}
-				}
-
-				hpaList, hpaErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(benchCfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
-				if hpaErr == nil {
-					for i := range hpaList.Items {
-						hpa := &hpaList.Items[i]
-						GinkgoWriter.Printf("  [%.0fs] HPA %s: current=%d desired=%d\n", elapsed, hpa.Name, hpa.Status.CurrentReplicas, hpa.Status.DesiredReplicas)
 					}
 				}
 			}
@@ -770,29 +786,54 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 		}
 		prefillResults = append(prefillResults, result)
 
-		GinkgoWriter.Printf("\n========================================\n")
-		GinkgoWriter.Printf("  %s PREFILL BENCHMARK RESULTS\n", autoscalerType)
-		GinkgoWriter.Printf("========================================\n")
-		GinkgoWriter.Printf("  Duration:        %.0fs\n", loadDuration)
-		GinkgoWriter.Printf("  Max Replicas:    %d\n", maxReplicas)
-		GinkgoWriter.Printf("  Avg Replicas:    %.2f\n", replicaAvg)
-		GinkgoWriter.Printf("  Avg Queue Depth: %.2f\n", qdAvg)
-		GinkgoWriter.Printf("  Avg EPP Queue:   %.2f\n", eppQDAvg)
-		GinkgoWriter.Printf("  Avg KV Cache:    %.3f\n", kvAvg)
-		if ttftJSON != nil {
-			GinkgoWriter.Printf("  TTFT:            %s\n", string(ttftJSON))
+		// Format TTFT/ITL/Throughput as p50/p90/p99 strings
+		formatPercentiles := func(raw json.RawMessage) string {
+			if raw == nil {
+				return "n/a"
+			}
+			var m map[string]interface{}
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return string(raw)
+			}
+			p50, _ := m["p50"].(float64)
+			p90, _ := m["p90"].(float64)
+			p99, _ := m["p99"].(float64)
+			if p50 == 0 && p90 == 0 && p99 == 0 {
+				return string(raw)
+			}
+			return fmt.Sprintf("p50=%.1f p90=%.1f p99=%.1f", p50, p90, p99)
 		}
-		if itlJSON != nil {
-			GinkgoWriter.Printf("  ITL:             %s\n", string(itlJSON))
-		}
-		if throughputJSON != nil {
-			GinkgoWriter.Printf("  Throughput:      %s\n", string(throughputJSON))
-		}
-		GinkgoWriter.Printf("  Replica Timeline (%d snapshots):\n", len(timeline))
+
+		GinkgoWriter.Printf("\n  ┌────────────────────────────────────────────────────────────\n")
+		GinkgoWriter.Printf("  │ %s PREFILL BENCHMARK RESULTS\n", autoscalerType)
+		GinkgoWriter.Printf("  │ Model: %s\n", benchCfg.ModelID)
+		GinkgoWriter.Printf("  ├────────────────────────────────────────────────────────────\n")
+		GinkgoWriter.Printf("  │ Duration:        %.0fs\n", loadDuration)
+		GinkgoWriter.Printf("  │ Final Replicas:  spec=%d\n", func() int32 {
+			d, e := k8sClient.AppsV1().Deployments(benchCfg.LLMDNamespace).Get(ctx, res.DeploymentName, metav1.GetOptions{})
+			if e != nil {
+				return 0
+			}
+			return *d.Spec.Replicas
+		}())
+		GinkgoWriter.Printf("  │ Max Replicas:    %d\n", maxReplicas)
+		GinkgoWriter.Printf("  │ Avg Replicas:    %.2f\n", replicaAvg)
+		GinkgoWriter.Printf("  ├── Prometheus Metrics ──────────────────────────────────────\n")
+		GinkgoWriter.Printf("  │ Avg KV Cache:    %.4f\n", kvAvg)
+		GinkgoWriter.Printf("  │ Avg Queue Depth: %.2f\n", qdAvg)
+		GinkgoWriter.Printf("  │ Avg EPP Queue:   %.2f\n", eppQDAvg)
+		GinkgoWriter.Printf("  ├── GuideLLM Results ────────────────────────────────────────\n")
+		GinkgoWriter.Printf("  │ Achieved RPS:    %.2f\n", achievedRPS)
+		GinkgoWriter.Printf("  │ TTFT (ms):       %s\n", formatPercentiles(ttftJSON))
+		GinkgoWriter.Printf("  │ ITL (ms):        %s\n", formatPercentiles(itlJSON))
+		GinkgoWriter.Printf("  │ Throughput:      %s\n", formatPercentiles(throughputJSON))
+		GinkgoWriter.Printf("  │ Errors:          %d\n", errorCount)
+		GinkgoWriter.Printf("  │ Incomplete:      %d\n", incompleteCount)
+		GinkgoWriter.Printf("  ├── Replica Timeline (%d snapshots) ─────────────────────────\n", len(timeline))
 		for _, s := range timeline {
-			GinkgoWriter.Printf("    t=%.0fs  spec=%d  ready=%d\n", s.ElapsedSec, s.SpecReplicas, s.ReadyReplicas)
+			GinkgoWriter.Printf("  │   t=%.0fs  spec=%d  ready=%d\n", s.ElapsedSec, s.SpecReplicas, s.ReadyReplicas)
 		}
-		GinkgoWriter.Printf("========================================\n\n")
+		GinkgoWriter.Printf("  └────────────────────────────────────────────────────────────\n\n")
 
 		By("Saving prefill benchmark results to file")
 		data, _ := json.MarshalIndent(prefillResults, "", "  ")
