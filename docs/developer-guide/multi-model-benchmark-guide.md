@@ -39,11 +39,12 @@ Get your login token from the OpenShift web console:
 oc login --token=sha256~XXXXXXXXXXXXXXXXXXXX --server=https://api.your-cluster.example.com:6443
 ```
 
-Verify access:
+Verify access and confirm which cluster you're connected to:
 
 ```bash
 oc whoami
-kubectl get nodes
+oc whoami --show-console
+oc whoami --show-server
 ```
 
 Check available GPUs on the cluster:
@@ -56,11 +57,21 @@ kubectl get nodes -o jsonpath='{range .items[?(@.status.allocatable.nvidia\.com/
 
 ## Step 2: Set Up Your Namespace
 
-Create a fresh namespace for the benchmark. Using a dedicated namespace avoids conflicts with other users. Replace `<your-namespace>` with a name of your choice. Mine was--> (e.g. `wva-bench-test`):
+First, check which namespaces you already have access to:
+
+```bash
+oc projects
+```
+
+If you have an existing namespace you can use, use that as `<your-namespace>` in the commands below.
+
+If you have cluster-admin access, create a fresh namespace:
 
 ```bash
 kubectl create namespace <your-namespace>
 ```
+
+> **Note**: If you get a `Forbidden` error, you don't have permission to create namespaces. Contact the cluster admin (Marcio Silva) to get admin access or have a namespace created for you.
 
 Label the namespace for OpenShift user-workload monitoring (so Prometheus can scrape metrics):
 
@@ -103,7 +114,7 @@ git checkout main
 
 ## Step 5: Run the Multi-Model Benchmark
 
-Replace `<your-namespace>` with your namespace (e.g. `wva-bench-test`):
+Replace `<your-namespace>` with your namespace:
 
 ```bash
 # 1. Undeploy previous run (clean slate)
