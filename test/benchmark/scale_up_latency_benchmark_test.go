@@ -42,8 +42,14 @@ const (
 
 var _ = Describe("Scale-Up Latency Benchmark", Label("benchmark"), Ordered, func() {
 	var (
+		res           ScenarioResources
+		results       BenchmarkResults
+		scenarioStart time.Time
+	)
+
+	BeforeAll(func() {
 		res = ScenarioResources{
-			PoolName:       "bench-pool",
+			PoolName:       benchCfg.PoolName,
 			ModelService:   "bench-ms",
 			DeploymentName: "bench-ms-decode",
 			ServiceName:    "bench-ms-service",
@@ -51,12 +57,6 @@ var _ = Describe("Scale-Up Latency Benchmark", Label("benchmark"), Ordered, func
 			HPAName:        "bench-hpa",
 			JobBaseName:    "bench-ms",
 		}
-
-		results       BenchmarkResults
-		scenarioStart time.Time
-	)
-
-	BeforeAll(func() {
 		setupBenchmarkScenario(res)
 		scenarioStart = time.Now()
 		GinkgoWriter.Println("Benchmark scenario starting")

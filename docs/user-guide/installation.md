@@ -4,22 +4,13 @@ This guide covers installing Workload-Variant-Autoscaler (WVA) on your Kubernete
 
 ## Prerequisites
 
-- Kubernetes v1.32.0 or later
+- Kubernetes v1.32.0 or later with administrator access or namespace-level permissions
 - Helm 3.x
 - kubectl configured to access your cluster
-- Cluster admin privileges
 
 ## Installation Methods
 
-### Option 1: Helm Installation
-See the [Helm Installation](../../charts/workload-variant-autoscaler/README.md) for detailed instructions.
-
-**Verify the installation:**
-```bash
-kubectl get pods -n workload-variant-autoscaler-system
-```
-
-### Option 2: Kustomize Installation
+### Option 1: Kustomize Installation (Recommended)
 
 Using kustomize for more control:
 
@@ -31,62 +22,28 @@ make install
 make deploy IMG=quay.io/llm-d/llm-d-workload-variant-autoscaler:latest
 ```
 
-### Option 3: Local Development (Kind Emulator):
-See the [Kind Emulator](../../deploy/kind-emulator/README.md) for detailed instructions.
+### Option 2: Helm Installation (Deprecated)
 
+See the [Helm Installation](../../charts/workload-variant-autoscaler/README.md) for detailed instructions.
 
-## Configuration
-
-### Helm Values
-
-Key configuration options:
-
-```yaml
-# custom-values.yaml
-image:
-  repository: quay.io/llm-d/llm-d-workload-variant-autoscaler
-  tag: latest
-  pullPolicy: IfNotPresent
-
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
-
-# Enable Prometheus monitoring
-prometheus:
-  enabled: true
-  servicemonitor:
-    enabled: true
-
-# Optional: Multi-controller isolation
-# Set a unique identifier for this controller instance
-# Useful for parallel testing or multi-tenant environments
-# See docs/user-guide/multi-controller-isolation.md
-wva:
-  controllerInstance: ""  # Leave empty for single controller
+**Verify the installation:**
+```bash
+kubectl get pods -n workload-variant-autoscaler-system
 ```
 
-### ConfigMaps
+### Option 3: Local Development and Testing
 
-WVA uses ConfigMaps for cluster configuration:
-
-- **Service Classes**: SLO definitions for different service tiers
-
-See [Configuration Guide](configuration.md) for details.
+See the [comprehensive deployment guide](../../deploy/README.md) for detailed instructions.
 
 ## Integrating with HPA/KEDA
 
 WVA can work with existing autoscalers:
 
 **For HPA integration:**
-See [HPA Integration Guide](../integrations/hpa-integration.md)
+See [HPA Integration Guide](hpa-integration.md)
 
 **For KEDA integration:**
-See [KEDA Integration Guide](../integrations/keda-integration.md)
+See [KEDA Integration Guide](keda-integration.md)
 
 ## Verifying Installation
 
@@ -108,15 +65,15 @@ See [KEDA Integration Guide](../integrations/keda-integration.md)
 
 ## Uninstallation
 
-**Helm:**
-```bash
-helm uninstall workload-variant-autoscaler -n workload-variant-autoscaler-system
-```
-
 **Kustomize:**
 ```bash
 make undeploy
 make uninstall  # Remove CRDs
+```
+
+**Helm:**
+```bash
+helm uninstall workload-variant-autoscaler -n workload-variant-autoscaler-system
 ```
 
 ## Troubleshooting
@@ -135,12 +92,10 @@ make uninstall  # Remove CRDs
 
 **See Also:**
 - [Configuration Guide](configuration.md)
-- [Troubleshooting Guide](troubleshooting.md) (coming soon)
+- [Troubleshooting Guide](troubleshooting.md)
 - [Developer Guide](../developer-guide/development.md)
 
 ## Next Steps
 
 - [Configure your first VariantAutoscaling resource](configuration.md)
-- [Follow the Quick Start Demo](../tutorials/demo.md)
-- [Set up integration with HPA](../integrations/hpa-integration.md)
-
+- [Set up integration with HPA](hpa-integration.md)

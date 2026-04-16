@@ -14,21 +14,12 @@ Getting started and using WVA:
 - **[Multi-Controller Isolation](user-guide/multi-controller-isolation.md)** - Running multiple WVA controller instances
 - **[LeaderWorkerSet Support](user-guide/LeaderWorkerSet-support.md)** - Supporting LeaderWorkerSets as scale targets
 
-### Tutorials
-
-Step-by-step guides:
-
-- **[Quick Start Demo](tutorials/demo.md)** - Getting started with WVA
-- **[Parameter Estimation](tutorials/parameter-estimation.md)** - Estimating model parameters
-- **[vLLM Samples](tutorials/vllm-samples.md)** - Working with vLLM servers
-- **[GuideLLM Sample](tutorials/guidellm-sample.md)** - Using GuideLLM for benchmarking
-
 ### Integrations
 
 Integration with other systems:
 
-- **[HPA Integration](integrations/hpa-integration.md)** - Using WVA with Horizontal Pod Autoscaler
-- **[KEDA Integration](integrations/keda-integration.md)** - Using WVA with KEDA
+- **[HPA Integration](user-guide/hpa-integration.md)** - Using WVA with Horizontal Pod Autoscaler
+- **[KEDA Integration](user-guide/keda-integration.md)** - Using WVA with KEDA
 - **[Prometheus Integration](integrations/prometheus.md)** - Custom metrics and monitoring
 
 ### Design & Architecture
@@ -45,7 +36,6 @@ Contributing to WVA:
 
 - **[Development Setup](developer-guide/development.md)** - Setting up your dev environment
 - **[Testing](developer-guide/testing.md)** - Running tests and CI workflows
-- **[Agentic Workflows](developer-guide/agentic-workflows.md)** - AI-powered automation workflows
 - **[Debugging](developer-guide/debugging.md)** - Debugging techniques and tools
 - **[Contributing](../CONTRIBUTING.md)** - How to contribute to the project
 
@@ -71,4 +61,3 @@ Contributing to WVA:
 ---
 
 **Note:** Documentation is continuously being improved. If you find errors or have suggestions, please open an issue or submit a PR!
-

@@ -89,6 +89,14 @@ deploy_llm_d_infrastructure() {
         log_info "Model ID matches guide default ($ACTUAL_DEFAULT_MODEL), no replacement needed"
     fi
 
+    # Ensure llm-d.ai/model label is unique per model for multi-model HPA isolation.
+    # The chart sets a default (e.g. "Qwen3-32B") that all deployments share,
+    # which causes AmbiguousSelector errors when multiple HPAs target different
+    # deployments with identical pod selectors.
+    local model_label_value
+    model_label_value=$(echo "$MODEL_ID" | sed 's|.*/||; s|\.|-|g')  # e.g. "Qwen3-0-6B", "Meta-Llama-3.1-8B"
+    log_info "Setting llm-d.ai/model label to: $model_label_value (unique per model)"
+    yq eval ".modelArtifacts.labels.\"llm-d.ai/model\" = \"$model_label_value\"" -i "$LLM_D_MODELSERVICE_VALUES"
     # Configure llm-d-inference-simulator if needed
     if [ "$DEPLOY_LLM_D_INFERENCE_SIM" == "true" ]; then
       log_info "Deploying llm-d-inference-simulator..."
@@ -101,10 +109,41 @@ deploy_llm_d_infrastructure() {
         log_info "Skipping llm-d-inference-simulator deployment (DEPLOY_LLM_D_INFERENCE_SIM=false)"
     fi
 
+    # Override llm-d container image tags if set (e.g. upgrade from v0.3.0 to v0.6.0)
+    if [ -n "$LLMD_IMAGE_TAG" ]; then
+      log_info "Overriding llm-d image tags to $LLMD_IMAGE_TAG"
+      yq eval ".decode.containers[0].image = \"ghcr.io/llm-d/llm-d-cuda:${LLMD_IMAGE_TAG}\"" -i "$LLM_D_MODELSERVICE_VALUES"
+      yq eval ".routing.proxy.image = \"ghcr.io/llm-d/llm-d-routing-sidecar:${LLMD_IMAGE_TAG}\"" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
     # Configure vLLM max-num-seqs if set (useful for e2e testing to force saturation)
     if [ -n "$VLLM_MAX_NUM_SEQS" ]; then
       log_info "Setting vLLM max-num-seqs to $VLLM_MAX_NUM_SEQS for decode containers"
       yq eval ".decode.containers[0].args += [\"--max-num-seqs=$VLLM_MAX_NUM_SEQS\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM GPU memory utilization if set
+    if [ -n "$VLLM_GPU_MEM_UTIL" ]; then
+      log_info "Setting vLLM gpu-memory-utilization to $VLLM_GPU_MEM_UTIL"
+      yq eval ".decode.containers[0].args += [\"--gpu-memory-utilization=$VLLM_GPU_MEM_UTIL\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM max-model-len if set
+    if [ -n "$VLLM_MAX_MODEL_LEN" ]; then
+      log_info "Setting vLLM max-model-len to $VLLM_MAX_MODEL_LEN"
+      yq eval ".decode.containers[0].args += [\"--max-model-len=$VLLM_MAX_MODEL_LEN\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM block-size if set
+    if [ -n "$VLLM_BLOCK_SIZE" ]; then
+      log_info "Setting vLLM block-size to $VLLM_BLOCK_SIZE"
+      yq eval ".decode.containers[0].args += [\"--block-size=$VLLM_BLOCK_SIZE\"]" -i "$LLM_D_MODELSERVICE_VALUES"
+    fi
+
+    # Configure vLLM enforce-eager if set
+    if [ -n "$VLLM_ENFORCE_EAGER" ] && [ "$VLLM_ENFORCE_EAGER" = "true" ]; then
+      log_info "Setting vLLM enforce-eager"
+      yq eval ".decode.containers[0].args += [\"--enforce-eager\"]" -i "$LLM_D_MODELSERVICE_VALUES"
     fi
 
     # Configure decode replicas if set (useful for e2e testing with limited GPUs)
@@ -169,6 +208,16 @@ deploy_llm_d_infrastructure() {
     else
       log_info "helmfile selector: (none)"
       helmfile apply -e "$GATEWAY_PROVIDER" -n "${LLMD_NS}"
+    fi
+
+    # Post-deploy workaround: Upstream EPP chart (v1.0.1) is missing RBAC for inferencemodelrewrites
+    log_info "Patching Role $LLM_D_EPP_NAME to include inferencemodelrewrites"
+    if kubectl get role "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
+        kubectl patch role "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[{"op": "add", "path": "/rules/0/resources/-", "value": "inferencemodelrewrites"}]' && \
+            log_success "Patched Role $LLM_D_EPP_NAME successfully" || \
+            log_warning "Failed to patch Role $LLM_D_EPP_NAME"
+    else
+        log_warning "Role $LLM_D_EPP_NAME not found, skipping RBAC patch"
     fi
 
     if [ "$E2E_TESTS_ENABLED" = "true" ] && [ "$INFRA_ONLY" = "true" ]; then

@@ -35,3 +35,6 @@ llmd-infra/
 
 *.tgz
 actionlint
+
+# AI
+.claude

@@ -56,7 +56,7 @@ The repository uses AI-powered workflows to automate repetitive tasks:
 - **Workflow Creation**: Interactive designer for new workflows
 - **Workflow Debugging**: Assists with troubleshooting
 
-Learn more in the [Agentic Workflows Guide](docs/developer-guide/agentic-workflows.md).
+Learn more in the [Developer Guide](docs/developer-guide/development.md).
 
 ## WVA Project Structure
 

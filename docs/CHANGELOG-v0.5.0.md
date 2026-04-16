@@ -41,7 +41,7 @@ T+90s: variant-1 ready (PendingReplicas=0), eligible again
 - ✅ Maintains cost-optimized scaling across variants
 
 **Documentation:**
-- [Saturation Analyzer - Cascade Scaling Prevention](saturation-analyzer.md#cascade-scaling-prevention)
+- [Saturation Analyzer - Cascade Scaling Prevention](user-guide/saturation-analyzer.md#cascade-scaling-prevention)
 - [Saturation Scaling Config](saturation-scaling-config.md#how-scale-up-triggers-work)
 
 ### 2. Prometheus Configuration via Environment Variables
@@ -250,6 +250,6 @@ E2E tests updated:
 ---
 
 For detailed implementation, see:
-- [Saturation Analyzer Documentation](saturation-analyzer.md)
+- [Saturation Analyzer Documentation](user-guide/saturation-analyzer.md)
 - [Prometheus Integration](integrations/prometheus.md)
 - [Configuration Guide](user-guide/configuration.md)

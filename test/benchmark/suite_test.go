@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -83,8 +84,26 @@ var _ = BeforeSuite(func() {
 
 	ctx, cancel = context.WithCancel(context.Background()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
 
+	// Determine Prometheus service name based on environment
+	promServiceName := "kube-prometheus-stack-prometheus"
+	promNamespace := benchCfg.MonitoringNS
+	promServicePort := 9090
+	if benchCfg.Environment == "openshift" {
+		promServiceName = "thanos-querier"
+		promNamespace = "openshift-monitoring"
+		// Try to fetch the service to get the correct port
+		svc, err := k8sClient.CoreV1().Services(promNamespace).Get(ctx, promServiceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred(), "Failed to get thanos-querier service")
+		for _, port := range svc.Spec.Ports {
+			if port.Name == "web" {
+				promServicePort = int(port.Port)
+				break
+			}
+		}
+	}
+
 	By("Setting up port-forward to Prometheus")
-	portForwardCmd = utils.SetUpPortForward(k8sClient, ctx, "kube-prometheus-stack-prometheus", benchCfg.MonitoringNS, 9090, 9090)
+	portForwardCmd = utils.SetUpPortForward(k8sClient, ctx, promServiceName, promNamespace, 9090, promServicePort)
 
 	By("Verifying Prometheus port-forward is ready")
 	err = utils.VerifyPortForwardReadiness(ctx, 9090, "https://localhost:9090/-/ready")

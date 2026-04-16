@@ -33,6 +33,7 @@ import (
 
 	"github.com/go-logr/logr"
 	flag "github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
@@ -41,6 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -65,6 +67,7 @@ import (
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	corev1 "k8s.io/api/core/v1"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	inferencePoolV1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	inferencePoolV1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
@@ -346,6 +349,27 @@ func main() {
 		mgrOptions.Cache = cache.Options{
 			DefaultNamespaces: map[string]cache.Config{
 				watchNS: {},
+			},
+		}
+	} else {
+		// Multi-namespace mode: Use label selector to filter ConfigMaps in the cache
+		// This significantly reduces memory usage by only caching WVA-related configmaps
+		wvaConfigSelector := labels.SelectorFromSet(labels.Set{
+			"app.kubernetes.io/name": "workload-variant-autoscaler",
+		})
+
+		setupLog.Info("Configuring cache with label selector for ConfigMaps",
+			"labelSelector", wvaConfigSelector.String())
+
+		// Configure cache to only watch configmaps with the WVA labels
+		// Other resource types are cached normally without filtering
+		mgrOptions.Cache = cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {
+					// Empty map means cache all namespaces, but filter by label
+					Namespaces: map[string]cache.Config{},
+					Label:      wvaConfigSelector,
+				},
 			},
 		}
 	}

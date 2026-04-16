@@ -201,9 +201,97 @@ load_image() {
         fi
     fi
     
-    # Load the image into the KIND cluster
-    kind load docker-image "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG" --name "$CLUSTER_NAME"
-    log_success "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' loaded into KIND cluster '$CLUSTER_NAME'"
+    # Load the image into the KIND cluster.
+    # Try `kind load docker-image` first. If it fails (common with Docker Desktop's
+    # containerd image store where `docker save` chokes on multi-platform manifests),
+    # fall back to pulling the image directly into each KIND node's containerd.
+    local full_image="$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
+    local load_stderr
+    if load_stderr="$(kind load docker-image "$full_image" --name "$CLUSTER_NAME" 2>&1)"; then
+        log_success "Image '$full_image' loaded into KIND cluster '$CLUSTER_NAME'"
+        return
+    fi
+
+    # Only fall back to the crictl/ctr path for the known containerd image store
+    # issue (docker save fails on multi-platform manifests, kubernetes-sigs/kind#3795).
+    # For any other error, report it and abort.
+    if ! echo "$load_stderr" | grep -qiE "docker save|multi-?platform|manifest|content digest|no such image|not found"; then
+        log_error "'kind load docker-image' failed:"
+        log_error "$load_stderr"
+        exit 1
+    fi
+
+    log_warning "'kind load docker-image' failed (containerd image store issue) — falling back to pulling directly into KIND nodes"
+    log_info "kind load stderr: $load_stderr"
+
+    # Pull the image directly into each KIND node's containerd, bypassing
+    # Docker Desktop entirely. This avoids the `docker save` multi-platform
+    # manifest issue (kubernetes-sigs/kind#3795).
+    local nodes
+    nodes="$(kind get nodes --name "$CLUSTER_NAME")" || {
+        log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
+        exit 1
+    }
+    if [ -z "$nodes" ]; then
+        log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
+        exit 1
+    fi
+
+    # Detect if an image reference is qualified with an explicit registry hostname.
+    # Heuristic used by Docker/containerd/podman:
+    # If the first '/'-separated segment contains a '.', a ':', or equals 'localhost',
+    # it is treated as a registry hostname (e.g., quay.io/foo, registry.k8s.io/pause,
+    # localhost:5000/myimg).
+    local first_segment
+    first_segment="${full_image%%/*}"
+    local has_explicit_registry=false
+    case "$first_segment" in
+        *.*|*:*|localhost) has_explicit_registry=true ;;
+    esac
+
+    local successful_nodes=()
+    for node in $nodes; do
+        log_info "Pulling image on node '$node'..."
+        local pull_stderr
+        if pull_stderr="$(docker exec "$node" crictl pull "$full_image" 2>&1)"; then
+            successful_nodes+=("$node")
+            continue
+        fi
+        log_warning "crictl pull failed on node '$node': $pull_stderr"
+
+        # crictl may not resolve short names; try with docker.io prefix, but
+        # only for unqualified image names (no registry hostname prefix like quay.io/).
+        if [ "$has_explicit_registry" = true ]; then
+            log_error "Failed to pull image on node '$node' (image has explicit registry, skipping docker.io fallback): $pull_stderr"
+            # Best-effort rollback to avoid partial cluster state.
+            for ok_node in "${successful_nodes[@]}"; do
+                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+            done
+            exit 1
+        fi
+
+        if pull_stderr="$(docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>&1)"; then
+            # Tag so kubelet can find it by the original name, but only if it doesn't already exist.
+            if ! docker exec "$node" ctr --namespace=k8s.io images ls -q | grep -Fxq "$full_image"; then
+                if ! docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" >/dev/null 2>&1; then
+                    log_error "Failed to tag image on node '$node' (docker.io/$full_image -> $full_image)"
+                    for ok_node in "${successful_nodes[@]}"; do
+                        docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+                    done
+                    exit 1
+                fi
+            fi
+            successful_nodes+=("$node")
+        else
+            log_error "Failed to pull image on node '$node': $pull_stderr"
+            for ok_node in "${successful_nodes[@]}"; do
+                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
+            done
+            exit 1
+        fi
+    done
+
+    log_success "Image '$full_image' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
 }
 
 KUBE_LIKE_VALUES_DEV_IF_PRESENT=true

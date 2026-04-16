@@ -1,0 +1,14 @@
+# Example VariantAutoscaling for HPA/KEDA integration.
+# Ensure a Deployment named sample-deployment exists in llm-d-sim (e.g. from kind-emulator or e2e).
+apiVersion: llmd.ai/v1alpha1
+kind: VariantAutoscaling
+metadata:
+  name: sample-deployment
+  namespace: llm-d-sim
+  labels:
+    inference.optimization/acceleratorName: A100
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: sample-deployment
+  modelID: default/default

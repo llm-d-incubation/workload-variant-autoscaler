@@ -1,112 +1,49 @@
 # Configuration Guide
 
-This guide explains how to configure Workload-Variant-Autoscaler for your workloads.
+This guide explains how to configure Workload Variant Autoscaler for your workloads.
 
-## Deployment Lifecycle Management
+- [Enabling Autoscaling for a Model Deployment](#enabling-autoscaling-for-a-model-deployment)
+- [Operating mode overview](#operating-mode)
+  - [Saturation behavior](#saturation-mode)
+- [ConfigMaps](#configmaps)
+  - [Precedence rules](#configuration-precedence)
+  - [Immutable vs mutable settings](#immutable-vs-mutable-parameters)
+    - [Immutable settings (restart required)](#immutable-parameters-require-restart)
+    - [Mutable settings (runtime updates)](#mutable-parameters-runtime-updates)
+  - [Immutable ConfigMap hardening](#immutable-configmap-security-hardening)
+  - [Namespace-local overrides](#namespace-local-configmap-overrides)
+  - [Main configuration ConfigMap](#main-configuration-configmap)
+  - [Environment variable configuration](#configuration-via-environment-variables)
+  - [CLI flag configuration](#configuration-via-cli-flags)
+  - [Parameter reference](#configuration-parameter-reference)
+  - [Fail-fast validation](#fail-fast-validation)
+  - [Update behavior](#configuration-update-behavior)
+- [Configuration options](#configuration-options)
+  - [Required fields](#required-fields)
+  - [Optional fields](#optional-fields)
+- [Cost configuration](#cost-configuration)
+  - [variantCost](#variantcost-optional)
+- [Advanced options](#advanced-options)
+- [Best practices](#best-practices)
+  - [Environment variables](#environment-variables)
+  - [Cost optimization](#cost-optimization)
+  - [Deployment configuration](#deployment-configuration)
+- [Monitoring configuration](#monitoring-configuration)
+  - [Prometheus metrics](#prometheus-metrics)
+- [Multi-controller environments](#multi-controller-environments)
+- [Troubleshooting configuration](#troubleshooting-configuration)
+  - [Common issues](#common-issues)
+- [Next steps](#next-steps)
 
-### Creating VariantAutoscaling Resources
 
-WVA automatically handles the relationship between VariantAutoscaling (VA) resources and their target Deployments:
+## Enabling Autoscaling for a Model Deployment
 
-**Recommended Order:**
-```bash
-# 1. Create and verify the deployment is ready
-kubectl apply -f deployment.yaml
-kubectl wait --for=condition=available deployment/llama-8b --timeout=300s
+You can enable autoscaling for your model deployment by creating a `VariantAutoscaling` resource that references your deployment and model ID and a backend autoscaler (HPA or KEDA).
 
-# 2. Create the VariantAutoscaling resource
-kubectl apply -f variantautoscaling.yaml
-```
+Choose between the following approaches:
 
-**Race Condition Protection:**
-
-WVA handles the race condition where a VA is created before its target deployment exists. If you create a VA before its deployment:
-
-1. VA is created with status indicating the deployment is not found
-2. When the deployment is created, WVA automatically detects it
-3. VA immediately begins monitoring and autoscaling (no wait for periodic reconciliation)
-
-```yaml
-# VA created first - will automatically detect deployment when it appears
-apiVersion: llmd.ai/v1alpha1
-kind: VariantAutoscaling
-metadata:
-  name: llama-8b-autoscaler
-spec:
-  scaleTargetRef:
-    name: llama-8b  # Deployment doesn't exist yet
-  # ... other config
-```
-
-### Deployment Deletion Handling
-
-When a target deployment is deleted, WVA immediately:
-
-1. **Updates VA Status**: Marks the VA as not ready with reason `DeploymentNotFound`
-2. **Clears Metrics**: Removes stale metrics to prevent incorrect autoscaling decisions
-3. **Maintains VA Resource**: The VA itself is not deleted and will resume operation when deployment is recreated
-
-**Example Status After Deployment Deletion:**
-
-```yaml
-status:
-  conditions:
-  - type: Ready
-    status: "False"
-    reason: "DeploymentNotFound"
-    message: "Target deployment 'llama-8b' no longer exists"
-  desiredOptimizedAlloc: {}  # Cleared to reflect no deployment
-```
-
-**Recovery Process:**
-
-When the deployment is recreated, WVA automatically:
-1. Detects the new deployment immediately (via Create event)
-2. Updates VA status to Ready
-3. Resumes monitoring and autoscaling
-
-No manual intervention required!
-
-### Best Practices
-
-1. **Always specify scaleTargetRef explicitly** when the deployment name differs from the model ID:
-   ```yaml
-   spec:
-     scaleTargetRef:
-       name: my-custom-deployment-name
-     modelId: "meta-llama/Llama-3.1-8B"
-   ```
-
-2. **Monitor VA status** to detect deployment issues:
-   ```bash
-   kubectl get va llama-8b-autoscaler -o jsonpath='{.status.conditions[?(@.type=="Ready")]}'
-   ```
-
-3. **Use consistent naming** - naming your deployment and VA with related names helps with operational clarity.
-
-## VariantAutoscaling Resource
-
-The `VariantAutoscaling` CR is the primary configuration interface for WVA.
-
-### Basic Example
-
-```yaml
-apiVersion: llmd.ai/v1alpha1
-kind: VariantAutoscaling
-metadata:
-  name: llama-8b-autoscaler
-  namespace: llm-inference
-spec:
-  scaleTargetRef:
-    kind: Deployment
-    name: llama-8b
-  modelID: "meta/llama-3.1-8b"
-  variantCost: "10.0"  # Optional, defaults to "10.0"
-```
-
-### Complete Reference
-
-For complete field documentation, see the [CRD Reference](crd-reference.md).
+- [With HPA](hpa-integration.md) - Use Kubernetes HPA for autoscaling based on WVA's custom metrics
+- [With KEDA](keda-integration.md) - Use KEDA for autoscaling based on WVA's custom metrics
 
 ## Operating Mode
 
@@ -120,7 +57,7 @@ WVA operates in **saturation mode**.
 - **Pros**: Fast response (<30s), predictable, no model training needed
 - **Cons**: Reactive (scales after saturation detected)
 
-See [Saturation Analyzer Documentation](../../docs/saturation-analyzer.md) for configuration details.
+See [Saturation Analyzer Documentation](saturation-analyzer.md) for configuration details.
 
 ## ConfigMaps
 
@@ -634,67 +571,14 @@ See [Prometheus Integration](../integrations/prometheus.md) for detailed Prometh
 
 WVA exposes metrics for monitoring and integrates with HPA for automatic scaling.
 
-### Safety Net Behavior
-
-WVA includes a **safety net** that prevents HPA from using stale metrics during failures:
-
-1. **Normal Operation**: Emits `wva_desired_replicas` with optimized targets
-2. **Capacity Analysis Fails**:
-   - Uses previous desired replicas (from last successful run)
-   - If unavailable, uses current replicas (safe no-op)
-3. **Log Messages**: Watch for `"Safety net activated"` in controller logs
-
-**Check Safety Net Activation:**
-```bash
-# Controller logs
-kubectl logs -n llm-d-scheduler deployment/wva-controller | grep "Safety net activated"
-
-# Should see:
-# "Safety net activated: emitted fallback metrics"
-#   variant=my-va
-#   currentReplicas=2
-#   desiredReplicas=2
-#   fallbackSource=current-replicas
-```
-
-**Why This Matters:**
-- Prevents HPA from scaling based on stale metrics
-- Provides graceful degradation during Prometheus outages
-- Emits safe no-op signals (current=desired) when no history available
-
 ### Prometheus Metrics
 
 See:
 - [Prometheus Integration](../integrations/prometheus.md)
 - [Custom Metrics](../integrations/prometheus.md#custom-metrics)
 
-## Examples
-
-More configuration examples in:
-- [config/samples/](../../config/samples/)
-- [Tutorials](../tutorials/)
 
 ## Multi-Controller Environments
-
-When running multiple WVA controller instances in the same cluster (e.g., for parallel testing, multi-tenant setups, or canary deployments), use the **controller instance isolation** feature to prevent metric conflicts and ensure proper VA resource management.
-
-### Quick Example
-
-```yaml
-# Helm values for controller instance A
-wva:
-  controllerInstance: "instance-a"
-
----
-# Helm values for controller instance B
-wva:
-  controllerInstance: "instance-b"
-```
-
-Each controller will:
-- Only manage VAs with matching `wva.llmd.ai/controller-instance` label
-- Emit metrics with `controller_instance` label
-- Have HPAs that filter metrics by `controller_instance`
 
 For complete documentation, see [Multi-Controller Isolation Guide](multi-controller-isolation.md).
 
@@ -720,6 +604,5 @@ For complete documentation, see [Multi-Controller Isolation Guide](multi-control
 
 ## Next Steps
 
-- [Run the Quick Start Demo](../tutorials/demo.md)
-- [Integrate with HPA](../integrations/hpa-integration.md)
+- [Integrate with HPA](hpa-integration.md)
 - [Set up Prometheus monitoring](../integrations/prometheus.md)

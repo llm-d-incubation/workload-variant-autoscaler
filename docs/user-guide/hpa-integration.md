@@ -58,7 +58,7 @@ helm install prometheus-adapter prometheus-community/prometheus-adapter \
 
 ```sh
 # Apply the VariantAutoscaling resource if not already there (ensure target Deployment exists, e.g. from kind-emulator)
-kubectl apply -f config/samples/variantautoscaling-integration.yaml
+kubectl apply -f config/samples/hpa/va.yaml
 ```
 
 ### 5. Deploy the HPA resource
@@ -67,7 +67,7 @@ Note: a `yaml` example snippet for HPA can be found [at the end of this doc](#hp
 
 ```sh
 # Deploy HPA for your deployments
-kubectl apply -f config/samples/hpa-integration.yaml
+kubectl apply -f config/samples/hpa/hpa.yaml
 ```
 
 ### 6. Verify the integration
@@ -149,7 +149,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-sim/wv
 
 ```sh
 # If you deployed workload-variant-autoscaler with llm-d:
-kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80 
+kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80
 
 # If you deployed workload-variant-autoscaler without llm-d, port-forward your model service (e.g. the Deployment's Service) on 8000:80.
 ```
@@ -434,7 +434,7 @@ hpa:
 - **stabilizationWindowSeconds**: Time HPA waits before applying scaling decisions
   - Higher values = more stable (prevents flapping)
   - Lower values = more responsive (faster scaling)
-  
+
 - **selectPolicy**: How to choose from multiple policies
   - `Max`: Maximum scale allowed by any policy (most aggressive)
   - `Min`: Minimum scale allowed by any policy (most conservative)
@@ -461,7 +461,7 @@ rules:
     resources:
       overrides:
         exported_namespace: {resource: "namespace"}
-        variant_name: {resource: "deployment"}  
+        variant_name: {resource: "deployment"}
     name:
       matches: "^wva_desired_replicas"
       as: "wva_desired_replicas"
@@ -487,7 +487,7 @@ extraArguments:
   - --prometheus-ca-file=/etc/prometheus-ca/ca.crt
 ```
 
-### HPA Configuration Example (`config/samples/hpa-integration.yaml`)
+### HPA Configuration Example (`config/samples/hpa/hpa.yaml`)
 
 ```yaml
 apiVersion: autoscaling/v2

@@ -981,19 +981,36 @@ func (p *PrometheusClient) API() promv1.API {
 	return p.client
 }
 
+type authRoundTripper struct {
+	token string
+	rt    http.RoundTripper
+}
+
+func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	return a.rt.RoundTrip(req)
+}
+
 // creates a new Prometheus client for e2e tests
 func NewPrometheusClient(baseURL string, insecureSkipVerify bool) (*PrometheusClient, error) {
 	config := promAPI.Config{
 		Address: baseURL,
 	}
 
-	if insecureSkipVerify {
-		roundTripper := promAPI.DefaultRoundTripper
-		if rt, ok := roundTripper.(*http.Transport); ok {
+	roundTripper := promAPI.DefaultRoundTripper
+	if rt, ok := roundTripper.(*http.Transport); ok {
+		if insecureSkipVerify {
 			rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		}
-		config.RoundTripper = roundTripper
 	}
+
+	if token := os.Getenv("PROMETHEUS_TOKEN"); token != "" {
+		roundTripper = &authRoundTripper{
+			token: token,
+			rt:    roundTripper,
+		}
+	}
+	config.RoundTripper = roundTripper
 
 	client, err := promAPI.NewClient(config)
 	if err != nil {

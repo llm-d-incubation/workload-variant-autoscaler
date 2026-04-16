@@ -706,7 +706,7 @@ The `VLLM_MAX_NUM_SEQS` variable controls the maximum number of concurrent seque
 
 **Use cases:**
 - **E2E Testing**: Set to low values (e.g., `8` or `16`) to quickly trigger saturation and test autoscaling
-- **Parameter Estimation**: Match this to your desired maximum batch size (see [Parameter Estimation Guide](../docs/tutorials/parameter-estimation.md))
+- **Parameter Estimation**: Match this to your desired maximum batch size (see [Configuration Guide](../docs/user-guide/configuration.md))
 - **Production**: Leave unset to use vLLM's default based on available GPU memory
 
 **Example:**

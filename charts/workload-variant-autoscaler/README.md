@@ -248,7 +248,7 @@ HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
 - **Development**: Use 30-60 seconds for faster iteration
 - **E2E Tests**: Use 30 seconds for rapid validation
 
-See [HPA Integration Guide](../../docs/integrations/hpa-integration.md) for detailed information.
+See [HPA Integration Guide](../../docs/user-guide/hpa-integration.md) for detailed information.
 
 ### Usage Examples
 

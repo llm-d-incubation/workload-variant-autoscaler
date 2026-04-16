@@ -41,10 +41,10 @@ helm install keda kedacore/keda \
   --set prometheus.operator.enabled=true
 ```
 
-2. Apply the sample KEDA ScaledObject configuration. A full example is in `config/samples/keda-scaled-object.yaml` and [at the end of this doc](#keda-scaledobject-configuration-example-configsampleskeda-scaled-objectyaml).
+2. Apply the sample KEDA ScaledObject configuration. A full example is in `config/samples/keda/scaledobject.yaml` and [at the end of this doc](#keda-scaledobject-configuration-example-configsampleskeda-scaledobjectyaml).
 
 ```bash
-kubectl apply -f config/samples/keda-scaled-object.yaml
+kubectl apply -f config/samples/keda/scaledobject.yaml
 ```
 
 3. Verify the installation:
@@ -53,7 +53,7 @@ kubectl apply -f config/samples/keda-scaled-object.yaml
 # Check KEDA resources
 kubectl get scaledobjects -n llm-d-sim
 
-kubectl get scaledobjects.keda.sh -n llm-d-sim                              
+kubectl get scaledobjects.keda.sh -n llm-d-sim
 NAME                      SCALETARGETKIND      SCALETARGETNAME    MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED    TRIGGERS     AUTHENTICATIONS   AGE
 sample-deployment-scaler   apps/v1.Deployment   sample-deployment         10    True    False    False      Unknown   prometheus                     33m
 ```
@@ -72,10 +72,10 @@ kubectl get events -n llm-d-sim --field-selector type=Normal
 
 ```bash
 # Ensure the target Deployment exists (e.g. from kind-emulator), then apply the VariantAutoscaling:
-kubectl apply -f config/samples/variantautoscaling-integration.yaml
+kubectl apply -f config/samples/keda/va.yaml
 ```
 
-5. Verify the HorizontalPodAutoscaler deployed by the ScaledObject and used by KEDA. After a while, you should see that it is correcly receiving metrics:
+5. Verify the HorizontalPodAutoscaler deployed by the ScaledObject and used by KEDA. After a while, you should see that it is correctly receiving metrics:
 
 ```bash
 kubectl get hpa -n llm-d-sim
@@ -152,7 +152,7 @@ kubectl get events -n llm-d-sim --field-selector type=Normal -w
 ```
 
 ```bash
-# Monitor deployment scaling events specifically  
+# Monitor deployment scaling events specifically
 kubectl get events -n llm-d-sim --field-selector involvedObject.name=sample-deployment
 ```
 
@@ -173,7 +173,7 @@ kubectl get events -n llm-d-sim | grep -i keda
 
 ```sh
 # If you deployed workload-variant-autoscaler with llm-d:
-kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80 
+kubectl port-forward -n llm-d-sim svc/infra-sim-inference-gateway 8000:80
 ```
 
 2. Launch the load generator (burst script; requires only `curl`). From repo root, with the vLLM service port-forwarded to localhost:8000:
@@ -196,7 +196,7 @@ wva-keda-hpa-sample-deployment   Deployment/sample-deployment   1/1 (avg)   1   
 wva-keda-hpa-sample-deployment   Deployment/sample-deployment   2/1 (avg)   1         10        1          6m1s
 wva-keda-hpa-sample-deployment   Deployment/sample-deployment   1/1 (avg)   1         10        2          6m16s
 
-kubectl get va -n llm-d-sim 
+kubectl get va -n llm-d-sim
 NAME               MODEL             ACCELERATOR   CURRENTREPLICAS   OPTIMIZED   AGE
 sample-deployment   default/default   A100          1                 2           11m
 
@@ -233,7 +233,7 @@ kubectl logs -n workload-variant-autoscaler-system deploy/workload-variant-autos
 2025-09-12T17:03:42.172298176Z {"level":"INFO","ts":"2025-09-12T17:03:42.172Z","msg":"Reconciliation completed - variants_processed: 1, optimization_successful: true"}
 ```
 
-### KEDA ScaledObject Configuration Example (`config/samples/keda-scaled-object.yaml`)
+### KEDA ScaledObject Configuration Example (`config/samples/keda/scaledobject.yaml`)
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
@@ -250,7 +250,7 @@ spec:
     apiVersion: apps/v1                  # default
     kind: Deployment                     # default
     name: sample-deployment
-  
+
   # Scaling configuration
   pollingInterval: 5                     # Check metrics every 5 seconds
   cooldownPeriod: 30                     # Wait 30 seconds before scaling to 0
@@ -264,7 +264,7 @@ spec:
     replicas: 2                          # Fallback to 2 replicas
     behavior: "currentReplicasIfHigher"  # If the current number of replicas is higher than fallback.replicas, this value will be used as fallback replicas.
                                          # If the current number of replicas is lower, the value of fallback.replicas will be used.
-  
+
   # Advanced HPA configuration
   advanced:
     restoreToOriginalReplicaCount: false
@@ -281,7 +281,7 @@ spec:
             value: 5                          # Scale down by max 4 pods at a time
             periodSeconds: 15
         scaleUp:
-          stabilizationWindowSeconds: 0      
+          stabilizationWindowSeconds: 0
           policies:
           - type: Percent
             value: 100                        # Scale up by max 100% at a time
@@ -297,7 +297,7 @@ spec:
     metadata:
       # Prometheus server address
       serverAddress: https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090
-      
+
       # Use wva_desired_replicas as the scaling metric
       query: |
         wva_desired_replicas{
@@ -306,9 +306,9 @@ spec:
         }
 
       # Scaling configuration for wva_desired_replicas metric (integer values)
-      threshold: '1'                       
+      threshold: '1'
       activationThreshold: '0'             # Activation: scale out from 0 when the metric is above 0
-      metricType: "AverageValue"           
+      metricType: "AverageValue"
 
       unsafeSsl: "true"                    # Skip SSL verification for self-signed certificates
 ```

@@ -38,6 +38,13 @@ func LoadConfigFromEnv() BenchmarkConfig {
 		gatewayServiceDefault = "infra-sim-inference-gateway-istio"
 	}
 
+	if shared.PoolName == "" {
+		shared.PoolName = "gaie-inference-scheduling"
+		if shared.Environment == "kind-emulator" {
+			shared.PoolName = "gaie-sim"
+		}
+	}
+
 	return BenchmarkConfig{
 		SharedConfig: shared,
 

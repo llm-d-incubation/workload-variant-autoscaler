@@ -8,7 +8,7 @@ The Workload Variant Autoscaler (WVA) is a Kubernetes-based global autoscaler fo
 
 ### What is a variant?
 
-In WVA, a **variant** is a way of serving a given model: a scale target (Deployment, StatefulSet, or LWS) with a particular combination of hardware, runtimes, and serving approach. Variants for the same model share the same base model (e.g. meta/llama-3.1-8b); LoRA adapters can differ per variant. Each variant is a distinct setup—e.g. different accelerators (A100, H100, L4), parallelism, or performance requirements. Create one `VariantAutoscaling` per variant; when several variants serve the same model, WVA chooses which to scale (e.g. add capacity on the cheapest variant, remove it from the most expensive). See [Configuration](docs/user-guide/configuration.md) and [Saturation Analyzer](docs/saturation-analyzer.md) for details.
+In WVA, a **variant** is a way of serving a given model: a scale target (Deployment, StatefulSet, or LWS) with a particular combination of hardware, runtimes, and serving approach. Variants for the same model share the same base model (e.g. meta/llama-3.1-8b); LoRA adapters can differ per variant. Each variant is a distinct setup—e.g. different accelerators (A100, H100, L4), parallelism, or performance requirements. Create one `VariantAutoscaling` per variant; when several variants serve the same model, WVA chooses which to scale (e.g. add capacity on the cheapest variant, remove it from the most expensive). See [Configuration](docs/user-guide/configuration.md) and [Saturation Analyzer](docs/user-guide/saturation-analyzer.md) for details.
 
 <!--
 <![Architecture](docs/design/diagrams/inferno-WVA-design.png)>
@@ -29,16 +29,9 @@ In WVA, a **variant** is a way of serving a given model: a scale target (Deploym
 - [CRD Reference](docs/user-guide/crd-reference.md)
 - [Multi-Controller Isolation](docs/user-guide/multi-controller-isolation.md)
 
-<!-- 
-
-### Tutorials
-- [Quick Start Demo](docs/tutorials/demo.md)
-- [Parameter Estimation](docs/tutorials/parameter-estimation.md)
-- [vLLM Server Setup](docs/tutorials/vllm-samples.md)
--->
 ### Integrations
-- [HPA Integration](docs/integrations/hpa-integration.md)
-- [KEDA Integration](docs/integrations/keda-integration.md)
+- [HPA Integration](docs/user-guide/hpa-integration.md)
+- [KEDA Integration](docs/user-guide/keda-integration.md)
 - [Prometheus Metrics](docs/integrations/prometheus.md)
 
 <!-- 

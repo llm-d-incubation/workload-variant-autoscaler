@@ -9,39 +9,40 @@ The Workload Variant Autoscaler supports saturation-based scaling using KV cache
 - ✅ **Efficient caching** with single read on startup (zero API calls during reconciliation)
 - ✅ **Automatic reload** via ConfigMap watch (immediate response to changes)
 - ✅ **Thread-safe** concurrent access with RWMutex
-- ✅ Graceful degradation to defaults if ConfigMap missing
+- ✅ Graceful degradation if ConfigMap missing (V2 has hardcoded defaults; V1 requires ConfigMap — see [Default Configuration](#default-configuration))
 
 ## Configuration
 
 ### ConfigMap Structure
 
-The saturation scaling configuration is stored in a ConfigMap named `capacity-scaling-config` in the Workload Variant Autoscaler controller's namespace.
+The saturation scaling configuration is stored in a ConfigMap named `wva-saturation-scaling-config` in the Workload Variant Autoscaler controller's namespace.
 
-**Location:** `deploy/configmap-capacity-scaling.yaml`
+**Location:** `deploy/configmap-saturation-scaling.yaml`
 
 ### Parameters
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
+| Parameter | Type | Description | Recommended |
+|-----------|------|-------------|-------------|
 | `kvCacheThreshold` | float64 | Replica is considered saturated if KV cache utilization ≥ threshold (0.0-1.0) | 0.80 |
-| `queueLengthThreshold` | int | Replica is considered saturated if queue length ≥ threshold | 5 |
+| `queueLengthThreshold` | float64 | Replica is considered saturated if queue length ≥ threshold | 5 |
 | `kvSpareTrigger` | float64 | Scale-up signal if average spare KV capacity < trigger (0.0-1.0) | 0.10 |
-| `queueSpareTrigger` | int | Scale-up signal if average spare queue capacity < trigger | 3 |
+| `queueSpareTrigger` | float64 | Scale-up signal if average spare queue capacity < trigger | 3 |
 
 ### Default Configuration
 
-The default configuration is automatically used if:
-- The ConfigMap is not deployed
-- The ConfigMap exists but has no `default` entry
-- An entry fails validation
+The recommended values for the V1 (percentage-based) saturation analyzer are:
 
-**Default values:**
 ```yaml
 kvCacheThreshold: 0.80
 queueLengthThreshold: 5
 kvSpareTrigger: 0.1
 queueSpareTrigger: 3
 ```
+
+> **Important:** These V1 threshold values are **not hardcoded** in the analyzer code.
+> If the ConfigMap is missing or has no `default` entry, all V1 thresholds default to zero,
+> which will cause every replica to appear saturated and trigger continuous scale-up.
+> Always deploy the ConfigMap with a `default` entry containing valid thresholds.
 
 ### How Scale-Up Triggers Work
 
@@ -70,12 +71,12 @@ The saturation analyzer uses a **spare capacity model** to determine when to sca
 - Replica A: 65% KV cache usage → Spare capacity: 0.15
 - Replica B: 72% KV cache usage → Spare capacity: 0.08
 - Average spare KV: (0.15 + 0.08) / 2 = **0.115**
-- Since 0.115 > 0.10, no scale-up yet
-- If Replica B increases to 75%: Average spare = 0.10 → **Scale-up triggered**
+- Since 0.115 ≥ 0.10, no scale-up yet (trigger uses strict `<`)
+- If Replica B increases to 76%: Average spare = (0.15 + 0.04) / 2 = **0.095** → 0.095 < 0.10 → **Scale-up triggered**
 
 This proactive approach ensures adequate headroom and prevents request drops by scaling before saturation occurs.
 
-**For detailed implementation, see:** [Saturation Analyzer Documentation](saturation-analyzer.md)
+**For detailed implementation, see:** [Saturation Analyzer Documentation](user-guide/saturation-analyzer.md)
 
 ## Best Practices: Coordinating with InferenceScheduler (End Point Picker)
 
@@ -115,11 +116,11 @@ Using aligned thresholds ensures consistent capacity management across the clust
 #### WVA Saturation Scaling Configuration
 
 ```yaml
-# WVA Configuration (capacity-scaling-config ConfigMap)
+# WVA Configuration (wva-saturation-scaling-config ConfigMap)
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: capacity-scaling-config
+  name: wva-saturation-scaling-config
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
@@ -173,10 +174,10 @@ Choose thresholds based on your workload characteristics and SLO requirements:
 
 #### Step 2: Apply to WVA
 
-Update `capacity-scaling-config` ConfigMap:
+Update `wva-saturation-scaling-config` ConfigMap:
 
 ```bash
-kubectl edit cm capacity-scaling-config -n <workload-variant-autoscaler-namespace>
+kubectl edit cm wva-saturation-scaling-config -n <workload-variant-autoscaler-namespace>
 ```
 
 Changes take effect **immediately** (WVA watches ConfigMap and auto-reloads).
@@ -214,7 +215,7 @@ kubectl rollout restart deployment/gaie-llama-70b-epp -n lab
 
 **WVA verification:**
 ```bash
-kubectl get cm capacity-scaling-config -n <workload-variant-autoscaler-namespace> -o yaml
+kubectl get cm wva-saturation-scaling-config -n <workload-variant-autoscaler-namespace> -o yaml
 ```
 
 **EPP verification (per-model instance):**
@@ -255,21 +256,24 @@ kubectl logs -n production deployment/gaie-granite-13b-epp | grep -i "saturation
 
 ### 1. Using Default Configuration
 
-Simply deploy the controller without the ConfigMap. The system will log a warning and use hardcoded defaults:
+> **Warning:** For the V1 (percentage-based) analyzer, deploying without a ConfigMap will
+> result in zero-valued thresholds, causing all replicas to be marked as saturated.
+> Always deploy the ConfigMap with a `default` entry for V1.
 
+If the ConfigMap is missing, the system will log a warning:
 ```
-WARN Saturation scaling ConfigMap not found, using hardcoded defaults
+WARN Saturation scaling ConfigMap not found
 ```
 
 ### 2. Customizing Global Defaults
 
-Edit `deploy/configmap-capacity-scaling.yaml`:
+Edit `deploy/configmap-saturation-scaling.yaml`:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: capacity-scaling-config
+  name: wva-saturation-scaling-config
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
@@ -281,7 +285,7 @@ data:
 
 Apply the ConfigMap:
 ```bash
-kubectl apply -f deploy/configmap-capacity-scaling.yaml
+kubectl apply -f deploy/configmap-saturation-scaling.yaml
 ```
 
 **Note:** Changes take effect immediately! The controller watches the ConfigMap and automatically:
@@ -291,13 +295,18 @@ kubectl apply -f deploy/configmap-capacity-scaling.yaml
 
 ### 3. Per-Model Overrides
 
-Add model-specific configuration entries to override defaults for specific model/namespace pairs:
+Add model-specific configuration entries to override defaults for specific model/namespace pairs.
+
+The saturation engine resolves per-model config using a lookup key in the format
+`{modelID}#{namespace}` (see `internal/engines/saturation/engine.go` — `resolveSaturationConfig()`).
+The ConfigMap data key **must** match this format for overrides to take effect.
+Lookup order: `modelID#namespace` → `default` → zero-value with defaults applied.
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: capacity-scaling-config
+  name: wva-saturation-scaling-config
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
@@ -307,36 +316,39 @@ data:
     queueSpareTrigger: 3
 
   # Override for granite model in production namespace
-  granite-13b-production: |
-    model_id: ibm/granite-13b
-    namespace: production
+  # All fields must be specified — no inheritance from default
+  "ibm/granite-13b#production": |
     kvCacheThreshold: 0.85
+    queueLengthThreshold: 5
     kvSpareTrigger: 0.15
+    queueSpareTrigger: 3
 
   # Override for llama model in lab namespace
-  llama-70b-lab: |
-    model_id: meta/llama-70b
-    namespace: lab
+  "meta/llama-70b#lab": |
+    kvCacheThreshold: 0.80
     queueLengthThreshold: 20
+    kvSpareTrigger: 0.1
     queueSpareTrigger: 10
 ```
 
 **Key points:**
-- Entry keys (e.g., `granite-13b-production`) can be any descriptive name
-- Each override must include `model_id` and `namespace` fields
-- Only specified fields are overridden; others inherit from `default`
+- Override keys **must** use the format `{modelID}#{namespace}` to match the engine's lookup
+- The `model_id` and `namespace` YAML fields inside the entry are parsed but **not used for lookup**
+- Overrides **replace** the `default` config entirely — there is no field-level inheritance. If an override omits a field (e.g., `queueLengthThreshold`), that field will be zero, not inherited from `default`. Always specify all required fields in each override entry.
 - Multiple overrides can exist for different model/namespace combinations
 
-### 4. Partial Overrides
+### 4. Per-Model Overrides — No Field Inheritance
 
-You can override only specific parameters while inheriting the rest from defaults:
+Overrides **fully replace** the `default` config. There is no field-level merging — omitted
+fields will be zero, not inherited from `default`. Always specify all required threshold
+fields in each override entry:
 
 ```yaml
-  my-model-override: |
-    model_id: my-org/my-model
-    namespace: my-namespace
+  "my-org/my-model#my-namespace": |
     kvCacheThreshold: 0.90
-    # Other fields inherit from default
+    queueLengthThreshold: 5
+    kvSpareTrigger: 0.1
+    queueSpareTrigger: 3
 ```
 
 ## Validation
@@ -373,49 +385,33 @@ WARN Invalid saturation scaling config entry, skipping key=invalid-config error=
 The controller uses an **efficient caching mechanism** with ConfigMap watch for optimal performance:
 
 **Initialization (on controller startup):**
-```go
-// cmd/main.go
-reconciler := &controller.VariantAutoscalingReconciler{...}
-reconciler.SetupWithManager(mgr)  // Sets up ConfigMap watch
 
-// Initialize cache on startup
-if err := reconciler.InitializeCapacityConfigCache(context.Background()); err != nil {
-    setupLog.Warn("Failed to load initial saturation scaling config, will use defaults")
-}
-```
+The ConfigMap reconciler watches the `wva-saturation-scaling-config` ConfigMap and loads
+configuration into the shared `Config` object. On startup, the controller bootstraps the
+config cache (see `internal/controller/configmap_bootstrap.go`).
 
 **Reconciliation (zero API calls):**
+
+During the optimization loop, the engine reads config from the in-memory cache:
 ```go
-// In Reconcile loop - uses cached config (fast, no API call)
-capacityConfigs := r.getCapacityConfigFromCache()
+// In optimize() - reads cached config (no API call)
+saturationConfigMap := e.Config.SaturationConfigForNamespace(namespace)
 
-// For a specific VariantAutoscaling resource
-capacityConfig := r.getCapacityScalingConfigForVariant(
-    capacityConfigs,
-    va.Spec.ModelID,
-    va.Namespace,
-)
+// Resolve per-model config using "{modelID}#{namespace}" lookup
+saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 
-// Use capacityConfig for saturation-based scaling decisions
-if currentKvUtil >= capacityConfig.KvCacheThreshold {
-    // Apply saturation scaling logic
-}
+// Use saturationConfig for saturation-based scaling decisions
+// (thresholds drive the analyzer's saturation detection)
 ```
 
 ### Automatic Cache Updates
 
-The controller watches the `capacity-scaling-config` ConfigMap for changes:
+The `ConfigMapReconciler` watches the `wva-saturation-scaling-config` ConfigMap for changes
+(see `internal/controller/configmap_reconciler.go`):
 
 1. **ConfigMap change detected** → Watch event triggered
-2. **Cache automatically reloaded** → New configuration loaded
-3. **All VariantAutoscaling resources reconciled** → New config applied immediately
-
-**Log output on ConfigMap change:**
-```
-INFO  Saturation scaling ConfigMap changed, reloading cache
-INFO  Saturation scaling config cache updated entries=3 has_default=true
-INFO  Triggering reconciliation for all VariantAutoscaling resources due to ConfigMap change count=5
-```
+2. **Cache automatically reloaded** → New configuration parsed and stored in `Config`
+3. **Next optimization cycle** picks up the new config automatically
 
 ### Performance Characteristics
 
@@ -440,12 +436,12 @@ INFO  Triggering reconciliation for all VariantAutoscaling resources due to Conf
 
 **Symptom:** Warning log message
 ```
-WARN Saturation scaling ConfigMap not found, using hardcoded defaults configmap=capacity-scaling-config namespace=<workload-variant-autoscaler-namespace>
+WARN Saturation scaling ConfigMap not found, using hardcoded defaults configmap=wva-saturation-scaling-config namespace=<workload-variant-autoscaler-namespace>
 ```
 
 **Solution:** Deploy the ConfigMap:
 ```bash
-kubectl apply -f deploy/configmap-capacity-scaling.yaml
+kubectl apply -f deploy/configmap-saturation-scaling.yaml
 ```
 
 ### Invalid Configuration Entry
@@ -479,15 +475,11 @@ data:
 **Symptom:** Model-specific override is not being used
 
 **Checklist:**
-1. Verify `model_id` exactly matches `va.Spec.ModelID`
-2. Verify `namespace` exactly matches the VariantAutoscaling resource namespace
-3. Check controller logs for validation errors
-4. Ensure entry passed validation (check for WARN logs)
-
-**Debug log (when override is applied):**
-```
-DEBUG Applied saturation scaling override key=my-override modelID=ibm/granite-13b namespace=production config={...}
-```
+1. Verify the ConfigMap data key uses the format `{modelID}#{namespace}` (e.g., `"ibm/granite-13b#production"`)
+2. Verify `modelID` exactly matches `va.Spec.ModelID`
+3. Verify `namespace` exactly matches the VariantAutoscaling resource namespace
+4. Check controller logs for validation errors
+5. Ensure entry passed validation (check for WARN logs)
 
 ### Config Changes Not Taking Effect
 
@@ -497,7 +489,7 @@ DEBUG Applied saturation scaling override key=my-override modelID=ibm/granite-13
 
 1. **Verify ConfigMap was updated:**
    ```bash
-   kubectl get cm capacity-scaling-config -n <workload-variant-autoscaler-namespace> -o yaml
+   kubectl get cm wva-saturation-scaling-config -n <workload-variant-autoscaler-namespace> -o yaml
    ```
 
 2. **Check controller logs for reload confirmation:**
@@ -528,11 +520,11 @@ DEBUG Applied saturation scaling override key=my-override modelID=ibm/granite-13
 WARN Failed to load initial saturation scaling config, will use defaults
 ```
 
-**Solution:** This is non-fatal. The controller continues with hardcoded defaults. To fix:
+**Solution:** This is non-fatal. The controller continues with zero-valued V1 thresholds (V2 has hardcoded defaults). To fix:
 
 1. Deploy the ConfigMap:
    ```bash
-   kubectl apply -f deploy/configmap-capacity-scaling.yaml
+   kubectl apply -f deploy/configmap-saturation-scaling.yaml
    ```
 
 2. The watch mechanism will automatically reload the cache once ConfigMap is available
@@ -544,12 +536,12 @@ WARN Failed to load initial saturation scaling config, will use defaults
 
 ## Example: Production Setup
 
-**deploy/configmap-capacity-scaling.yaml:**
+**deploy/configmap-saturation-scaling.yaml:**
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: capacity-scaling-config
+  name: wva-saturation-scaling-config
   namespace: <workload-variant-autoscaler-namespace>
 data:
   # Conservative defaults for most workloads
@@ -560,18 +552,14 @@ data:
     queueSpareTrigger: 3
 
   # High-priority production workload - scale aggressively
-  granite-prod: |
-    model_id: ibm/granite-13b
-    namespace: production
+  "ibm/granite-13b#production": |
     kvCacheThreshold: 0.70
     queueLengthThreshold: 3
     kvSpareTrigger: 0.20
     queueSpareTrigger: 5
 
   # Development workload - allow higher saturation
-  llama-dev: |
-    model_id: meta/llama-70b
-    namespace: development
+  "meta/llama-70b#development": |
     kvCacheThreshold: 0.90
     queueLengthThreshold: 15
     kvSpareTrigger: 0.05
@@ -580,35 +568,35 @@ data:
 
 Apply the configuration:
 ```bash
-kubectl apply -f deploy/configmap-capacity-scaling.yaml
+kubectl apply -f deploy/configmap-saturation-scaling.yaml
 ```
 
 Verify deployment:
 ```bash
-kubectl get cm capacity-scaling-config -n <workload-variant-autoscaler-namespace>
-kubectl describe cm capacity-scaling-config -n <workload-variant-autoscaler-namespace>
+kubectl get cm wva-saturation-scaling-config -n <workload-variant-autoscaler-namespace>
+kubectl describe cm wva-saturation-scaling-config -n <workload-variant-autoscaler-namespace>
 ```
 
 ## API Reference
 
 ### Go Structs
 
-**CapacityScalingConfig:**
+**SaturationScalingConfig** (defined in `internal/config/saturation_scaling.go`):
 ```go
-type CapacityScalingConfig struct {
+type SaturationScalingConfig struct {
     ModelID              string  `yaml:"model_id,omitempty"`
     Namespace            string  `yaml:"namespace,omitempty"`
     KvCacheThreshold     float64 `yaml:"kvCacheThreshold"`
-    QueueLengthThreshold int     `yaml:"queueLengthThreshold"`
+    QueueLengthThreshold float64 `yaml:"queueLengthThreshold"`
     KvSpareTrigger       float64 `yaml:"kvSpareTrigger"`
-    QueueSpareTrigger    int     `yaml:"queueSpareTrigger"`
+    QueueSpareTrigger    float64 `yaml:"queueSpareTrigger"`
+    // ... additional V2-specific fields omitted
 }
 ```
 
 **Methods:**
-- `DefaultCapacityScalingConfig() CapacityScalingConfig` - Returns hardcoded defaults
-- `Validate() error` - Validates configuration values
-- `Merge(override CapacityScalingConfig)` - Applies partial override
+- `ApplyDefaults()` - Fills in zero-valued V2 fields with their defaults (V1 fields have no hardcoded defaults)
+- `Validate() error` - Validates configuration values (thresholds in range, consistency checks)
 
 ## Architecture Notes
 
@@ -622,17 +610,18 @@ The caching mechanism uses the following components:
 - Write operations (cache reload) are exclusive
 
 **Defensive Copy:**
-- `getCapacityConfigFromCache()` returns a deep copy
+- `SaturationConfigForNamespace()` returns a deep copy
 - Prevents external code from modifying cached configuration
 - Each caller gets an independent copy
 
 **Watch Mechanism:**
-- Kubernetes watch on `capacity-scaling-config` ConfigMap
+- Kubernetes watch on `wva-saturation-scaling-config` ConfigMap
 - Predicate filters to only relevant ConfigMap events
 - Event handler reloads cache and triggers reconciliation
 
 **Graceful Degradation:**
 - Controller starts successfully even if ConfigMap missing
-- Uses hardcoded defaults as fallback
+- V2 analyzer uses hardcoded defaults (`scaleUpThreshold: 0.85`, `scaleDownBoundary: 0.70`)
+- V1 analyzer has **no hardcoded defaults** — all thresholds will be zero without ConfigMap
 - Automatically loads config once ConfigMap becomes available
 
