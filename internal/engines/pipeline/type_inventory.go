@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -292,9 +293,19 @@ func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRe
 	}
 
 	accType := decision.AcceleratorName
-	if accType == "" {
-		return 0, fmt.Errorf("decision for %s/%s has no AcceleratorName specified",
-			decision.Namespace, decision.VariantName)
+	if accType == "" || accType == constants.DefaultAcceleratorName {
+		// Normally resolved by DefaultLimiter.resolveUnknownAccelerators before
+		// reaching here. This is a safety net for direct callers.
+		if len(a.remainingByType) == 1 {
+			for resolvedType := range a.remainingByType {
+				decision.AcceleratorName = resolvedType
+				accType = resolvedType
+			}
+		} else {
+			// Heterogeneous cluster — can't determine pool. Return 0 so the
+			// decision keeps its current replicas without over-allocating.
+			return 0, nil
+		}
 	}
 
 	available := a.remainingByType[accType]

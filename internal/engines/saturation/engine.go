@@ -33,10 +33,10 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	actuator "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/actuator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -1217,17 +1217,17 @@ func (e *Engine) applySaturationDecisions(
 			} else if curr, ok := currentAllocations[vaName]; ok {
 				targetReplicas = curr.NumReplicas
 			}
-			// Keep existing accelerator or use current
-			if updateVa.Status.DesiredOptimizedAlloc.Accelerator != "" {
-				acceleratorName = updateVa.Status.DesiredOptimizedAlloc.Accelerator
-			} else if curr, ok := currentAllocations[vaName]; ok {
+			// Keep existing accelerator or use current (skip sentinel values)
+			if acc := updateVa.Status.DesiredOptimizedAlloc.Accelerator; acc != "" && acc != constants.DefaultAcceleratorName {
+				acceleratorName = acc
+			} else if curr, ok := currentAllocations[vaName]; ok && curr.Accelerator != "" && curr.Accelerator != constants.DefaultAcceleratorName {
 				acceleratorName = curr.Accelerator
 			}
 
 			// Fallback for new VAs without prior status or collected metrics:
 			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
 			// and use current deployment replicas as target to avoid unintended scaling.
-			if acceleratorName == "" {
+			if acceleratorName == "" || acceleratorName == constants.DefaultAcceleratorName {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
 					var scaleTarget scaletarget.ScaleTargetAccessor
@@ -1270,15 +1270,36 @@ func (e *Engine) applySaturationDecisions(
 					Object: &updateVa,
 				}
 			}
-			continue
+		}
+
+		// Emit a K8s event when accelerator cannot be resolved so operators
+		// can see the problem without digging through controller logs.
+		if acceleratorName == constants.DefaultAcceleratorName {
+			if e.Recorder != nil {
+				e.Recorder.Eventf(&updateVa, "Warning", "AcceleratorNotResolved",
+					"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label %q. "+
+						"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
+						"HPA/KEDA metrics will not be emitted until the accelerator is resolved.",
+					utils.AcceleratorNameLabel)
+			}
+			logger.Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+				"variant", vaName)
 		}
 
 		// Update DesiredOptimizedAlloc
-		// ALWAYS update LastRunTime to trigger reconciliation in the controller
+		// ALWAYS update LastRunTime to trigger reconciliation in the controller.
+		// Status is updated even without accelerator so that DesiredOptimizedAlloc.NumReplicas
+		// and LastRunTime remain current, and conditions are set properly.
+		// Never persist the sentinel to status — downstream paths re-resolve when the field
+		// is empty, and the limiter resolves it to the real type for decisions.
 		numReplicas := int32(targetReplicas)
+		statusAccelerator := acceleratorName
+		if statusAccelerator == constants.DefaultAcceleratorName {
+			statusAccelerator = ""
+		}
 		updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 			NumReplicas: &numReplicas,
-			Accelerator: acceleratorName,
+			Accelerator: statusAccelerator,
 			LastRunTime: metav1.Now(),
 		}
 		updateVa.Status.Actuation.Applied = false // Reset applied status until Actuator handles it (if needed)
@@ -1330,7 +1351,13 @@ func (e *Engine) applySaturationDecisions(
 		// 	isSaturationOnly = decision.SaturationOnly
 		// }
 
-		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
+		// Skip metric emission when accelerator is unresolved to avoid publishing
+		// wva_* gauges under an empty or incorrect accelerator_type label.
+		// Status updates and conditions still proceed so the controller can reconcile.
+		if acceleratorName == constants.DefaultAcceleratorName {
+			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
+				"variant", updateVa.Name)
+		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			logger.Error(err, "Failed to emit metrics for external autoscalers",
 				"variant", updateVa.Name)
 		} else {
@@ -1451,18 +1478,16 @@ func (e *Engine) emitSafetyNetMetrics(
 				accelerator = curr.Accelerator
 			}
 		}
-		if accelerator == "" {
+		if accelerator == "" || accelerator == constants.DefaultAcceleratorName {
 			// Try to get accelerator name from scale target nodeSelector/nodeAffinity or VA labels
 			if scaleTarget == nil {
 				logger.V(logging.DEBUG).Info("Safety net: no scale target found for VA",
 					"variant", va.Name)
 			} else {
-				if acceleratorName := utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget); acceleratorName != "" {
-					accelerator = acceleratorName
-				}
+				accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget)
 			}
 		}
-		if accelerator == "" {
+		if accelerator == "" || accelerator == constants.DefaultAcceleratorName {
 			logger.Info("Safety net: skipping metric emission - no accelerator name available",
 				"variant", va.Name)
 			continue

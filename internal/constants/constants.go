@@ -64,6 +64,13 @@ const (
 
 	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
 	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
+
+	// DefaultAcceleratorName is used internally by the GPU limiter when the
+	// accelerator type cannot be resolved from the scale target or VA label.
+	// In homogeneous clusters (single GPU type), the limiter resolves this to
+	// the real type before it reaches status or metrics. This value must never
+	// be persisted to VA status or used as a Prometheus label.
+	DefaultAcceleratorName = "unknown"
 )
 
 // Component names identify WVA components for observability (metrics, logging, tracing).

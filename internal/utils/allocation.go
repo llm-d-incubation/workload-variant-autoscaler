@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -32,12 +31,12 @@ func BuildAllocationFromMetrics(
 		numReplicas = int(constants.SpecReplicasFallback)
 	}
 
-	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels
+	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels.
+	// An empty accelerator is allowed so that metrics collection can proceed for
+	// deployments without nodeSelector (common in homogeneous GPU clusters).
+	// The accelerator field will be empty in the resulting Allocation; callers that
+	// need it (e.g. the GPU limiter) handle empty values independently.
 	acc := GetAcceleratorNameFromScaleTarget(va, scaleTarget)
-	if acc == "" {
-		return interfaces.Allocation{},
-			fmt.Errorf("accelerator name not found in scale target nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
-	}
 
 	// Calculate variant cost
 	// VariantCost removed from Status as it is duplicated from Spec (per-replica cost)
