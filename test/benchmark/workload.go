@@ -36,6 +36,20 @@ func scenariosDir() string {
 	return filepath.Join(filepath.Dir(thisFile), "scenarios")
 }
 
+// defaultScenario returns the fallback prefill_heavy defaults used when no
+// scenario file is found or when YAML parsing fails.
+func defaultScenario() WorkloadScenario {
+	return WorkloadScenario{
+		Name:         "Prefill Heavy (default)",
+		PromptTokens: 4000,
+		OutputTokens: 1000,
+		Rate:         20,
+		MaxSeconds:   600,
+		Profile:      "poisson",
+		RequestType:  "text_completions",
+	}
+}
+
 // LoadScenario loads a WorkloadScenario from test/benchmark/scenarios/<name>.yaml.
 // If the named file doesn't exist, it falls back to prefill_heavy defaults.
 func LoadScenario(name string) WorkloadScenario {
@@ -47,29 +61,13 @@ func LoadScenario(name string) WorkloadScenario {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Fallback to prefill_heavy defaults (preserves backward compatibility)
-		return WorkloadScenario{
-			Name:         "Prefill Heavy (default)",
-			PromptTokens: 4000,
-			OutputTokens: 1000,
-			Rate:         20,
-			MaxSeconds:   600,
-			Profile:      "poisson",
-			RequestType:  "text_completions",
-		}
+		return defaultScenario()
 	}
 
 	var scenario WorkloadScenario
 	if parseErr := yaml.Unmarshal(data, &scenario); parseErr != nil {
 		// On parse error, return defaults
-		return WorkloadScenario{
-			Name:         "Prefill Heavy (default)",
-			PromptTokens: 4000,
-			OutputTokens: 1000,
-			Rate:         20,
-			MaxSeconds:   600,
-			Profile:      "poisson",
-			RequestType:  "text_completions",
-		}
+		return defaultScenario()
 	}
 
 	return scenario

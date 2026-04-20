@@ -810,7 +810,7 @@ var _ = Describe("Scaling Benchmark", Ordered, Label("benchmark"), func() {
 		}
 
 		GinkgoWriter.Printf("\n  ┌────────────────────────────────────────────────────────────\n")
-		GinkgoWriter.Printf("  │ %s PREFILL BENCHMARK RESULTS\n", autoscalerType)
+		GinkgoWriter.Printf("  │ %s %s BENCHMARK RESULTS\n", autoscalerType, strings.ToUpper(scenario.Name))
 		GinkgoWriter.Printf("  │ Model: %s\n", benchCfg.ModelID)
 		GinkgoWriter.Printf("  ├────────────────────────────────────────────────────────────\n")
 		GinkgoWriter.Printf("  │ Duration:        %.0fs\n", loadDuration)
