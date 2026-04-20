@@ -302,8 +302,13 @@ func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRe
 				accType = resolvedType
 			}
 		} else {
-			// Heterogeneous cluster — can't determine pool. Return 0 so the
-			// decision keeps its current replicas without over-allocating.
+			// Heterogeneous cluster — can't determine which pool to debit.
+			// Note: #995 proposed "treat as unlimited (return all requested GPUs)"
+			// but that allows the same physical GPUs to be double-allocated: once
+			// here for the unresolved decision, and again from a typed pool for a
+			// subsequent known-type decision. Returning 0 is safer — the variant
+			// keeps its current replicas without over-allocating. Operator must
+			// set nodeSelector or the VA label for scaling in mixed-GPU clusters.
 			return 0, nil
 		}
 	}
