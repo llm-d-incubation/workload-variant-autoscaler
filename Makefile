@@ -25,6 +25,14 @@ SCALE_TO_ZERO_ENABLED       ?= false
 SCALER_BACKEND              ?= prometheus-adapter  # prometheus-adapter (HPA), keda (ScaledObject), or none (skip, use pre-installed backend)
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
+BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy)
+
+# Map scenario name to Ginkgo label filter
+ifeq ($(BENCHMARK_SCENARIO),decode_heavy)
+  BENCHMARK_LABEL_FILTER := decode-heavy
+else
+  BENCHMARK_LABEL_FILTER := phase3a
+endif
 
 # Flags for deploy/install.sh installation script
 # Full e2e / CI-style cluster infra (WVA + llm-d, no chart VA/HPA): prefer `make deploy-e2e-infra`
@@ -297,6 +305,7 @@ test-multi-model-scaling: manifests generate fmt vet ## Run multi-model scaling 
 	MM_MIN_REPLICAS=$(MM_MIN_REPLICAS) \
 	MM_MAX_REPLICAS=$(MM_MAX_REPLICAS) \
 	GATEWAY_SERVICE_NAME=multi-model-inference-gateway-istio \
+	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
 	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
 	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
 		-ginkgo.label-filter="multi-model"; \
@@ -368,8 +377,8 @@ test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full
 
 # Benchmark targets
 .PHONY: test-benchmark
-test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-latency scenario)
-	@echo "Running benchmark tests..."
+test-benchmark: manifests generate fmt vet ## Run benchmark tests. Use BENCHMARK_SCENARIO=decode_heavy for decode-heavy workload.
+	@echo "Running benchmark tests (scenario=$(BENCHMARK_SCENARIO), label=$(BENCHMARK_LABEL_FILTER))..."
 	KUBECONFIG=$(KUBECONFIG) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
@@ -378,9 +387,10 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests (scale-up-late
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
+	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
 	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
 	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
-		-ginkgo.label-filter="phase3a"; \
+		-ginkgo.label-filter="$(BENCHMARK_LABEL_FILTER)"; \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
 	echo "=========================================="; \

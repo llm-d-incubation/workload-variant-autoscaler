@@ -75,7 +75,7 @@ var prefillResults []PrefillResult
 
 const prefillResultsFile = "/tmp/prefill-benchmark-results.json"
 
-var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark", "phase3a"), func() {
+var _ = Describe("Scaling Benchmark", Ordered, Label("benchmark"), func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -439,7 +439,7 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 		}
 	}
 
-	runPrefillBenchmark := func(autoscalerType string) {
+	runBenchmarkScenario := func(autoscalerType string, scenarioName string) {
 		ensureEPPConfig()
 		ensureInfraDeploymentReady()
 		verifyEPPConfig()
@@ -487,9 +487,13 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 
 		By("Launching GuideLLM Load Generator")
 
+		scenario := LoadScenario(scenarioName)
+		GinkgoWriter.Printf("  Scenario: %s (prompt=%d, output=%d, rate=%d)\n",
+			scenario.Name, scenario.PromptTokens, scenario.OutputTokens, scenario.Rate)
+
 		err = CreateGuideLLMJobWithArgs(
 			ctx, k8sClient, benchCfg.LLMDNamespace, res.ModelService,
-			targetURL, benchCfg.ModelID,
+			targetURL, benchCfg.ModelID, scenario,
 		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create GuideLLM load job")
 
@@ -841,7 +845,7 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 		_ = os.WriteFile(prefillResultsFile, data, 0644)
 	}
 
-	Context("WVA", func() {
+	Context("WVA Prefill Heavy", Label("phase3a"), func() {
 		It("should run the prefill heavy workload against WVA", func() {
 			cleanupAutoscalers()
 			res.DeploymentName = findInfraDecodeDeployment()
@@ -872,7 +876,42 @@ var _ = Describe("Prefill Heavy Workload Benchmark", Ordered, Label("benchmark",
 
 			waitForVAAndMetrics()
 
-			runPrefillBenchmark("WVA")
+			runBenchmarkScenario("WVA", "prefill_heavy")
+		})
+	})
+
+	Context("WVA Decode Heavy", Label("decode-heavy"), func() {
+		It("should run the decode heavy workload against WVA", func() {
+			cleanupAutoscalers()
+			res.DeploymentName = findInfraDecodeDeployment()
+			ensureInfraDeploymentReady()
+
+			By("Creating VariantAutoscaling resource (max=10, cost=10)")
+			err := fixtures.EnsureVariantAutoscaling(
+				ctx, crClient, benchCfg.LLMDNamespace, res.VAName, res.DeploymentName,
+				benchCfg.ModelID, benchCfg.AcceleratorType, 10.0, benchCfg.ControllerInstance,
+				fixtures.WithMinReplicas(1),
+				fixtures.WithMaxReplicas(10),
+			)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create VA")
+
+			By("Creating HPA (Scale Up: 0s/Pods/10/150, Scale Down: 240s/Pods/10/150)")
+			behavior := &autoscalingv2.HorizontalPodAutoscalerBehavior{
+				ScaleUp: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr.To(int32(0)),
+					Policies:                   []autoscalingv2.HPAScalingPolicy{{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 150}},
+				},
+				ScaleDown: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr.To(int32(240)),
+					Policies:                   []autoscalingv2.HPAScalingPolicy{{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 150}},
+				},
+			}
+			err = fixtures.EnsureHPA(ctx, k8sClient, benchCfg.LLMDNamespace, res.HPAName, res.DeploymentName, res.VAName, 1, 10, WithBehavior(behavior))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA")
+
+			waitForVAAndMetrics()
+
+			runBenchmarkScenario("WVA", "decode_heavy")
 		})
 	})
 

@@ -239,6 +239,11 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 	// launchLoadJobs creates a GuideLLM job for each model targeting the shared Gateway.
 	launchLoadJobs := func() {
 		By("Launching GuideLLM load jobs for each model")
+		scenarioName := testconfig.GetEnv("BENCHMARK_SCENARIO", "prefill_heavy")
+		scenario := LoadScenario(scenarioName)
+		GinkgoWriter.Printf("  Scenario: %s (prompt=%d, output=%d, rate=%d)\n",
+			scenario.Name, scenario.PromptTokens, scenario.OutputTokens, scenario.Rate)
+
 		gatewayName := testconfig.GetEnv("GATEWAY_SERVICE_NAME", "multi-model-inference-gateway-istio")
 		gwHost := fmt.Sprintf("%s.%s.svc.cluster.local", gatewayName, benchCfg.LLMDNamespace)
 
@@ -248,7 +253,7 @@ var _ = Describe("Multi-Model Scaling Benchmark", Ordered, Label("benchmark", "m
 
 			err := CreateGuideLLMJobWithArgs(
 				testCtx, k8sClient, benchCfg.LLMDNamespace,
-				m.JobName, targetURL, m.ModelID,
+				m.JobName, targetURL, m.ModelID, scenario,
 			)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create load job "+m.JobName)
 		}
