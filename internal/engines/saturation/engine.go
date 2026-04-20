@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -1275,7 +1276,7 @@ func (e *Engine) applySaturationDecisions(
 		// can see the problem without digging through controller logs.
 		if acceleratorName == constants.DefaultAcceleratorName {
 			if e.Recorder != nil {
-				e.Recorder.Eventf(&updateVa, "Warning", "AcceleratorNotResolved",
+				e.Recorder.Eventf(&updateVa, corev1.EventTypeWarning, "AcceleratorNotResolved",
 					"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label %q. "+
 						"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
 						"HPA/KEDA metrics will not be emitted until the accelerator is resolved.",

@@ -32,10 +32,11 @@ func BuildAllocationFromMetrics(
 	}
 
 	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels.
-	// An empty accelerator is allowed so that metrics collection can proceed for
-	// deployments without nodeSelector (common in homogeneous GPU clusters).
-	// The accelerator field will be empty in the resulting Allocation; callers that
-	// need it (e.g. the GPU limiter) handle empty values independently.
+	// When unresolved, GetAcceleratorNameFromScaleTarget returns the sentinel value
+	// ("unknown") so that metrics collection can proceed for deployments without
+	// nodeSelector (common in homogeneous GPU clusters). The GPU limiter resolves
+	// the sentinel to the real type in homogeneous clusters before it reaches
+	// status or metrics.
 	acc := GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 
 	// Calculate variant cost
