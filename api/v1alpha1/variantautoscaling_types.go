@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -14,6 +15,99 @@ type VariantAutoscalingConfigSpec struct {
 	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
 	// +kubebuilder:default="10.0"
 	VariantCost string `json:"variantCost,omitempty"`
+}
+
+// Scaling backend type constants.
+const (
+	ScalingBackendTypeHPA  = "hpa"
+	ScalingBackendTypeKEDA = "keda"
+)
+
+// ScalingBackendSpec selects how the controller materializes a scaler for this VA.
+// When nil on the parent VariantAutoscalingSpec, the controller only emits
+// Prometheus metrics (metrics-only / legacy mode).
+type ScalingBackendSpec struct {
+	// Type is the scaling backend: "hpa" creates a controller-managed
+	// autoscaling/v2 HorizontalPodAutoscaler backed by the wva_desired_replicas
+	// external metric; "keda" creates a controller-managed keda.sh/v1alpha1
+	// ScaledObject with a prometheus trigger on the same metric.
+	// +kubebuilder:validation:Enum=hpa;keda
+	// +kubebuilder:default=hpa
+	// +kubebuilder:validation:Required
+	Type string `json:"type"`
+
+	// HPA contains HPA-specific configuration. Used when Type is "hpa".
+	// +kubebuilder:validation:Optional
+	HPA *HPAConfig `json:"hpa,omitempty"`
+
+	// KEDA contains KEDA-specific configuration. Used when Type is "keda".
+	// +kubebuilder:validation:Optional
+	KEDA *KEDAConfig `json:"keda,omitempty"`
+}
+
+// HPAConfig holds settings for a controller-managed autoscaling/v2
+// HorizontalPodAutoscaler.
+type HPAConfig struct {
+	// Behavior configures scaling behavior policies on the generated HPA.
+	// Maps directly to HorizontalPodAutoscalerSpec.Behavior.
+	// +kubebuilder:validation:Optional
+	Behavior *autoscalingv2.HorizontalPodAutoscalerBehavior `json:"behavior,omitempty"`
+}
+
+// KEDAConfig holds optional tuning for a controller-managed keda.sh/v1alpha1
+// ScaledObject. Field names mirror KEDA ScaledObject spec keys where applicable.
+//
+// Important terminology:
+//   - IdleReplicaCount maps to ScaledObject.spec.idleReplicaCount: the replica
+//     target when KEDA triggers are inactive. This is NOT the same as
+//     VariantAutoscaling.spec.minReplicas (which maps to ScaledObject.spec.minReplicaCount,
+//     the floor while KEDA is actively scaling from metrics).
+type KEDAConfig struct {
+	// PollingInterval is the interval in seconds to check each trigger.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	PollingInterval *int32 `json:"pollingInterval,omitempty"`
+
+	// CooldownPeriod is the period in seconds to wait after the last trigger
+	// fired before scaling the resource back to minReplicaCount.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	CooldownPeriod *int32 `json:"cooldownPeriod,omitempty"`
+
+	// InitialCooldownPeriod is the delay in seconds after ScaledObject creation
+	// before the first scale-down is allowed.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	InitialCooldownPeriod *int32 `json:"initialCooldownPeriod,omitempty"`
+
+	// IdleReplicaCount is the replica count when all KEDA triggers report inactive.
+	// Maps to ScaledObject.spec.idleReplicaCount. Omit to use KEDA defaults.
+	// Not the same as VariantAutoscaling.spec.minReplicas (see type-level doc).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	IdleReplicaCount *int32 `json:"idleReplicaCount,omitempty"`
+
+	// Fallback configures KEDA fallback behavior when a scaler fails.
+	// Maps to ScaledObject.spec.fallback.
+	// +kubebuilder:validation:Optional
+	Fallback *kedav1alpha1.Fallback `json:"fallback,omitempty"`
+
+	// Advanced configures KEDA advanced options such as HPA behavior overrides
+	// and replica restoration. Maps to ScaledObject.spec.advanced.
+	// +kubebuilder:validation:Optional
+	Advanced *kedav1alpha1.AdvancedConfig `json:"advanced,omitempty"`
+}
+
+// EffectiveScalingBackendType returns the resolved backend type.
+// Returns empty string when sb is nil (metrics-only mode).
+func EffectiveScalingBackendType(sb *ScalingBackendSpec) string {
+	if sb == nil {
+		return ""
+	}
+	if sb.Type == "" {
+		return ScalingBackendTypeHPA
+	}
+	return sb.Type
 }
 
 // VariantAutoscalingSpec defines the desired state for autoscaling a model variant.
@@ -42,6 +136,12 @@ type VariantAutoscalingSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=2
 	MaxReplicas int32 `json:"maxReplicas"`
+
+	// ScalingBackend selects whether WVA manages an HPA or a KEDA ScaledObject
+	// for this VariantAutoscaling. When nil the controller only emits Prometheus
+	// metrics (legacy / metrics-only mode).
+	// +kubebuilder:validation:Optional
+	ScalingBackend *ScalingBackendSpec `json:"scalingBackend,omitempty"`
 
 	// VariantAutoscalingConfigSpec holds optional tuning fields that integrators can embed.
 	VariantAutoscalingConfigSpec `json:",inline"`
@@ -135,6 +235,26 @@ const (
 	TypeMetricsAvailable = "MetricsAvailable"
 	// TypeOptimizationReady indicates whether the optimization engine can run successfully
 	TypeOptimizationReady = "OptimizationReady"
+)
+
+// Condition Types for ScalingBackend
+const (
+	// TypeScalingBackendReady indicates whether the managed scaler resource
+	// (HPA or ScaledObject) has been reconciled successfully.
+	TypeScalingBackendReady = "ScalingBackendReady"
+)
+
+// Condition Reasons for ScalingBackendReady
+const (
+	// ReasonScalingBackendReconciled indicates the managed scaler was created or updated.
+	ReasonScalingBackendReconciled = "ScalingBackendReconciled"
+	// ReasonScalingBackendKEDANotInstalled indicates KEDA CRDs are not present in the cluster.
+	ReasonScalingBackendKEDANotInstalled = "KEDANotInstalled"
+	// ReasonScalingBackendError indicates an error occurred while reconciling the scaler.
+	ReasonScalingBackendError = "ScalingBackendError"
+	// ReasonScalingBackendUnsupportedTarget indicates the scale target kind is not
+	// compatible with the selected backend.
+	ReasonScalingBackendUnsupportedTarget = "UnsupportedScaleTarget"
 )
 
 // Condition Reasons for MetricsAvailable
