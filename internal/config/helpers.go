@@ -52,12 +52,18 @@ func ParseIntFromConfig(data map[string]string, key string, defaultValue int, mi
 }
 
 // ParseBoolFromConfig parses a boolean from ConfigMap with default fallback
-// Accepts "true", "1", or "yes" as true values (case-sensitive)
+// Accepts "true", "1", or "yes" as true values and "false", "0", or "no" as false values (case-sensitive).
 // Returns the parsed boolean or the default value if key is missing or value is not recognized
 func ParseBoolFromConfig(data map[string]string, key string, defaultValue bool) bool {
 	if valStr := ConfigValue(data, key, ""); valStr != "" {
-		// Accept "true", "1", "yes" as true
-		return valStr == "true" || valStr == "1" || valStr == "yes"
+		switch valStr {
+		case "true", "1", "yes":
+			return true
+		case "false", "0", "no":
+			return false
+		default:
+			ctrl.Log.Info("Invalid boolean value in ConfigMap, using default", "value", valStr, "key", key, "default", defaultValue)
+		}
 	}
 	return defaultValue
 }
