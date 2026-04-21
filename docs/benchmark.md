@@ -1,6 +1,6 @@
 # Benchmark Results
 
-Summary of WVA benchmark runs with configuration details
+Summary of WVA benchmark runs with configuration details. 
 
 ## Environment
 
@@ -63,7 +63,6 @@ Summary of WVA benchmark runs with configuration details
 | Max replicas | _TBD_ | _TBD_ |
 | Avg KV cache utilization | _TBD_ | _TBD_ |
 | Avg queue depth (EPP) | _TBD_ | _TBD_ |
-| Achieved RPS | _TBD_ | _TBD_ |
 | Error count | _TBD_ | _TBD_ |
 | Cost (avg replicas × GPU/hr) | _TBD_ | _TBD_ |
 
@@ -82,7 +81,6 @@ Summary of WVA benchmark runs with configuration details
 | Max replicas | _TBD_ | _TBD_ |
 | Avg KV cache utilization | _TBD_ | _TBD_ |
 | Avg queue depth (EPP) | _TBD_ | _TBD_ |
-| Achieved RPS | _TBD_ | _TBD_ |
 | Error count | _TBD_ | _TBD_ |
 | Cost (avg replicas × GPU/hr) | _TBD_ | _TBD_ |
 
@@ -101,6 +99,5 @@ Summary of WVA benchmark runs with configuration details
 | Max replicas | _TBD_ |
 | Avg KV cache utilization | _TBD_ |
 | Avg queue depth (EPP) | _TBD_ |
-| Achieved RPS | _TBD_ |
 | Error count | _TBD_ |
 | Cost (avg replicas × GPU/hr) | _TBD_ |
