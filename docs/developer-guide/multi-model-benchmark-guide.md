@@ -129,6 +129,7 @@ make deploy-multi-model-infra \
   WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
   NAMESPACE_SCOPED=true SKIP_BUILD=true \
   DECODE_REPLICAS=1 IMG_TAG=v0.6.0 LLM_D_RELEASE=v0.6.0 \
+  DEPLOY_PROMETHEUS_ADAPTER=false \
   MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
 
 # 3. Run the benchmark
