@@ -116,14 +116,12 @@ git checkout main
 
 The single-model benchmark tests WVA scaling behavior with one model under different workload patterns. Scenario configurations are defined in `test/benchmark/scenarios/`.
 
-### Available Scenarios
+| Scenario | Prompt Tokens | Output Tokens | Rate | What it tests |
+|----------|--------------|---------------|------|---------------|
+| `prefill_heavy` | 4000 | 1000 | 20 RPS | Prefill (prompt processing) — long input, short output |
+| `decode_heavy` | 1000 | 4000 | 20 RPS | Decode (token generation) — short input, long output |
 
-| Scenario | Prompt Tokens | Output Tokens | Rate | Description |
-|----------|--------------|---------------|------|-------------|
-| `prefill_heavy` | 4000 | 1000 | 20 RPS | Stress-tests prefill (prompt processing) with long input, short output |
-| `decode_heavy` | 1000 | 4000 | 20 RPS | Stress-tests decode (token generation) with short input, long output |
-
-### Deploy Single-Model Infrastructure
+### 1. Deploy Single-Model Infrastructure
 
 ```bash
 make deploy-e2e-infra \
@@ -141,20 +139,29 @@ Wait for all pods to be ready:
 oc get pods -n <your-namespace>
 ```
 
-You should see a vLLM decode pod, EPP pod, gateway pod, and WVA controller pods all in `Running` state.
+Expected output — vLLM decode pod, EPP, gateway, and WVA controller all `Running`:
 
-### Run the Benchmark
+```
+NAME                                                              READY   STATUS    RESTARTS   AGE
+gaie-inference-scheduling-epp-...                                 1/1     Running   0          4m
+infra-inference-scheduling-inference-gateway-istio-...            1/1     Running   0          4m
+ms-inference-scheduling-llm-d-modelservice-decode-...             1/1     Running   0          4m
+workload-variant-autoscaler-controller-manager-...                1/1     Running   0          2m
+workload-variant-autoscaler-controller-manager-...                1/1     Running   0          2m
+```
 
-Run with the desired scenario:
+### 2. Run the Prefill Heavy Benchmark
 
 ```bash
-# Prefill heavy (default)
 make test-benchmark \
   ENVIRONMENT=openshift \
   E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
   BENCHMARK_SCENARIO=prefill_heavy
+```
 
-# Decode heavy
+### 3. Run the Decode Heavy Benchmark
+
+```bash
 make test-benchmark \
   ENVIRONMENT=openshift \
   E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
@@ -162,6 +169,22 @@ make test-benchmark \
 ```
 
 Each benchmark run takes approximately 15–20 minutes (30s warmup + 600s load generation + monitoring overhead).
+
+### Expected Output
+
+On success, the test prints a results summary and exits with code 0:
+
+```
+SUCCESS! -- 1 Passed | 0 Failed | 0 Pending | 6 Skipped
+--- PASS: TestBenchmark
+PASS
+```
+
+The results summary includes:
+- TTFT and ITL latency percentiles (p50, p90, p99)
+- Avg/max replicas and replica timeline
+- KV cache utilization, vLLM queue depth, and EPP queue depth
+- Achieved RPS, error count, and incomplete request count
 
 ### What the Benchmark Does
 
@@ -173,7 +196,7 @@ Each benchmark run takes approximately 15–20 minutes (30s warmup + 600s load g
 6. Monitors replicas, KV cache utilization, and queue depth every 15s
 7. Extracts and reports TTFT, ITL, throughput, and error metrics
 
-### Cleanup
+### 4. Cleanup
 
 ```bash
 kubectl delete namespace <your-namespace>
