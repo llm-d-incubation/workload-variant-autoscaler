@@ -10,14 +10,14 @@ Verify the following tools are installed on your machine:
 
 ```bash
 oc version --client
-kubectl version --client
+oc version --client  # includes kubectl functionality
 helm version --short
 yq --version
 jq --version
 go version
 ```
 
-If any are missing, install via Homebrew: `brew install openshift-cli kubectl helm yq jq go`
+If any are missing, install via Homebrew: `brew install openshift-cli helm yq jq go`
 
 ### Required Access
 
@@ -50,7 +50,7 @@ oc whoami --show-server
 Check available GPUs on the cluster:
 
 ```bash
-kubectl get nodes -o jsonpath='{range .items[?(@.status.allocatable.nvidia\.com/gpu)]}{.metadata.name}{"\t"}{.metadata.labels.nvidia\.com/gpu\.product}{"\n"}{end}'
+oc get nodes -o jsonpath='{range .items[?(@.status.allocatable.nvidia\.com/gpu)]}{.metadata.name}{"\t"}{.metadata.labels.nvidia\.com/gpu\.product}{"\n"}{end}'
 ```
 
 ---
@@ -68,7 +68,7 @@ If you have an existing namespace you can use, use that as `<your-namespace>` in
 If you have cluster-admin access, create a fresh namespace:
 
 ```bash
-kubectl create namespace <your-namespace>
+oc new-project <your-namespace>
 ```
 
 > **Note**: If you get a `Forbidden` error, you don't have permission to create namespaces. Contact the cluster admin to get admin access or have a namespace created for you.
@@ -76,7 +76,7 @@ kubectl create namespace <your-namespace>
 Label the namespace for OpenShift user-workload monitoring (so Prometheus can scrape metrics):
 
 ```bash
-kubectl label namespace <your-namespace> openshift.io/user-monitoring=true --overwrite
+oc label namespace <your-namespace> openshift.io/user-monitoring=true --overwrite
 ```
 
 ---
@@ -199,7 +199,7 @@ The results summary includes:
 ### 4. Cleanup
 
 ```bash
-kubectl delete namespace <your-namespace>
+oc delete project <your-namespace>
 ```
 
 ---
@@ -240,14 +240,14 @@ Expected result: `make test-multi-model-scaling` passes with exit code 0.
 In a separate terminal, watch the scaling behavior:
 
 ```bash
-watch kubectl get hpa -n <your-namespace>
-watch kubectl get variantautoscaling -n <your-namespace>
+watch oc get hpa -n <your-namespace>
+watch oc get variantautoscaling -n <your-namespace>
 ```
 
 ### Cleanup
 
 ```bash
-kubectl delete namespace <your-namespace>
+oc delete project <your-namespace>
 ```
 
 ---
