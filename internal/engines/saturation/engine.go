@@ -1218,16 +1218,16 @@ func (e *Engine) applySaturationDecisions(
 				targetReplicas = curr.NumReplicas
 			}
 			// Keep existing accelerator or use current (skip sentinel values)
-			if acc := updateVa.Status.DesiredOptimizedAlloc.Accelerator; acc != "" && acc != constants.DefaultAcceleratorName {
+			if acc := updateVa.Status.DesiredOptimizedAlloc.Accelerator; constants.IsAcceleratorResolved(acc) {
 				acceleratorName = acc
-			} else if curr, ok := currentAllocations[vaName]; ok && curr.Accelerator != "" && curr.Accelerator != constants.DefaultAcceleratorName {
+			} else if curr, ok := currentAllocations[vaName]; ok && constants.IsAcceleratorResolved(curr.Accelerator) {
 				acceleratorName = curr.Accelerator
 			}
 
 			// Fallback for new VAs without prior status or collected metrics:
 			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
 			// and use current deployment replicas as target to avoid unintended scaling.
-			if acceleratorName == "" || acceleratorName == constants.DefaultAcceleratorName {
+			if !constants.IsAcceleratorResolved(acceleratorName) {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
 					var scaleTarget scaletarget.ScaleTargetAccessor
@@ -1274,13 +1274,16 @@ func (e *Engine) applySaturationDecisions(
 
 		// Emit a K8s event when accelerator cannot be resolved so operators
 		// can see the problem without digging through controller logs.
-		if acceleratorName == constants.DefaultAcceleratorName {
+		// Uses Event (not Eventf) with a fixed message for better event deduplication
+		// by the API server — identical events are aggregated with an updated count
+		// rather than creating new entries each optimization cycle.
+		if !constants.IsAcceleratorResolved(acceleratorName) {
 			if e.Recorder != nil {
-				e.Recorder.Eventf(&updateVa, corev1.EventTypeWarning, "AcceleratorNotResolved",
-					"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label %q. "+
+				e.Recorder.Event(&updateVa, corev1.EventTypeWarning, "AcceleratorNotResolved",
+					"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
+						utils.AcceleratorNameLabel+". "+
 						"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
-						"HPA/KEDA metrics will not be emitted until the accelerator is resolved.",
-					utils.AcceleratorNameLabel)
+						"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
 			}
 			logger.Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
 				"variant", vaName)
@@ -1294,7 +1297,7 @@ func (e *Engine) applySaturationDecisions(
 		// is empty, and the limiter resolves it to the real type for decisions.
 		numReplicas := int32(targetReplicas)
 		statusAccelerator := acceleratorName
-		if statusAccelerator == constants.DefaultAcceleratorName {
+		if !constants.IsAcceleratorResolved(statusAccelerator) {
 			statusAccelerator = ""
 		}
 		updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
@@ -1354,7 +1357,7 @@ func (e *Engine) applySaturationDecisions(
 		// Skip metric emission when accelerator is unresolved to avoid publishing
 		// wva_* gauges under an empty or incorrect accelerator_type label.
 		// Status updates and conditions still proceed so the controller can reconcile.
-		if acceleratorName == constants.DefaultAcceleratorName {
+		if !constants.IsAcceleratorResolved(acceleratorName) {
 			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
 				"variant", updateVa.Name)
 		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
@@ -1478,7 +1481,7 @@ func (e *Engine) emitSafetyNetMetrics(
 				accelerator = curr.Accelerator
 			}
 		}
-		if accelerator == "" || accelerator == constants.DefaultAcceleratorName {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			// Try to get accelerator name from scale target nodeSelector/nodeAffinity or VA labels
 			if scaleTarget == nil {
 				logger.V(logging.DEBUG).Info("Safety net: no scale target found for VA",
@@ -1487,7 +1490,7 @@ func (e *Engine) emitSafetyNetMetrics(
 				accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget)
 			}
 		}
-		if accelerator == "" || accelerator == constants.DefaultAcceleratorName {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			logger.Info("Safety net: skipping metric emission - no accelerator name available",
 				"variant", va.Name)
 			continue

@@ -91,7 +91,7 @@ func (l *DefaultLimiter) resolveUnknownAccelerators(decisions []*interfaces.Vari
 		realType = t
 	}
 	for _, d := range decisions {
-		if d.AcceleratorName == "" || d.AcceleratorName == constants.DefaultAcceleratorName {
+		if !constants.IsAcceleratorResolved(d.AcceleratorName) {
 			d.AcceleratorName = realType
 		}
 	}

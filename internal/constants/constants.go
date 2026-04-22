@@ -82,3 +82,9 @@ const (
 	ComponentEnforcer   = "enforcer"
 	ComponentController = "controller"
 )
+
+// IsAcceleratorResolved returns true if the accelerator name is a real GPU type
+// (not empty and not the "unknown" sentinel).
+func IsAcceleratorResolved(name string) bool {
+	return name != "" && name != DefaultAcceleratorName
+}

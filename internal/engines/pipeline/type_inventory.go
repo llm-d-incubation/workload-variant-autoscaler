@@ -293,7 +293,7 @@ func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRe
 	}
 
 	accType := decision.AcceleratorName
-	if accType == "" || accType == constants.DefaultAcceleratorName {
+	if !constants.IsAcceleratorResolved(accType) {
 		// Normally resolved by DefaultLimiter.resolveUnknownAccelerators before
 		// reaching here. This is a safety net for direct callers.
 		if len(a.remainingByType) == 1 {
