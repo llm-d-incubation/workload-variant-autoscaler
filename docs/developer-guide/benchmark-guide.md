@@ -215,6 +215,7 @@ Replace `<your-namespace>` with your namespace:
 make undeploy-multi-model-infra \
   ENVIRONMENT=openshift \
   WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
+  DEPLOY_PROMETHEUS_ADAPTER=false \
   MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
 
 # 2. Deploy multi-model infrastructure
