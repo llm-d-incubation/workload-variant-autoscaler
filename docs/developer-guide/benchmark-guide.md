@@ -121,13 +121,9 @@ The single-model benchmark tests WVA scaling behavior with one model under diffe
 | `prefill_heavy` | 4000 | 1000 | 20 RPS | Prefill (prompt processing) — long input, short output |
 | `decode_heavy` | 1000 | 4000 | 20 RPS | Decode (token generation) — short input, long output |
 
-```bash
-# 1. Undeploy previous run (clean slate)
-oc delete project <your-namespace>
-oc new-project <your-namespace>
-oc label namespace <your-namespace> openshift.io/user-monitoring=true --overwrite
+### 1. Deploy Single-Model Infrastructure
 
-# 2. Deploy single-model infrastructure
+```bash
 make deploy-e2e-infra \
   ENVIRONMENT=openshift \
   WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
