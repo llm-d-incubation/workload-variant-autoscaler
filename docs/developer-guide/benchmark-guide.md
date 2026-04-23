@@ -121,14 +121,15 @@ The single-model benchmark tests WVA scaling behavior with one model under diffe
 | `prefill_heavy` | 4000 | 1000 | 20 RPS | Prefill (prompt processing) — long input, short output |
 | `decode_heavy` | 1000 | 4000 | 20 RPS | Decode (token generation) — short input, long output |
 
+### Deploy Single-Model Infrastructure
+
 ```bash
 # 1. Undeploy previous run (clean slate)
 make deploy-e2e-infra \
   ENVIRONMENT=openshift \
   WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
   E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
-  DEPLOY_PROMETHEUS_ADAPTER=false \
-  --undeploy
+  DEPLOY_PROMETHEUS_ADAPTER=false
 
 # 2. Deploy single-model infrastructure
 make deploy-e2e-infra \
