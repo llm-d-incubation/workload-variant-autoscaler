@@ -915,6 +915,41 @@ var _ = Describe("Scaling Benchmark", Ordered, Label("benchmark"), func() {
 		})
 	})
 
+	Context("WVA Symmetrical", Label("symmetrical"), func() {
+		It("should run the symmetrical workload against WVA", func() {
+			cleanupAutoscalers()
+			res.DeploymentName = findInfraDecodeDeployment()
+			ensureInfraDeploymentReady()
+
+			By("Creating VariantAutoscaling resource (max=10, cost=10)")
+			err := fixtures.EnsureVariantAutoscaling(
+				ctx, crClient, benchCfg.LLMDNamespace, res.VAName, res.DeploymentName,
+				benchCfg.ModelID, benchCfg.AcceleratorType, 10.0, benchCfg.ControllerInstance,
+				fixtures.WithMinReplicas(1),
+				fixtures.WithMaxReplicas(10),
+			)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create VA")
+
+			By("Creating HPA (Scale Up: 0s/Pods/10/150, Scale Down: 240s/Pods/10/150)")
+			behavior := &autoscalingv2.HorizontalPodAutoscalerBehavior{
+				ScaleUp: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr.To(int32(0)),
+					Policies:                   []autoscalingv2.HPAScalingPolicy{{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 150}},
+				},
+				ScaleDown: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr.To(int32(240)),
+					Policies:                   []autoscalingv2.HPAScalingPolicy{{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 150}},
+				},
+			}
+			err = fixtures.EnsureHPA(ctx, k8sClient, benchCfg.LLMDNamespace, res.HPAName, res.DeploymentName, res.VAName, 1, 10, WithBehavior(behavior))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA")
+
+			waitForVAAndMetrics()
+
+			runBenchmarkScenario("WVA", "symmetrical")
+		})
+	})
+
 	AfterAll(func() {
 		GinkgoWriter.Println("Prefill benchmark complete — cleaning up autoscalers and scaling to 1 for next test suite")
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Minute)

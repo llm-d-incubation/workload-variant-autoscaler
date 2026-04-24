@@ -26,11 +26,13 @@ SCALER_BACKEND              ?= prometheus-adapter  # prometheus-adapter (HPA), k
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
 E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
-BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy)
+BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy), symmetrical
 
 # Map scenario name to Ginkgo label filter
 ifeq ($(BENCHMARK_SCENARIO),decode_heavy)
   BENCHMARK_LABEL_FILTER := decode-heavy
+else ifeq ($(BENCHMARK_SCENARIO),symmetrical)
+  BENCHMARK_LABEL_FILTER := symmetrical
 else
   BENCHMARK_LABEL_FILTER := phase3a
 endif
