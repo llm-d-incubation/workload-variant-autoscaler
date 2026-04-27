@@ -18,7 +18,7 @@ const (
 	QueryAvgTTFT = "avg_ttft"
 
 	// QueryAvgITL is the query name for average inter-token latency per pod (in seconds).
-	// Source: vllm:time_per_output_token_seconds histogram
+	// Source: vllm:inter_token_latency_seconds histogram
 	QueryAvgITL = "avg_itl"
 )
 
@@ -46,7 +46,7 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 	})
 
 	// Average time-to-first-token per pod (seconds).
-	// Uses histogram _sum/_count from vLLM over a 1m rate window.
+	// Uses histogram rate(sum[1m]) / rate(count[1m]) over a 1m sliding window.
 	// Used by queueing model tuner as the observed TTFT for Kalman filter updates.
 	registry.MustRegister(source.QueryTemplate{
 		Name:     QueryAvgTTFT,
@@ -58,12 +58,12 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 	})
 
 	// Average inter-token latency per pod (seconds).
-	// Uses histogram _sum/_count from vLLM over a 1m rate window.
+	// Uses histogram rate(sum[1m]) / rate(count[1m]) over a 1m sliding window.
 	// Used by queueing model tuner as the observed ITL for Kalman filter updates.
 	registry.MustRegister(source.QueryTemplate{
 		Name:     QueryAvgITL,
 		Type:     source.QueryTypePromQL,
-		Template: `max by (pod) (rate(vllm:time_per_output_token_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:time_per_output_token_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template: `max by (pod) (rate(vllm:inter_token_latency_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:inter_token_latency_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:   []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Average inter-token latency per pod (seconds), " +
 			"used by queueing model tuner for parameter learning",

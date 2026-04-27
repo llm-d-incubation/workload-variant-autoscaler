@@ -311,9 +311,11 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	if result := results[registration.QuerySchedulerDispatchRate]; result != nil {
 		if !result.HasError() {
 			for _, value := range result.Values {
-				podName := value.Labels["pod"]
+				// The scheduler metric has both "pod" (EPP scrape target) and "pod_name"
+				// (the vLLM endpoint pod). Prefer pod_name so we join with vLLM metrics.
+				podName := value.Labels["pod_name"]
 				if podName == "" {
-					podName = value.Labels["pod_name"]
+					podName = value.Labels["pod"]
 				}
 				if podName == "" {
 					logger.Info("Scheduler dispatch rate metric missing both 'pod' and 'pod_name' labels, skipping",

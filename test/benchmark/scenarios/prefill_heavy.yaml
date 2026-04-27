@@ -1,0 +1,8 @@
+name: "Prefill Heavy"
+description: "Stress-tests prefill (prompt processing) with long input, short output"
+promptTokens: 4000
+outputTokens: 1000
+rate: 20
+maxSeconds: 600
+profile: "poisson"
+requestType: "text_completions"

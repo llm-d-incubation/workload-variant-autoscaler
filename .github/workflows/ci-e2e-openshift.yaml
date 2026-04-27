@@ -397,8 +397,8 @@ jobs:
       MAX_NUM_SEQS: ${{ github.event.inputs.max_num_seqs || '5' }}
       HPA_STABILIZATION_SECONDS: ${{ github.event.inputs.hpa_stabilization_seconds || '240' }}
       SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
-      # Use main branch of llm-d/llm-d for inferencepool chart v1.2.1 (GA API support)
-      LLM_D_RELEASE: main
+      # Pin llm-d release for deterministic CI behavior
+      LLM_D_RELEASE: v0.6.0
       # PR-specific namespaces for isolation between concurrent PR tests
       # Primary llm-d namespace (Model A1 + A2)
       LLMD_NAMESPACE: llm-d-inference-scheduler-pr-${{ needs.gate.outputs.pr_number || github.run_id }}

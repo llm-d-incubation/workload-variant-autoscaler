@@ -37,4 +37,4 @@ llmd-infra/
 actionlint
 
 # AI
-.claude
+.claude/worktrees/

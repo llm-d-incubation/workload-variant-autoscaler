@@ -1,0 +1,8 @@
+name: "Symmetrical"
+description: "Balanced workload with equal input and output token lengths"
+promptTokens: 1000
+outputTokens: 1000
+rate: 20
+maxSeconds: 600
+profile: "poisson"
+requestType: "text_completions"

@@ -3,6 +3,7 @@ package fixtures
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,13 +18,14 @@ import (
 // EnsureModelServiceLWS creates or replaces a LeaderWorkerSet for model service (idempotent for test setup).
 func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, groupSize int32) error {
 	lwsName := name + "-decode"
+	desiredLWS := buildModelServiceLWS(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, groupSize)
 
 	// Check if LWS already exists
 	existingLWS := &lwsv1.LeaderWorkerSet{}
 	err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, existingLWS)
 	if err == nil {
 		// LWS exists, check if it's ready
-		if existingLWS.Status.ReadyReplicas > 0 {
+		if existingLWS.Status.ReadyReplicas > 0 && modelServiceLWSMatchesDesired(*existingLWS, *desiredLWS) {
 			return nil
 		}
 		// Not ready, delete and recreate
@@ -31,10 +33,8 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, k8sClien
 		deleteErr := crClient.Delete(ctx, existingLWS, &client.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			if !errors.IsConflict(deleteErr) {
-				return fmt.Errorf("delete existing LWS %s: %w", lwsName, deleteErr)
-			}
+		if deleteErr != nil && !errors.IsNotFound(deleteErr) && !errors.IsConflict(deleteErr) {
+			return fmt.Errorf("delete existing LWS %s: %w", lwsName, deleteErr)
 		}
 		// Wait for deletion
 		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -53,17 +53,22 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, k8sClien
 		return fmt.Errorf("check existing LWS %s: %w", lwsName, err)
 	}
 
-	lws := buildModelServiceLWS(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, groupSize)
-	err = crClient.Create(ctx, lws)
+	err = crClient.Create(ctx, desiredLWS)
 	if err != nil && errors.IsAlreadyExists(err) {
 		propagationPolicy := metav1.DeletePropagationForeground
-		_ = crClient.Delete(ctx, lws, &client.DeleteOptions{
+		_ = crClient.Delete(ctx, desiredLWS, &client.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
 		time.Sleep(2 * time.Second)
-		err = crClient.Create(ctx, lws)
+		err = crClient.Create(ctx, desiredLWS)
 	}
 	return err
+}
+
+func modelServiceLWSMatchesDesired(existing, desired lwsv1.LeaderWorkerSet) bool {
+	return reflect.DeepEqual(existing.Spec, desired.Spec) &&
+		reflect.DeepEqual(existing.Labels, desired.Labels) &&
+		reflect.DeepEqual(existing.Annotations, desired.Annotations)
 }
 
 // DeleteModelServiceLWS deletes the LeaderWorkerSet for model service. Idempotent; ignores NotFound.

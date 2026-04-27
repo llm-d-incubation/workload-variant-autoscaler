@@ -3,6 +3,10 @@ package benchmark
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -11,26 +15,85 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/yaml"
 )
 
-// CreateGuideLLMJobWithArgs launches a GuideLLM Job with the specified arguments.
+// WorkloadScenario defines the GuideLLM workload parameters loaded from scenarios/ YAML files.
+type WorkloadScenario struct {
+	Name         string `json:"name" yaml:"name"`
+	Description  string `json:"description,omitempty" yaml:"description,omitempty"`
+	PromptTokens int    `json:"promptTokens" yaml:"promptTokens"`
+	OutputTokens int    `json:"outputTokens" yaml:"outputTokens"`
+	Rate         int    `json:"rate" yaml:"rate"`
+	MaxSeconds   int    `json:"maxSeconds" yaml:"maxSeconds"`
+	Profile      string `json:"profile" yaml:"profile"`
+	RequestType  string `json:"requestType" yaml:"requestType"`
+}
+
+// scenariosDir returns the absolute path to the scenarios/ directory relative to this source file.
+func scenariosDir() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(thisFile), "scenarios")
+}
+
+// defaultScenario returns the fallback prefill_heavy defaults used when no
+// scenario file is found or when YAML parsing fails.
+func defaultScenario() WorkloadScenario {
+	return WorkloadScenario{
+		Name:         "Prefill Heavy (default)",
+		PromptTokens: 4000,
+		OutputTokens: 1000,
+		Rate:         20,
+		MaxSeconds:   600,
+		Profile:      "poisson",
+		RequestType:  "text_completions",
+	}
+}
+
+// LoadScenario loads a WorkloadScenario from test/benchmark/scenarios/<name>.yaml.
+// If the named file doesn't exist, it falls back to prefill_heavy defaults.
+func LoadScenario(name string) WorkloadScenario {
+	if name == "" {
+		name = "prefill_heavy"
+	}
+
+	path := filepath.Join(scenariosDir(), name+".yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Fallback to prefill_heavy defaults (preserves backward compatibility)
+		return defaultScenario()
+	}
+
+	var scenario WorkloadScenario
+	if parseErr := yaml.Unmarshal(data, &scenario); parseErr != nil {
+		// On parse error, return defaults
+		return defaultScenario()
+	}
+
+	return scenario
+}
+
+// CreateGuideLLMJobWithArgs launches a GuideLLM Job with parameters from the given WorkloadScenario.
 func CreateGuideLLMJobWithArgs(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	namespace, name, targetServiceURL, modelID string,
+	scenario WorkloadScenario,
 ) error {
 	image := "ghcr.io/vllm-project/guidellm:v0.5.4"
+
+	dataArg := "prompt_tokens=" + strconv.Itoa(scenario.PromptTokens) + ",output_tokens=" + strconv.Itoa(scenario.OutputTokens)
 
 	args := []string{
 		"benchmark",
 		"--target", targetServiceURL,
 		"--model", modelID,
-		"--profile", "poisson",
-		"--rate", "20",
-		"--max-seconds", "600",
+		"--profile", scenario.Profile,
+		"--rate", strconv.Itoa(scenario.Rate),
+		"--max-seconds", strconv.Itoa(scenario.MaxSeconds),
 		"--random-seed", "42",
-		"--request-type", "text_completions",
-		"--data", "prompt_tokens=4000,output_tokens=1000",
+		"--request-type", scenario.RequestType,
+		"--data", dataArg,
 		"--output-path", "/tmp/benchmarks.json",
 		"--backend-kwargs", `'{"validate_backend": false}'`,
 	}

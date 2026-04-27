@@ -114,7 +114,10 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 						Metric: autoscalingv2.MetricIdentifier{
 							Name: "wva_desired_replicas",
 							Selector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{"variant_name": vaName},
+								MatchLabels: map[string]string{
+									"variant_name":       vaName,
+									"exported_namespace": namespace,
+								},
 							},
 						},
 						Target: autoscalingv2.MetricTarget{

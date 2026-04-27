@@ -49,20 +49,21 @@ undeploy_llm_d_infrastructure() {
         RELEASE="$WELL_LIT_PATH_NAME"
     fi
 
+    # Helm uninstall only needs the release name and namespace — it does not
+    # require the local llm-d clone directory. Always attempt to remove the
+    # releases so cluster resources are cleaned up even when the local repo
+    # has already been deleted or was never cloned.
+    log_info "Removing llm-d core components..."
+
+    helm uninstall "infra-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
+        log_warning "llm-d infra components not found or already uninstalled"
+    helm uninstall "gaie-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
+        log_warning "llm-d inference-scheduler components not found or already uninstalled"
+    helm uninstall "ms-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
+        log_warning "llm-d ModelService components not found or already uninstalled"
+
     if [ ! -d "$EXAMPLE_DIR" ]; then
-        log_warning "llm-d example directory not found, skipping cleanup"
-    else
-        cd "$EXAMPLE_DIR"
-
-        log_info "Removing llm-d core components..."
-
-        helm uninstall "infra-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-            log_warning "llm-d infra components not found or already uninstalled"
-        helm uninstall "gaie-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-            log_warning "llm-d inference-scheduler components not found or already uninstalled"
-        helm uninstall "ms-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-            log_warning "llm-d ModelService components not found or already uninstalled"
-
+        log_warning "llm-d example directory not found, skipping local cleanup"
     fi
 
     # Remove HF token secret

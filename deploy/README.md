@@ -586,6 +586,7 @@ spec:
         selector:
           matchLabels:
             variant_name: my-vllm-deployment-decode
+            exported_namespace: $NAMESPACE
       target:
         type: AverageValue
         averageValue: "1"
@@ -697,7 +698,7 @@ HPA_STABILIZATION_SECONDS=30 ./deploy/install.sh
 | `WVA_LOG_LEVEL` | WVA logging level | `info` |
 | `VLLM_SVC_ENABLED` | Enable vLLM Service | `true` |
 | `VLLM_SVC_NODEPORT` | vLLM NodePort | `30000` |
-| `LLM_D_RELEASE` | llm-d version | `v0.3.0` |
+| `LLM_D_RELEASE` | llm-d version | `v0.6.0` |
 | `VLLM_MAX_NUM_SEQS` | vLLM max concurrent sequences per replica | (unset - uses vLLM default) |
 
 **vLLM Performance Tuning:**

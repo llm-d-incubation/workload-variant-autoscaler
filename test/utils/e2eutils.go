@@ -944,7 +944,8 @@ func CreateHPAOnDesiredReplicaMetrics(name, namespace, deploymentName, variantNa
 							Name: constants.WVADesiredReplicas,
 							Selector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{
-									"variant_name": variantName,
+									"variant_name":       variantName,
+									"exported_namespace": namespace,
 								},
 							},
 						},

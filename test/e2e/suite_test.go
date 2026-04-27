@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	infextv1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -147,6 +149,10 @@ var _ = BeforeSuite(func() {
 	// Add LeaderWorkerSet scheme for LWS support
 	err = lwsv1.AddToScheme(s)
 	Expect(err).NotTo(HaveOccurred(), "Failed to add LWS scheme")
+	err = kedav1alpha1.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add KEDA scheme")
+	err = infextv1alpha2.Install(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add Inference Extension v1alpha2 scheme")
 
 	crClient, err = client.New(restConfig, client.Options{Scheme: s})
 	Expect(err).NotTo(HaveOccurred(), "Failed to create controller-runtime client")

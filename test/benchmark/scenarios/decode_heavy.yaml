@@ -1,0 +1,8 @@
+name: "Decode Heavy"
+description: "Stress-tests decode (token generation) with short input, long output"
+promptTokens: 1000
+outputTokens: 4000
+rate: 20
+maxSeconds: 600
+profile: "poisson"
+requestType: "text_completions"

@@ -219,6 +219,7 @@ spec:
         selector:
           matchLabels:
             variant_name: "llama-8b"
+            exported_namespace: "llm-d"
             controller_instance: "my-instance-id"
 ```
 

@@ -523,6 +523,7 @@ spec:
         selector:
           matchLabels:
             variant_name: sample-deployment
+            exported_namespace: llm-d-sim
       target:
         type: AverageValue
         averageValue: "1"

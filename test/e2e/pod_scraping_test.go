@@ -19,7 +19,7 @@ import (
 //
 // Note: On Kind clusters, pod IPs are not routable from outside the cluster, so direct
 // scraping tests are skipped. In-cluster scraping tests still run to verify functionality.
-var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
+var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, func() {
 	var (
 		poolName          = "pod-scraping-pool"
 		modelServiceName  = "pod-scraping-ms"

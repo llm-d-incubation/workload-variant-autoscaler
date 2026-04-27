@@ -3,6 +3,7 @@ package fixtures
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -39,20 +40,19 @@ func DeleteModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
 	appLabel := name + "-decode"
 	deploymentName := appLabel
+	desiredDeployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
 
 	existingDeployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err == nil {
-		if existingDeployment.Status.ReadyReplicas > 0 {
+		if existingDeployment.Status.ReadyReplicas > 0 && modelServiceDeploymentMatchesDesired(*existingDeployment, *desiredDeployment) {
 			return nil
 		}
 		propagationPolicy := metav1.DeletePropagationForeground
 		deleteErr := k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			if !errors.IsConflict(deleteErr) {
-				return fmt.Errorf("delete existing deployment %s: %w", deploymentName, deleteErr)
-			}
+		if deleteErr != nil && !errors.IsNotFound(deleteErr) && !errors.IsConflict(deleteErr) {
+			return fmt.Errorf("delete existing deployment %s: %w", deploymentName, deleteErr)
 		}
 		if err := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); err != nil {
 			return fmt.Errorf("timeout waiting for deployment %s to be deleted: %w", deploymentName, err)
@@ -61,8 +61,7 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 		return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
 	}
 
-	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
-	_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, desiredDeployment, metav1.CreateOptions{})
 	if err != nil && errors.IsAlreadyExists(err) {
 		propagationPolicy := metav1.DeletePropagationForeground
 		_ = k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{
@@ -71,9 +70,15 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 		if waitErr := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); waitErr != nil {
 			return fmt.Errorf("timeout waiting for deployment %s to be deleted before recreate: %w", deploymentName, waitErr)
 		}
-		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
+		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, desiredDeployment, metav1.CreateOptions{})
 	}
 	return err
+}
+
+func modelServiceDeploymentMatchesDesired(existing, desired appsv1.Deployment) bool {
+	return reflect.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) &&
+		reflect.DeepEqual(existing.Spec.Template.Labels, desired.Spec.Template.Labels) &&
+		reflect.DeepEqual(existing.Spec.Template.Spec, desired.Spec.Template.Spec)
 }
 
 func buildModelServiceDeployment(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) *appsv1.Deployment {
