@@ -73,7 +73,7 @@ type MetricSnap struct {
 
 var prefillResults []PrefillResult
 
-const prefillResultsFile = "/tmp/prefill-benchmark-results.json"
+var benchmarkResultsFile string
 
 var _ = Describe("Scaling Benchmark", Ordered, Label("benchmark"), func() {
 	var (
@@ -840,9 +840,10 @@ var _ = Describe("Scaling Benchmark", Ordered, Label("benchmark"), func() {
 		}
 		GinkgoWriter.Printf("  └────────────────────────────────────────────────────────────\n\n")
 
-		By("Saving prefill benchmark results to file")
+		benchmarkResultsFile = fmt.Sprintf("/tmp/%s-benchmark-results.json", scenarioName)
+		By(fmt.Sprintf("Saving benchmark results to %s", benchmarkResultsFile))
 		data, _ := json.MarshalIndent(prefillResults, "", "  ")
-		_ = os.WriteFile(prefillResultsFile, data, 0644)
+		_ = os.WriteFile(benchmarkResultsFile, data, 0644)
 	}
 
 	Context("WVA Prefill Heavy", Label("phase3a"), func() {
