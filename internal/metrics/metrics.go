@@ -23,6 +23,12 @@ var (
 	optimizationDuration *prometheus.HistogramVec
 	modelsProcessedGauge *prometheus.GaugeVec
 
+	// pipeline stage visibility metrics
+	decisionsLimitedTotal      *prometheus.CounterVec
+	availableGpus              *prometheus.GaugeVec
+	enforcerModificationsTotal *prometheus.CounterVec
+	optimizerActive            *prometheus.GaugeVec
+
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
 	controllerInstance string
@@ -104,6 +110,54 @@ func InitMetrics(registry prometheus.Registerer) error {
 		modelsProcessedLabels,
 	)
 
+	decisionsLimitedLabels := []string{constants.LabelVariantName, constants.LabelNamespace, constants.LabelLimiterName}
+	if controllerInstance != "" {
+		decisionsLimitedLabels = append(decisionsLimitedLabels, constants.LabelControllerInstance)
+	}
+	decisionsLimitedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVADecisionsLimitedTotal,
+			Help: "Total number of decisions limited by the limiter",
+		},
+		decisionsLimitedLabels,
+	)
+
+	availableGpusLabels := []string{constants.LabelAcceleratorType}
+	if controllerInstance != "" {
+		availableGpusLabels = append(availableGpusLabels, constants.LabelControllerInstance)
+	}
+	availableGpus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAAvailableGpus,
+			Help: "Number of GPUs currently available",
+		},
+		availableGpusLabels,
+	)
+
+	enforcerModificationsLabels := []string{constants.LabelPolicyType}
+	if controllerInstance != "" {
+		enforcerModificationsLabels = append(enforcerModificationsLabels, constants.LabelControllerInstance)
+	}
+	enforcerModificationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVAEnforcerModificationsTotal,
+			Help: "Total number of decision modifications made by the enforcer",
+		},
+		enforcerModificationsLabels,
+	)
+
+	optimizerActiveLabels := []string{constants.LabelOptimizerName}
+	if controllerInstance != "" {
+		optimizerActiveLabels = append(optimizerActiveLabels, constants.LabelControllerInstance)
+	}
+	optimizerActive = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAOptimizerActive,
+			Help: "1 for active optimizer, 0 for inactive",
+		},
+		optimizerActiveLabels,
+	)
+
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
 		return fmt.Errorf("failed to register replicaScalingTotal metric: %w", err)
@@ -122,6 +176,18 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(modelsProcessedGauge); err != nil {
 		return fmt.Errorf("failed to register modelsProcessedGauge metric: %w", err)
+	}
+	if err := registry.Register(decisionsLimitedTotal); err != nil {
+		return fmt.Errorf("failed to register decisionsLimitedTotal metric: %w", err)
+	}
+	if err := registry.Register(availableGpus); err != nil {
+		return fmt.Errorf("failed to register availableGpus metric: %w", err)
+	}
+	if err := registry.Register(enforcerModificationsTotal); err != nil {
+		return fmt.Errorf("failed to register enforcerModificationsTotal metric: %w", err)
+	}
+	if err := registry.Register(optimizerActive); err != nil {
+		return fmt.Errorf("failed to register optimizerActive metric: %w", err)
 	}
 
 	return nil
@@ -220,5 +286,47 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 		return nil
 	}
 	desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
+	return nil
+}
+
+func (m *MetricsEmitter) EmitOptimizerActiveMetric(optimizerName string, isActive bool) error {
+	labels := prometheus.Labels{
+		constants.LabelOptimizerName: optimizerName,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	// These operations are local and should never fail, but we handle errors for debugging
+	if optimizerActive == nil {
+		return errors.New("optimizerActive metric not initialized")
+	}
+
+	v := float64(0)
+	if isActive {
+		v = 1
+	}
+	optimizerActive.With(labels).Set(v)
+	return nil
+}
+
+func (m *MetricsEmitter) EmitEnforcerMetric(policyType string) error {
+	labels := prometheus.Labels{
+		constants.LabelPolicyType: policyType,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	// These operations are local and should never fail, but we handle errors for debugging
+	if enforcerModificationsTotal == nil {
+		return errors.New("enforcerModificationsTotal metric not initialized")
+	}
+
+	enforcerModificationsTotal.With(labels).Inc()
 	return nil
 }

@@ -115,6 +115,22 @@ const (
 
 	// WVAModelsProcessed is a gauge that tracks the number of models processed in the last optimization cycle.
 	WVAModelsProcessed = "wva_models_processed"
+
+	// WVADecisionsLimitedTotal is a counter that tracks the total number of decisions limited by the limiter.
+	// Labels: variant_name, namespace, limiter_name
+	WVADecisionsLimitedTotal = "wva_decisions_limited_total"
+
+	// WVAAvailableGpus is a gauge that tracks the number of currently available GPUs.
+	// Labels: accelerator_type
+	WVAAvailableGpus = "wva_available_gpus"
+
+	// WVAEnforcerModificationsTotal is a counter that tracks the total number of decision modifications made by the enforcer.
+	// Labels:policy_type
+	WVAEnforcerModificationsTotal = "wva_enforcer_modifications_total"
+
+	// WVAOptimizerActive is a gauge that is 0 when an optimizer is inactive, and 1 when it's active.
+	// Labels:optimizer_name
+	WVAOptimizerActive = "wva_optimizer_active"
 )
 
 // Metric Label Names
@@ -128,4 +144,7 @@ const (
 	LabelAcceleratorType    = "accelerator_type"
 	LabelControllerInstance = "controller_instance"
 	LabelStatus             = "status"
+	LabelLimiterName        = "limiter_name"
+	LabelPolicyType         = "policy_type"
+	LabelOptimizerName      = "optimizer_name"
 )

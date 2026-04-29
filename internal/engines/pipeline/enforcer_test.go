@@ -7,9 +7,12 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // boolPtr is a helper to create a pointer to a bool value
@@ -209,6 +212,118 @@ var _ = Describe("Enforcer", func() {
 
 				Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-saturation"))
 				Expect(decisions[0].Reason).To(ContainSubstring("enforced"))
+			})
+		})
+
+		Context("metrics emission", func() {
+			var (
+				registry *prometheus.Registry
+			)
+
+			BeforeEach(func() {
+				// Create a fresh registry for each test
+				registry = prometheus.NewRegistry()
+				err := metrics.InitMetrics(registry)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("should emit metric when enforcing scale-to-zero", func() {
+				enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
+					return 0, nil
+				})
+				decisions := []interfaces.VariantDecision{
+					{VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 2},
+				}
+				scaleToZeroConfig := config.ScaleToZeroConfigData{
+					"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
+				}
+
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+
+				// Verify metric was emitted
+				metricFamilies, err := registry.Gather()
+				Expect(err).NotTo(HaveOccurred())
+
+				var found bool
+				for _, mf := range metricFamilies {
+					if mf.GetName() == constants.WVAEnforcerModificationsTotal {
+						found = true
+						// Should have at least one metric
+						Expect(mf.GetMetric()).NotTo(BeEmpty())
+						// Check for scale_to_zero policy type
+						for _, m := range mf.GetMetric() {
+							for _, label := range m.GetLabel() {
+								if label.GetName() == constants.LabelPolicyType && label.GetValue() == "scale_to_zero" {
+									counter := m.GetCounter()
+									Expect(counter).NotTo(BeNil())
+									Expect(counter.GetValue()).To(BeNumerically(">", 0))
+								}
+							}
+						}
+					}
+				}
+				Expect(found).To(BeTrue(), "enforcer metric should be emitted")
+			})
+
+			It("should emit metric when enforcing minimum replica", func() {
+				enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
+					return 0, nil
+				})
+				decisions := []interfaces.VariantDecision{
+					{VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 0, TargetReplicas: 0},
+				}
+				scaleToZeroConfig := config.ScaleToZeroConfigData{
+					"test-model": {EnableScaleToZero: boolPtr(false)},
+				}
+
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+
+				// Verify metric was emitted
+				metricFamilies, err := registry.Gather()
+				Expect(err).NotTo(HaveOccurred())
+
+				var found bool
+				for _, mf := range metricFamilies {
+					if mf.GetName() == constants.WVAEnforcerModificationsTotal {
+						found = true
+						// Check for minimum_replicas policy type
+						for _, m := range mf.GetMetric() {
+							for _, label := range m.GetLabel() {
+								if label.GetName() == constants.LabelPolicyType && label.GetValue() == "minimum_replicas" {
+									counter := m.GetCounter()
+									Expect(counter).NotTo(BeNil())
+									Expect(counter.GetValue()).To(BeNumerically(">", 0))
+								}
+							}
+						}
+					}
+				}
+				Expect(found).To(BeTrue(), "enforcer metric should be emitted")
+			})
+
+			It("should not emit metric when no enforcement is needed", func() {
+				enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
+					return 10, nil // Has requests
+				})
+				decisions := []interfaces.VariantDecision{
+					{VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 3},
+				}
+				scaleToZeroConfig := config.ScaleToZeroConfigData{
+					"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
+				}
+
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+
+				// Verify no metric was emitted (counter should be empty or zero)
+				metricFamilies, err := registry.Gather()
+				Expect(err).NotTo(HaveOccurred())
+
+				for _, mf := range metricFamilies {
+					if mf.GetName() == constants.WVAEnforcerModificationsTotal {
+						// Metrics should be empty since no enforcement was applied
+						Expect(mf.GetMetric()).To(BeEmpty(), "no enforcement should mean no metrics emitted")
+					}
+				}
 			})
 		})
 	})

@@ -7,9 +7,11 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/go-logr/logr"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 )
 
@@ -23,12 +25,14 @@ type Enforcer struct {
 	// requestCountFunc is a function that returns the total request count for a model.
 	// Injected for testability.
 	requestCountFunc RequestCountFuncType
+	metricsEmitter   *metrics.MetricsEmitter
 }
 
 // NewEnforcer creates a new scale-to-zero enforcer.
 func NewEnforcer(requestCountFunc RequestCountFuncType) *Enforcer {
 	return &Enforcer{
 		requestCountFunc: requestCountFunc,
+		metricsEmitter:   metrics.NewMetricsEmitter(),
 	}
 }
 
@@ -110,7 +114,7 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 			continue
 		}
 		d.TargetReplicas = 0
-		updateDecisionAction(d, optimizerName)
+		updateDecisionAction(logger, d, optimizerName, "scale_to_zero", e.metricsEmitter)
 	}
 
 	return true
@@ -161,7 +165,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 
 	if cheapestIdx >= 0 {
 		decisions[cheapestIdx].TargetReplicas = 1
-		updateDecisionAction(&decisions[cheapestIdx], optimizerName)
+		updateDecisionAction(logger, &decisions[cheapestIdx], optimizerName, "minimum_replicas", e.metricsEmitter)
 		logger.Info("Preserving minimum replica on cheapest variant (scale-to-zero disabled)",
 			"modelID", modelID,
 			"variant", decisions[cheapestIdx].VariantName,
@@ -174,7 +178,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 
 // updateDecisionAction updates a decision's Action and Reason fields based on
 // the current TargetReplicas vs CurrentReplicas after enforcement.
-func updateDecisionAction(d *interfaces.VariantDecision, optimizerName string) {
+func updateDecisionAction(logger logr.Logger, d *interfaces.VariantDecision, optimizerName, policyType string, metricsEmitter *metrics.MetricsEmitter) {
 	switch {
 	case d.TargetReplicas > d.CurrentReplicas:
 		d.Action = interfaces.ActionScaleUp
@@ -184,4 +188,9 @@ func updateDecisionAction(d *interfaces.VariantDecision, optimizerName string) {
 		d.Action = interfaces.ActionNoChange
 	}
 	d.Reason = fmt.Sprintf("V2 %s (optimizer: %s, enforced)", d.Action, optimizerName)
+
+	// finally emit metric
+	if err := metricsEmitter.EmitEnforcerMetric(policyType); err != nil {
+		logger.Error(err, "Failed to emit enforcer metric", "policy_type", policyType)
+	}
 }

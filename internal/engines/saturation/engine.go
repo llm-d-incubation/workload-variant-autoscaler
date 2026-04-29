@@ -103,6 +103,8 @@ type Engine struct {
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
 	// CostAwareOptimizer (unlimited) or GreedyByScoreOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
+
+	metricsEmitter *metrics.MetricsEmitter
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -145,6 +147,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
+		metricsEmitter:          metrics.NewMetricsEmitter(),
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -177,6 +180,21 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	logger := ctrl.LoggerFrom(ctx)
+
+	optimizerNames := []string{
+		pipeline.GreedyByScoreOptimizerName,
+		pipeline.CostAwareOptimizerName,
+	}
+	for _, name := range optimizerNames {
+		isActive := false
+		if name == e.optimizer.Name() {
+			isActive = true
+		}
+		if err := e.metricsEmitter.EmitOptimizerActiveMetric(name, isActive); err != nil {
+			logger.Error(err, "Failed to emit optimizer active metric", "optimizer", name)
+		}
+	}
 	e.executor.Start(ctx)
 }
 
@@ -283,6 +301,9 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
 		} else {
 			e.optimizer = pipeline.NewCostAwareOptimizer()
+		}
+		if err := e.metricsEmitter.EmitOptimizerActiveMetric(e.optimizer.Name(), true); err != nil {
+			logger.Error(err, "Failed to emit optimizer active metric")
 		}
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
