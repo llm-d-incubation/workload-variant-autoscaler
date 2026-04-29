@@ -108,6 +108,13 @@ const (
 	// WVADesiredRatio is a gauge that tracks the ratio of desired to current replicas.
 	// Labels: variant_name, namespace, accelerator_type
 	WVADesiredRatio = "wva_desired_ratio"
+
+	// WVAOptimizationDurationSeconds is a histogram that tracks the duration of each optimization cycle.
+	// Labels: status (success, error)
+	WVAOptimizationDurationSeconds = "wva_optimization_duration_seconds"
+
+	// WVAModelsProcessed is a gauge that tracks the number of models processed in the last optimization cycle.
+	WVAModelsProcessed = "wva_models_processed"
 )
 
 // Metric Label Names
@@ -120,4 +127,5 @@ const (
 	LabelReason             = "reason"
 	LabelAcceleratorType    = "accelerator_type"
 	LabelControllerInstance = "controller_instance"
+	LabelStatus             = "status"
 )

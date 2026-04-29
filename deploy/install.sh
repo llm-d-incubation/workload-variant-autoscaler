@@ -123,6 +123,13 @@ KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
 # kubernetes: default false (cluster-managed KEDA); set true to let this script install/upgrade KEDA via Helm
 KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
 
+# LeaderWorkerSet (LWS) configuration
+# Set DEPLOY_LWS=false to skip LWS installation (e.g., when running benchmarks
+# locally or when LWS is already installed cluster-wide)
+DEPLOY_LWS=${DEPLOY_LWS:-true}
+LWS_NAMESPACE=${LWS_NAMESPACE:-"lws-system"}
+LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.8.0"}
+
 # Environment-related variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENVIRONMENT=${ENVIRONMENT:-"kubernetes"}

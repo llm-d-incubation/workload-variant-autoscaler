@@ -43,6 +43,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -180,7 +181,18 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 }
 
 // optimize performs the optimization logic.
-func (e *Engine) optimize(ctx context.Context) error {
+func (e *Engine) optimize(ctx context.Context) (retErr error) {
+	start := time.Now()
+	var modelsProcessed int
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ObserveOptimizationDuration(time.Since(start).Seconds(), status)
+		metrics.SetModelsProcessed(modelsProcessed)
+	}()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Get optimization interval from Config (already a time.Duration)
@@ -225,6 +237,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 
 	// Group VAs by model for per-model capacity analysis
 	modelGroups := utils.GroupVariantAutoscalingByModel(activeVAs)
+	modelsProcessed = len(modelGroups)
 	logger.Info("Grouped VAs by model",
 		"modelCount", len(modelGroups),
 		"totalVAs", len(activeVAs))
@@ -302,10 +315,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	} else {
 		logger.Info("No scaling decisions to apply, updating VA status with metrics")
 	}
-	if err := e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations); err != nil {
-		logger.Error(err, "Failed to apply saturation decisions")
-		return err
-	}
+	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
 
 	logger.Info("Optimization completed successfully",
 		"mode", "saturation-only",
@@ -876,7 +886,7 @@ func (e *Engine) applySaturationDecisions(
 	decisions []interfaces.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*interfaces.Allocation,
-) error {
+) {
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
@@ -1107,8 +1117,6 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
-
-	return nil
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.

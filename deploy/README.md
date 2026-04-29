@@ -141,6 +141,11 @@ export DEPLOY_LLM_D=true                    # Deploy llm-d infrastructure
 export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
 export DEPLOY_VA=true                       # Chart-managed VariantAutoscaling (default off; e2e often creates its own)
 export DEPLOY_HPA=true                      # Chart-managed HPA (default off; enable with DEPLOY_VA for demos)
+export DEPLOY_LWS=true                      # Deploy LeaderWorkerSet (set false if already installed)
+
+# LeaderWorkerSet Configuration
+export LWS_NAMESPACE="lws-system"           # Namespace for LWS installation
+export LWS_CHART_VERSION="0.8.0"            # LWS Helm chart version
 
 # HPA Configuration
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window (default: 240s)
@@ -218,7 +223,14 @@ export DEPLOY_HPA=false
 make deploy-wva-on-k8s
 ```
 
-##### Example 4: Fast HPA scaling for development/testing
+##### Example 4: Skip LeaderWorkerSet installation (LWS already on cluster)
+
+```bash
+export DEPLOY_LWS=false  # Skip LWS when it is already installed cluster-wide
+make deploy-wva-on-k8s
+```
+
+##### Example 5: Fast HPA scaling for development/testing
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
@@ -228,7 +240,7 @@ export HPA_STABILIZATION_SECONDS=30  # Fast scaling for dev/test (default: 240)
 make deploy-wva-on-k8s
 ```
 
-##### Example 5: E2E testing with very fast scaling
+##### Example 6: E2E testing with very fast scaling
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
@@ -239,7 +251,7 @@ export VLLM_MAX_NUM_SEQS=8           # Low batch size for easy saturation
 make deploy-wva-on-k8s
 ```
 
-##### Example 6: Parameter estimation with specific batch size
+##### Example 7: Parameter estimation with specific batch size
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
@@ -250,7 +262,7 @@ export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
-##### Example 7: Infra-only mode for e2e testing
+##### Example 8: Infra-only mode for e2e testing
 
 Deploy only the llm-d infrastructure and WVA controller without creating VariantAutoscaling or HPA resources. This is useful for e2e testing where tests dynamically create their own VA/HPA resources.
 
@@ -664,6 +676,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter | `true` |
 | `DEPLOY_VA` | Deploy VariantAutoscaling CR via WVA Helm chart | `false` |
 | `DEPLOY_HPA` | Deploy HPA via WVA Helm chart | `false` |
+| `DEPLOY_LWS` | Deploy LeaderWorkerSet (skip if already installed or not needed) | `true` |
 | `INFRA_ONLY` | Deploy only infrastructure (skip VA/HPA) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
 
@@ -699,6 +712,8 @@ HPA_STABILIZATION_SECONDS=30 ./deploy/install.sh
 | `VLLM_SVC_ENABLED` | Enable vLLM Service | `true` |
 | `VLLM_SVC_NODEPORT` | vLLM NodePort | `30000` |
 | `LLM_D_RELEASE` | llm-d version | `v0.6.0` |
+| `LWS_NAMESPACE` | Namespace for LeaderWorkerSet installation | `lws-system` |
+| `LWS_CHART_VERSION` | LeaderWorkerSet Helm chart version | `0.8.0` |
 | `VLLM_MAX_NUM_SEQS` | vLLM max concurrent sequences per replica | (unset - uses vLLM default) |
 
 **vLLM Performance Tuning:**
