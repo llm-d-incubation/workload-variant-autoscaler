@@ -60,4 +60,11 @@ const (
 	DeploymentAPIVersion      = "apps/v1"
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
+
+	ComponentCollector  = "collector" // WVA components (for observability, etc ...)
+	ComponentAnalyzer   = "analyzer"
+	ComponentOptimizer  = "optimizer"
+	ComponentLimiter    = "limiter"
+	ComponentEnforcer   = "enforcer"
+	ComponentController = "controller"
 )

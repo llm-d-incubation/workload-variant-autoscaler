@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 var _ = Describe("ConfigMap Bootstrap", func() {
@@ -364,4 +367,130 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 			}
 		}
 	})
+
+	Describe("ConfigMap Bootstrap Error Metrics", func() {
+		var (
+			ctx      context.Context
+			registry *prometheus.Registry
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			// Create a new registry for each test to ensure metric isolation
+			registry = prometheus.NewRegistry()
+			err := metrics.InitMetrics(registry)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should record error metric when Config is nil", func() {
+			By("Creating reconciler with nil Config")
+			reconciler := &ConfigMapReconciler{
+				Reader: k8sClient,
+				Config: nil, // nil config to trigger error
+			}
+
+			By("Attempting to bootstrap ConfigMaps")
+			err := reconciler.BootstrapInitialConfigMaps(ctx)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("config is nil"))
+
+			By("Verifying error metric was incremented")
+			labels := prometheus.Labels{
+				constants.LabelComponent: constants.ComponentController,
+				constants.LabelErrorType: "Config is nil in ConfigMapReconciler bootstrap",
+			}
+			metricValue := getErrorMetricValue(registry, labels)
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Config is nil")
+		})
+
+		It("should record error metric when List fails", func() {
+			By("Creating a test config")
+			cfg, err := newTestConfigWithPrometheus("https://prometheus:9090")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a failing client that errors on List")
+			failingClient := &failingK8sClient{
+				Reader:    k8sClient,
+				failGet:   false,
+				failList:  true,
+				listError: errors.New("simulated list error"),
+			}
+
+			reconciler := &ConfigMapReconciler{
+				Reader: failingClient,
+				Config: cfg,
+			}
+
+			By("Attempting to bootstrap ConfigMaps")
+			err = reconciler.BootstrapInitialConfigMaps(ctx)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to list namespaces"))
+
+			By("Verifying error metric was incremented")
+			labels := prometheus.Labels{
+				constants.LabelComponent: constants.ComponentController,
+				constants.LabelErrorType: "Failed to list namespaces during bootstrap",
+			}
+			metricValue := getErrorMetricValue(registry, labels)
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when List fails")
+
+			By("Verifying bootstrap failed state was marked")
+			Expect(cfg.ConfigMapsBootstrapComplete()).To(BeFalse())
+		})
+	})
 })
+
+// getErrorMetricValue retrieves the value of the wva_errors_total metric with specific labels
+func getErrorMetricValue(registry *prometheus.Registry, labels prometheus.Labels) float64 {
+	metricFamilies, err := registry.Gather()
+	Expect(err).NotTo(HaveOccurred())
+
+	for _, mf := range metricFamilies {
+		if mf.GetName() == constants.WVAErrorsTotal {
+			for _, metric := range mf.GetMetric() {
+				// Check if all labels match
+				allLabelsMatch := true
+				for _, label := range metric.GetLabel() {
+					expectedVal, exists := labels[label.GetName()]
+					if exists && label.GetValue() != expectedVal {
+						allLabelsMatch = false
+						break
+					}
+				}
+				if allLabelsMatch {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0.0
+}
+
+// failingK8sClient wraps a real client but fails on specific operations
+type failingK8sClient struct {
+	client.Reader
+	failGet   bool
+	failList  bool
+	getError  error
+	listError error
+}
+
+func (f *failingK8sClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if f.failGet && f.getError != nil {
+		return f.getError
+	}
+	return f.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (f *failingK8sClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if f.failList && f.listError != nil {
+		return f.listError
+	}
+	return f.Reader.List(ctx, list, opts...)
+}

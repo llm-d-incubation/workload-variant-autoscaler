@@ -7,9 +7,12 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // boolPtr is a helper to create a pointer to a bool value
@@ -76,7 +79,11 @@ var _ = Describe("Enforcer", func() {
 			})
 
 			Context("and request count query fails", func() {
-				It("should keep decisions unchanged", func() {
+				It("should keep decisions unchanged and record error metric", func() {
+					// Create fresh registry for this test
+					registry := prometheus.NewRegistry()
+					Expect(metrics.InitMetrics(registry)).To(Succeed())
+
 					enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 						return 0, errors.New("prometheus unavailable")
 					})
@@ -91,6 +98,10 @@ var _ = Describe("Enforcer", func() {
 
 					Expect(applied).To(BeFalse())
 					Expect(decisions[0].TargetReplicas).To(Equal(2))
+
+					// Verify error metric was recorded
+					count := getErrorMetricCount(registry, "Failed to get request count, keeping current decisions")
+					Expect(count).To(BeNumerically(">", 0))
 				})
 			})
 		})
@@ -213,3 +224,38 @@ var _ = Describe("Enforcer", func() {
 		})
 	})
 })
+
+// getErrorMetricCount retrieves the count for a specific error type and component from the registry.
+func getErrorMetricCount(registry *prometheus.Registry, errorType string) float64 {
+	return getErrorMetricCountForComponent(registry, constants.ComponentEnforcer, errorType)
+}
+
+// getErrorMetricCountForComponent retrieves the count for a specific error type and component from the registry.
+func getErrorMetricCountForComponent(registry *prometheus.Registry, component, errorType string) float64 {
+	metricFamilies, err := registry.Gather()
+	if err != nil {
+		return 0
+	}
+
+	for _, mf := range metricFamilies {
+		if mf.GetName() == "wva_errors_total" {
+			for _, metric := range mf.GetMetric() {
+				matchesComponent := false
+				matchesErrorType := false
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "component" && label.GetValue() == component {
+						matchesComponent = true
+					}
+					if label.GetName() == "error_type" && label.GetValue() == errorType {
+						matchesErrorType = true
+					}
+				}
+				if matchesComponent && matchesErrorType {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+
+	return 0
+}

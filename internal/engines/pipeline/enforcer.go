@@ -8,8 +8,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 )
 
@@ -84,9 +86,11 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 
 	requestCount, err := e.requestCountFunc(ctx, modelID, namespace, retentionPeriod)
 	if err != nil {
-		logger.Error(err, "Failed to get request count, keeping current decisions",
+		error_type := "Failed to get request count, keeping current decisions"
+		logger.Error(err, error_type,
 			"modelID", modelID,
 			"namespace", namespace)
+		metrics.RecordError(ctx, constants.ComponentEnforcer, error_type)
 		return false
 	}
 

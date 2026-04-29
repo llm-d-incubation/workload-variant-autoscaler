@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 var _ = Describe("ConfigMapReconciler", func() {
@@ -480,5 +482,111 @@ var _ = Describe("ConfigMapReconciler", func() {
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
 
+	})
+
+	Context("Metrics Recording", func() {
+		It("should record error metrics when RecordError is called", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Recording an error")
+			errorType := "Failed to get ConfigMap"
+			metrics.RecordError(ctx, constants.ComponentController, errorType)
+
+			By("Verifying the error metric was incremented")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Find the wva_errors_total metric
+			var found bool
+			var metricValue float64
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					for _, metric := range mf.GetMetric() {
+						// Check if labels match
+						labelMatch := true
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelComponent && label.GetValue() != constants.ComponentController {
+								labelMatch = false
+								break
+							}
+							if label.GetName() == constants.LabelErrorType && label.GetValue() != errorType {
+								labelMatch = false
+								break
+							}
+						}
+						if labelMatch {
+							found = true
+							metricValue = metric.GetCounter().GetValue()
+							break
+						}
+					}
+				}
+			}
+			Expect(found).To(BeTrue(), "Error metric should be found")
+			Expect(metricValue).To(BeNumerically("==", 1.0), "Error counter should be 1")
+
+			By("Recording the same error again")
+			metrics.RecordError(ctx, constants.ComponentController, errorType)
+
+			By("Verifying the error metric was incremented again")
+			metricFamilies, err = testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			found = false
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					for _, metric := range mf.GetMetric() {
+						labelMatch := true
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelComponent && label.GetValue() != constants.ComponentController {
+								labelMatch = false
+								break
+							}
+							if label.GetName() == constants.LabelErrorType && label.GetValue() != errorType {
+								labelMatch = false
+								break
+							}
+						}
+						if labelMatch {
+							found = true
+							metricValue = metric.GetCounter().GetValue()
+							break
+						}
+					}
+				}
+			}
+			Expect(found).To(BeTrue(), "Error metric should be found")
+			Expect(metricValue).To(BeNumerically("==", 2.0), "Error counter should be 2")
+		})
+
+		It("should record different error types separately", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Recording different error types")
+			metrics.RecordError(ctx, constants.ComponentController, "Failed to get ConfigMap")
+			metrics.RecordError(ctx, constants.ComponentController, "Failed to update ConfigMap")
+			metrics.RecordError(ctx, constants.ComponentCollector, "Failed to collect metrics")
+
+			By("Verifying all errors were recorded")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Count the number of error metrics
+			var errorMetricCount int
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					errorMetricCount = len(mf.GetMetric())
+					break
+				}
+			}
+			// Should have 3 separate error counters (one for each unique component+error_type combination)
+			Expect(errorMetricCount).To(Equal(3), "Should have 3 separate error metrics")
+		})
 	})
 })

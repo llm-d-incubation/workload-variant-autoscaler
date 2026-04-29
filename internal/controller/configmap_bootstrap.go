@@ -7,6 +7,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	metrics "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,7 +21,9 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 
 	if r.Config == nil {
 		err := errors.New("config is nil")
-		logger.Error(err, "Config is nil in ConfigMapReconciler bootstrap")
+		error_type := "Config is nil in ConfigMapReconciler bootstrap"
+		logger.Error(err, error_type)
+		metrics.RecordError(ctx, constants.ComponentController, error_type)
 		return err
 	}
 
@@ -51,7 +54,9 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		// All-namespaces mode: list and scan all namespaces
 		namespaceList := &corev1.NamespaceList{}
 		if err := r.List(ctx, namespaceList, &client.ListOptions{}); err != nil {
-			logger.Error(err, "Failed to list namespaces during bootstrap")
+			error_type := "Failed to list namespaces during bootstrap"
+			logger.Error(err, error_type)
+			metrics.RecordError(ctx, constants.ComponentController, error_type)
 			r.Config.MarkConfigMapsBootstrapFailed(err)
 			return fmt.Errorf("failed to list namespaces: %w", err)
 		}
