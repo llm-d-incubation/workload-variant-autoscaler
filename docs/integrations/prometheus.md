@@ -1,6 +1,6 @@
 # Prometheus Integration
 
-WVA integrates with Prometheus to collect metrics from vLLM inference servers and expose custom autoscaling metrics. This guide covers Prometheus configuration, metric collection, and security best practices.
+WVA integrates with Prometheus to collect metrics from vLLM inference servers and expose custom autoscaling metrics. In addition, WVA also emits internal metrics for observability (See [Internal Metrics](#internal-metrics))). This guide covers Prometheus configuration, metric collection, and security best practices.
 
 ## Configuration
 
@@ -241,4 +241,35 @@ abs(wva_desired_replicas - wva_current_replicas)
 
 # Scaling frequency by reason
 rate(wva_replica_scaling_total[5m]) by (reason)
+```
+
+## Internal Metrics
+### Error Metric
+Errors in WVA controller is available via `wva_errors_total` metric which has the following metadata:
+```
+ "wva_errors_total": [
+      {
+        "type": "counter",
+        "unit": "",
+        "help": "Total number of errors by component"
+      }
+    ]
+```
+The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". The following example shows an example for "controller" component:
+```
+
+  "metric": "wva_errors_total",
+  "labels": {
+    "component": "controller",
+    "container": "manager",
+    "endpoint": "https",
+    "error_type": "Failed to parse saturation scaling config entry",
+    "instance": "10.244.2.15:8443",
+    "job": "workload-variant-autoscaler-metrics",
+    "namespace": "workload-variant-autoscaler-system",
+    "pod": "workload-variant-autoscaler-controller-manager-75968fcb5c-gq5mj",
+    "service": "workload-variant-autoscaler-metrics"
+  },
+  "value": "3"
+}
 ```
