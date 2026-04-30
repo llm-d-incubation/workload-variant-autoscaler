@@ -180,6 +180,11 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	e.setActiveOptimizer(ctx, e.optimizer)
+	e.executor.Start(ctx)
+}
+
+func (e *Engine) setActiveOptimizer(ctx context.Context, optimizer pipeline.ScalingOptimizer) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	optimizerNames := []string{
@@ -187,15 +192,14 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 		pipeline.CostAwareOptimizerName,
 	}
 	for _, name := range optimizerNames {
-		isActive := false
-		if name == e.optimizer.Name() {
-			isActive = true
+		isActive := false // default is false
+		if name == optimizer.Name() {
+			isActive = true // only one active at a time
 		}
 		if err := e.metricsEmitter.EmitOptimizerActiveMetric(name, isActive); err != nil {
 			logger.Error(err, "Failed to emit optimizer active metric", "optimizer", name)
 		}
 	}
-	e.executor.Start(ctx)
 }
 
 // optimize performs the optimization logic.
@@ -297,14 +301,13 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
 	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
+		var optimizer pipeline.ScalingOptimizer
 		if enableLimiter {
-			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
+			optimizer = pipeline.NewGreedyByScoreOptimizer()
 		} else {
-			e.optimizer = pipeline.NewCostAwareOptimizer()
+			optimizer = pipeline.NewCostAwareOptimizer()
 		}
-		if err := e.metricsEmitter.EmitOptimizerActiveMetric(e.optimizer.Name(), true); err != nil {
-			logger.Error(err, "Failed to emit optimizer active metric")
-		}
+		e.setActiveOptimizer(ctx, optimizer)
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 

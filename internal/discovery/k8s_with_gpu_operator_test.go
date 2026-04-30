@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +14,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func init() {
+	// Initialize metrics for all discovery tests
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		panic("failed to initialize metrics: " + err.Error())
+	}
+}
 
 func TestDiscover_NvidiaOnly(t *testing.T) {
 	scheme := runtime.NewScheme()

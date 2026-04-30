@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
@@ -20,13 +21,15 @@ var vendors = []string{
 
 // K8sWithGpuOperator implements CapacityDiscovery for Kubernetes clusters with GPU Operator
 type K8sWithGpuOperator struct {
-	Client client.Client
+	Client         client.Client
+	metricsEmitter *metrics.MetricsEmitter
 }
 
 // NewK8sWithGpuOperator creates a new K8sWithGpuOperator instance.
 func NewK8sWithGpuOperator(client client.Client) *K8sWithGpuOperator {
 	return &K8sWithGpuOperator{
-		Client: client,
+		Client:         client,
+		metricsEmitter: metrics.NewMetricsEmitter(),
 	}
 }
 
@@ -69,6 +72,7 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 		}
 
 		// Process nodes for this vendor
+		total := 0
 		for _, node := range nodeList.Items {
 			nodeName := node.Name
 			memKey := vendor + "/gpu.memory"
@@ -82,6 +86,7 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 			count := 0
 			if cap, ok := node.Status.Allocatable[corev1.ResourceName(vendor+"/gpu")]; ok {
 				count = int(cap.Value())
+				total += count
 			}
 
 			if inv[nodeName] == nil {
@@ -93,6 +98,8 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 				Memory: mem,
 			}
 		}
+
+		d.metricsEmitter.EmitAvailableGPUsMetric(vendor, int32(total)) // emit as soon as discovered
 	}
 
 	return inv, nil

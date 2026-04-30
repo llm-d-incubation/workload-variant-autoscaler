@@ -330,3 +330,31 @@ func (m *MetricsEmitter) EmitEnforcerMetric(policyType string) error {
 	enforcerModificationsTotal.With(labels).Inc()
 	return nil
 }
+
+func (m *MetricsEmitter) EmitAvailableGPUsMetric(acceleratorType string, count int32) {
+	labels := prometheus.Labels{
+		constants.LabelAcceleratorType: acceleratorType,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	availableGpus.With(labels).Set(float64(count))
+}
+
+func (m *MetricsEmitter) EmitDecisionsLimitedTotalMetric(variantName, namespace, limiterName string) {
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelNamespace:   namespace,
+		constants.LabelLimiterName: limiterName,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	decisionsLimitedTotal.With(labels).Inc()
+}

@@ -23,6 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const testControllerInstanceName = "controller-1"
+
 func TestEmitOptimizerActiveMetric(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
@@ -164,7 +166,7 @@ func TestEmitOptimizerActiveMetric_WithControllerInstance(t *testing.T) {
 
 	// Set environment variable BEFORE InitMetrics so labels are created correctly
 	// InitMetrics reads from os.Getenv(ControllerInstanceEnvVar)
-	t.Setenv(ControllerInstanceEnvVar, "controller-1")
+	t.Setenv(ControllerInstanceEnvVar, testControllerInstanceName)
 
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
@@ -193,8 +195,8 @@ func TestEmitOptimizerActiveMetric_WithControllerInstance(t *testing.T) {
 			}
 			m := mf.GetMetric()[0]
 			instance := getLabelValue(m, constants.LabelControllerInstance)
-			if instance != "controller-1" {
-				t.Errorf("Expected controller_instance=controller-1, got %s", instance)
+			if instance != testControllerInstanceName {
+				t.Errorf("Expected controller_instance=%s, got %s", testControllerInstanceName, instance)
 			}
 		}
 	}
