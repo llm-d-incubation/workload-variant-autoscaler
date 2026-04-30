@@ -77,7 +77,7 @@ jobs:
             core.setOutput('pr_head_repo', headRepo);
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # For issue_comment on a fork PR: checkout from head repo so the commit exists
           repository: ${{ steps.pr-info.outputs.pr_head_repo || github.repository }}
@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Sanity check repo contents
         run: ls -la
@@ -264,7 +264,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract Go version from go.mod
         run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
@@ -382,7 +382,7 @@ jobs:
           echo "PR head repo: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}"
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}
           ref: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
