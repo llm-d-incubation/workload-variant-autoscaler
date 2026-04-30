@@ -55,13 +55,17 @@ var (
 	SpecReplicasFallback int32 = 1 // in case Spec.Replicas is nil
 )
 
+// Kubernetes resource kinds and API versions for supported scale targets.
 const (
 	DeploymentKind            = "Deployment"
 	DeploymentAPIVersion      = "apps/v1"
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
+)
 
-	ComponentCollector  = "collector" // WVA components (for observability, etc ...)
+// Component names identify WVA components for observability (metrics, logging, tracing).
+const (
+	ComponentCollector  = "collector"
 	ComponentAnalyzer   = "analyzer"
 	ComponentOptimizer  = "optimizer"
 	ComponentLimiter    = "limiter"

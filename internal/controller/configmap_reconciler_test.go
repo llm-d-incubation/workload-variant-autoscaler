@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("ConfigMapReconciler", func() {
@@ -485,81 +487,44 @@ var _ = Describe("ConfigMapReconciler", func() {
 	})
 
 	Context("Metrics Recording", func() {
-		It("should record error metrics when RecordError is called", func() {
+		It("should record error metric when Get fails during reconciliation", func() {
 			By("Initializing metrics with a test registry")
 			testRegistry := prometheus.NewRegistry()
 			err := metrics.InitMetrics(testRegistry)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Recording an error")
-			errorType := "Failed to get ConfigMap"
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
-
-			By("Verifying the error metric was incremented")
-			metricFamilies, err := testRegistry.Gather()
-			Expect(err).NotTo(HaveOccurred())
-
-			// Find the wva_errors_total metric
-			var found bool
-			var metricValue float64
-			for _, mf := range metricFamilies {
-				if mf.GetName() == constants.WVAErrorsTotal {
-					for _, metric := range mf.GetMetric() {
-						// Check if labels match
-						labelMatch := true
-						for _, label := range metric.GetLabel() {
-							if label.GetName() == constants.LabelComponent && label.GetValue() != constants.ComponentController {
-								labelMatch = false
-								break
-							}
-							if label.GetName() == constants.LabelErrorType && label.GetValue() != errorType {
-								labelMatch = false
-								break
-							}
-						}
-						if labelMatch {
-							found = true
-							metricValue = metric.GetCounter().GetValue()
-							break
-						}
-					}
-				}
+			By("Creating a failing client that errors on Get")
+			failingClient := &failingK8sClient{
+				Reader:   k8sClient,
+				failGet:  true,
+				getError: errors.New("simulated get error"),
 			}
-			Expect(found).To(BeTrue(), "Error metric should be found")
-			Expect(metricValue).To(BeNumerically("==", 1.0), "Error counter should be 1")
 
-			By("Recording the same error again")
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
-
-			By("Verifying the error metric was incremented again")
-			metricFamilies, err = testRegistry.Gather()
-			Expect(err).NotTo(HaveOccurred())
-
-			found = false
-			for _, mf := range metricFamilies {
-				if mf.GetName() == constants.WVAErrorsTotal {
-					for _, metric := range mf.GetMetric() {
-						labelMatch := true
-						for _, label := range metric.GetLabel() {
-							if label.GetName() == constants.LabelComponent && label.GetValue() != constants.ComponentController {
-								labelMatch = false
-								break
-							}
-							if label.GetName() == constants.LabelErrorType && label.GetValue() != errorType {
-								labelMatch = false
-								break
-							}
-						}
-						if labelMatch {
-							found = true
-							metricValue = metric.GetCounter().GetValue()
-							break
-						}
-					}
-				}
+			testReconciler := &ConfigMapReconciler{
+				Reader:    failingClient,
+				Scheme:    reconciler.Scheme,
+				Config:    cfg,
+				Datastore: ds,
+				Recorder:  reconciler.Recorder,
 			}
-			Expect(found).To(BeTrue(), "Error metric should be found")
-			Expect(metricValue).To(BeNumerically("==", 2.0), "Error counter should be 2")
+
+			By("Attempting to reconcile a ConfigMap")
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      config.SaturationConfigMapName(),
+					Namespace: systemNamespace,
+				},
+			}
+			_, err = testReconciler.Reconcile(ctx, req)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("simulated get error"))
+
+			By("Verifying error metric was incremented")
+			metricValue := testutil.GetErrorMetricValue(testRegistry, constants.ComponentController, "Failed to get ConfigMap")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Get fails")
 		})
 
 		It("should record different error types separately", func() {

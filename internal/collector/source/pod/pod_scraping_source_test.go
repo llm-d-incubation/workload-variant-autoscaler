@@ -17,7 +17,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sourcepkg "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("PodScrapingSource", func() {
@@ -1013,29 +1015,7 @@ var _ = Describe("Error metrics recording", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Verify error metric was recorded
-		count := getErrorMetricCount(registry, "Failed to scrape pod")
+		count := testutil.GetErrorMetricValue(registry, constants.ComponentCollector, "Failed to scrape pod")
 		Expect(count).To(BeNumerically(">", 0), "Error metric should be incremented when pod scraping fails")
 	})
 })
-
-// getErrorMetricCount retrieves the count for a specific error type from the registry.
-func getErrorMetricCount(registry *prometheus.Registry, errorType string) float64 {
-	metricFamilies, err := registry.Gather()
-	if err != nil {
-		return 0
-	}
-
-	for _, mf := range metricFamilies {
-		if mf.GetName() == "wva_errors_total" {
-			for _, metric := range mf.GetMetric() {
-				for _, label := range metric.GetLabel() {
-					if label.GetName() == "error_type" && label.GetValue() == errorType {
-						return metric.GetCounter().GetValue()
-					}
-				}
-			}
-		}
-	}
-
-	return 0
-}

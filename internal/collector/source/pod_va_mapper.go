@@ -17,6 +17,10 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
+const (
+	errorTypeFailedToGetScaleTarget = "failed to get scale target"
+)
+
 // PodVAMapper maps pod names to their corresponding VariantAutoscaling objects.
 type PodVAMapper struct {
 	k8sClient client.Client
@@ -86,9 +90,9 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 
 	pod := &corev1.Pod{}
 	if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
-		error_type := "failed to get pod"
-		logger.V(logging.DEBUG).Error(err, error_type, "pod", podName, "namespace", namespace)
-		metrics.RecordError(ctx, constants.ComponentCollector, error_type)
+		errorType := "failed to get pod"
+		logger.V(logging.DEBUG).Error(err, errorType, "pod", podName, "namespace", namespace)
+		metrics.RecordError(ctx, constants.ComponentCollector, errorType)
 		return "", ""
 	}
 
@@ -103,18 +107,16 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 	case "ReplicaSet":
 		rs := &appsv1.ReplicaSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
-			error_type := "failed to get ReplicaSet"
-			logger.V(logging.DEBUG).Error(err, error_type, "replicaset", owner.Name, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, error_type)
+			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "replicaset", owner.Name, "namespace", namespace)
+			metrics.RecordError(ctx, constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs
 	case "StatefulSet":
 		rs := &appsv1.StatefulSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
-			error_type := "failed to get StatefulSet"
-			logger.V(logging.DEBUG).Error(err, error_type, "statefulset", owner.Name, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, error_type)
+			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "statefulset", owner.Name, "namespace", namespace)
+			metrics.RecordError(ctx, constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs

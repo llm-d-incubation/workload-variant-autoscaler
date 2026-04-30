@@ -86,11 +86,11 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 
 	requestCount, err := e.requestCountFunc(ctx, modelID, namespace, retentionPeriod)
 	if err != nil {
-		error_type := "Failed to get request count, keeping current decisions"
-		logger.Error(err, error_type,
+		errorType := "Failed to get request count, keeping current decisions"
+		logger.Error(err, errorType,
 			"modelID", modelID,
 			"namespace", namespace)
-		metrics.RecordError(ctx, constants.ComponentEnforcer, error_type)
+		metrics.RecordError(ctx, constants.ComponentEnforcer, errorType)
 		return false
 	}
 

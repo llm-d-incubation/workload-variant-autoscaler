@@ -60,9 +60,9 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			r.handleConfigMapDeletion(ctx, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		error_type := "Failed to get ConfigMap"
-		logger.Error(err, error_type, "name", req.Name, "namespace", req.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+		errorType := "Failed to get ConfigMap"
+		logger.Error(err, errorType, "name", req.Name, "namespace", req.Namespace)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 

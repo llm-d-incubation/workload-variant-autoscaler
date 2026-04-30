@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	stdErrors "errors"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -42,6 +43,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils/resources"
 )
@@ -580,18 +582,33 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			err := metrics.InitMetrics(testRegistry)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Reconciling the VA - scale target not found triggers status update")
+			By("Creating a client that fails on Status().Patch()")
+			failingClient := &failingStatusClient{
+				Client:          k8sClient,
+				failStatusPatch: true,
+				patchError:      errors.NewInternalError(stdErrors.New("simulated status patch error")),
+			}
+
+			By("Reconciling the VA - scale target not found triggers status update that fails")
 			controllerReconciler := &VariantAutoscalingReconciler{
-				Client:    k8sClient,
+				Client:    failingClient,
 				Scheme:    k8sClient.Scheme(),
 				Recorder:  record.NewFakeRecorder(100),
 				Config:    config.NewTestConfig(),
 				Datastore: datastore.NewDatastore(config.NewTestConfig()),
 			}
 
-			_, _ = controllerReconciler.Reconcile(ctx, reconcile.Request{
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+
+			By("Verifying error metric was recorded")
+			metricValue := testutil.GetErrorMetricValue(testRegistry, constants.ComponentController, "Failed to update VariantAutoscaling status")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Status().Patch() fails")
 
 			By("Cleanup")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -650,3 +667,33 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 	})
 
 })
+
+// failingStatusClient wraps a real client and fails Status().Patch() operations
+type failingStatusClient struct {
+	client.Client
+	failStatusPatch bool
+	patchError      error
+}
+
+func (f *failingStatusClient) Status() client.StatusWriter {
+	if f.failStatusPatch {
+		return &failingStatusWriter{
+			StatusWriter: f.Client.Status(),
+			patchError:   f.patchError,
+		}
+	}
+	return f.Client.Status()
+}
+
+// failingStatusWriter wraps a real status writer and fails Patch operations
+type failingStatusWriter struct {
+	client.StatusWriter
+	patchError error
+}
+
+func (f *failingStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if f.patchError != nil {
+		return f.patchError
+	}
+	return f.StatusWriter.Patch(ctx, obj, patch, opts...)
+}

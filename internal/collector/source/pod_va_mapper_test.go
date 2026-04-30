@@ -451,7 +451,7 @@ var _ = Describe("PodVAMapper", func() {
 								errorType = label.GetValue()
 							}
 						}
-						if component == constants.ComponentCollector && errorType == "failed to get ReplicaSet" {
+						if component == constants.ComponentCollector && errorType == errorTypeFailedToGetScaleTarget {
 							found = true
 							Expect(metric.GetCounter().GetValue()).To(BeNumerically(">=", 1.0))
 							break
@@ -459,7 +459,7 @@ var _ = Describe("PodVAMapper", func() {
 					}
 				}
 			}
-			Expect(found).To(BeTrue(), "Error metric for 'failed to get ReplicaSet' should be recorded")
+			Expect(found).To(BeTrue(), "Error metric for 'failed to get scale target' should be recorded")
 		})
 
 		It("should record different error types separately", func() {

@@ -31,6 +31,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("ConfigMap Bootstrap", func() {
@@ -397,11 +398,7 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 			Expect(err.Error()).To(ContainSubstring("config is nil"))
 
 			By("Verifying error metric was incremented")
-			labels := prometheus.Labels{
-				constants.LabelComponent: constants.ComponentController,
-				constants.LabelErrorType: "Config is nil in ConfigMapReconciler bootstrap",
-			}
-			metricValue := getErrorMetricValue(registry, labels)
+			metricValue := testutil.GetErrorMetricValue(registry, constants.ComponentController, "Config is nil in ConfigMapReconciler bootstrap")
 			Expect(metricValue).To(BeNumerically(">=", 1.0),
 				"Error metric should be incremented when Config is nil")
 		})
@@ -432,11 +429,7 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 			Expect(err.Error()).To(ContainSubstring("failed to list namespaces"))
 
 			By("Verifying error metric was incremented")
-			labels := prometheus.Labels{
-				constants.LabelComponent: constants.ComponentController,
-				constants.LabelErrorType: "Failed to list namespaces during bootstrap",
-			}
-			metricValue := getErrorMetricValue(registry, labels)
+			metricValue := testutil.GetErrorMetricValue(registry, constants.ComponentController, "Failed to list namespaces during bootstrap")
 			Expect(metricValue).To(BeNumerically(">=", 1.0),
 				"Error metric should be incremented when List fails")
 
@@ -445,52 +438,3 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 		})
 	})
 })
-
-// getErrorMetricValue retrieves the value of the wva_errors_total metric with specific labels
-func getErrorMetricValue(registry *prometheus.Registry, labels prometheus.Labels) float64 {
-	metricFamilies, err := registry.Gather()
-	Expect(err).NotTo(HaveOccurred())
-
-	for _, mf := range metricFamilies {
-		if mf.GetName() == constants.WVAErrorsTotal {
-			for _, metric := range mf.GetMetric() {
-				// Check if all labels match
-				allLabelsMatch := true
-				for _, label := range metric.GetLabel() {
-					expectedVal, exists := labels[label.GetName()]
-					if exists && label.GetValue() != expectedVal {
-						allLabelsMatch = false
-						break
-					}
-				}
-				if allLabelsMatch {
-					return metric.GetCounter().GetValue()
-				}
-			}
-		}
-	}
-	return 0.0
-}
-
-// failingK8sClient wraps a real client but fails on specific operations
-type failingK8sClient struct {
-	client.Reader
-	failGet   bool
-	failList  bool
-	getError  error
-	listError error
-}
-
-func (f *failingK8sClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if f.failGet && f.getError != nil {
-		return f.getError
-	}
-	return f.Reader.Get(ctx, key, obj, opts...)
-}
-
-func (f *failingK8sClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	if f.failList && f.listError != nil {
-		return f.listError
-	}
-	return f.Reader.List(ctx, list, opts...)
-}

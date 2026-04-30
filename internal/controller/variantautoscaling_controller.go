@@ -42,7 +42,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	metrics "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
@@ -131,11 +131,11 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				"namespace", req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		error_type := "Unable to fetch VariantAutoscaling"
-		logger.Error(err, error_type,
+		errorType := "Unable to fetch VariantAutoscaling"
+		logger.Error(err, errorType,
 			"name", req.Name,
 			"namespace", req.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -177,9 +177,9 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				fmt.Sprintf("Scale target %s %s not found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 			if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-				error_type := "Failed to update VariantAutoscaling status"
-				logger.Error(err, error_type)
-				metrics.RecordError(ctx, constants.ComponentController, error_type)
+				errorType := "Failed to update VariantAutoscaling status"
+				logger.Error(err, errorType)
+				metrics.RecordError(ctx, constants.ComponentController, errorType)
 				return ctrl.Result{}, err
 			}
 
@@ -187,11 +187,12 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			// when the scale target is created
 			return ctrl.Result{}, nil
 		}
-		error_type := "Failed to get scale target " + va.Spec.ScaleTargetRef.Kind
-		logger.Error(err, error_type,
+		errorType := "Failed to get scale target"
+		logger.Error(err, errorType,
 			"name", scaleTargetName,
-			"namespace", va.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+			"namespace", va.Namespace,
+			"scale target", va.Spec.ScaleTargetRef.Kind)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -261,10 +262,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// and the CRD validates the partial patch — rejecting it when required
 	// fields (numReplicas, accelerator) are absent. See: #731
 	if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-		error_type := "Failed to update VariantAutoscaling status"
-		logger.Error(err, error_type,
+		errorType := "Failed to update VariantAutoscaling status"
+		logger.Error(err, errorType,
 			"name", va.Name)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -305,11 +306,11 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	// Use indexed lookup for VA targeting this Deployment
 	va, err := indexers.FindVAForDeployment(ctx, r.Client, deploy.Name, deploy.Namespace)
 	if err != nil {
-		error_type := "Failed to find VA for deployment event using index"
-		logger.Error(err, error_type,
+		errorType := "Failed to find VA for deployment event using index"
+		logger.Error(err, errorType,
 			"deployment", deploy.Name,
 			"namespace", deploy.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return nil
 	}
 
@@ -345,11 +346,11 @@ func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Co
 	// Use indexed lookup for VA targeting this LeaderWorkerSet
 	va, err := indexers.FindVAForLeaderWorkerSet(ctx, r.Client, lws.Name, lws.Namespace)
 	if err != nil {
-		error_type := "Failed to find VA for leaderWorkerSet event using index"
-		logger.Error(err, error_type,
+		errorType := "Failed to find VA for leaderWorkerSet event using index"
+		logger.Error(err, errorType,
 			"leaderWorkerSet", lws.Name,
 			"namespace", lws.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, error_type)
+		metrics.RecordError(ctx, constants.ComponentController, errorType)
 		return nil
 	}
 
