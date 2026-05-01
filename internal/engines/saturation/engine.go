@@ -37,6 +37,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -1274,18 +1275,15 @@ func (e *Engine) applySaturationDecisions(
 
 		// Emit a K8s event when accelerator cannot be resolved so operators
 		// can see the problem without digging through controller logs.
-		// Uses Event (not Eventf) with a fixed message for better event deduplication
-		// by the API server — identical events are aggregated with an updated count
-		// rather than creating new entries each optimization cycle.
+		// The message is a constant string (not built per-cycle via Eventf with
+		// formatted args), so each emission produces an identical
+		// (involvedObject, source, type, reason, message) tuple — which the K8s
+		// API server's event aggregator collapses into a single Event entry with
+		// an updated count, rather than creating a new entry each optimization
+		// cycle.
 		if !constants.IsAcceleratorResolved(acceleratorName) {
-			if e.Recorder != nil {
-				e.Recorder.Event(&updateVa, corev1.EventTypeWarning, "AcceleratorNotResolved",
-					"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
-						utils.AcceleratorNameLabel+". "+
-						"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
-						"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
-			}
-			logger.Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+			e.emitAcceleratorNotResolvedEvent(&updateVa)
+			logger.V(logging.DEBUG).Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
 				"variant", vaName)
 		}
 
@@ -1394,8 +1392,11 @@ func (e *Engine) applySaturationDecisions(
 			//   for this variant during this loop (metrics pipeline is working).
 			// - hasDecision is true when the optimizer produced a scaling decision based on
 			//   saturation metrics in this run.
-			// Either condition implies saturation metrics were available and usable.
-			metricsAvailable := hasAllocation || hasDecision
+			// - The accelerator must also be resolved: when it is the sentinel, the
+			//   metric-emission branch above is skipped (no wva_* gauges are published),
+			//   so reporting MetricsAvailable=True would leave HPA/KEDA-side reasoning
+			//   inconsistent with controller-side reporting.
+			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
 			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
 			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
 			if metricsAvailable {
@@ -1403,11 +1404,16 @@ func (e *Engine) applySaturationDecisions(
 				metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
 			}
 
+			// Use the sanitized statusAccelerator (computed above) rather than the raw
+			// acceleratorName. The controller reads this cache entry and writes
+			// AcceleratorName verbatim into Status.DesiredOptimizedAlloc.Accelerator,
+			// so passing the sentinel here would leak it into the CRD status —
+			// violating the "never persist the sentinel to status" invariant.
 			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
 				VariantName:       vaName,
 				Namespace:         va.Namespace,
 				TargetReplicas:    targetReplicas,
-				AcceleratorName:   acceleratorName,
+				AcceleratorName:   statusAccelerator,
 				LastRunTime:       metav1.Now(),
 				CurrentAllocation: currentAllocations[vaName],
 				MetricsAvailable:  metricsAvailable,
@@ -1430,6 +1436,23 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
+}
+
+// emitAcceleratorNotResolvedEvent records a Warning event on the given
+// VariantAutoscaling so operators see at-a-glance that the optimization
+// loop ran but could not resolve an accelerator type for it. The message
+// is a constant string so the API server's event aggregator collapses
+// repeated emissions into a single Event entry with an updated count
+// rather than creating a new entry each optimization cycle.
+func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) {
+	if e.Recorder == nil {
+		return
+	}
+	e.Recorder.Event(va, corev1.EventTypeWarning, "AcceleratorNotResolved",
+		"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
+			utils.AcceleratorNameLabel+". "+
+			"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
+			"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.

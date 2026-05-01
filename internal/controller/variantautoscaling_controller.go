@@ -227,7 +227,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// Only update DesiredOptimizedAlloc if we have a valid accelerator (required by CRD).
 		// Note: numReplicas may legitimately be 0 for scale-to-zero scenarios.
 		// Replace the entire struct to ensure all required fields are included in the patch.
-		if accelerator != "" {
+		// IsAcceleratorResolved (rather than a bare empty-string check) also rejects the
+		// internal sentinel value, providing defense in depth against the engine cache
+		// ever propagating it here.
+		if constants.IsAcceleratorResolved(accelerator) {
 			va.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 				NumReplicas: numReplicas,
 				Accelerator: accelerator,
@@ -284,7 +287,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 // the base is left unchanged so the zero-valued struct is not included.
 func fullDesiredAllocPatchBase(originalVA *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) *llmdVariantAutoscalingV1alpha1.VariantAutoscaling {
 	base := originalVA.DeepCopy()
-	if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+	if constants.IsAcceleratorResolved(va.Status.DesiredOptimizedAlloc.Accelerator) {
 		// Zero out the base so the entire modified desiredOptimizedAlloc
 		// appears as a change and is fully included in the merge patch.
 		base.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{}

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"sync"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
@@ -309,6 +312,12 @@ func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRe
 			// subsequent known-type decision. Returning 0 is safer — the variant
 			// keeps its current replicas without over-allocating. Operator must
 			// set nodeSelector or the VA label for scaling in mixed-GPU clusters.
+			ctrl.Log.WithName("typeAllocator").V(logging.DEBUG).Info(
+				"Skipping allocation: accelerator unresolved in heterogeneous cluster — operator must set nodeSelector or VA label",
+				"variant", decision.VariantName,
+				"namespace", decision.Namespace,
+				"availableTypes", len(a.remainingByType),
+				"gpusRequested", gpusRequested)
 			return 0, nil
 		}
 	}
