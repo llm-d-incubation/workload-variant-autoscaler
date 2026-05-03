@@ -30,7 +30,7 @@ const (
 	testVariantName2 = "variant-b"
 )
 
-func TestEmitDecisionsLimitedTotalMetric(t *testing.T) {
+func TestRecordDecisionsLimitedTotalMetric(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -39,8 +39,8 @@ func TestEmitDecisionsLimitedTotalMetric(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit decisions limited metrics for different combinations
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName2, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName2, testNamespace, testLimiterName)
 
 	// Verify the counter was recorded
 	metrics, err := registry.Gather()
@@ -94,7 +94,7 @@ func TestEmitDecisionsLimitedTotalMetric(t *testing.T) {
 	}
 }
 
-func TestEmitDecisionsLimitedTotalMetric_Increment(t *testing.T) {
+func TestRecordDecisionsLimitedTotalMetric_Increment(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -103,9 +103,9 @@ func TestEmitDecisionsLimitedTotalMetric_Increment(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit the same metric multiple times (counter should increment)
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
 
 	// Verify the counter incremented
 	metrics, err := registry.Gather()
@@ -134,7 +134,7 @@ func TestEmitDecisionsLimitedTotalMetric_Increment(t *testing.T) {
 	}
 }
 
-func TestEmitDecisionsLimitedTotalMetric_WithControllerInstance(t *testing.T) {
+func TestRecordDecisionsLimitedTotalMetric_WithControllerInstance(t *testing.T) {
 	// Save and restore original controller instance and metrics
 	savedInstance := controllerInstance
 	savedDecisionsLimitedTotal := decisionsLimitedTotal
@@ -154,7 +154,7 @@ func TestEmitDecisionsLimitedTotalMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit decisions limited metric
-	emitter.EmitDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
+	emitter.RecordDecisionsLimitedTotalMetric(testVariantName, testNamespace, testLimiterName)
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()
@@ -193,7 +193,7 @@ func TestEmitDecisionsLimitedTotalMetric_WithControllerInstance(t *testing.T) {
 	}
 }
 
-func TestEmitDecisionsLimitedTotalMetric_MultipleLimiters(t *testing.T) {
+func TestRecordDecisionsLimitedTotalMetric_MultipleLimiters(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -215,7 +215,7 @@ func TestEmitDecisionsLimitedTotalMetric_MultipleLimiters(t *testing.T) {
 
 	for _, tc := range testCases {
 		for i := 0; i < tc.count; i++ {
-			emitter.EmitDecisionsLimitedTotalMetric(tc.variantName, tc.namespace, tc.limiterName)
+			emitter.RecordDecisionsLimitedTotalMetric(tc.variantName, tc.namespace, tc.limiterName)
 		}
 	}
 

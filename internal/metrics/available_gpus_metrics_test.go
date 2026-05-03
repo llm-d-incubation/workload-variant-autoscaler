@@ -29,7 +29,7 @@ const (
 	testControllerInstance  = "controller-1"
 )
 
-func TestEmitAvailableGPUsMetric(t *testing.T) {
+func TestRecordAvailableGPUsMetric(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -38,8 +38,8 @@ func TestEmitAvailableGPUsMetric(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit available GPU metrics for different accelerator types
-	emitter.EmitAvailableGPUsMetric(testAcceleratorTypeA100, 8)
-	emitter.EmitAvailableGPUsMetric(testAcceleratorTypeH100, 4)
+	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeH100, 4)
 
 	// Verify the gauge was recorded
 	metrics, err := registry.Gather()
@@ -83,7 +83,7 @@ func TestEmitAvailableGPUsMetric(t *testing.T) {
 	}
 }
 
-func TestEmitAvailableGPUsMetric_Update(t *testing.T) {
+func TestRecordAvailableGPUsMetric_Update(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -92,10 +92,10 @@ func TestEmitAvailableGPUsMetric_Update(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// First set A100 count to 8
-	emitter.EmitAvailableGPUsMetric(testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
 
 	// Then update A100 count to 5
-	emitter.EmitAvailableGPUsMetric(testAcceleratorTypeA100, 5)
+	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 5)
 
 	// Verify the gauge reflects the latest value
 	metrics, err := registry.Gather()
@@ -128,7 +128,7 @@ func TestEmitAvailableGPUsMetric_Update(t *testing.T) {
 	}
 }
 
-func TestEmitAvailableGPUsMetric_WithControllerInstance(t *testing.T) {
+func TestRecordAvailableGPUsMetric_WithControllerInstance(t *testing.T) {
 	// Save and restore original controller instance and metrics
 	savedInstance := controllerInstance
 	savedAvailableGpus := availableGpus
@@ -148,7 +148,7 @@ func TestEmitAvailableGPUsMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit available GPU metric
-	emitter.EmitAvailableGPUsMetric(testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()
@@ -179,7 +179,7 @@ func TestEmitAvailableGPUsMetric_WithControllerInstance(t *testing.T) {
 	}
 }
 
-func TestEmitAvailableGPUsMetric_MultipleAcceleratorTypes(t *testing.T) {
+func TestRecordAvailableGPUsMetric_MultipleAcceleratorTypes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -199,7 +199,7 @@ func TestEmitAvailableGPUsMetric_MultipleAcceleratorTypes(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		emitter.EmitAvailableGPUsMetric(tc.acceleratorType, tc.count)
+		emitter.RecordAvailableGPUsMetric(tc.acceleratorType, tc.count)
 	}
 
 	// Verify all accelerator types were recorded
@@ -241,7 +241,7 @@ func TestEmitAvailableGPUsMetric_MultipleAcceleratorTypes(t *testing.T) {
 	}
 }
 
-func TestEmitAvailableGPUsMetric_ZeroCount(t *testing.T) {
+func TestRecordAvailableGPUsMetric_ZeroCount(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -250,7 +250,7 @@ func TestEmitAvailableGPUsMetric_ZeroCount(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit zero count (all GPUs in use)
-	emitter.EmitAvailableGPUsMetric("A100", 0)
+	emitter.RecordAvailableGPUsMetric("A100", 0)
 
 	// Verify the gauge shows 0
 	metrics, err := registry.Gather()

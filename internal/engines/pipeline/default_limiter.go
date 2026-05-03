@@ -90,7 +90,7 @@ func (l *DefaultLimiter) updateDecisionMetadata(decisions []*interfaces.VariantD
 		// If the algorithm marked the decision as limited, set LimitedBy
 		if d.WasLimited {
 			d.LimitedBy = l.name
-			l.metricsEmitter.EmitDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
+			l.metricsEmitter.RecordDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
 		}
 
 		// Add decision step for observability

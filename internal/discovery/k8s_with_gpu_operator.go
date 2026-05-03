@@ -99,7 +99,7 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 			}
 		}
 
-		d.metricsEmitter.EmitAvailableGPUsMetric(vendor, int32(total)) // emit as soon as discovered
+		d.metricsEmitter.RecordAvailableGPUsMetric(vendor, int32(total)) // record as soon as discovered
 	}
 
 	return inv, nil

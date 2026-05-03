@@ -289,7 +289,7 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	return nil
 }
 
-func (m *MetricsEmitter) EmitOptimizerActiveMetric(optimizerName string, isActive bool) error {
+func (m *MetricsEmitter) RecordOptimizerActiveMetric(optimizerName string, isActive bool) {
 	labels := prometheus.Labels{
 		constants.LabelOptimizerName: optimizerName,
 	}
@@ -299,20 +299,14 @@ func (m *MetricsEmitter) EmitOptimizerActiveMetric(optimizerName string, isActiv
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
-	// These operations are local and should never fail, but we handle errors for debugging
-	if optimizerActive == nil {
-		return errors.New("optimizerActive metric not initialized")
-	}
-
 	v := float64(0)
 	if isActive {
 		v = 1
 	}
 	optimizerActive.With(labels).Set(v)
-	return nil
 }
 
-func (m *MetricsEmitter) EmitEnforcerMetric(policyType string) error {
+func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
 	labels := prometheus.Labels{
 		constants.LabelPolicyType: policyType,
 	}
@@ -322,16 +316,10 @@ func (m *MetricsEmitter) EmitEnforcerMetric(policyType string) error {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
-	// These operations are local and should never fail, but we handle errors for debugging
-	if enforcerModificationsTotal == nil {
-		return errors.New("enforcerModificationsTotal metric not initialized")
-	}
-
 	enforcerModificationsTotal.With(labels).Inc()
-	return nil
 }
 
-func (m *MetricsEmitter) EmitAvailableGPUsMetric(acceleratorType string, count int32) {
+func (m *MetricsEmitter) RecordAvailableGPUsMetric(acceleratorType string, count int32) {
 	labels := prometheus.Labels{
 		constants.LabelAcceleratorType: acceleratorType,
 	}
@@ -344,7 +332,7 @@ func (m *MetricsEmitter) EmitAvailableGPUsMetric(acceleratorType string, count i
 	availableGpus.With(labels).Set(float64(count))
 }
 
-func (m *MetricsEmitter) EmitDecisionsLimitedTotalMetric(variantName, namespace, limiterName string) {
+func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespace, limiterName string) {
 	labels := prometheus.Labels{
 		constants.LabelVariantName: variantName,
 		constants.LabelNamespace:   namespace,

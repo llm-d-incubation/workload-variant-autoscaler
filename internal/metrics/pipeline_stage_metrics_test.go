@@ -25,7 +25,7 @@ import (
 
 const testControllerInstanceName = "controller-1"
 
-func TestEmitOptimizerActiveMetric(t *testing.T) {
+func TestRecordOptimizerActiveMetric(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -34,14 +34,10 @@ func TestEmitOptimizerActiveMetric(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Set cost-aware optimizer as active
-	if err := emitter.EmitOptimizerActiveMetric("cost-aware", true); err != nil {
-		t.Fatalf("EmitOptimizerActiveMetric failed: %v", err)
-	}
+	emitter.RecordOptimizerActiveMetric("cost-aware", true)
 
 	// Set greedy-by-score optimizer as inactive
-	if err := emitter.EmitOptimizerActiveMetric("greedy-by-score", false); err != nil {
-		t.Fatalf("EmitOptimizerActiveMetric failed: %v", err)
-	}
+	emitter.RecordOptimizerActiveMetric("greedy-by-score", false)
 
 	// Verify the gauge was recorded
 	metrics, err := registry.Gather()
@@ -85,7 +81,7 @@ func TestEmitOptimizerActiveMetric(t *testing.T) {
 	}
 }
 
-func TestEmitOptimizerActiveMetric_Toggle(t *testing.T) {
+func TestRecordOptimizerActiveMetric_Toggle(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -94,14 +90,10 @@ func TestEmitOptimizerActiveMetric_Toggle(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// First set optimizer as active
-	if err := emitter.EmitOptimizerActiveMetric("cost-aware", true); err != nil {
-		t.Fatalf("EmitOptimizerActiveMetric failed: %v", err)
-	}
+	emitter.RecordOptimizerActiveMetric("cost-aware", true)
 
 	// Then toggle it to inactive
-	if err := emitter.EmitOptimizerActiveMetric("cost-aware", false); err != nil {
-		t.Fatalf("EmitOptimizerActiveMetric failed: %v", err)
-	}
+	emitter.RecordOptimizerActiveMetric("cost-aware", false)
 
 	// Verify the gauge reflects the latest value (inactive)
 	metrics, err := registry.Gather()
@@ -134,28 +126,7 @@ func TestEmitOptimizerActiveMetric_Toggle(t *testing.T) {
 	}
 }
 
-func TestEmitOptimizerActiveMetric_NilSafety(t *testing.T) {
-	// Reset the package-level var to nil to simulate uninitialized state
-	savedOptimizerActive := optimizerActive
-	optimizerActive = nil
-	defer func() {
-		optimizerActive = savedOptimizerActive
-	}()
-
-	emitter := NewMetricsEmitter()
-
-	// Should return error when metrics are not initialized
-	err := emitter.EmitOptimizerActiveMetric("cost-aware", true)
-	if err == nil {
-		t.Error("Expected error when optimizerActive is nil, got nil")
-	}
-	expectedErr := "optimizerActive metric not initialized"
-	if err.Error() != expectedErr {
-		t.Errorf("Expected error message '%s', got '%s'", expectedErr, err.Error())
-	}
-}
-
-func TestEmitOptimizerActiveMetric_WithControllerInstance(t *testing.T) {
+func TestRecordOptimizerActiveMetric_WithControllerInstance(t *testing.T) {
 	// Save and restore original controller instance and metrics
 	savedInstance := controllerInstance
 	savedOptimizerActive := optimizerActive
@@ -176,9 +147,7 @@ func TestEmitOptimizerActiveMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit optimizer active metric
-	if err := emitter.EmitOptimizerActiveMetric("cost-aware", true); err != nil {
-		t.Fatalf("EmitOptimizerActiveMetric failed: %v", err)
-	}
+	emitter.RecordOptimizerActiveMetric("cost-aware", true)
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()

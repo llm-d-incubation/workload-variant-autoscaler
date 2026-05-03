@@ -23,7 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func TestEmitEnforcerMetric(t *testing.T) {
+func TestRecordEnforcerMetric(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -32,19 +32,13 @@ func TestEmitEnforcerMetric(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit enforcer metric for scale-to-zero policy
-	if err := emitter.EmitEnforcerMetric("scale-to-zero"); err != nil {
-		t.Fatalf("EmitEnforcerMetric failed: %v", err)
-	}
+	emitter.RecordEnforcerMetric("scale-to-zero")
 
 	// Emit enforcer metric for minimum-replica policy
-	if err := emitter.EmitEnforcerMetric("minimum-replica"); err != nil {
-		t.Fatalf("EmitEnforcerMetric failed: %v", err)
-	}
+	emitter.RecordEnforcerMetric("minimum-replica")
 
 	// Emit multiple times for the same policy (counter should increment)
-	if err := emitter.EmitEnforcerMetric("scale-to-zero"); err != nil {
-		t.Fatalf("EmitEnforcerMetric failed: %v", err)
-	}
+	emitter.RecordEnforcerMetric("scale-to-zero")
 
 	// Verify the counter was recorded
 	metrics, err := registry.Gather()
@@ -88,28 +82,7 @@ func TestEmitEnforcerMetric(t *testing.T) {
 	}
 }
 
-func TestEmitEnforcerMetric_NilSafety(t *testing.T) {
-	// Reset the package-level var to nil to simulate uninitialized state
-	savedEnforcerModificationsTotal := enforcerModificationsTotal
-	enforcerModificationsTotal = nil
-	defer func() {
-		enforcerModificationsTotal = savedEnforcerModificationsTotal
-	}()
-
-	emitter := NewMetricsEmitter()
-
-	// Should return error when metrics are not initialized
-	err := emitter.EmitEnforcerMetric("scale-to-zero")
-	if err == nil {
-		t.Error("Expected error when enforcerModificationsTotal is nil, got nil")
-	}
-	expectedErr := "enforcerModificationsTotal metric not initialized"
-	if err.Error() != expectedErr {
-		t.Errorf("Expected error message '%s', got '%s'", expectedErr, err.Error())
-	}
-}
-
-func TestEmitEnforcerMetric_WithControllerInstance(t *testing.T) {
+func TestRecordEnforcerMetric_WithControllerInstance(t *testing.T) {
 	// Save and restore original controller instance and metrics
 	savedInstance := controllerInstance
 	savedEnforcerModificationsTotal := enforcerModificationsTotal
@@ -129,9 +102,7 @@ func TestEmitEnforcerMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit enforcer metric
-	if err := emitter.EmitEnforcerMetric("scale-to-zero"); err != nil {
-		t.Fatalf("EmitEnforcerMetric failed: %v", err)
-	}
+	emitter.RecordEnforcerMetric("scale-to-zero")
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()
@@ -162,7 +133,7 @@ func TestEmitEnforcerMetric_WithControllerInstance(t *testing.T) {
 	}
 }
 
-func TestEmitEnforcerMetric_MultiplePolicyTypes(t *testing.T) {
+func TestRecordEnforcerMetric_MultiplePolicyTypes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
@@ -178,9 +149,7 @@ func TestEmitEnforcerMetric_MultiplePolicyTypes(t *testing.T) {
 	}
 
 	for _, policyType := range policyTypes {
-		if err := emitter.EmitEnforcerMetric(policyType); err != nil {
-			t.Fatalf("EmitEnforcerMetric failed for policy %s: %v", policyType, err)
-		}
+		emitter.RecordEnforcerMetric(policyType)
 	}
 
 	// Verify all policy types were recorded

@@ -180,13 +180,11 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
-	e.setActiveOptimizer(ctx, e.optimizer)
+	e.setActiveOptimizer(e.optimizer)
 	e.executor.Start(ctx)
 }
 
-func (e *Engine) setActiveOptimizer(ctx context.Context, optimizer pipeline.ScalingOptimizer) {
-	logger := ctrl.LoggerFrom(ctx)
-
+func (e *Engine) setActiveOptimizer(optimizer pipeline.ScalingOptimizer) {
 	optimizerNames := []string{
 		pipeline.GreedyByScoreOptimizerName,
 		pipeline.CostAwareOptimizerName,
@@ -196,9 +194,7 @@ func (e *Engine) setActiveOptimizer(ctx context.Context, optimizer pipeline.Scal
 		if name == optimizer.Name() {
 			isActive = true // only one active at a time
 		}
-		if err := e.metricsEmitter.EmitOptimizerActiveMetric(name, isActive); err != nil {
-			logger.Error(err, "Failed to emit optimizer active metric", "optimizer", name)
-		}
+		e.metricsEmitter.RecordOptimizerActiveMetric(name, isActive)
 	}
 }
 
@@ -307,7 +303,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		} else {
 			optimizer = pipeline.NewCostAwareOptimizer()
 		}
-		e.setActiveOptimizer(ctx, optimizer)
+		e.setActiveOptimizer(optimizer)
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
