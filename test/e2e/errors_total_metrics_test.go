@@ -19,7 +19,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
-var _ = Describe("Error metrics recording", Label("full"), Ordered, func() {
+var _ = Describe("Observability - Error metrics recording", Label("full"), Ordered, func() {
 	var (
 		cmNamespace        string
 		cmOriginal         *corev1.ConfigMap
@@ -57,7 +57,10 @@ var _ = Describe("Error metrics recording", Label("full"), Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "failed reading existing saturation configmap")
 		}
 
-		// Set up port-forward to Prometheus if PROMETHEUS_URL is not set
+		// Set up Prometheus client
+		// Environment variables:
+		//   - PROMETHEUS_URL: Override the Prometheus endpoint (default: setup port-forward to https://localhost:9090)
+		//   - PROMETHEUS_SKIP_TLS_VERIFY: Set to "false" to enable TLS cert verification (default: true)
 		prometheusURL := os.Getenv("PROMETHEUS_URL")
 		if prometheusURL == "" {
 			By("Setting up port-forward to Prometheus")
@@ -90,15 +93,24 @@ var _ = Describe("Error metrics recording", Label("full"), Ordered, func() {
 			usePrometheus = true
 		}
 
-		// Only create Prometheus client if we have a valid URL and usePrometheus is true
+		// Create Prometheus client if URL is available
 		if usePrometheus {
 			By("Creating Prometheus client")
-			promClient, err = utils.NewPrometheusClient(prometheusURL, true)
+			// Allow TLS verification to be configured via environment variable.
+			// WARNING: insecureSkipVerify=true disables TLS certificate verification and is intended
+			// only for E2E tests with self-signed certificates. Do not use in production.
+			// Set PROMETHEUS_SKIP_TLS_VERIFY=false to enable certificate verification.
+			insecureSkipVerify := true // Default for E2E tests with self-signed certs
+			if skipVerify := os.Getenv("PROMETHEUS_SKIP_TLS_VERIFY"); skipVerify != "" {
+				insecureSkipVerify = strings.EqualFold(skipVerify, "true")
+			}
+
+			promClient, err = utils.NewPrometheusClient(prometheusURL, insecureSkipVerify)
 			if err != nil {
 				GinkgoWriter.Printf("Warning: Failed to create Prometheus client (will skip metric verification): %v\n", err)
 				usePrometheus = false
 			} else {
-				GinkgoWriter.Printf("Prometheus client created successfully (URL: %s)\n", prometheusURL)
+				GinkgoWriter.Printf("Prometheus client created successfully (URL: %s, TLS verification: %v)\n", prometheusURL, !insecureSkipVerify)
 			}
 		}
 
