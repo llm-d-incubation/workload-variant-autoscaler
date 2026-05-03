@@ -185,6 +185,10 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 }
 
 func (e *Engine) setActiveOptimizer(optimizer pipeline.ScalingOptimizer) {
+	// Update the engine's optimizer
+	e.optimizer = optimizer
+
+	// Record metrics for which optimizer is active
 	optimizerNames := []string{
 		pipeline.GreedyByScoreOptimizerName,
 		pipeline.CostAwareOptimizerName,
@@ -304,7 +308,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 			optimizer = pipeline.NewCostAwareOptimizer()
 		}
 		e.setActiveOptimizer(optimizer)
-		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
+		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
 	var allDecisions []interfaces.VariantDecision

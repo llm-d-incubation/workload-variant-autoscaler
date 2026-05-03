@@ -125,11 +125,11 @@ const (
 	WVAAvailableGpus = "wva_available_gpus"
 
 	// WVAEnforcerModificationsTotal is a counter that tracks the total number of decision modifications made by the enforcer.
-	// Labels:policy_type
+	// Labels: policy_type
 	WVAEnforcerModificationsTotal = "wva_enforcer_modifications_total"
 
 	// WVAOptimizerActive is a gauge that is 0 when an optimizer is inactive, and 1 when it's active.
-	// Labels:optimizer_name
+	// Labels: optimizer_name
 	WVAOptimizerActive = "wva_optimizer_active"
 )
 

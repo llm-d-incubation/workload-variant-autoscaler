@@ -26,7 +26,6 @@ import (
 const (
 	testAcceleratorTypeA100 = "A100"
 	testAcceleratorTypeH100 = "H100"
-	testControllerInstance  = "controller-1"
 )
 
 func TestRecordAvailableGPUsMetric(t *testing.T) {

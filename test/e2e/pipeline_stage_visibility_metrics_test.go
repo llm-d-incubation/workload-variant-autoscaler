@@ -45,13 +45,14 @@ var _ = Describe("Observability - Pipeline Stage Visibility Metric Tests", Label
 			time.Sleep(2 * time.Second)
 
 			By("Verifying Prometheus port-forward is ready")
-			err := utils.VerifyPortForwardReadiness(ctx, 9090, "https://localhost:9090/-/ready")
+			// Port-forward connections are already authenticated via kubectl, so use HTTP
+			err := utils.VerifyPortForwardReadiness(ctx, 9090, "http://localhost:9090/-/ready")
 			if err != nil {
 				GinkgoWriter.Printf("Warning: Prometheus port-forward not ready (will skip metric verification): %v\n", err)
 				GinkgoWriter.Printf("  Port-forward command may have failed. Check if service exists: kubectl get svc -n %s %s\n", promNamespace, promServiceName)
 				usePrometheus = false
 			} else {
-				prometheusURL = utils.DefaultPrometheusURL
+				prometheusURL = "http://localhost:9090"
 				GinkgoWriter.Printf("Prometheus port-forward established at %s\n", prometheusURL)
 				usePrometheus = true
 			}
@@ -63,12 +64,14 @@ var _ = Describe("Observability - Pipeline Stage Visibility Metric Tests", Label
 		// Create Prometheus client if URL is available
 		if usePrometheus {
 			By("Creating Prometheus client")
-			// Allow TLS verification to be configured via environment variable.
-			// WARNING: insecureSkipVerify=true disables TLS certificate verification and is intended
-			// only for E2E tests with self-signed certificates. Do not use in production.
-			// Set PROMETHEUS_SKIP_TLS_VERIFY=false to enable certificate verification.
+			// For custom PROMETHEUS_URL (not port-forward), allow TLS verification to be configured.
+			// Port-forward connections use HTTP (already authenticated via kubectl).
+			// Set PROMETHEUS_SKIP_TLS_VERIFY=false to enable certificate verification for custom URLs.
 			insecureSkipVerify := true // Default for E2E tests with self-signed certs
-			if skipVerify := os.Getenv("PROMETHEUS_SKIP_TLS_VERIFY"); skipVerify != "" {
+			if strings.HasPrefix(prometheusURL, "http://") {
+				// HTTP connections don't use TLS
+				insecureSkipVerify = false
+			} else if skipVerify := os.Getenv("PROMETHEUS_SKIP_TLS_VERIFY"); skipVerify != "" {
 				insecureSkipVerify = strings.EqualFold(skipVerify, "true")
 			}
 
