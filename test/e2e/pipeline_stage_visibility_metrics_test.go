@@ -27,7 +27,7 @@ var _ = Describe("Observability - Pipeline Stage Visibility Metric Tests", Label
 		// Set up Prometheus client
 		// Environment variables:
 		//   - PROMETHEUS_URL: Override the Prometheus endpoint (default: setup port-forward to https://localhost:9090)
-		//   - PROMETHEUS_SKIP_TLS_VERIFY: Set to "false" to enable TLS cert verification (default: true)
+		//   - PROMETHEUS_SKIP_TLS_VERIFY: Set to "false" to enable TLS cert verification (default: true for HTTPS, not applicable for HTTP)
 		prometheusURL := os.Getenv("PROMETHEUS_URL")
 		if prometheusURL == "" {
 			By("Setting up port-forward to Prometheus")
@@ -45,14 +45,15 @@ var _ = Describe("Observability - Pipeline Stage Visibility Metric Tests", Label
 			time.Sleep(2 * time.Second)
 
 			By("Verifying Prometheus port-forward is ready")
-			// Port-forward connections are already authenticated via kubectl, so use HTTP
-			err := utils.VerifyPortForwardReadiness(ctx, 9090, "http://localhost:9090/-/ready")
+			// Prometheus service uses HTTPS, so kubectl port-forward proxies HTTPS.
+			// Use HTTPS with InsecureSkipVerify since it's a self-signed cert over an authenticated kubectl channel.
+			err := utils.VerifyPortForwardReadiness(ctx, 9090, "https://localhost:9090/-/ready")
 			if err != nil {
 				GinkgoWriter.Printf("Warning: Prometheus port-forward not ready (will skip metric verification): %v\n", err)
 				GinkgoWriter.Printf("  Port-forward command may have failed. Check if service exists: kubectl get svc -n %s %s\n", promNamespace, promServiceName)
 				usePrometheus = false
 			} else {
-				prometheusURL = "http://localhost:9090"
+				prometheusURL = "https://localhost:9090"
 				GinkgoWriter.Printf("Prometheus port-forward established at %s\n", prometheusURL)
 				usePrometheus = true
 			}
@@ -64,9 +65,8 @@ var _ = Describe("Observability - Pipeline Stage Visibility Metric Tests", Label
 		// Create Prometheus client if URL is available
 		if usePrometheus {
 			By("Creating Prometheus client")
-			// For custom PROMETHEUS_URL (not port-forward), allow TLS verification to be configured.
-			// Port-forward connections use HTTP (already authenticated via kubectl).
-			// Set PROMETHEUS_SKIP_TLS_VERIFY=false to enable certificate verification for custom URLs.
+			// Port-forward connections use HTTPS with self-signed certs (already authenticated via kubectl).
+			// For custom PROMETHEUS_URL, allow TLS verification to be configured via PROMETHEUS_SKIP_TLS_VERIFY.
 			insecureSkipVerify := true // Default for E2E tests with self-signed certs
 			if strings.HasPrefix(prometheusURL, "http://") {
 				// HTTP connections don't use TLS
