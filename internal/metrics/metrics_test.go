@@ -133,11 +133,11 @@ func TestRecordErrorNotInitialized(t *testing.T) {
 
 	ctx := context.Background()
 
-	// RecordError should not panic even when errorsTotal is nil
-	// It will log an error and return early
-	require.NotPanics(t, func() {
+	// RecordError will panic when errorsTotal is nil because metrics must be initialized
+	// before calling RecordError. This is by design - callers must use InitMetrics first.
+	require.Panics(t, func() {
 		RecordError(ctx, constants.ComponentController, "TestError")
-	}, "RecordError should not panic when errorsTotal is nil")
+	}, "RecordError should panic when errorsTotal is nil (metrics not initialized)")
 }
 
 func TestRecordErrorMetricFormat(t *testing.T) {

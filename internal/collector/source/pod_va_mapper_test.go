@@ -26,11 +26,16 @@ var _ = Describe("PodVAMapper", func() {
 	var (
 		ctx         context.Context
 		deployments map[string]scaletarget.ScaleTargetAccessor
+		registry    *prometheus.Registry
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		deployments = make(map[string]scaletarget.ScaleTargetAccessor)
+
+		// Initialize metrics for error recording
+		registry = prometheus.NewRegistry()
+		Expect(metrics.InitMetrics(registry)).To(Succeed())
 	})
 
 	// Helper function to create a scheme with all required types

@@ -521,9 +521,14 @@ vllm_num_requests_waiting{namespace="test-ns"} 5
 			readyPod2   *corev1.Pod
 			mockServer1 *httptest.Server
 			mockServer2 *httptest.Server
+			registry    *prometheus.Registry
 		)
 
 		BeforeEach(func() {
+			// Initialize metrics for error recording
+			registry = prometheus.NewRegistry()
+			Expect(metrics.InitMetrics(registry)).To(Succeed())
+
 			service = &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pool-epp",

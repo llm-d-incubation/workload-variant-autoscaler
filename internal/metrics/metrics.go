@@ -9,7 +9,6 @@ import (
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ControllerInstanceEnvVar is the environment variable name for controller instance label
@@ -150,28 +149,6 @@ func InitMetricsAndEmitter(registry prometheus.Registerer) (*MetricsEmitter, err
 	return NewMetricsEmitter(), nil
 }
 
-// RecordError records an error metric for the specified component and error type
-func RecordError(ctx context.Context, component, errorType string) {
-	labels := prometheus.Labels{
-		constants.LabelComponent: component,
-		constants.LabelErrorType: errorType,
-	}
-
-	// Add controller_instance label if configured
-	if controllerInstance != "" {
-		labels[constants.LabelControllerInstance] = controllerInstance
-	}
-
-	// These operations are local and should never fail, but we handle errors for debugging
-	if errorsTotal == nil {
-		logger := log.FromContext(ctx)
-		logger.Error(errors.New("errorsTotal metric not initialized"), "Failed to record error")
-		return
-	}
-
-	errorsTotal.With(labels).Inc()
-}
-
 // MetricsEmitter handles emission of custom metrics
 type MetricsEmitter struct{}
 
@@ -257,4 +234,23 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	}
 	desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
 	return nil
+}
+
+// RecordError records an error metric for the specified component and error type
+// Callers MUST invoke InitMetrics before this method (the package-level
+// metric vars are nil otherwise, and the Set calls below would panic).
+// InitMetricsAndEmitter is the recommended construction path because it
+// performs the registration before returning the emitter.
+func RecordError(ctx context.Context, component, errorType string) {
+	labels := prometheus.Labels{
+		constants.LabelComponent: component,
+		constants.LabelErrorType: errorType,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	errorsTotal.With(labels).Inc()
 }
