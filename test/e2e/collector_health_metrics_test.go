@@ -9,7 +9,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
@@ -23,6 +25,22 @@ var _ = Describe("Observability - Collector Health Metrics Feature", Ordered, La
 	)
 
 	BeforeAll(func() {
+		By("Checking for active VariantAutoscaling resources")
+		// Collector health metrics are only emitted when the controller is processing variants
+		vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
+		err := crClient.List(ctx, vaList, &client.ListOptions{})
+		if err != nil {
+			Skip(fmt.Sprintf("Failed to list VariantAutoscaling resources: %v. Skipping collector health metrics tests.", err))
+		}
+
+		if len(vaList.Items) == 0 {
+			Skip("No VariantAutoscaling resources found in the cluster. " +
+				"Collector health metrics are only emitted when processing variants. " +
+				"Skipping collector health metrics tests.")
+		}
+
+		GinkgoWriter.Printf("Found %d VariantAutoscaling resource(s) in the cluster\n", len(vaList.Items))
+
 		// Set up Prometheus client
 		// Environment variables:
 		//   - PROMETHEUS_URL: Override the Prometheus endpoint (default: read from WVA configmap and port-forward)
