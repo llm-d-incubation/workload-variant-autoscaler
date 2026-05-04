@@ -20,15 +20,16 @@ var _ = Describe("Observability - Collector Health Metrics Feature", Ordered, La
 	var (
 		portForwardCmd     *exec.Cmd
 		promClient         *utils.PrometheusClient
-		usePrometheus      bool
 		cleanupPortForward bool
 	)
 
 	BeforeAll(func() {
+		var err error
+
 		By("Checking for active VariantAutoscaling resources")
 		// Collector health metrics are only emitted when the controller is processing variants
 		vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
-		err := crClient.List(ctx, vaList, &client.ListOptions{})
+		err = crClient.List(ctx, vaList, &client.ListOptions{})
 		if err != nil {
 			Skip(fmt.Sprintf("Failed to list VariantAutoscaling resources: %v. Skipping collector health metrics tests.", err))
 		}
@@ -49,68 +50,49 @@ var _ = Describe("Observability - Collector Health Metrics Feature", Ordered, La
 		if prometheusURL == "" {
 			By("Reading Prometheus service info from WVA configmap")
 			// Get Prometheus service info from workload-variant-autoscaler-variantautoscaling-config configmap
-			promInfo, err := utils.GetPrometheusServiceInfoFromConfigMap(ctx, k8sClient, cfg.WVANamespace)
-			if err != nil {
-				GinkgoWriter.Printf("Warning: Failed to get Prometheus service info from configmap (will skip metric verification): %v\n", err)
-				usePrometheus = false
-			} else {
-				GinkgoWriter.Printf("Prometheus service from configmap: %s/%s:%d (scheme: %s)\n",
-					promInfo.Namespace, promInfo.ServiceName, promInfo.Port, promInfo.Scheme)
+			var promInfo *utils.PrometheusServiceInfo
+			promInfo, err = utils.GetPrometheusServiceInfoFromConfigMap(ctx, k8sClient, cfg.WVANamespace)
+			Expect(err).NotTo(HaveOccurred(), "Failed to get Prometheus service info from configmap")
 
-				By("Setting up port-forward to Prometheus")
-				localPort := 9090
-				portForwardCmd = utils.SetUpPortForward(k8sClient, ctx, promInfo.ServiceName, promInfo.Namespace, localPort, promInfo.Port)
-				cleanupPortForward = true
+			GinkgoWriter.Printf("Prometheus service from configmap: %s/%s:%d (scheme: %s)\n",
+				promInfo.Namespace, promInfo.ServiceName, promInfo.Port, promInfo.Scheme)
 
-				// Give port-forward a moment to establish
-				GinkgoWriter.Printf("Waiting for port-forward to establish...\n")
-				time.Sleep(2 * time.Second)
+			By("Setting up port-forward to Prometheus")
+			localPort := 9090
+			portForwardCmd = utils.SetUpPortForward(k8sClient, ctx, promInfo.ServiceName, promInfo.Namespace, localPort, promInfo.Port)
+			cleanupPortForward = true
 
-				By("Verifying Prometheus port-forward is ready")
-				// Prometheus service uses HTTPS, so kubectl port-forward proxies HTTPS.
-				// Use HTTPS with InsecureSkipVerify since it's a self-signed cert over an authenticated kubectl channel.
-				prometheusURL = fmt.Sprintf("%s://localhost:%d", promInfo.Scheme, localPort)
-				readinessURL := prometheusURL + "/-/ready"
-				err = utils.VerifyPortForwardReadiness(ctx, localPort, readinessURL)
-				if err != nil {
-					GinkgoWriter.Printf("Warning: Prometheus port-forward not ready (will skip metric verification): %v\n", err)
-					GinkgoWriter.Printf("  Port-forward command may have failed. Check if service exists: kubectl get svc -n %s %s\n",
-						promInfo.Namespace, promInfo.ServiceName)
-					usePrometheus = false
-				} else {
-					GinkgoWriter.Printf("Prometheus port-forward established at %s\n", prometheusURL)
-					usePrometheus = true
-				}
-			}
+			// Give port-forward a moment to establish
+			GinkgoWriter.Printf("Waiting for port-forward to establish...\n")
+			time.Sleep(2 * time.Second)
+
+			By("Verifying Prometheus port-forward is ready")
+			// Prometheus service uses HTTPS, so kubectl port-forward proxies HTTPS.
+			// Use HTTPS with InsecureSkipVerify since it's a self-signed cert over an authenticated kubectl channel.
+			prometheusURL = fmt.Sprintf("%s://localhost:%d", promInfo.Scheme, localPort)
+			readinessURL := prometheusURL + "/-/ready"
+			err = utils.VerifyPortForwardReadiness(ctx, localPort, readinessURL)
+			Expect(err).NotTo(HaveOccurred(), "Prometheus port-forward failed to become ready. Check if service exists: kubectl get svc -n %s %s", promInfo.Namespace, promInfo.ServiceName)
+
+			GinkgoWriter.Printf("Prometheus port-forward established at %s\n", prometheusURL)
 		} else {
 			GinkgoWriter.Printf("Using PROMETHEUS_URL from environment: %s\n", prometheusURL)
-			usePrometheus = true
 		}
 
-		// Create Prometheus client if URL is available
-		if usePrometheus {
-			By("Creating Prometheus client")
-			// Port-forward connections use HTTPS with self-signed certs (already authenticated via kubectl).
-			// For custom PROMETHEUS_URL, allow TLS verification to be configured via PROMETHEUS_SKIP_TLS_VERIFY.
-			insecureSkipVerify := true // Default for HTTPS with self-signed certs
-			if strings.HasPrefix(prometheusURL, "http://") {
-				// HTTP connections don't use TLS
-				insecureSkipVerify = false
-			} else if skipVerify := os.Getenv("PROMETHEUS_SKIP_TLS_VERIFY"); skipVerify != "" {
-				insecureSkipVerify = strings.EqualFold(skipVerify, "true")
-			}
-
-			var err error
-			promClient, err = utils.NewPrometheusClient(prometheusURL, insecureSkipVerify)
-			if err != nil {
-				GinkgoWriter.Printf("Warning: Failed to create Prometheus client (will skip metric verification): %v\n", err)
-				usePrometheus = false
-			} else {
-				GinkgoWriter.Printf("Prometheus client created successfully (URL: %s, TLS verification: %v)\n", prometheusURL, !insecureSkipVerify)
-			}
+		By("Creating Prometheus client")
+		// Port-forward connections use HTTPS with self-signed certs (already authenticated via kubectl).
+		// For custom PROMETHEUS_URL, allow TLS verification to be configured via PROMETHEUS_SKIP_TLS_VERIFY.
+		insecureSkipVerify := true // Default for HTTPS with self-signed certs
+		if strings.HasPrefix(prometheusURL, "http://") {
+			// HTTP connections don't use TLS
+			insecureSkipVerify = false
+		} else if skipVerify := os.Getenv("PROMETHEUS_SKIP_TLS_VERIFY"); skipVerify != "" {
+			insecureSkipVerify = strings.EqualFold(skipVerify, "true")
 		}
 
-		GinkgoWriter.Printf("Collector health metrics test starting (prometheus: %v)\n", usePrometheus)
+		promClient, err = utils.NewPrometheusClient(prometheusURL, insecureSkipVerify)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create Prometheus client")
+		GinkgoWriter.Printf("Prometheus client created successfully (URL: %s, TLS verification: %v)\n", prometheusURL, !insecureSkipVerify)
 	})
 
 	AfterAll(func() {
