@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
@@ -22,6 +23,11 @@ var (
 
 	optimizationDuration *prometheus.HistogramVec
 	modelsProcessedGauge *prometheus.GaugeVec
+
+	configInfoGauge                     *prometheus.GaugeVec
+	configKvSpareThresholdGauge         *prometheus.GaugeVec
+	configQueueSpareThresholdGauge      *prometheus.GaugeVec
+	configOptimizationIntervalSecsGauge *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -104,6 +110,46 @@ func InitMetrics(registry prometheus.Registerer) error {
 		modelsProcessedLabels,
 	)
 
+	// Config info metric with labels
+	configInfoLabels := []string{constants.LabelAnalyzerName, constants.LabelLimiterEnabled, constants.LabelScaleToZeroEnabled}
+	if controllerInstance != "" {
+		configInfoLabels = append(configInfoLabels, constants.LabelControllerInstance)
+	}
+	configInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAConfigInfo,
+			Help: "WVA configuration information (value is always 1)",
+		},
+		configInfoLabels,
+	)
+
+	// Config threshold and interval metrics
+	configLabels := []string{}
+	if controllerInstance != "" {
+		configLabels = append(configLabels, constants.LabelControllerInstance)
+	}
+	configKvSpareThresholdGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAConfigKvSpareThreshold,
+			Help: "KV cache spare threshold configuration value",
+		},
+		configLabels,
+	)
+	configQueueSpareThresholdGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAConfigQueueSpareThreshold,
+			Help: "Queue spare threshold configuration value",
+		},
+		configLabels,
+	)
+	configOptimizationIntervalSecsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAConfigOptimizationIntervalSeconds,
+			Help: "Optimization interval in seconds",
+		},
+		configLabels,
+	)
+
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
 		return fmt.Errorf("failed to register replicaScalingTotal metric: %w", err)
@@ -122,6 +168,18 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(modelsProcessedGauge); err != nil {
 		return fmt.Errorf("failed to register modelsProcessedGauge metric: %w", err)
+	}
+	if err := registry.Register(configInfoGauge); err != nil {
+		return fmt.Errorf("failed to register configInfoGauge metric: %w", err)
+	}
+	if err := registry.Register(configKvSpareThresholdGauge); err != nil {
+		return fmt.Errorf("failed to register configKvSpareThresholdGauge metric: %w", err)
+	}
+	if err := registry.Register(configQueueSpareThresholdGauge); err != nil {
+		return fmt.Errorf("failed to register configQueueSpareThresholdGauge metric: %w", err)
+	}
+	if err := registry.Register(configOptimizationIntervalSecsGauge); err != nil {
+		return fmt.Errorf("failed to register configOptimizationIntervalSecsGauge metric: %w", err)
 	}
 
 	return nil
@@ -221,4 +279,57 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	}
 	desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
 	return nil
+}
+
+// SetConfigInfo sets the config info metric with the given analyzer name and feature flags.
+// The metric value is always set to 1 (info-style metric).
+func SetConfigInfo(analyzerName string, limiterEnabled, scaleToZeroEnabled bool) {
+	if configInfoGauge == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelAnalyzerName:       analyzerName,
+		constants.LabelLimiterEnabled:     strconv.FormatBool(limiterEnabled),
+		constants.LabelScaleToZeroEnabled: strconv.FormatBool(scaleToZeroEnabled),
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	configInfoGauge.With(labels).Set(1)
+}
+
+// SetConfigKvSpareThreshold sets the KV spare threshold configuration value.
+func SetConfigKvSpareThreshold(threshold float64) {
+	if configKvSpareThresholdGauge == nil {
+		return
+	}
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	configKvSpareThresholdGauge.With(labels).Set(threshold)
+}
+
+// SetConfigQueueSpareThreshold sets the queue spare threshold configuration value.
+func SetConfigQueueSpareThreshold(threshold float64) {
+	if configQueueSpareThresholdGauge == nil {
+		return
+	}
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	configQueueSpareThresholdGauge.With(labels).Set(threshold)
+}
+
+// SetConfigOptimizationInterval sets the optimization interval in seconds.
+func SetConfigOptimizationInterval(intervalSeconds float64) {
+	if configOptimizationIntervalSecsGauge == nil {
+		return
+	}
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	configOptimizationIntervalSecsGauge.With(labels).Set(intervalSeconds)
 }

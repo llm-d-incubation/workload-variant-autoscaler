@@ -177,6 +177,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)
 }
 
@@ -325,6 +326,20 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	return nil
 }
 
+// Resolve saturation config and record config metrics
+func (e *Engine) resolveSaturationConfig(
+	configMap map[string]config.SaturationScalingConfig,
+	modelID, namespace string,
+) config.SaturationScalingConfig {
+	config := resolveSaturationConfig(configMap, modelID, namespace)
+	// record config metric after resolution instead of where the configmaps are reconciled. Here we
+	// have the exact values being used by the optimize engine.
+	metrics.SetConfigKvSpareThreshold(config.KvSpareTrigger)
+	metrics.SetConfigQueueSpareThreshold(config.QueueSpareTrigger)
+	metrics.SetConfigInfo(config.AnalyzerName, config.EnableLimiter, e.Config.ScaleToZeroEnabled())
+	return config
+}
+
 // optimizeV1 runs the V1 percentage-based saturation analysis path (saturation-percentage-based).
 // Processes each model independently: analyze → enforce → convert → limiter.
 func (e *Engine) optimizeV1(
@@ -353,7 +368,7 @@ func (e *Engine) optimizeV1(
 			continue
 		}
 
-		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
+		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 		saturationTargets, saturationAnalysis, data, err := e.RunSaturationAnalysis(ctx, modelID, modelVAs, saturationConfig, e.client)
 		if err != nil {
 			logger.Error(err, "Saturation analysis failed", "modelID", modelID)
@@ -461,8 +476,8 @@ func (e *Engine) optimizeV2(
 				"namespace", namespace, "modelID", modelID)
 			continue
 		}
-		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 
+		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
 			logger.Error(err, "Model data preparation failed", "modelID", modelID)
