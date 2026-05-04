@@ -972,6 +972,14 @@ type PrometheusQueryResult struct {
 	} `json:"data"`
 }
 
+// PrometheusServiceInfo contains information about the Prometheus service endpoint
+type PrometheusServiceInfo struct {
+	ServiceName string
+	Namespace   string
+	Port        int
+	Scheme      string // "http" or "https"
+}
+
 // PrometheusClient wraps the official Prometheus client
 type PrometheusClient struct {
 	client promv1.API
@@ -1020,6 +1028,49 @@ func NewPrometheusClient(baseURL string, insecureSkipVerify bool) (*PrometheusCl
 
 	return &PrometheusClient{
 		client: promv1.NewAPI(client),
+	}, nil
+}
+
+// GetPrometheusServiceInfoFromConfigMap reads the Prometheus service info from the WVA controller configmap.
+// It reads the workload-variant-autoscaler-variantautoscaling-config configmap and extracts
+// the service name, namespace, and port from PROMETHEUS_BASE_URL.
+// Example URL: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
+func GetPrometheusServiceInfoFromConfigMap(ctx context.Context, k8sClient *kubernetes.Clientset, wvaNamespace string) (*PrometheusServiceInfo, error) {
+	configMapName := "workload-variant-autoscaler-variantautoscaling-config"
+
+	cm, err := k8sClient.CoreV1().ConfigMaps(wvaNamespace).Get(ctx, configMapName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get configmap %s/%s: %w", wvaNamespace, configMapName, err)
+	}
+
+	configYAML, ok := cm.Data["config.yaml"]
+	if !ok {
+		return nil, fmt.Errorf("config.yaml not found in configmap %s/%s", wvaNamespace, configMapName)
+	}
+
+	// Parse PROMETHEUS_BASE_URL from the YAML content
+	// Format: PROMETHEUS_BASE_URL: "https://service-name.namespace.svc.cluster.local:port"
+	re := regexp.MustCompile(`PROMETHEUS_BASE_URL:\s*"(https?://)?([^:/"]+)\.([^:/"]+)\.svc\.cluster\.local:(\d+)"`)
+	matches := re.FindStringSubmatch(configYAML)
+	if len(matches) < 5 {
+		return nil, fmt.Errorf("PROMETHEUS_BASE_URL not found or invalid format in configmap %s/%s config.yaml", wvaNamespace, configMapName)
+	}
+
+	scheme := "http"
+	if matches[1] == "https://" {
+		scheme = "https"
+	}
+
+	port, err := strconv.Atoi(matches[4])
+	if err != nil {
+		return nil, fmt.Errorf("invalid port in PROMETHEUS_BASE_URL: %w", err)
+	}
+
+	return &PrometheusServiceInfo{
+		ServiceName: matches[2],
+		Namespace:   matches[3],
+		Port:        port,
+		Scheme:      scheme,
 	}, nil
 }
 
