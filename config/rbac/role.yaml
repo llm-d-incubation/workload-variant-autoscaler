@@ -101,7 +101,7 @@ rules:
   - get
   - update
 - apiGroups:
-  - llmd.ai
+  - llm-d.ai
   resources:
   - variantautoscalings
   verbs:
@@ -113,13 +113,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - llmd.ai
+  - llm-d.ai
   resources:
   - variantautoscalings/finalizers
   verbs:
   - update
 - apiGroups:
-  - llmd.ai
+  - llm-d.ai
   resources:
   - variantautoscalings/status
   verbs:

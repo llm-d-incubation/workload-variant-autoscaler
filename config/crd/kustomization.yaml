@@ -2,7 +2,7 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/llmd.ai_variantautoscalings.yaml
+- bases/llm-d.ai_variantautoscalings.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 #patches:

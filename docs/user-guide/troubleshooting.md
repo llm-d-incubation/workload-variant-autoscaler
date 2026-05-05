@@ -51,7 +51,7 @@ kubectl get deployment -n <controller-namespace> workload-variant-autoscaler-con
 Add or update the label on your VariantAutoscaling resource:
 
 ```yaml
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: my-va

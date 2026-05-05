@@ -1,7 +1,7 @@
 # Example: VariantAutoscaling with LeaderWorkerSet (LWS) as scale target
 # Ensure a LeaderWorkerSet named vllm-lws exists in llm-d-sim (e.g. from kind-emulator or e2e).
 # 
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: sample-deployment

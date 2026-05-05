@@ -234,7 +234,7 @@ Tune load with `TOTAL_REQUESTS`, `BATCH_SIZE`, and optional `BATCH_SLEEP`, `MAX_
 watch kubectl get deploy -n llm-d-sim
 
 # Watch VariantAutoscaling status
-watch kubectl get variantautoscalings.llmd.ai -A
+watch kubectl get variantautoscalings.llm-d.ai -A
 
 # View controller logs
 kubectl logs -n workload-variant-autoscaler-system \
@@ -259,7 +259,7 @@ kubectl logs -n workload-variant-autoscaler-system \
   deployment/workload-variant-autoscaler-controller-manager
 
 # Verify CRDs installed
-kubectl get crd variantautoscalings.llmd.ai
+kubectl get crd variantautoscalings.llm-d.ai
 
 # Check RBAC
 kubectl get clusterrole,clusterrolebinding -l app=workload-variant-autoscaler

@@ -546,7 +546,7 @@ If you don't create VariantAutoscaling via Helm, create it manually:
 
 ```bash
 cat <<EOF | kubectl apply -f -
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: my-vllm-deployment-decode

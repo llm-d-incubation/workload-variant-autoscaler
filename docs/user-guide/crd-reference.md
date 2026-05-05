@@ -1,12 +1,12 @@
 # API Reference
 
 ## Packages
-- [llmd.ai/v1alpha1](#llmdaiv1alpha1)
+- [llm-d.ai/v1alpha1](#llm-daiv1alpha1)
 
 
-## llmd.ai/v1alpha1
+## llm-d.ai/v1alpha1
 
-Package v1alpha1 contains API Schema definitions for the llmd v1alpha1 API group.
+Package v1alpha1 contains API Schema definitions for the llm-d v1alpha1 API group.
 
 ### Resource Types
 - [VariantAutoscaling](#variantautoscaling)
@@ -62,7 +62,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `apiVersion` _string_ | `llmd.ai/v1alpha1` | | |
+| `apiVersion` _string_ | `llm-d.ai/v1alpha1` | | |
 | `kind` _string_ | `VariantAutoscaling` | | |
 | `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  | Optional: \{\} <br /> |
 | `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  | Optional: \{\} <br /> |
@@ -101,7 +101,7 @@ VariantAutoscalingList contains a list of VariantAutoscaling resources.
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `apiVersion` _string_ | `llmd.ai/v1alpha1` | | |
+| `apiVersion` _string_ | `llm-d.ai/v1alpha1` | | |
 | `kind` _string_ | `VariantAutoscalingList` | | |
 | `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  | Optional: \{\} <br /> |
 | `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  | Optional: \{\} <br /> |
