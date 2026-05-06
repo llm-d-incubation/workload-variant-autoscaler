@@ -42,7 +42,7 @@ func (g *GreedyBySaturation) Allocate(
 
 	// Allocate GPUs to each candidate in priority order
 	for _, d := range candidates {
-		g.allocateForDecision(d, allocator)
+		g.allocateForDecision(ctx, d, allocator)
 	}
 
 	return nil
@@ -76,7 +76,7 @@ func (g *GreedyBySaturation) sortByPriority(decisions []*interfaces.VariantDecis
 // allocateForDecision attempts to allocate GPUs for a single decision.
 // If partial allocation, adjusts TargetReplicas accordingly.
 // Respects MaxReplicas (caps scale-up) and MinReplicas (floor even under GPU scarcity).
-func (g *GreedyBySaturation) allocateForDecision(d *interfaces.VariantDecision, allocator ResourceAllocator) {
+func (g *GreedyBySaturation) allocateForDecision(ctx context.Context, d *interfaces.VariantDecision, allocator ResourceAllocator) {
 	replicasNeeded := d.TargetReplicas - d.CurrentReplicas
 	if replicasNeeded <= 0 {
 		return
@@ -97,7 +97,7 @@ func (g *GreedyBySaturation) allocateForDecision(d *interfaces.VariantDecision, 
 	}
 
 	gpusRequested := replicasNeeded * gpusPerReplica
-	gpusAllocated, _ := allocator.TryAllocate(d, gpusRequested)
+	gpusAllocated, _ := allocator.TryAllocate(ctx, d, gpusRequested)
 
 	// Calculate how many replicas we can actually add
 	replicasAllocated := 0

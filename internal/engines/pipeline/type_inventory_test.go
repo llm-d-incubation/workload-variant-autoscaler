@@ -260,7 +260,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(16)) // H100: 16-4=12, A100: 8-4=4
 
 			// Allocate from H100 pool
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -292,7 +292,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(2))
 
 			// Request more than available - should get partial allocation
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -309,7 +309,6 @@ var _ = Describe("TypeAllocator", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		_ = ctx // silence unused variable warning
 	})
 
 	Describe("TryAllocate", func() {
@@ -326,7 +325,7 @@ var _ = Describe("TypeAllocator", func() {
 					totalRemaining:  total,
 				}
 
-				allocated, err := allocator.TryAllocate(decision, gpusRequested)
+				allocated, err := allocator.TryAllocate(ctx, decision, gpusRequested)
 
 				if expectError {
 					Expect(err).To(HaveOccurred())
@@ -406,8 +405,10 @@ var _ = Describe("TypeAllocator", func() {
 				totalRemaining:  24,
 			}
 
+			ctx := context.Background()
+
 			// First allocation: 4 H100 GPUs
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -419,7 +420,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(20))
 
 			// Second allocation: 6 A100 GPUs
-			allocated, err = allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-b",
 				Namespace:       "default",
 				AcceleratorName: "A100",
@@ -431,7 +432,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(14))
 
 			// Third allocation: more H100 than available
-			allocated, err = allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-c",
 				Namespace:       "default",
 				AcceleratorName: "H100",

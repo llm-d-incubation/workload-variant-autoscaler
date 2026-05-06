@@ -17,8 +17,8 @@ limitations under the License.
 package saturation
 
 import (
-	"strings"
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,62 +34,48 @@ func newVAFixture(name, namespace string) *llmdVariantAutoscalingV1alpha1.Varian
 	}
 }
 
-// TestEmitAcceleratorNotResolvedEvent_RecordsWarning confirms the helper
-// emits a Warning event with the AcceleratorNotResolved reason and a
-// remediation message that points operators at nodeSelector / VA label.
-func TestEmitAcceleratorNotResolvedEvent_RecordsWarning(t *testing.T) {
-	recorder := record.NewFakeRecorder(10)
-	e := &Engine{Recorder: recorder}
-	va := newVAFixture("variant-a", "team-x")
+var _ = Describe("emitAcceleratorNotResolvedEvent", func() {
+	var (
+		recorder *record.FakeRecorder
+		engine   *Engine
+		va       *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
+	)
 
-	e.emitAcceleratorNotResolvedEvent(va)
+	BeforeEach(func() {
+		recorder = record.NewFakeRecorder(10)
+		engine = &Engine{Recorder: recorder}
+		va = newVAFixture("variant-a", "team-x")
+	})
 
-	select {
-	case got := <-recorder.Events:
-		if !strings.HasPrefix(got, "Warning AcceleratorNotResolved ") {
-			t.Fatalf("unexpected event prefix: %q", got)
-		}
-		if !strings.Contains(got, "nodeSelector") {
-			t.Errorf("event message should mention nodeSelector remediation, got: %q", got)
-		}
-		if !strings.Contains(got, "HPA/KEDA metrics will not be emitted") {
-			t.Errorf("event message should warn that metrics are gated, got: %q", got)
-		}
-	default:
-		t.Fatal("expected an event to be recorded, none was")
-	}
-}
+	It("records a Warning event with the AcceleratorNotResolved reason and a remediation message", func() {
+		engine.emitAcceleratorNotResolvedEvent(va)
 
-// TestEmitAcceleratorNotResolvedEvent_NilRecorderIsNoOp confirms the helper
-// is safe to call when the engine has no recorder configured (e.g. unit
-// tests that exercise other code paths).
-func TestEmitAcceleratorNotResolvedEvent_NilRecorderIsNoOp(t *testing.T) {
-	e := &Engine{Recorder: nil}
-	va := newVAFixture("variant-a", "team-x")
+		var got string
+		Eventually(recorder.Events).Should(Receive(&got))
+		Expect(got).To(HavePrefix("Warning AcceleratorNotResolved "))
+		Expect(got).To(ContainSubstring("nodeSelector"),
+			"event message should mention nodeSelector remediation")
+		Expect(got).To(ContainSubstring("HPA/KEDA metrics will not be emitted"),
+			"event message should warn that metrics are gated")
+	})
 
-	// Should not panic.
-	e.emitAcceleratorNotResolvedEvent(va)
-}
+	It("is a no-op when the engine has no recorder configured", func() {
+		engineWithoutRecorder := &Engine{Recorder: nil}
 
-// TestEmitAcceleratorNotResolvedEvent_ConstantMessageEnablesDedup confirms
-// that repeated emissions for the same VA produce identical (type, reason,
-// message) tuples — which is what allows the K8s API server's event
-// aggregator to collapse them into a single Event with an updated count
-// rather than creating a new entry per optimization cycle.
-func TestEmitAcceleratorNotResolvedEvent_ConstantMessageEnablesDedup(t *testing.T) {
-	recorder := record.NewFakeRecorder(10)
-	e := &Engine{Recorder: recorder}
-	va := newVAFixture("variant-a", "team-x")
+		Expect(func() { engineWithoutRecorder.emitAcceleratorNotResolvedEvent(va) }).
+			NotTo(Panic())
+	})
 
-	e.emitAcceleratorNotResolvedEvent(va)
-	e.emitAcceleratorNotResolvedEvent(va)
+	It("produces identical event strings on repeat emissions to enable API-server-side dedup", func() {
+		engine.emitAcceleratorNotResolvedEvent(va)
+		engine.emitAcceleratorNotResolvedEvent(va)
 
-	first := <-recorder.Events
-	second := <-recorder.Events
-	if first != second {
-		t.Fatalf("expected identical event strings to enable API-server-side dedup, got\nfirst:  %q\nsecond: %q", first, second)
-	}
-	if !strings.Contains(first, corev1.EventTypeWarning) {
-		t.Errorf("event should be Warning-typed, got: %q", first)
-	}
-}
+		var first, second string
+		Eventually(recorder.Events).Should(Receive(&first))
+		Eventually(recorder.Events).Should(Receive(&second))
+		Expect(first).To(Equal(second),
+			"identical event strings let the API server's event aggregator collapse repeats into a single entry")
+		Expect(first).To(ContainSubstring(corev1.EventTypeWarning),
+			"event should be Warning-typed")
+	})
+})

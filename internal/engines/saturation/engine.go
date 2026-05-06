@@ -1287,12 +1287,15 @@ func (e *Engine) applySaturationDecisions(
 				"variant", vaName)
 		}
 
-		// Update DesiredOptimizedAlloc
-		// ALWAYS update LastRunTime to trigger reconciliation in the controller.
-		// Status is updated even without accelerator so that DesiredOptimizedAlloc.NumReplicas
-		// and LastRunTime remain current, and conditions are set properly.
-		// Never persist the sentinel to status — downstream paths re-resolve when the field
-		// is empty, and the limiter resolves it to the real type for decisions.
+		// Stage the just-computed decision on the in-memory VA so that
+		// act.EmitMetrics below — which reads
+		// Status.DesiredOptimizedAlloc.{NumReplicas,Accelerator}
+		// (see actuator.EmitMetrics) — publishes the fresh target rather than
+		// whatever was last persisted by the controller. This object is local
+		// to the engine; CRD persistence happens later, via the cache write
+		// (DecisionCache.Set) → controller patch path.
+		// Sanitize the sentinel out of the staged value so neither EmitMetrics
+		// nor the cache (which reuses statusAccelerator) ever sees it.
 		numReplicas := int32(targetReplicas)
 		statusAccelerator := acceleratorName
 		if !constants.IsAcceleratorResolved(statusAccelerator) {

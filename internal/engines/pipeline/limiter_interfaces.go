@@ -132,7 +132,9 @@ type ResourceAllocator interface {
 	//
 	// The decision parameter provides context (AcceleratorName, GPUsPerReplica,
 	// ScaleTargetRef) that some allocators need for type-aware or node-aware allocation.
-	TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (gpusAllocated int, err error)
+	// ctx carries the request-scoped logger so per-cycle traces emitted from the
+	// allocator are correlated with the rest of the engine cycle's structured logs.
+	TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (gpusAllocated int, err error)
 
 	// Remaining returns total remaining allocatable GPUs across all resources.
 	Remaining() int

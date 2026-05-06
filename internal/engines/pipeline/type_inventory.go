@@ -290,7 +290,7 @@ type typeAllocator struct {
 // The accelerator type is determined from the decision's AcceleratorName field.
 // Returns the actual GPUs allocated (may be less than requested if the type's
 // pool is exhausted).
-func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (a *typeAllocator) TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}
@@ -312,7 +312,7 @@ func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRe
 			// subsequent known-type decision. Returning 0 is safer — the variant
 			// keeps its current replicas without over-allocating. Operator must
 			// set nodeSelector or the VA label for scaling in mixed-GPU clusters.
-			ctrl.Log.WithName("typeAllocator").V(logging.DEBUG).Info(
+			ctrl.LoggerFrom(ctx).WithName("typeAllocator").V(logging.DEBUG).Info(
 				"Skipping allocation: accelerator unresolved in heterogeneous cluster — operator must set nodeSelector or VA label",
 				"variant", decision.VariantName,
 				"namespace", decision.Namespace,

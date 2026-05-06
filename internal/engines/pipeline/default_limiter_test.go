@@ -90,7 +90,7 @@ type mockTypeAllocator struct {
 	availableByType map[string]int
 }
 
-func (m *mockTypeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (m *mockTypeAllocator) TryAllocate(_ context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	accelType := decision.AcceleratorName
 	if accelType == "" {
 		accelType = "default"
@@ -176,7 +176,7 @@ var _ = Describe("DefaultLimiter", func() {
 						for _, d := range decisions {
 							if d.TargetReplicas > d.CurrentReplicas {
 								gpusNeeded := (d.TargetReplicas - d.CurrentReplicas) * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								d.GPUsAllocated = allocated
 							}
 						}
@@ -233,7 +233,7 @@ var _ = Describe("DefaultLimiter", func() {
 							if d.TargetReplicas > d.CurrentReplicas {
 								replicasNeeded := d.TargetReplicas - d.CurrentReplicas
 								gpusNeeded := replicasNeeded * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								// Calculate how many replicas we can actually add
 								replicasCanAdd := 0
 								if d.GPUsPerReplica > 0 {
@@ -293,7 +293,7 @@ var _ = Describe("DefaultLimiter", func() {
 						for _, d := range decisions {
 							if d.TargetReplicas > d.CurrentReplicas {
 								gpusNeeded := (d.TargetReplicas - d.CurrentReplicas) * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								d.GPUsAllocated = allocated
 							}
 						}
