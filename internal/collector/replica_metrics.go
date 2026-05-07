@@ -62,6 +62,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 )
 
 // ReplicaMetricsCollector collects replica-level metrics for both saturation
@@ -70,15 +72,46 @@ type ReplicaMetricsCollector struct {
 	source      source.MetricsSource
 	k8sClient   client.Client
 	podVAMapper *source.PodVAMapper
+	recorder    record.EventRecorder
 }
 
 // NewReplicaMetricsCollector creates a new replica metrics collector.
-func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client) *ReplicaMetricsCollector {
+func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client, recorder record.EventRecorder) *ReplicaMetricsCollector {
 	return &ReplicaMetricsCollector{
 		source:      metricsSource,
 		k8sClient:   k8sClient,
 		podVAMapper: source.NewPodVAMapper(k8sClient),
+		recorder:    recorder,
 	}
+}
+
+func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	reason string,
+) {
+	for _, va := range variantAutoscalings {
+		c.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
+	}
+}
+
+// This function wraps collectReplicaMetrics to make sure to always record K8S events if needed.
+func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
+	ctx context.Context,
+	modelID string,
+	namespace string,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	variantCosts map[string]float64,
+) ([]interfaces.ReplicaMetrics, error) {
+	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
+	if err != nil {
+		c.recordMetricsUnavailableEvent(variantAutoscalings, "Failed to collect metrics for model")
+		return nil, err
+	}
+	if len(replicaMetrics) == 0 {
+		c.recordMetricsUnavailableEvent(variantAutoscalings, "No saturation metrics available for model")
+	}
+	return replicaMetrics, nil
 }
 
 // CollectReplicaMetrics collects per-replica metrics for all replicas of a model.
@@ -100,7 +133,7 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 // Returns:
 //   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
-func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
+func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	ctx context.Context,
 	modelID string,
 	namespace string,

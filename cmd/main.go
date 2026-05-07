@@ -489,7 +489,7 @@ func main() {
 
 	// Register scale from zero engine loop with the manager. Only start when leader.
 	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		engine, err := scalefromzero.NewEngine(mgr.GetClient(), mgr.GetRESTMapper(), restConfig, ds, cfg)
+		engine, err := scalefromzero.NewEngine(mgr.GetClient(), mgr.GetEventRecorderFor("workload-variant-autoscaler-scalezero-engine"), mgr.GetRESTMapper(), restConfig, ds, cfg)
 		if err != nil {
 			return err
 		}
