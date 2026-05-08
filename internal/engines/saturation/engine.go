@@ -417,7 +417,7 @@ func (e *Engine) optimizeV1(
 		}
 
 		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
-    
+
 		// Prepare model data once per model (single metrics collection pass).
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 

@@ -28,10 +28,10 @@ var (
 	configKvSpareThresholdGauge         *prometheus.GaugeVec
 	configQueueSpareThresholdGauge      *prometheus.GaugeVec
 	configOptimizationIntervalSecsGauge *prometheus.GaugeVec
-	metricsCollectionDuration *prometheus.HistogramVec
-	metricsCollectionErrors   *prometheus.CounterVec
-	metricsPodsDiscovered     *prometheus.GaugeVec
-	metricsFreshnessStatus    *prometheus.GaugeVec
+	metricsCollectionDuration           *prometheus.HistogramVec
+	metricsCollectionErrors             *prometheus.CounterVec
+	metricsPodsDiscovered               *prometheus.GaugeVec
+	metricsFreshnessStatus              *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -152,6 +152,8 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "Optimization interval in seconds",
 		},
 		configLabels,
+	)
+
 	metricsCollectionDurationLabels := []string{constants.LabelQueryType}
 	if controllerInstance != "" {
 		metricsCollectionDurationLabels = append(metricsCollectionDurationLabels, constants.LabelControllerInstance)
@@ -231,6 +233,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(configOptimizationIntervalSecsGauge); err != nil {
 		return fmt.Errorf("failed to register configOptimizationIntervalSecsGauge metric: %w", err)
+	}
 	if err := registry.Register(metricsCollectionDuration); err != nil {
 		return fmt.Errorf("failed to register metricsCollectionDuration metric: %w", err)
 	}
@@ -394,6 +397,8 @@ func SetConfigOptimizationInterval(intervalSeconds float64) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 	configOptimizationIntervalSecsGauge.With(labels).Set(intervalSeconds)
+}
+
 // ObserveMetricsCollectionDuration records the duration of a metrics collection operation.
 func ObserveMetricsCollectionDuration(durationSeconds float64, queryType string) {
 	if metricsCollectionDuration == nil {
