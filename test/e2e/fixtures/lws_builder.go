@@ -23,7 +23,11 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespac
 	// Check if LWS already exists
 	existingLWS := &lwsv1.LeaderWorkerSet{}
 	err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, existingLWS)
-	if err == nil {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing LWS %s: %w", lwsName, err)
+		}
+	} else {
 		// LWS exists, check if it's ready
 		if existingLWS.Status.ReadyReplicas > 0 && modelServiceLWSMatchesDesired(*existingLWS, *desiredLWS) {
 			return nil
@@ -49,8 +53,6 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespac
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for LWS %s to be deleted: %w", lwsName, waitErr)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing LWS %s: %w", lwsName, err)
 	}
 
 	err = crClient.Create(ctx, desiredLWS)
@@ -59,7 +61,19 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespac
 		_ = crClient.Delete(ctx, desiredLWS, &client.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		time.Sleep(2 * time.Second)
+		waitErr := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			checkErr := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, &lwsv1.LeaderWorkerSet{})
+			if errors.IsNotFound(checkErr) {
+				return true, nil
+			}
+			if checkErr != nil {
+				return false, checkErr
+			}
+			return false, nil
+		})
+		if waitErr != nil {
+			return fmt.Errorf("timeout waiting for LWS %s to be deleted before recreate: %w", lwsName, waitErr)
+		}
 		err = crClient.Create(ctx, desiredLWS)
 	}
 	return err

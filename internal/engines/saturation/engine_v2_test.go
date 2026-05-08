@@ -185,21 +185,29 @@ var _ = Describe("getRoleFromScaleTarget", func() {
 
 var _ = Describe("resolveSaturationConfig", func() {
 
-	It("should return model-specific config when present", func() {
+	It("should merge model-specific override onto default", func() {
 		configMap := map[string]config.SaturationScalingConfig{
 			"default": {
-				KvCacheThreshold: 0.80,
-				AnalyzerName:     "saturation",
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "saturation",
 			},
 			"llama-70b#production": {
 				KvCacheThreshold: 0.85,
 				Priority:         5.0,
-				AnalyzerName:     "saturation",
 			},
 		}
 		cfg := resolveSaturationConfig(configMap, "llama-70b", "production")
+		// Overridden fields
 		Expect(cfg.KvCacheThreshold).To(Equal(0.85))
 		Expect(cfg.Priority).To(Equal(5.0))
+		// Inherited from default
+		Expect(cfg.QueueLengthThreshold).To(Equal(5.0))
+		Expect(cfg.KvSpareTrigger).To(Equal(0.10))
+		Expect(cfg.QueueSpareTrigger).To(Equal(3.0))
+		Expect(cfg.AnalyzerName).To(Equal("saturation"))
 	})
 
 	It("should fall back to default config when model-specific not found", func() {
@@ -214,11 +222,14 @@ var _ = Describe("resolveSaturationConfig", func() {
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
 	})
 
-	It("should return zero-value with defaults when map is empty", func() {
+	It("should return V1 defaults when map is empty", func() {
 		configMap := map[string]config.SaturationScalingConfig{}
 		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
-		Expect(cfg.KvCacheThreshold).To(Equal(0.0))
+		Expect(cfg.KvCacheThreshold).To(Equal(config.DefaultKvCacheThreshold))
+		Expect(cfg.QueueLengthThreshold).To(Equal(config.DefaultQueueLengthThreshold))
+		Expect(cfg.KvSpareTrigger).To(Equal(config.DefaultKvSpareTrigger))
+		Expect(cfg.QueueSpareTrigger).To(Equal(config.DefaultQueueSpareTrigger))
 	})
 
 	It("should apply defaults on model-specific config", func() {
@@ -231,6 +242,27 @@ var _ = Describe("resolveSaturationConfig", func() {
 		Expect(cfg.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))
 		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
 		Expect(cfg.Priority).To(Equal(config.DefaultPriority))
+		// V1 defaults also applied
+		Expect(cfg.KvCacheThreshold).To(Equal(config.DefaultKvCacheThreshold))
+	})
+
+	It("should allow partial override with only one field changed", func() {
+		configMap := map[string]config.SaturationScalingConfig{
+			"default": {
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+			},
+			"model-1#ns-1": {
+				KvCacheThreshold: 0.90,
+			},
+		}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.KvCacheThreshold).To(Equal(0.90))
+		Expect(cfg.QueueLengthThreshold).To(Equal(5.0))
+		Expect(cfg.KvSpareTrigger).To(Equal(0.10))
+		Expect(cfg.QueueSpareTrigger).To(Equal(3.0))
 	})
 })
 

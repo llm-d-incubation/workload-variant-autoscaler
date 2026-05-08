@@ -7,10 +7,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // mockPrometheusAPI implements promv1.API for testing
@@ -240,6 +243,84 @@ var _ = Describe("CollectModelRequestCount", func() {
 			Expect(capturedQuery).To(ContainSubstring("[15m]"))
 			Expect(capturedQuery).To(ContainSubstring(`model_name="test-model"`))
 			Expect(capturedQuery).To(ContainSubstring(`namespace="test-ns"`))
+		})
+	})
+
+	Context("metrics collection duration tracking", func() {
+		var metricsRegistry *promclient.Registry
+
+		BeforeEach(func() {
+			// Initialize metrics with a fresh registry for isolation
+			metricsRegistry = promclient.NewRegistry()
+			err := metrics.InitMetrics(metricsRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			mockAPI = &mockPrometheusAPI{
+				queryFunc: func(ctx context.Context, query string, ts time.Time, opts ...v1.Option) (model.Value, v1.Warnings, error) {
+					// Simulate some query latency
+					time.Sleep(10 * time.Millisecond)
+					return &model.Scalar{
+						Value:     model.SampleValue(42),
+						Timestamp: model.TimeFromUnix(time.Now().Unix()),
+					}, nil, nil
+				},
+			}
+			metricsSource = prometheus.NewPrometheusSource(ctx, mockAPI, prometheus.DefaultPrometheusSourceConfig())
+			err = registry.Register("prometheus", metricsSource)
+			Expect(err).NotTo(HaveOccurred())
+			RegisterScaleToZeroQueries(registry)
+		})
+
+		It("should record metrics collection duration", func() {
+			// Call the function which should record collection duration
+			_, err := CollectModelRequestCount(ctx, metricsSource, "test-model", "test-ns", 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Gather metrics from the registry
+			metricFamilies, err := metricsRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Find the collection duration histogram
+			var found bool
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAMetricsCollectionDurationSeconds {
+					found = true
+
+					// Verify the histogram has at least one observation
+					Expect(mf.GetMetric()).NotTo(BeEmpty(), "Should have at least one metric series")
+
+					// Find the metric with query_type=request_count label
+					var foundRequestCount bool
+					for _, m := range mf.GetMetric() {
+						// Check labels
+						var queryType string
+						for _, label := range m.GetLabel() {
+							if label.GetName() == constants.LabelQueryType {
+								queryType = label.GetValue()
+								break
+							}
+						}
+
+						if queryType == constants.QueryTypeRequestCount {
+							foundRequestCount = true
+							histogram := m.GetHistogram()
+							Expect(histogram).NotTo(BeNil(), "Histogram should not be nil")
+							Expect(histogram.GetSampleCount()).To(BeNumerically(">=", 1),
+								"Should have recorded at least one observation")
+							// Duration should be > 0 (we simulated 10ms delay)
+							Expect(histogram.GetSampleSum()).To(BeNumerically(">", 0),
+								"Duration should be greater than 0")
+							break
+						}
+					}
+
+					Expect(foundRequestCount).To(BeTrue(),
+						"Should have recorded duration for query_type=%s", constants.QueryTypeRequestCount)
+					break
+				}
+			}
+
+			Expect(found).To(BeTrue(), "Should have found %s metric", constants.WVAMetricsCollectionDurationSeconds)
 		})
 	})
 })

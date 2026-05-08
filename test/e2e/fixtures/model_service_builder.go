@@ -43,7 +43,11 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 	desiredDeployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
 
 	existingDeployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
-	if err == nil {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
+		}
+	} else {
 		if existingDeployment.Status.ReadyReplicas > 0 && modelServiceDeploymentMatchesDesired(*existingDeployment, *desiredDeployment) {
 			return nil
 		}
@@ -57,8 +61,6 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 		if err := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); err != nil {
 			return fmt.Errorf("timeout waiting for deployment %s to be deleted: %w", deploymentName, err)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
 	}
 
 	_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, desiredDeployment, metav1.CreateOptions{})
