@@ -66,21 +66,6 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 361 (510 incomplete) | _TBD_ |
 | Cost (avg replicas × GPU/hr) | 1.91 | _TBD_ |
 
-### 3-Run Validation — Qwen/Qwen3-32B (WVA v0.6.0 Default(v1))
-
-All runs use WVA v0.6.0 Default(v1) configuration with Qwen/Qwen3-32B on OpenShift with NVIDIA H100 GPUs.
-
-| Metric | Run 1 | Run 2 | Run 3 | Avg |
-|--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 97,988 | 98,770 | 98,575 | 98,444 |
-| P99 ITL (ms/token) | 54.49 | 54.56 | 54.60 | 54.55 |
-| Avg replicas | 1.68 | 1.73 | 1.73 | 1.71 |
-| Max replicas | 3 | 3 | 3 | 3 |
-| Avg KV cache utilization | 68.7% | 67.5% | 63.5% | 66.6% |
-| Avg queue depth (EPP) | 242.1 | 242.6 | 231.1 | 238.6 |
-| Error count | 4,185 / 4,890 | 4,174 / 4,874 | 4,171 / 4,871 | 4,177 / 4,878 |
-| Cost (avg replicas × GPU/hr) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-
 ## Decode Heavy Scenario
 
 **llm-d Release:** v0.6.0
@@ -99,21 +84,6 @@ All runs use WVA v0.6.0 Default(v1) configuration with Qwen/Qwen3-32B on OpenShi
 | Error count | 192 (511 incomplete) | _TBD_ |
 | Cost (avg replicas × GPU/hr) | 1.92 | _TBD_ |
 
-### 3-Run Validation — Qwen/Qwen3-32B (WVA v0.6.0 Default(v1))
-
-All runs use WVA v0.6.0 Default(v1) configuration with Qwen/Qwen3-32B on OpenShift with NVIDIA H100 GPUs.
-
-| Metric | Run 1 | Run 2 | Run 3 | Avg |
-|--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 98,271 | 98,100 | 98,368 | 98,246 |
-| P99 ITL (ms/token) | 54.64 | 54.87 | 54.26 | 54.59 |
-| Avg replicas | 1.75 | 1.75 | 1.75 | 1.75 |
-| Max replicas | 3 | 3 | 3 | 3 |
-| Avg KV cache utilization | 64.8% | 63.5% | 65.4% | 64.5% |
-| Avg queue depth (EPP) | 226.1 | 228.4 | 231.9 | 228.8 |
-| Error count | 4,180 / 4,860 | 4,194 / 4,893 | 4,180 / 4,880 | 4,185 / 4,878 |
-| Cost (avg replicas × GPU/hr) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-
 ## Symmetrical Scenario
 
 **llm-d Release:** v0.6.0
@@ -131,18 +101,3 @@ All runs use WVA v0.6.0 Default(v1) configuration with Qwen/Qwen3-32B on OpenShi
 | Avg queue depth (EPP) | 4.38 |
 | Error count | 0 (343 incomplete) |
 | Cost (avg replicas × GPU/hr) | 1.92 |
-
-### 3-Run Validation — Qwen/Qwen3-32B (WVA v0.6.0 Default(v1))
-
-All runs use WVA v0.6.0 Default(v1) configuration with Qwen/Qwen3-32B on OpenShift with NVIDIA H100 GPUs.
-
-| Metric | Run 1 | Run 2 | Run 3 | Avg |
-|--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 98,403 | 98,847 | 98,622 | 98,624 |
-| P99 ITL (ms/token) | 54.41 | 54.58 | 54.48 | 54.49 |
-| Avg replicas | 1.73 | 1.75 | 1.75 | 1.74 |
-| Max replicas | 3 | 3 | 3 | 3 |
-| Avg KV cache utilization | 68.4% | 65.4% | 63.4% | 65.7% |
-| Avg queue depth (EPP) | 231.9 | 223.3 | 213.2 | 222.8 |
-| Error count | 4,171 / 4,871 | 4,174 / 4,874 | 4,171 / 4,871 | 4,172 / 4,872 |
-| Cost (avg replicas × GPU/hr) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
