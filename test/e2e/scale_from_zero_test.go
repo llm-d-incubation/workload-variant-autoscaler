@@ -668,7 +668,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS
@@ -1089,7 +1089,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with single-node (leader only) with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS

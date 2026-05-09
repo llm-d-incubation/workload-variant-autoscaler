@@ -72,8 +72,12 @@ func EnsureHPA(
 	opts ...HPAOption,
 ) error {
 	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, opts...)
-	existing, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
-	if err == nil && existing != nil {
+	_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing HPA %s: %w", hpa.Name, err)
+		}
+	} else {
 		deleteErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing HPA %s: %w", hpa.Name, deleteErr)
@@ -85,8 +89,6 @@ func EnsureHPA(
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for HPA %s deletion: %w", hpa.Name, waitErr)
 		}
-	} else if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing HPA %s: %w", hpa.Name, err)
 	}
 	_, err = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Create(ctx, hpa, metav1.CreateOptions{})
 	return err
@@ -97,7 +99,7 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-hpa",
 			Namespace: namespace,
-			Labels:    map[string]string{"test-resource": "true"},
+			Labels:    map[string]string{"test-resource": defaultTestResourceLabelValue},
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{

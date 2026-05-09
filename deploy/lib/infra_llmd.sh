@@ -10,12 +10,25 @@
 deploy_llm_d_infrastructure() {
     log_info "Deploying llm-d infrastructure..."
 
-     # Clone llm-d repo if not exists
-    if [ ! -d "$LLM_D_PROJECT" ]; then
-        log_info "Cloning $LLM_D_PROJECT repository (release: $LLM_D_RELEASE)"
-        git clone -b $LLM_D_RELEASE -- https://github.com/$LLM_D_OWNER/$LLM_D_PROJECT.git $LLM_D_PROJECT &> /dev/null
+    # Clone llm-d guide repo. If the directory already exists (e.g., checked out
+    # by CI), align it to the requested ref.
+    local llm_d_repo_url="https://github.com/$LLM_D_OWNER/$LLM_D_PROJECT.git"
+    local llm_d_clone_dir="$LLM_D_PROJECT"
+
+    if [ ! -d "$llm_d_clone_dir" ]; then
+        log_info "Cloning $llm_d_repo_url (release: $LLM_D_RELEASE) into $llm_d_clone_dir"
+        git clone -b "$LLM_D_RELEASE" -- "$llm_d_repo_url" "$llm_d_clone_dir" &> /dev/null
     else
-        log_warning "$LLM_D_PROJECT directory already exists, skipping clone"
+        log_info "Found existing $llm_d_clone_dir directory; aligning llm-d checkout to ref '$LLM_D_RELEASE'"
+        if [ ! -d "$llm_d_clone_dir/.git" ]; then
+            log_error "$llm_d_clone_dir exists but is not a git repository. Remove it or set LLM_D_PROJECT to a clean directory."
+            exit 1
+        fi
+        git -C "$llm_d_clone_dir" fetch --all --tags --prune &>/dev/null || true
+        if ! git -C "$llm_d_clone_dir" checkout "$LLM_D_RELEASE" &>/dev/null; then
+            log_error "Failed to align $llm_d_clone_dir to ref '$LLM_D_RELEASE'"
+            exit 1
+        fi
     fi
 
     # Check for HF_TOKEN (use dummy for emulated deployments)
@@ -37,7 +50,11 @@ deploy_llm_d_infrastructure() {
 
     # Install dependencies
     log_info "Installing llm-d dependencies"
-    bash $CLIENT_PREREQ_DIR/install-deps.sh
+    if [ ! -f "$CLIENT_PREREQ_DIR/install-deps.sh" ]; then
+        log_error "Missing llm-d dependency installer at $CLIENT_PREREQ_DIR/install-deps.sh"
+        exit 1
+    fi
+    bash "$CLIENT_PREREQ_DIR/install-deps.sh"
 
     # On OpenShift, skip base Gateway API CRDs (managed by Ingress Operator via
     # ValidatingAdmissionPolicy "openshift-ingress-operator-gatewayapi-crd-admission").
@@ -50,7 +67,7 @@ deploy_llm_d_infrastructure() {
             && log_success "GAIE CRDs installed" \
             || log_warning "Failed to install GAIE CRDs (may already exist or network issue)"
     else
-        bash $GATEWAY_PREREQ_DIR/install-gateway-provider-dependencies.sh
+        bash "$GATEWAY_PREREQ_DIR/install-gateway-provider-dependencies.sh"
     fi
 
     # Install Gateway provider (if kgateway, use v2.0.3)

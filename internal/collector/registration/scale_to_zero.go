@@ -12,7 +12,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
@@ -84,12 +86,18 @@ func CollectModelRequestCount(
 		ParamRetentionPeriod:  retentionPeriodStr,
 	}
 
-	// Execute the query
+	// Execute the query with timing
+	startTime := time.Now()
 	results, err := metricsSource.Refresh(ctx, source.RefreshSpec{
 		Queries: []string{QueryModelRequestCount},
 		Params:  params,
 	})
+	duration := time.Since(startTime).Seconds()
+	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeRequestCount)
+
 	if err != nil {
+		reason := utils.CategorizePrometheusError(err)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeRequestCount, reason)
 		logger.V(logging.VERBOSE).Info("Failed to query model request count",
 			"model", modelID,
 			"namespace", namespace,

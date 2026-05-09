@@ -83,7 +83,11 @@ func EnsureScaledObject(
 	existing := scaledObjectRef(namespace, name)
 	key := client.ObjectKey{Namespace: namespace, Name: obj.GetName()}
 	err := crClient.Get(ctx, key, existing)
-	if err == nil {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing ScaledObject %s: %w", obj.GetName(), err)
+		}
+	} else {
 		deleteErr := crClient.Delete(ctx, existing)
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing ScaledObject %s: %w", obj.GetName(), deleteErr)
@@ -96,8 +100,6 @@ func EnsureScaledObject(
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for ScaledObject %s deletion: %w", obj.GetName(), waitErr)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing ScaledObject %s: %w", obj.GetName(), err)
 	}
 	return crClient.Create(ctx, obj)
 }
@@ -141,7 +143,7 @@ func buildScaledObject(namespace, name, scaleTargetName, vaName string, minRepli
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      objName,
 			Namespace: namespace,
-			Labels:    map[string]string{"test-resource": "true"},
+			Labels:    map[string]string{"test-resource": defaultTestResourceLabelValue},
 		},
 		Spec: spec,
 	}

@@ -82,7 +82,7 @@ jobs:
     steps:
       - name: Checkout source
         if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check for code changes
         if: github.event_name == 'pull_request'
@@ -348,7 +348,7 @@ jobs:
       image_tag: ${{ steps.build.outputs.image_tag }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
@@ -416,7 +416,7 @@ jobs:
       WVA_IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}

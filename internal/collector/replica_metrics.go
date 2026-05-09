@@ -36,9 +36,12 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -111,11 +114,22 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		registration.QueryAvgITL,
 	}
 
+	// Execute the query with timing
+	startTime := time.Now()
 	results, err := c.source.Refresh(ctx, source.RefreshSpec{
 		Queries: queries,
 		Params:  params,
 	})
+	duration := time.Since(startTime).Seconds()
+	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeKVCache)
+	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeQueueLength)
+	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeCacheConfig)
+
 	if err != nil {
+		reason := utils.CategorizePrometheusError(err)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeKVCache, reason)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeCacheConfig, reason)
 		return nil, fmt.Errorf("failed to refresh saturation metrics: %w", err)
 	}
 
@@ -128,17 +142,63 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		queueTimestamp time.Time
 		hasQueue       bool
 		// V2 fields for token-based capacity analysis
-		numGpuBlocks       int64
-		blockSize          int64
-		avgOutputTokens    float64
-		avgInputTokens     float64
-		prefixCacheHitRate float64
-		hasCacheConfig     bool
+		numGpuBlocks                int64
+		blockSize                   int64
+		avgOutputTokens             float64
+		avgOutputTokensTimestamp    time.Time
+		avgInputTokens              float64
+		avgInputTokensTimestamp     time.Time
+		prefixCacheHitRate          float64
+		prefixCacheHitRateTimestamp time.Time
+		hasCacheConfig              bool
+		cacheConfigTimestamp        time.Time
 		// Queueing model fields
-		arrivalRate    float64
-		hasArrivalRate bool
-		avgTTFT        float64
-		avgITL         float64
+		arrivalRate          float64
+		hasArrivalRate       bool
+		arrivalRateTimestamp time.Time
+		avgTTFT              float64
+		avgTTFTTimestamp     time.Time
+		avgITL               float64
+		avgITLTimestamp      time.Time
+	}
+
+	// trackMetricFreshness determines the freshness status of metrics in podMetricData
+	// and increments the corresponding counters in the freshness status map.
+	trackMetricFreshness := func(
+		vaName string,
+		data *podMetricData,
+		collectedAt time.Time,
+		freshnessMap map[string]map[string]int,
+	) {
+		// Initialize inner map if needed
+		if freshnessMap[vaName] == nil {
+			freshnessMap[vaName] = make(map[string]int)
+		}
+
+		thresholds := config.DefaultFreshnessThresholds()
+
+		// Helper to track a single timestamp
+		trackTimestamp := func(timestamp time.Time) {
+			var status string
+			if timestamp.IsZero() {
+				status = "missing"
+			} else {
+				age := collectedAt.Sub(timestamp)
+				status = thresholds.DetermineStatus(age)
+			}
+			freshnessMap[vaName][status]++
+		}
+
+		// Track all metric timestamps
+		trackTimestamp(data.kvTimestamp)
+		trackTimestamp(data.queueTimestamp)
+		trackTimestamp(data.avgOutputTokensTimestamp)
+		trackTimestamp(data.avgInputTokensTimestamp)
+		trackTimestamp(data.prefixCacheHitRateTimestamp)
+		trackTimestamp(data.cacheConfigTimestamp)
+		trackTimestamp(data.arrivalRateTimestamp)
+		trackTimestamp(data.avgTTFTTimestamp)
+		trackTimestamp(data.avgITLTimestamp)
 	}
 
 	// Extract per-pod metrics from results
@@ -228,6 +288,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				}
 				if podData[podName].numGpuBlocks > 0 && podData[podName].blockSize > 0 {
 					podData[podName].hasCacheConfig = true
+					podData[podName].cacheConfigTimestamp = value.Timestamp
 				}
 
 				logger.V(logging.DEBUG).Info("Cache config info metric",
@@ -256,6 +317,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				// NaN check: rate division by zero produces NaN
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) {
 					podData[podName].avgOutputTokens = value.Value
+					podData[podName].avgOutputTokensTimestamp = value.Timestamp
 				}
 			}
 		}
@@ -279,6 +341,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				// NaN check: rate division by zero produces NaN
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) {
 					podData[podName].avgInputTokens = value.Value
+					podData[podName].avgInputTokensTimestamp = value.Timestamp
 				}
 			}
 		}
@@ -302,6 +365,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				// NaN check: rate division by zero produces NaN when no prefix cache queries
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 && value.Value <= 1 {
 					podData[podName].prefixCacheHitRate = value.Value
+					podData[podName].prefixCacheHitRateTimestamp = value.Timestamp
 				}
 			}
 		}
@@ -332,6 +396,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 {
 					podData[podName].arrivalRate = value.Value
 					podData[podName].hasArrivalRate = true
+					podData[podName].arrivalRateTimestamp = value.Timestamp
 
 					logger.V(logging.DEBUG).Info("Scheduler dispatch rate metric",
 						"pod", podName,
@@ -358,6 +423,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				}
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value > 0 {
 					podData[podName].avgTTFT = value.Value
+					podData[podName].avgTTFTTimestamp = value.Timestamp
 
 					logger.V(logging.DEBUG).Info("Avg TTFT metric",
 						"pod", podName,
@@ -384,6 +450,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				}
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value > 0 {
 					podData[podName].avgITL = value.Value
+					podData[podName].avgITLTimestamp = value.Timestamp
 
 					logger.V(logging.DEBUG).Info("Avg ITL metric",
 						"pod", podName,
@@ -403,11 +470,21 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		scaleTargetMaxBatchSize[key] = params.MaxNumSeqs
 	}
 
+	// Track metrics freshness status per pod
+	vaMetricsFreshnessStatus := make(map[string]map[string]int)
+
 	// Build replica metrics from pod data
 	replicaMetrics := make([]interfaces.ReplicaMetrics, 0, len(podData))
+	metrics.SetMetricsPodsDiscovered(namespace, len(podData))
 	collectedAt := time.Now()
 
 	for podName, data := range podData {
+		// Match Pod to VariantAutoscaling using indexed lookup
+		vaName := c.podVAMapper.FindVAForPod(ctx, podName, namespace, scaleTargets)
+
+		// Track freshness for metrics in this pod for this variant right away
+		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
+
 		// Skip pods that have no metrics at all
 		if !data.hasKv && !data.hasQueue {
 			continue
@@ -430,9 +507,6 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				"namespace", namespace)
 			queueLen = 0
 		}
-
-		// Match Pod to VariantAutoscaling using indexed lookup
-		vaName := c.podVAMapper.FindVAForPod(ctx, podName, namespace, scaleTargets)
 
 		if vaName == "" {
 			logger.Info("Skipping pod that doesn't match any scale target",
@@ -524,6 +598,12 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		}
 
 		replicaMetrics = append(replicaMetrics, metric)
+	}
+
+	for vaName, statuses := range vaMetricsFreshnessStatus {
+		for status, count := range statuses {
+			metrics.SetMetricsFreshnessStatus(vaName, status, count)
+		}
 	}
 
 	logger.V(logging.DEBUG).Info("Collected replica metrics",

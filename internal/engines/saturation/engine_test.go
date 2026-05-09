@@ -263,10 +263,12 @@ var _ = Describe("Saturation Engine", func() {
 				},
 			}
 
+			// Populate Role to verify it propagates to VariantDecision in the
+			// P/D-aware path (empty, prefill, decode cover the common cases).
 			variantStates := []interfaces.VariantReplicaState{
-				{VariantName: "variant-a", CurrentReplicas: 3, DesiredReplicas: 3},
-				{VariantName: "variant-b", CurrentReplicas: 3, DesiredReplicas: 3},
-				{VariantName: "variant-c", CurrentReplicas: 2, DesiredReplicas: 2},
+				{VariantName: "variant-a", CurrentReplicas: 3, DesiredReplicas: 3, Role: ""},
+				{VariantName: "variant-b", CurrentReplicas: 3, DesiredReplicas: 3, Role: "prefill"},
+				{VariantName: "variant-c", CurrentReplicas: 2, DesiredReplicas: 2, Role: "decode"},
 			}
 
 			By("Converting saturation targets to decisions")
@@ -290,6 +292,11 @@ var _ = Describe("Saturation Engine", func() {
 			Expect(decisionMap["variant-a"].Action).To(Equal(interfaces.ActionNoChange))
 			Expect(decisionMap["variant-b"].Action).To(Equal(interfaces.ActionScaleUp))
 			Expect(decisionMap["variant-c"].Action).To(Equal(interfaces.ActionNoChange))
+
+			By("Verifying Role propagates from VariantReplicaState to VariantDecision")
+			Expect(decisionMap["variant-a"].Role).To(Equal(""), "empty role must pass through unchanged")
+			Expect(decisionMap["variant-b"].Role).To(Equal("prefill"))
+			Expect(decisionMap["variant-c"].Role).To(Equal("decode"))
 		})
 	})
 

@@ -1,8 +1,12 @@
+target: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+model: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
 name: "Decode Heavy"
 description: "Stress-tests decode (token generation) with short input, long output"
-promptTokens: 1000
-outputTokens: 4000
+request_type: text_completions
+profile: poisson
 rate: 20
-maxSeconds: 600
-profile: "poisson"
-requestType: "text_completions"
+max_seconds: 600
+data:
+  prompt_tokens: 1000
+  output_tokens: 4000
+  seed: 42

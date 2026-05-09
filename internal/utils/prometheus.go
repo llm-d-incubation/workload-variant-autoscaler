@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -40,4 +43,42 @@ func FormatPrometheusDuration(d time.Duration) string {
 
 	// Very short durations, use milliseconds (Prometheus doesn't support ms, use minimum 1s)
 	return "1s"
+}
+
+// CategorizePrometheusError maps a Prometheus error to a bounded set of error categories
+// suitable for use as a metric label. This prevents high cardinality in metrics.
+func CategorizePrometheusError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	// Check for context errors first
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+
+	// Check error message content
+	errMsg := strings.ToLower(err.Error())
+
+	switch {
+	case strings.Contains(errMsg, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(errMsg, "no such host"):
+		return "dns_error"
+	case strings.Contains(errMsg, "timeout"):
+		return "timeout"
+	case strings.Contains(errMsg, "parse error"):
+		return "parse_error"
+	case strings.Contains(errMsg, "bad_data"):
+		return "bad_data"
+	case strings.Contains(errMsg, "execution"):
+		return "execution_error"
+	case strings.Contains(errMsg, "query processing"):
+		return "query_processing"
+	default:
+		return "unknown"
+	}
 }

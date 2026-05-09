@@ -28,6 +28,19 @@ E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
 E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
 BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy), symmetrical
 
+# llm-d-benchmark CLI configuration
+BENCHMARK_REPO_URL   ?= https://github.com/llm-d/llm-d-benchmark.git
+BENCHMARK_REPO_DIR   ?= $(CURDIR)/llm-d-benchmark
+BENCHMARK_SPEC       ?= guides/inference-scheduling-wva
+BENCHMARK_NAMESPACE  ?= # set via BENCHMARK_NAMESPACE=<namespace>
+BENCHMARK_WORKSPACE  ?= $(CURDIR)
+BENCHMARK_HARNESS    ?= guidellm
+BENCHMARK_WORKLOAD   ?= prefill_heavy.yaml
+BENCHMARK_FORCE      ?= true
+BENCHMARK_MONITORING ?= true
+BENCHMARK_UV         ?= false
+BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
+
 # Map scenario name to Ginkgo label filter
 ifeq ($(BENCHMARK_SCENARIO),decode_heavy)
   BENCHMARK_LABEL_FILTER := decode-heavy
@@ -406,6 +419,104 @@ test-benchmark: manifests generate fmt vet ## Run benchmark tests. Use BENCHMARK
 # Convenience target that deploys infra + runs benchmark tests.
 .PHONY: test-benchmark-with-setup
 test-benchmark-with-setup: deploy-e2e-infra test-benchmark
+
+##@ llm-d-benchmark CLI (standup / run / teardown)
+
+# llmdbenchmark binary from the benchmark repo venv
+BENCHMARK_VENV       = $(BENCHMARK_REPO_DIR)/.venv
+LLMDBENCHMARK        = $(BENCHMARK_VENV)/bin/llmdbenchmark
+
+# Common llmdbenchmark flags (spec + workspace + base dir for config resolution)
+BENCHMARK_CLI_FLAGS = --spec $(BENCHMARK_SPEC) --workspace $(BENCHMARK_WORKSPACE) --base-dir $(BENCHMARK_REPO_DIR)
+
+.PHONY: benchmark-install
+benchmark-install: ## Clone llm-d-benchmark and install the llmdbenchmark CLI
+	@if [ ! -d "$(BENCHMARK_REPO_DIR)" ]; then \
+		echo "Cloning llm-d-benchmark..."; \
+		git clone $(BENCHMARK_REPO_URL) $(BENCHMARK_REPO_DIR); \
+	else \
+		echo "llm-d-benchmark already cloned at $(BENCHMARK_REPO_DIR)"; \
+	fi
+	@cd $(BENCHMARK_REPO_DIR) && ./install.sh $(if $(filter true,$(BENCHMARK_UV)),--uv,--no-uv)
+
+.PHONY: benchmark-standup
+benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-standup BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
+		-p $(BENCHMARK_NAMESPACE) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
+
+.PHONY: benchmark-run
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ]; then \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD)"; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+		-p $(BENCHMARK_NAMESPACE) \
+		-l $(BENCHMARK_HARNESS) \
+		-w $(BENCHMARK_WORKLOAD) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
+
+.PHONY: benchmark-run-all
+benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenario (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-all BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@for scenario in $(BENCHMARK_SCENARIOS_DIR)/*.yaml; do \
+		scenario_name=$$(basename "$$scenario"); \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[1/3] Tearing down before: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) teardown \
+			-p $(BENCHMARK_NAMESPACE) || true; \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[2/3] Standing up for: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
+			-p $(BENCHMARK_NAMESPACE) \
+			$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,) || { \
+			echo "ERROR: Standup failed for $$scenario_name"; \
+			exit 1; \
+		}; \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[3/3] Running scenario: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+			-p $(BENCHMARK_NAMESPACE) \
+			-l $(BENCHMARK_HARNESS) \
+			-w "$$scenario_name" || { \
+			echo "ERROR: Scenario $$scenario_name failed"; \
+			exit 1; \
+		}; \
+	done
+	@echo ""
+	@echo "=========================================="
+	@echo "All scenarios completed successfully"
+	@echo "=========================================="
+
+.PHONY: benchmark-teardown
+benchmark-teardown: ## Tear down the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-teardown BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) teardown \
+		-p $(BENCHMARK_NAMESPACE)
+
+.PHONY: benchmark-full
+benchmark-full: benchmark-standup benchmark-run-all benchmark-teardown ## Full lifecycle: standup -> run all scenarios -> teardown
 
 # Stub for llm-d nightly reusable workflows (test_target=nightly-test-llm-d)
 # No-op; temporarily satisfies nightly CI make invocation
