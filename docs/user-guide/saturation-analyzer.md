@@ -291,11 +291,16 @@ Lookup order: `modelID#namespace` → `default` → zero-value with defaults app
     queueSpareTrigger: 3
 ```
 
-> **Note:** Overrides **fully replace** the `default` config — there is no field-level
-> inheritance. Always specify all required threshold fields. The `model_id` and `namespace`
-> YAML fields inside the entry are parsed into the config struct but are **not used for
-> lookup**. The ConfigMap data key itself determines which model/namespace the override
-> applies to.
+> **Note:** Overrides use **field-level merge**: only non-zero fields in the override
+> replace the corresponding values from `default`; omitted fields inherit from `default`.
+> The `model_id` and `namespace` YAML fields inside the entry are parsed into the config
+> struct but are **not used for lookup** — the ConfigMap data key itself determines which
+> model/namespace the override applies to.
+>
+> **Gotcha:** Because `Merge()` only overlays non-zero values, an override cannot force
+> a field to its zero value — `kvSpareTrigger: 0`, `enableLimiter: false`, or an empty
+> `analyzers: []` are all treated as "unset" and inherit from `default`. See
+> [Saturation Scaling Configuration](../saturation-scaling-config.md) for the full list.
 
 ## Architecture
 

@@ -316,12 +316,10 @@ data:
     queueSpareTrigger: 3
 
   # Override for granite model in production namespace
-  # All fields must be specified — no inheritance from default
+  # Only fields specified here are overridden; the rest inherit from `default`
   "ibm/granite-13b#production": |
     kvCacheThreshold: 0.85
-    queueLengthThreshold: 5
     kvSpareTrigger: 0.15
-    queueSpareTrigger: 3
 
   # Override for llama model in lab namespace
   "meta/llama-70b#lab": |
@@ -334,22 +332,30 @@ data:
 **Key points:**
 - Override keys **must** use the format `{modelID}#{namespace}` to match the engine's lookup
 - The `model_id` and `namespace` YAML fields inside the entry are parsed but **not used for lookup**
-- Overrides **replace** the `default` config entirely — there is no field-level inheritance. If an override omits a field (e.g., `queueLengthThreshold`), that field will be zero, not inherited from `default`. Always specify all required fields in each override entry.
+- Overrides use **field-level merge**: only non-zero fields in the override replace the corresponding values from `default`; any field you omit (or set to its zero value) inherits from `default`. See `Merge()` in `internal/config/saturation_scaling.go`.
 - Multiple overrides can exist for different model/namespace combinations
 
-### 4. Per-Model Overrides — No Field Inheritance
+### 4. Per-Model Overrides — Field-Level Inheritance
 
-Overrides **fully replace** the `default` config. There is no field-level merging — omitted
-fields will be zero, not inherited from `default`. Always specify all required threshold
-fields in each override entry:
+Overrides are merged onto `default` field by field: only non-zero fields in the override
+replace values from `default`, and any field you omit inherits from `default`. To change
+just one threshold, specify only that field:
 
 ```yaml
+  # Inherits queueLengthThreshold, kvSpareTrigger, queueSpareTrigger from `default`
   "my-org/my-model#my-namespace": |
     kvCacheThreshold: 0.90
-    queueLengthThreshold: 5
-    kvSpareTrigger: 0.1
-    queueSpareTrigger: 3
 ```
+
+> **Gotcha:** Because `Merge()` only overlays non-zero values, an override cannot force
+> a field to its zero value — the override is treated as "unset" and inherits from
+> `default` instead. This affects every field type, not just numeric thresholds:
+>
+> - `kvSpareTrigger: 0` → inherits from `default` (cannot zero out a numeric threshold)
+> - `enableLimiter: false` → inherits from `default` (cannot disable a limiter that's enabled by default)
+> - `analyzers: []` → inherits from `default` (cannot clear a non-empty analyzer list)
+>
+> See `Merge()` in `internal/config/saturation_scaling.go`.
 
 ## Validation
 
