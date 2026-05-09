@@ -308,12 +308,21 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 // InitMetricsAndEmitter is the recommended construction path because it
 // performs the registration before returning the emitter.
 func RecordError(ctx context.Context, component, errorType string) {
+	if errorsTotal == nil {
+		return
+	}
 	labels := prometheus.Labels{
 		constants.LabelComponent: component,
 		constants.LabelErrorType: errorType,
 	}
 
 	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	errorsTotal.With(labels).Inc()
+}
+
 // ObserveMetricsCollectionDuration records the duration of a metrics collection operation.
 func ObserveMetricsCollectionDuration(durationSeconds float64, queryType string) {
 	if metricsCollectionDuration == nil {
@@ -368,6 +377,5 @@ func SetMetricsFreshnessStatus(variantName, status string, count int) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
-	errorsTotal.With(labels).Inc()
 	metricsFreshnessStatus.With(labels).Set(float64(count))
 }
