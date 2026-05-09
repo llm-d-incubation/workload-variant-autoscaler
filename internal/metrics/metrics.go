@@ -28,10 +28,10 @@ var (
 	availableGpus              *prometheus.GaugeVec
 	enforcerModificationsTotal *prometheus.CounterVec
 	optimizerActive            *prometheus.GaugeVec
-	metricsCollectionDuration *prometheus.HistogramVec
-	metricsCollectionErrors   *prometheus.CounterVec
-	metricsPodsDiscovered     *prometheus.GaugeVec
-	metricsFreshnessStatus    *prometheus.GaugeVec
+	metricsCollectionDuration  *prometheus.HistogramVec
+	metricsCollectionErrors    *prometheus.CounterVec
+	metricsPodsDiscovered      *prometheus.GaugeVec
+	metricsFreshnessStatus     *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -160,6 +160,8 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "1 for active optimizer, 0 for inactive",
 		},
 		optimizerActiveLabels,
+	)
+
 	metricsCollectionDurationLabels := []string{constants.LabelQueryType}
 	if controllerInstance != "" {
 		metricsCollectionDurationLabels = append(metricsCollectionDurationLabels, constants.LabelControllerInstance)
@@ -239,6 +241,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(optimizerActive); err != nil {
 		return fmt.Errorf("failed to register optimizerActive metric: %w", err)
+	}
 	if err := registry.Register(metricsCollectionDuration); err != nil {
 		return fmt.Errorf("failed to register metricsCollectionDuration metric: %w", err)
 	}
@@ -410,6 +413,13 @@ func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespac
 	}
 
 	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	decisionsLimitedTotal.With(labels).Inc()
+}
+
 // ObserveMetricsCollectionDuration records the duration of a metrics collection operation.
 func ObserveMetricsCollectionDuration(durationSeconds float64, queryType string) {
 	if metricsCollectionDuration == nil {
@@ -464,6 +474,5 @@ func SetMetricsFreshnessStatus(variantName, status string, count int) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
-	decisionsLimitedTotal.With(labels).Inc()
 	metricsFreshnessStatus.With(labels).Set(float64(count))
 }
