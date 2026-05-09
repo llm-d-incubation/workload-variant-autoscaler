@@ -131,6 +131,21 @@ const (
 	// WVAOptimizerActive is a gauge that is 0 when an optimizer is inactive, and 1 when it's active.
 	// Labels: optimizer_name
 	WVAOptimizerActive = "wva_optimizer_active"
+	// WVAMetricsCollectionDurationSeconds is a histogram that tracks the duration of metrics collection operations.
+	// Labels: query_type
+	WVAMetricsCollectionDurationSeconds = "wva_metrics_collection_duration_seconds"
+
+	// WVAMetricsCollectionErrorsTotal is a counter that tracks the total number of metrics collection errors.
+	// Labels: query_type, reason
+	WVAMetricsCollectionErrorsTotal = "wva_metrics_collection_errors_total"
+
+	// WVAMetricsPodsDiscovered is a gauge that tracks the number of pods discovered for metrics collection.
+	// Labels: namespace
+	WVAMetricsPodsDiscovered = "wva_metrics_pods_discovered"
+
+	// WVAMetricsFreshnessStatus is a gauge that tracks the freshness status of metrics for each variant.
+	// Labels: variant_name, status
+	WVAMetricsFreshnessStatus = "wva_metrics_freshness_status"
 )
 
 // Metric Label Names
@@ -147,4 +162,14 @@ const (
 	LabelLimiterName        = "limiter_name"
 	LabelPolicyType         = "policy_type"
 	LabelOptimizerName      = "optimizer_name"
+	LabelQueryType          = "query_type"
+)
+
+// Metric Label Values for query_type
+// These values are used as the query_type label in metrics collection metrics.
+const (
+	QueryTypeKVCache      = "kv_cache"
+	QueryTypeQueueLength  = "queue_length"
+	QueryTypeRequestCount = "request_count"
+	QueryTypeCacheConfig  = "cache_config"
 )

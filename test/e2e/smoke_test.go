@@ -975,7 +975,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			cleanupSmokeTestResources()
 
 			By("Creating model service LeaderWorkerSet")
-			err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+			err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 			// Register cleanup for LWS (runs even if test fails)
@@ -1798,7 +1798,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			cleanupSmokeTestResources()
 
 			By("Creating model service LeaderWorkerSet with single-node (leader only)")
-			err := fixtures.EnsureModelServiceLWS(ctx, crClient, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+			err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 			// Register cleanup for LWS (runs even if test fails)

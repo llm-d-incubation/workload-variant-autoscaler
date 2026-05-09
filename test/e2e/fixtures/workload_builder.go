@@ -68,7 +68,7 @@ func CreateLoadJob(
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app":           name + "-load",
-				"test-resource": "true",
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -77,7 +77,7 @@ func CreateLoadJob(
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app":           name + "-load",
-						"test-resource": "true",
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -183,8 +183,12 @@ func EnsureBurstLoadJob(
 	loadCfg LoadConfig,
 ) error {
 	jobName := name + "-load"
-	existing, err := k8sClient.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
-	if err == nil && existing != nil {
+	_, err := k8sClient.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing Job %s: %w", jobName, err)
+		}
+	} else {
 		deleteErr := k8sClient.BatchV1().Jobs(namespace).Delete(ctx, jobName, metav1.DeleteOptions{})
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing Job %s: %w", jobName, deleteErr)
@@ -196,8 +200,6 @@ func EnsureBurstLoadJob(
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for Job %s deletion: %w", jobName, waitErr)
 		}
-	} else if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing Job %s: %w", jobName, err)
 	}
 	job := buildBurstLoadJob(namespace, name, targetServiceURL, loadCfg)
 	_, err = k8sClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
@@ -212,7 +214,7 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app":           name + "-load",
-				"test-resource": "true",
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -221,7 +223,7 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app":           name + "-load",
-						"test-resource": "true",
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -368,7 +370,7 @@ exit 0
 			Labels: map[string]string{
 				"experiment":    experimentLabel,
 				"worker":        strconv.Itoa(workerID),
-				"test-resource": "true",
+				"test-resource": defaultTestResourceLabelValue,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -378,7 +380,7 @@ exit 0
 					Labels: map[string]string{
 						"experiment":    experimentLabel,
 						"worker":        strconv.Itoa(workerID),
-						"test-resource": "true",
+						"test-resource": defaultTestResourceLabelValue,
 					},
 				},
 				Spec: corev1.PodSpec{

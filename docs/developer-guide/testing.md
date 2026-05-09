@@ -144,6 +144,20 @@ WVA provides a **single consolidated E2E suite** that runs on multiple environme
 
 E2E is intended to be a **deterministic correctness signal**: resource wiring, reconciliation, and stable invariants (e.g., CRs reconcile, status conditions are set, scalers are created and point at the right targets/metrics). Traffic generation and performance/benchmarking scenarios should live outside `test/e2e/`.
 
+### E2E shared fixtures
+
+Code lives under `test/e2e/fixtures`. The `fixtures` package holds reusable helpers to create, ensure (idempotent setup), and delete Kubernetes objects used by the e2e suite (VariantAutoscaling, HPA, KEDA ScaledObject, model services, Services, ServiceMonitors, InferenceObjective, etc.). Package-level documentation and naming conventions (`Create*` / `Ensure*` / `Delete*`, `baseName` vs full resource names) live in the package doc:
+
+```bash
+go doc ./test/e2e/fixtures
+```
+
+After changing fixture APIs or generated object shape, compile e2e without running specs:
+
+```bash
+go test ./test/e2e/... -run TestDoesNotExist
+```
+
 ### Infra-Only Setup (Required Before Running Tests)
 
 Tests expect **only** the WVA controller and llm-d infrastructure to be deployed; they create VariantAutoscaling resources, HPAs, and model services themselves. Use the install script in **infra-only** mode:

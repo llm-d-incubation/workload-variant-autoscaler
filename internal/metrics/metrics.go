@@ -28,6 +28,10 @@ var (
 	availableGpus              *prometheus.GaugeVec
 	enforcerModificationsTotal *prometheus.CounterVec
 	optimizerActive            *prometheus.GaugeVec
+	metricsCollectionDuration *prometheus.HistogramVec
+	metricsCollectionErrors   *prometheus.CounterVec
+	metricsPodsDiscovered     *prometheus.GaugeVec
+	metricsFreshnessStatus    *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -156,6 +160,53 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "1 for active optimizer, 0 for inactive",
 		},
 		optimizerActiveLabels,
+	metricsCollectionDurationLabels := []string{constants.LabelQueryType}
+	if controllerInstance != "" {
+		metricsCollectionDurationLabels = append(metricsCollectionDurationLabels, constants.LabelControllerInstance)
+	}
+	metricsCollectionDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    constants.WVAMetricsCollectionDurationSeconds,
+			Help:    "Duration of metrics collection operations in seconds",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
+		},
+		metricsCollectionDurationLabels,
+	)
+
+	metricsCollectionErrorsLabels := []string{constants.LabelQueryType, constants.LabelReason}
+	if controllerInstance != "" {
+		metricsCollectionErrorsLabels = append(metricsCollectionErrorsLabels, constants.LabelControllerInstance)
+	}
+	metricsCollectionErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVAMetricsCollectionErrorsTotal,
+			Help: "Total number of metrics collection errors",
+		},
+		metricsCollectionErrorsLabels,
+	)
+
+	metricsPodsDiscoveredLabels := []string{constants.LabelNamespace}
+	if controllerInstance != "" {
+		metricsPodsDiscoveredLabels = append(metricsPodsDiscoveredLabels, constants.LabelControllerInstance)
+	}
+	metricsPodsDiscovered = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAMetricsPodsDiscovered,
+			Help: "Number of pods discovered for a namespace",
+		},
+		metricsPodsDiscoveredLabels,
+	)
+
+	metricsFreshnessStatusLabels := []string{constants.LabelVariantName, constants.LabelStatus}
+	if controllerInstance != "" {
+		metricsFreshnessStatusLabels = append(metricsFreshnessStatusLabels, constants.LabelControllerInstance)
+	}
+	metricsFreshnessStatus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAMetricsFreshnessStatus,
+			Help: "Freshness status of metrics for each variant",
+		},
+		metricsFreshnessStatusLabels,
 	)
 
 	// Register metrics with the registry
@@ -188,6 +239,17 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(optimizerActive); err != nil {
 		return fmt.Errorf("failed to register optimizerActive metric: %w", err)
+	if err := registry.Register(metricsCollectionDuration); err != nil {
+		return fmt.Errorf("failed to register metricsCollectionDuration metric: %w", err)
+	}
+	if err := registry.Register(metricsCollectionErrors); err != nil {
+		return fmt.Errorf("failed to register metricsCollectionErrors metric: %w", err)
+	}
+	if err := registry.Register(metricsPodsDiscovered); err != nil {
+		return fmt.Errorf("failed to register metricsPodsDiscovered metric: %w", err)
+	}
+	if err := registry.Register(metricsFreshnessStatus); err != nil {
+		return fmt.Errorf("failed to register metricsFreshnessStatus metric: %w", err)
 	}
 
 	return nil
@@ -348,9 +410,60 @@ func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespac
 	}
 
 	// Add controller_instance label if configured
+// ObserveMetricsCollectionDuration records the duration of a metrics collection operation.
+func ObserveMetricsCollectionDuration(durationSeconds float64, queryType string) {
+	if metricsCollectionDuration == nil {
+		return
+	}
+	labels := prometheus.Labels{constants.LabelQueryType: queryType}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	metricsCollectionDuration.With(labels).Observe(durationSeconds)
+}
+
+// IncMetricsCollectionErrors increments the metrics collection error counter.
+func IncMetricsCollectionErrors(queryType, reason string) {
+	if metricsCollectionErrors == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelQueryType: queryType,
+		constants.LabelReason:    reason,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	metricsCollectionErrors.With(labels).Inc()
+}
+
+// SetMetricsPodsDiscovered sets the number of pods discovered in a namespace.
+func SetMetricsPodsDiscovered(namespace string, count int) {
+	if metricsPodsDiscovered == nil {
+		return
+	}
+	labels := prometheus.Labels{constants.LabelNamespace: namespace}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	metricsPodsDiscovered.With(labels).Set(float64(count))
+}
+
+// SetMetricsFreshnessStatus sets the freshness status count for a variant's metrics.
+// status should be one of: "fresh", "stale", "missing", "unavailable".
+// count is the number of metrics with this status for the variant.
+func SetMetricsFreshnessStatus(variantName, status string, count int) {
+	if metricsFreshnessStatus == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelStatus:      status,
+	}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
 	decisionsLimitedTotal.With(labels).Inc()
+	metricsFreshnessStatus.With(labels).Set(float64(count))
 }

@@ -95,7 +95,7 @@ All other configuration is passed directly to the deploy/test commands in later 
 
 ## Step 4: Clone the Repository
 
-If you haven't already:
+Clone the WVA repository and enter the directory:
 
 ```bash
 git clone https://github.com/llm-d/llm-d-workload-variant-autoscaler.git
@@ -110,9 +110,32 @@ git checkout main
 # gh pr checkout <pr-number>
 ```
 
+Install the benchmark CLI — this clones `llm-d-benchmark` into your workspace and sets up the `llmdbenchmark` CLI (once per workspace):
+
+```bash
+make benchmark-install
+```
+
+> **Note:** If your system Python is older than 3.11, the install will fail. Use the `--uv` flag to let `uv` download the correct Python version automatically:
+> ```bash
+> make benchmark-install BENCHMARK_UV=true
+> ```
+
+After this, your workspace will look like:
+
+```
+llm-d-workload-variant-autoscaler/
+├── llm-d-benchmark/          ← cloned by make benchmark-install
+├── test/benchmark/scenarios/
+│   ├── prefill_heavy.yaml
+│   ├── decode_heavy.yaml
+│   └── symmetrical.yaml
+└── Makefile
+```
+
 ---
 
-## Step 5a: Run the Single-Model Benchmark
+## Step 5: Run the Single-Model Benchmark
 
 The single-model benchmark tests WVA scaling behavior with one model under different workload patterns. Scenario configurations are defined in `test/benchmark/scenarios/`.
 
@@ -120,135 +143,61 @@ The single-model benchmark tests WVA scaling behavior with one model under diffe
 |----------|--------------|---------------|------|---------------|
 | `prefill_heavy` | 4000 | 1000 | 20 RPS | Prefill (prompt processing) — long input, short output |
 | `decode_heavy` | 1000 | 4000 | 20 RPS | Decode (token generation) — short input, long output |
+| `symmetrical` | 1000 | 1000 | 20 RPS | Balanced load — equal input and output |
 
-### Deploy Single-Model Infrastructure
-
-```bash
-# 1. Undeploy previous run (clean slate)
-make undeploy-wva-on-openshift \
-  WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
-  DEPLOY_PROMETHEUS_ADAPTER=false
-
-# 2. Deploy single-model infrastructure
-make deploy-e2e-infra \
-  ENVIRONMENT=openshift \
-  WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
-  E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
-  NAMESPACE_SCOPED=true SKIP_BUILD=true \
-  DECODE_REPLICAS=1 IMG_TAG=v0.6.0 LLM_D_RELEASE=v0.6.0 \
-  DEPLOY_PROMETHEUS_ADAPTER=false
-```
-
-Wait for all pods to be ready:
+**1. Stand up the benchmark environment:**
 
 ```bash
-oc get pods -n <your-namespace>
+make benchmark-standup BENCHMARK_NAMESPACE=<your-namespace>
 ```
 
-Expected output — vLLM decode pod, EPP, gateway, and WVA controller all `Running`:
+Wait until you see `✅ All smoketest steps complete.`
 
-```
-NAME                                                              READY   STATUS    RESTARTS   AGE
-gaie-inference-scheduling-epp-...                                 1/1     Running   0          4m
-infra-inference-scheduling-inference-gateway-istio-...            1/1     Running   0          4m
-ms-inference-scheduling-llm-d-modelservice-decode-...             1/1     Running   0          4m
-workload-variant-autoscaler-controller-manager-...                1/1     Running   0          2m
-workload-variant-autoscaler-controller-manager-...                1/1     Running   0          2m
-```
-
-### 2. Run the Prefill Heavy Benchmark
+**2. Run a scenario:**
 
 ```bash
-make test-benchmark \
-  ENVIRONMENT=openshift \
-  E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
-  BENCHMARK_SCENARIO=prefill_heavy
+make benchmark-run BENCHMARK_NAMESPACE=<your-namespace> BENCHMARK_WORKLOAD=prefill_heavy.yaml
 ```
 
-### 3. Run the Decode Heavy Benchmark
+Repeat with `decode_heavy.yaml` or `symmetrical.yaml` for the other scenarios.
+
+Wait until you see:
+```
+✅ Run complete (mode=full, harness=guidellm).
+```
+
+Results are saved automatically in a timestamped directory at the repo root:
+```
+<username>-YYYYMMDD-HHMMSS/
+└── results/
+    └── guidellm-<id>/
+        ├── benchmark_report_v0.2,_results.json_0.yaml   ← full metrics
+        ├── results.json
+        └── run_metadata.yaml
+```
+
+**3. Tear down when done:**
 
 ```bash
-make test-benchmark \
-  ENVIRONMENT=openshift \
-  E2E_EMULATED_LLMD_NAMESPACE=<your-namespace> \
-  BENCHMARK_SCENARIO=decode_heavy
+make benchmark-teardown BENCHMARK_NAMESPACE=<your-namespace>
 ```
 
-Each benchmark run takes approximately 15–20 minutes (30s warmup + 600s load generation + monitoring overhead).
-
-### Expected Output
-
-On success, the test prints a results summary and exits with code 0:
-
+Wait until you see:
 ```
-SUCCESS! -- 1 Passed | 0 Failed | 0 Pending | 6 Skipped
---- PASS: TestBenchmark
-PASS
+✅ Teardown complete (normal).
 ```
 
-The results summary includes:
-- TTFT and ITL latency percentiles (p50, p90, p99)
-- Avg/max replicas and replica timeline
-- KV cache utilization, vLLM queue depth, and EPP queue depth
-- Achieved RPS, error count, and incomplete request count
-
-### What the Benchmark Does
-
-1. Finds the Helm-deployed decode deployment in the namespace
-2. Creates a VariantAutoscaling (VA) resource (min=1, max=10, cost=10)
-3. Creates an HPA with external metric `wva_desired_replicas`
-4. Patches EPP ConfigMap with flow control and scorer weights
-5. Launches a GuideLLM load generation job with the scenario parameters
-6. Monitors replicas, KV cache utilization, and queue depth every 15s
-7. Extracts and reports TTFT, ITL, throughput, and error metrics
-
-### 4. Cleanup
-
-```bash
-oc delete project <your-namespace>
-```
-
----
-
-## Step 5b: Run the Multi-Model Benchmark
-
-The multi-model benchmark tests WVA scaling across multiple models sharing the same infrastructure.
-
-Replace `<your-namespace>` with your namespace:
-
-```bash
-# 1. Undeploy previous run (clean slate)
-make undeploy-multi-model-infra \
-  ENVIRONMENT=openshift \
-  WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
-  DEPLOY_PROMETHEUS_ADAPTER=false \
-  MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
-
-# 2. Deploy multi-model infrastructure
-make deploy-multi-model-infra \
-  ENVIRONMENT=openshift \
-  WVA_NS=<your-namespace> LLMD_NS=<your-namespace> \
-  NAMESPACE_SCOPED=true SKIP_BUILD=true \
-  DECODE_REPLICAS=1 IMG_TAG=v0.6.0 LLM_D_RELEASE=v0.6.0 \
-  DEPLOY_PROMETHEUS_ADAPTER=false \
-  MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
-
-# 3. Run the benchmark
-make test-multi-model-scaling \
-  ENVIRONMENT=openshift \
-  LLMD_NS=<your-namespace> \
-  MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
-```
-
-Expected result: `make test-multi-model-scaling` passes with exit code 0.
+> **Tip:** To run standup + all 3 scenarios + teardown in one command:
+> ```bash
+> make benchmark-full BENCHMARK_NAMESPACE=<your-namespace>
+> ```
 
 ### Monitor During the Benchmark
 
-In a separate terminal, watch the scaling behavior:
+In a separate terminal, monitor the scaling behavior:
 
 ```bash
-watch oc get hpa -n <your-namespace>
-watch oc get variantautoscaling -n <your-namespace>
+oc get pods -n <your-namespace>
 ```
 
 ### Cleanup

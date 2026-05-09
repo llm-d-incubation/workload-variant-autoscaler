@@ -37,11 +37,13 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/actuator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -270,8 +272,15 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		return err
 	}
 
+	// Execute the query with timing
+	startTime := time.Now()
 	results, err := eppSource.Refresh(ctx, source.RefreshSpec{})
+	duration := time.Since(startTime).Seconds()
+	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeQueueLength)
+
 	if err != nil {
+		reason := utils.CategorizePrometheusError(err)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
 		return err
 	}
 

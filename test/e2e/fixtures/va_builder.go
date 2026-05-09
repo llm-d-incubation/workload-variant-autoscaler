@@ -84,7 +84,11 @@ func EnsureVariantAutoscaling(
 ) error {
 	existingVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
 	err := crClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, existingVA)
-	if err == nil {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing VA %s: %w", name, err)
+		}
+	} else {
 		deleteErr := crClient.Delete(ctx, existingVA)
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing VA %s: %w", name, deleteErr)
@@ -92,8 +96,6 @@ func EnsureVariantAutoscaling(
 		if err := WaitUntilVariantAutoscalingDeleted(ctx, crClient, namespace, name, 1*time.Minute); err != nil {
 			return fmt.Errorf("timeout waiting for VA %s to be deleted: %w", name, err)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing VA %s: %w", name, err)
 	}
 	va := buildVariantAutoscaling(namespace, name, deploymentName, modelID, accelerator, cost, controllerInstance, opts...)
 	return crClient.Create(ctx, va)
@@ -121,7 +123,7 @@ func EnsureVariantAutoscalingWithDefaults(
 
 func buildVariantAutoscaling(namespace, name, deploymentName, modelID, accelerator string, cost float64, controllerInstance string, opts ...VAOption) *variantautoscalingv1alpha1.VariantAutoscaling {
 	labels := map[string]string{
-		"test-resource":            "true",
+		"test-resource":            defaultTestResourceLabelValue,
 		utils.AcceleratorNameLabel: accelerator,
 	}
 	if controllerInstance != "" {

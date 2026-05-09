@@ -20,6 +20,10 @@ If a test needs **high traffic**, long “wait and see” timing, or performance
 4. **Tiered Testing**: Smoke tests for quick validation, full suite for comprehensive coverage
 5. **Serialize If Needed**: Since the scope is **deterministic correctness**, if there are tests that should be run serially then make them as such, and make sure the environment is clean in each `BeforeAll`. Running tests such as for Deployment, LWS with 1 leader+1 worker, LWS with 1 leader+0 worker in parallel pointing to the same model can have issues with conflicting resources and can be hard to track.
 
+### Shared fixtures (`fixtures/`)
+
+Cluster object builders and ensure/delete helpers live in [`fixtures/`](./fixtures/). See package documentation with `go doc ./test/e2e/fixtures` or the [developer testing guide](../../docs/developer-guide/testing.md#e2e-shared-fixtures).
+
 ## Prerequisites
 
 ### Infrastructure Setup

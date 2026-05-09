@@ -106,17 +106,40 @@ func (c *SaturationScalingConfig) IsV2() bool {
 	return len(c.Analyzers) > 0 || c.AnalyzerName == "saturation"
 }
 
+// V1 analyzer default thresholds, applied when fields are omitted from YAML config.
+const (
+	DefaultKvCacheThreshold     = 0.80
+	DefaultQueueLengthThreshold = 5.0
+	DefaultKvSpareTrigger       = 0.10
+	DefaultQueueSpareTrigger    = 3.0
+)
+
 // V2 analyzer default thresholds, applied when fields are omitted from YAML config.
 const (
 	DefaultScaleUpThreshold  = 0.85
 	DefaultScaleDownBoundary = 0.70
 )
 
-// ApplyDefaults fills in zero-valued V2 fields with their defaults.
+// ApplyDefaults fills in zero-valued fields with their defaults.
+// V1 thresholds (KvCacheThreshold, QueueLengthThreshold, KvSpareTrigger, QueueSpareTrigger)
+// are always defaulted when zero. V2 thresholds are only defaulted when the config is V2.
 // Must be called before Validate() to handle omitempty zero-values correctly.
 func (c *SaturationScalingConfig) ApplyDefaults() {
 	if c.Priority == 0 {
 		c.Priority = DefaultPriority
+	}
+	// V1 defaults — apply unconditionally (V2 also inherits these for saturation checks)
+	if c.KvCacheThreshold == 0 {
+		c.KvCacheThreshold = DefaultKvCacheThreshold
+	}
+	if c.QueueLengthThreshold == 0 {
+		c.QueueLengthThreshold = DefaultQueueLengthThreshold
+	}
+	if c.KvSpareTrigger == 0 {
+		c.KvSpareTrigger = DefaultKvSpareTrigger
+	}
+	if c.QueueSpareTrigger == 0 {
+		c.QueueSpareTrigger = DefaultQueueSpareTrigger
 	}
 	if c.IsV2() {
 		if c.ScaleUpThreshold == 0 {
@@ -142,6 +165,48 @@ func (c *SaturationScalingConfig) ApplyDefaults() {
 				c.Analyzers[i].Enabled = &enabled
 			}
 		}
+	}
+}
+
+// Merge overlays non-zero fields from override onto c.
+// This allows per-model overrides to specify only the fields they want to change,
+// inheriting all other values from the base (typically the "default" config).
+func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
+	if override.KvCacheThreshold != 0 {
+		c.KvCacheThreshold = override.KvCacheThreshold
+	}
+	if override.QueueLengthThreshold != 0 {
+		c.QueueLengthThreshold = override.QueueLengthThreshold
+	}
+	if override.KvSpareTrigger != 0 {
+		c.KvSpareTrigger = override.KvSpareTrigger
+	}
+	if override.QueueSpareTrigger != 0 {
+		c.QueueSpareTrigger = override.QueueSpareTrigger
+	}
+	if override.AnalyzerName != "" {
+		c.AnalyzerName = override.AnalyzerName
+	}
+	if override.ScaleUpThreshold != 0 {
+		c.ScaleUpThreshold = override.ScaleUpThreshold
+	}
+	if override.ScaleDownBoundary != 0 {
+		c.ScaleDownBoundary = override.ScaleDownBoundary
+	}
+	if override.EnableLimiter {
+		c.EnableLimiter = override.EnableLimiter
+	}
+	if override.Priority != 0 {
+		c.Priority = override.Priority
+	}
+	if len(override.Analyzers) > 0 {
+		c.Analyzers = override.Analyzers
+	}
+	if override.ModelID != "" {
+		c.ModelID = override.ModelID
+	}
+	if override.Namespace != "" {
+		c.Namespace = override.Namespace
 	}
 }
 

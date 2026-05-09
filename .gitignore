@@ -30,6 +30,9 @@ gpu.cluster
 # llm-d and llm-d-infra directories
 llm-d/
 llm-d-infra/
+llm-d-benchmark/
+# llmdbenchmark workspace directories (created by benchmark runs)
+*-*-*-*-*-*/
 llmd/
 llmd-infra/
 
