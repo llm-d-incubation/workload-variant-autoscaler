@@ -11,6 +11,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// kubePrometheusStackGrafanaName is the default name for Grafana resources deployed by kube-prometheus-stack
+	kubePrometheusStackGrafanaName = "kube-prometheus-stack-grafana"
+	// httpPortName is the standard name for HTTP service ports
+	httpPortName = "http"
+)
+
 // OperationalDashboard tests validate Grafana deployment and dashboard functionality.
 // These tests are optional and will be skipped if Grafana is not deployed in the cluster.
 //
@@ -63,11 +70,11 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 				GinkgoWriter.Printf("✓ Found Grafana service: %s\n", grafanaServiceName)
 			} else {
 				// Try common service name
-				GinkgoWriter.Println("Trying common service name: kube-prometheus-stack-grafana")
+				GinkgoWriter.Printf("Trying common service name: %s\n", kubePrometheusStackGrafanaName)
 				_, err := k8sClient.CoreV1().Services(cfg.MonitoringNS).Get(ctx,
-					"kube-prometheus-stack-grafana", metav1.GetOptions{})
+					kubePrometheusStackGrafanaName, metav1.GetOptions{})
 				if err == nil {
-					grafanaServiceName = "kube-prometheus-stack-grafana"
+					grafanaServiceName = kubePrometheusStackGrafanaName
 					GinkgoWriter.Printf("✓ Found Grafana service by name: %s\n", grafanaServiceName)
 				} else {
 					GinkgoWriter.Printf("⚠ Could not find Grafana service: %v\n", err)
@@ -172,7 +179,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			var httpPort *corev1.ServicePort
 			for i := range service.Spec.Ports {
 				port := &service.Spec.Ports[i]
-				if port.Name == "http" || port.Name == "http-web" || port.Port == 80 {
+				if port.Name == httpPortName || port.Name == "http-web" || port.Port == 80 {
 					httpPort = port
 					break
 				}
@@ -264,7 +271,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 				port := &grafanaContainer.Ports[i]
 				GinkgoWriter.Printf("    - Port[%d]: name=%s, containerPort=%d, protocol=%s\n",
 					i, port.Name, port.ContainerPort, port.Protocol)
-				if port.Name == "http" || port.Name == "grafana" || port.ContainerPort == 3000 {
+				if port.Name == httpPortName || port.Name == "grafana" || port.ContainerPort == 3000 {
 					httpPort = port
 				}
 			}
@@ -327,7 +334,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			var servicePort *corev1.ServicePort
 			for i := range service.Spec.Ports {
 				port := &service.Spec.Ports[i]
-				if port.Name == "http" || port.Name == "http-web" || port.Port == 80 {
+				if port.Name == httpPortName || port.Name == "http-web" || port.Port == 80 {
 					servicePort = port
 					break
 				}
@@ -338,7 +345,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			GinkgoWriter.Printf("  ✓ Service port: %d → targetPort: %v\n", servicePort.Port, servicePort.TargetPort)
 
 			By("Verifying Grafana admin password secret exists")
-			secretName := "kube-prometheus-stack-grafana"
+			secretName := kubePrometheusStackGrafanaName
 			GinkgoWriter.Printf("  Checking secret: %s in namespace: %s\n", secretName, cfg.MonitoringNS)
 			secret, err := k8sClient.CoreV1().Secrets(cfg.MonitoringNS).Get(ctx,
 				secretName, metav1.GetOptions{})
@@ -531,7 +538,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			}
 
 			By("Verifying Grafana admin credentials exist")
-			secretName := "kube-prometheus-stack-grafana"
+			secretName := kubePrometheusStackGrafanaName
 			GinkgoWriter.Printf("  Checking secret: %s in namespace: %s\n", secretName, cfg.MonitoringNS)
 			secret, err := k8sClient.CoreV1().Secrets(cfg.MonitoringNS).Get(ctx,
 				secretName, metav1.GetOptions{})
@@ -784,7 +791,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			}
 
 			By("Verifying Grafana admin credentials exist")
-			secretName := "kube-prometheus-stack-grafana"
+			secretName := kubePrometheusStackGrafanaName
 			GinkgoWriter.Printf("  Checking secret: %s in namespace: %s\n", secretName, cfg.MonitoringNS)
 			secret, err := k8sClient.CoreV1().Secrets(cfg.MonitoringNS).Get(ctx,
 				secretName, metav1.GetOptions{})
