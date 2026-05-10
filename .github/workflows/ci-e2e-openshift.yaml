@@ -720,7 +720,10 @@ jobs:
           DECODE_REPLICAS: "1"
           # OpenShift user-workload Prometheus (not kube-prometheus-stack in a custom namespace).
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
-          # User-workload Prometheus cannot use the controller-manager SA token for /metrics bearer auth.
+          DEPLOY_OPERATIONAL_DASHBOARD: "false"
+          # Disable bearer token auth on WVA /metrics endpoint — OpenShift's
+          # user-workload-monitoring cannot authenticate with the controller-manager
+          # SA token. The endpoint is still only accessible within the cluster network.
           WVA_METRICS_SECURE: "false"
           # Lower saturation thresholds for simulator mode — the simulator's
           # KV-cache and queue metrics are modest, so default thresholds
@@ -853,6 +856,12 @@ jobs:
           DEPLOY_WVA: "false"
           MODEL_ID: ${{ env.MODEL_ID }}
           ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
+          DEPLOY_PROMETHEUS: "false"
+          DEPLOY_OPERATIONAL_DASHBOARD: "false"
+          DEPLOY_PROMETHEUS_ADAPTER: "false"
+          DEPLOY_VA: "false"
+          DEPLOY_HPA: "false"
+          # vLLM max-num-seqs for e2e testing (lower = easier to saturate)
           VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
           DECODE_REPLICAS: "1"
           MONITORING_NAMESPACE: openshift-user-workload-monitoring

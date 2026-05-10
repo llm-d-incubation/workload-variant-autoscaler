@@ -111,9 +111,10 @@ export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway (for in
 **Deployment flags** (`deploy/install.sh`) — use Helm for chart VA/HPA; llm-d is **`deploy/install-llmd-infra.sh`**:
 
 ```bash
-export DEPLOY_PROMETHEUS=true         # Deploy kube-prometheus-stack
-export DEPLOY_WVA=true                # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
+export DEPLOY_PROMETHEUS=true               # Deploy kube-prometheus-stack
+export DEPLOY_OPERATIONAL_DASHBOARD=false   # Deploy kube-prometheus-stack-grafana
+export DEPLOY_WVA=true                      # Deploy WVA controller
+export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
 ```
 
 ## Usage Examples
@@ -150,6 +151,7 @@ make deploy-wva-on-k8s   # install.sh + install-llmd-infra.sh
 ```bash
 export DEPLOY_WVA=true
 export DEPLOY_PROMETHEUS=true
+export DEPLOY_OPERATIONAL_DASHBOARD=false  # Grafana and operational dashboard
 export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
 make deploy-wva-on-k8s

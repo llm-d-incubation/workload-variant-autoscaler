@@ -68,9 +68,10 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 **Deployment flags**:
 
 ```bash
-export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
-export DEPLOY_WVA=true                # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
+export DEPLOY_PROMETHEUS=true               # Deploy Prometheus stack
+export DEPLOY_OPERATIONAL_DASHBOARD=false   # Deploy Grafana and operational dashboard
+export DEPLOY_WVA=true                      # Deploy WVA controller
+export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
 # llm-d: `make deploy-wva-emulated-on-kind` runs install.sh then install-llmd-infra.sh
 ```
 
@@ -93,6 +94,7 @@ make create-kind-cluster KIND_ARGS="-t mix -n 4 -g 2"
 ```bash
 cd /path/to/repo
 export ENVIRONMENT=kind-emulator
+export DEPLOY_OPERATIONAL_DASHBOARD=false  # Optional: deploy Grafana dashboard
 ./deploy/install.sh
 ```
 

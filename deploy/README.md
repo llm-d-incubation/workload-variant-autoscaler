@@ -140,9 +140,10 @@ export WVA_IMAGE_REPO="ghcr.io/llm-d/llm-d-workload-variant-autoscaler"
 export WVA_IMAGE_TAG="latest"
 
 # Optional
-export DEPLOY_WVA=false            # Monitoring + scaler only
+export DEPLOY_WVA=false                     # Monitoring + scaler only
 export DEPLOY_PROMETHEUS=false
-export DEPLOY_LWS=false           # Skip LeaderWorkerSet if already on cluster
+export DEPLOY_OPERATIONAL_DASHBOARD=false   # Deploy Grafana and operational dashboard
+export DEPLOY_LWS=false                     # Skip LeaderWorkerSet if already on cluster
 
 # llm-d (install-llmd-infra.sh) — examples
 export HF_TOKEN="hf_xxx"
@@ -183,6 +184,7 @@ make deploy-e2e-infra ENVIRONMENT=kind-emulator IMG=localhost/llm-d-workload-var
 ```bash
 export DEPLOY_WVA=true
 export DEPLOY_PROMETHEUS=true
+export DEPLOY_OPERATIONAL_DASHBOARD=false
 export DEPLOY_PROMETHEUS_ADAPTER=true
 ./deploy/install.sh -e kubernetes
 ```
@@ -571,6 +573,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DEPLOY_PROMETHEUS` | Deploy Prometheus stack | `true` |
+| `DEPLOY_OPERATIONAL_DASHBOARD` | Deploy Grafana and operational dashboard | `false` |
 | `DEPLOY_WVA` | Deploy WVA controller | `true` |
 | `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter (when `SCALER_BACKEND=prometheus-adapter`) | `true` |
 | `DEPLOY_LWS` | Deploy LeaderWorkerSet (skip if already installed or not needed) | `true` |

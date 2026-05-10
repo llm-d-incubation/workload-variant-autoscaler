@@ -113,6 +113,9 @@ if [ "$UNDEPLOY" = true ]; then
     DELETE_NAMESPACES="${DELETE_NAMESPACES:-false}" \
     "$LLMD_DEPLOY_SCRIPT" --undeploy -e "$ENVIRONMENT" || true
     ENVIRONMENT="$ENVIRONMENT" \
+    DEPLOY_WVA=true \
+    DEPLOY_PROMETHEUS=true \
+    DEPLOY_OPERATIONAL_DASHBOARD=false \
     DELETE_NAMESPACES="${DELETE_NAMESPACES:-false}" \
     "$DEPLOY_SCRIPT" --undeploy
 
@@ -141,6 +144,7 @@ for i in "${!MODEL_LIST[@]}"; do
         ENVIRONMENT="$ENVIRONMENT" \
         DEPLOY_WVA=true \
         DEPLOY_PROMETHEUS=true \
+        DEPLOY_OPERATIONAL_DASHBOARD=false \
         "$DEPLOY_SCRIPT"
         ENVIRONMENT="$ENVIRONMENT" \
         MODEL_ID="$model" \
