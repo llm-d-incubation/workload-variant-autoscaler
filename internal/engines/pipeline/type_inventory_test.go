@@ -45,6 +45,15 @@ func (m *mockFullDiscovery) DiscoverUsage(ctx context.Context) (map[string]int, 
 	return m.usage, nil
 }
 
+// DiscoverNodes is required by FullDiscovery. TypeInventory doesn't use per-node
+// info, so this mock returns an empty map.
+func (m *mockFullDiscovery) DiscoverNodes(ctx context.Context) (map[string]discovery.NodeInfo, error) {
+	if m.discErr != nil {
+		return nil, m.discErr
+	}
+	return map[string]discovery.NodeInfo{}, nil
+}
+
 var _ = Describe("TypeInventory", func() {
 	var ctx context.Context
 

@@ -119,6 +119,18 @@ const (
 	// WVAErrorsTotal is a counter that tracks the total number of errors by component.
 	// Labels: component, error_type
 	WVAErrorsTotal = "wva_errors_total"
+	// WVAConfigInfo is an info-style gauge that exposes WVA configuration as labels.
+	// Labels: analyzer_name, limiter_enabled, scale_to_zero_enabled
+	WVAConfigInfo = "wva_config_info"
+
+	// WVAConfigKvSpareThreshold is a gauge that tracks the KV cache spare threshold configuration.
+	WVAConfigKvSpareThreshold = "wva_config_kv_spare_threshold"
+
+	// WVAConfigQueueSpareThreshold is a gauge that tracks the queue spare threshold configuration.
+	WVAConfigQueueSpareThreshold = "wva_config_queue_spare_threshold"
+
+	// WVAConfigOptimizationIntervalSeconds is a gauge that tracks the optimization interval in seconds.
+	WVAConfigOptimizationIntervalSeconds = "wva_config_optimization_interval_seconds"
 	// WVAMetricsCollectionDurationSeconds is a histogram that tracks the duration of metrics collection operations.
 	// Labels: query_type
 	WVAMetricsCollectionDurationSeconds = "wva_metrics_collection_duration_seconds"
@@ -134,6 +146,30 @@ const (
 	// WVAMetricsFreshnessStatus is a gauge that tracks the freshness status of metrics for each variant.
 	// Labels: variant_name, status
 	WVAMetricsFreshnessStatus = "wva_metrics_freshness_status"
+
+	// WVASaturationUtilization is a gauge that tracks per-variant utilization ratio (0.0-1.0).
+	// Labels: variant_name, namespace, model_name, accelerator_type
+	WVASaturationUtilization = "wva_saturation_utilization"
+
+	// WVASpareCapacity is a gauge that tracks per-variant spare capacity (0.0-1.0).
+	// Labels: variant_name, namespace, model_name, accelerator_type
+	WVASpareCapacity = "wva_spare_capacity"
+
+	// WVARequiredCapacity is a gauge that tracks model-level required capacity.
+	// >0 means scale-up needed.
+	// Value semantics differ by analyzer (use the "unit" label to distinguish):
+	//   - unit="binary"     (V1): 0.0 = no scale-up, 1.0 = scale-up needed
+	//   - unit="continuous" (V2): continuous token-based demand
+	// Labels: variant_name, namespace, model_name, unit
+	WVARequiredCapacity = "wva_required_capacity"
+
+	// WVAKvCacheTokensUsed is a gauge that tracks total KV cache tokens currently in use per variant.
+	// Labels: variant_name, namespace, model_name
+	WVAKvCacheTokensUsed = "wva_kv_cache_tokens_used"
+
+	// WVAKvCacheTokensCapacity is a gauge that tracks total KV cache token capacity per variant.
+	// Labels: variant_name, namespace, model_name
+	WVAKvCacheTokensCapacity = "wva_kv_cache_tokens_capacity"
 )
 
 // Metric Label Names
@@ -149,7 +185,15 @@ const (
 	LabelControllerInstance = "controller_instance"
 	LabelStatus             = "status"
 	LabelErrorType          = "error_type"
+	LabelAnalyzerName       = "analyzer_name"
+	LabelLimiterEnabled     = "limiter_enabled"
+	LabelScaleToZeroEnabled = "scale_to_zero_enabled"
 	LabelQueryType          = "query_type"
+	// LabelUnit distinguishes the unit of a metric value when a single metric name
+	// carries values with different semantic units. Currently applied to
+	// wva_required_capacity, whose value is either a binary scale-up signal (V1)
+	// or a continuous token-demand value (V2).
+	LabelUnit = "unit"
 )
 
 // Metric Label Values for query_type
@@ -159,4 +203,11 @@ const (
 	QueryTypeQueueLength  = "queue_length"
 	QueryTypeRequestCount = "request_count"
 	QueryTypeCacheConfig  = "cache_config"
+)
+
+// Values for the LabelUnit Prometheus label, describing how to interpret the
+// metric value ("binary" 0/1 vs. "continuous" absolute quantity).
+const (
+	UnitBinary     = "binary"
+	UnitContinuous = "continuous"
 )

@@ -6,6 +6,7 @@ import (
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,4 +92,23 @@ func (a *Actuator) EmitMetrics(ctx context.Context, variantAutoscaling *llmdOptv
 		"desiredReplicas", desiredReplicas,
 		"accelerator", variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
 	return nil
+}
+
+// RecordSaturationMetrics records saturation analysis and KV cache capacity
+// metrics from a decision. The controller does not actively push metrics —
+// Prometheus scrapes them — so the verb is "Record", not "Emit".
+func (a *Actuator) RecordSaturationMetrics(ctx context.Context, decision interfaces.VariantDecision) {
+	a.MetricsEmitter.RecordSaturationMetrics(
+		ctx,
+		decision.VariantName,
+		decision.Namespace,
+		decision.ModelID,
+		decision.AcceleratorName,
+		decision.RequiredCapacityUnit,
+		decision.Utilization,
+		decision.SpareCapacity,
+		decision.RequiredCapacity,
+		decision.KvCacheTokensUsed,
+		decision.KvCacheTokensCapacity,
+	)
 }

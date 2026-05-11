@@ -292,18 +292,21 @@ func buildDecisionsWithOptimizer(
 		}
 
 		decisions = append(decisions, interfaces.VariantDecision{
-			VariantName:     name,
-			ModelID:         req.ModelID,
-			Namespace:       req.Namespace,
-			AcceleratorName: vc.AcceleratorName,
-			Cost:            vc.Cost,
-			Role:            state.Role,
-			CurrentReplicas: state.CurrentReplicas,
-			TargetReplicas:  target,
-			Action:          action,
-			Reason:          reason,
-			MinReplicas:     state.MinReplicas,
-			MaxReplicas:     state.MaxReplicas,
+			VariantName:      name,
+			ModelID:          req.ModelID,
+			Namespace:        req.Namespace,
+			AcceleratorName:  vc.AcceleratorName,
+			Cost:             vc.Cost,
+			Role:             state.Role,
+			CurrentReplicas:  state.CurrentReplicas,
+			TargetReplicas:   target,
+			Action:           action,
+			Reason:           reason,
+			MinReplicas:      state.MinReplicas,
+			MaxReplicas:      state.MaxReplicas,
+			Utilization:      vc.Utilization,
+			SpareCapacity:    1.0 - vc.Utilization,
+			RequiredCapacity: req.Result.RequiredCapacity,
 		})
 	}
 	return decisions

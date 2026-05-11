@@ -30,11 +30,16 @@ func NewK8sWithGpuOperator(client client.Client) *K8sWithGpuOperator {
 	}
 }
 
-// Discover discovers GPU capacity by iterating over nodes and checking GFD labels.
-// It queries nodes for each GPU vendor (NVIDIA, AMD, Intel) separately since
-// Kubernetes LabelSelectors don't support OR logic across different label keys.
-func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[string]AcceleratorModelInfo, error) {
-	inv := make(map[string]map[string]AcceleratorModelInfo)
+// listGPUNodes queries GPU-bearing nodes across all supported vendors
+// (NVIDIA, AMD, Intel) and returns a canonical per-node view keyed by node name.
+// It queries per vendor because Kubernetes LabelSelectors don't support OR logic
+// across different label keys. Multi-vendor nodes (nodes with labels from more
+// than one vendor) are merged into a single NodeInfo entry.
+//
+// This is the single internal node-listing primitive; public methods Discover,
+// discoverNodeGPUTypes, and DiscoverNodes project from its result.
+func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeInfo, error) {
+	nodes := make(map[string]NodeInfo)
 
 	// Parse WVA_NODE_SELECTOR once for reuse across vendor queries
 	var userRequirements []labels.Requirement
@@ -46,12 +51,12 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 		userRequirements, _ = userSelector.Requirements()
 	}
 
-	// Query nodes for each GPU vendor separately
-	// K8s LabelSelectors don't support OR logic across different keys (e.g. nvidia OR amd)
+	// Query nodes for each GPU vendor separately.
+	// K8s LabelSelectors don't support OR logic across different keys (e.g. nvidia OR amd).
 	for _, vendor := range vendors {
 		prodKey := vendor + "/gpu.product"
+		memKey := vendor + "/gpu.memory"
 
-		// Create vendor-specific selector
 		req, err := labels.NewRequirement(prodKey, selection.Exists, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create label requirement for %s: %w", vendor, err)
@@ -68,34 +73,69 @@ func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[strin
 			return nil, fmt.Errorf("failed to list nodes for vendor %s: %w", vendor, err)
 		}
 
-		// Process nodes for this vendor
 		for _, node := range nodeList.Items {
-			nodeName := node.Name
-			memKey := vendor + "/gpu.memory"
-
 			model, ok := node.Labels[prodKey]
 			if !ok {
 				continue
 			}
 
-			mem := node.Labels[memKey]
 			count := 0
 			if cap, ok := node.Status.Allocatable[corev1.ResourceName(vendor+"/gpu")]; ok {
 				count = int(cap.Value())
 			}
 
-			if inv[nodeName] == nil {
-				inv[nodeName] = make(map[string]AcceleratorModelInfo)
+			ni, exists := nodes[node.Name]
+			if !exists {
+				ni = NodeInfo{
+					Name:         node.Name,
+					Labels:       copyStringMap(node.Labels),
+					Accelerators: make(map[string]AcceleratorModelInfo),
+				}
 			}
-
-			inv[nodeName][model] = AcceleratorModelInfo{
+			ni.Accelerators[model] = AcceleratorModelInfo{
 				Count:  count,
-				Memory: mem,
+				Memory: node.Labels[memKey],
 			}
+			nodes[node.Name] = ni
 		}
 	}
 
-	return inv, nil
+	return nodes, nil
+}
+
+// copyStringMap returns a shallow copy of m, or an empty map if m is nil.
+// Used to ensure the labels map returned in NodeInfo is independent of the
+// underlying corev1.Node object.
+func copyStringMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// Discover discovers GPU capacity by iterating over nodes and checking GFD labels.
+// It queries nodes for each GPU vendor (NVIDIA, AMD, Intel) separately since
+// Kubernetes LabelSelectors don't support OR logic across different label keys.
+//
+// This is a projection of listGPUNodes into the CapacityDiscovery shape
+// (per-node accelerator map without labels).
+func (d *K8sWithGpuOperator) Discover(ctx context.Context) (map[string]map[string]AcceleratorModelInfo, error) {
+	nodes, err := d.listGPUNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]AcceleratorModelInfo, len(nodes))
+	for name, n := range nodes {
+		out[name] = n.Accelerators
+	}
+	return out, nil
+}
+
+// DiscoverNodes returns per-node info (labels + accelerators) for all GPU-bearing
+// nodes. Used by label-aware features such as the namespace-scoped limiter.
+func (d *K8sWithGpuOperator) DiscoverNodes(ctx context.Context) (map[string]NodeInfo, error) {
+	return d.listGPUNodes(ctx)
 }
 
 // DiscoverUsage calculates current GPU usage by summing GPU requests from running pods.
@@ -143,48 +183,38 @@ func (d *K8sWithGpuOperator) DiscoverUsage(ctx context.Context) (map[string]int,
 }
 
 // discoverNodeGPUTypes returns a map of node name to GPU type (model name).
-// It queries nodes for each GPU vendor separately to support multi-vendor clusters.
+// For multi-vendor nodes (nodes labeled for more than one GPU vendor), the model
+// from the LAST matching vendor in `vendors` wins (order: nvidia.com, amd.com,
+// intel.com → intel wins if present, else amd, else nvidia).
+//
+// This preserves the pre-refactor behavior: the original implementation iterated
+// vendors in order and assigned `nodeGPUType[node] = model` on each match,
+// causing later assignments to overwrite earlier ones. Changing this would
+// silently affect usage attribution for multi-vendor nodes, so the refactor
+// keeps the exact same tie-break semantics.
+//
+// This is a projection of listGPUNodes into a single-model-per-node shape.
 func (d *K8sWithGpuOperator) discoverNodeGPUTypes(ctx context.Context) (map[string]string, error) {
-	nodeGPUType := make(map[string]string)
-
-	// Parse WVA_NODE_SELECTOR once for reuse across vendor queries
-	var userRequirements []labels.Requirement
-	if selectorStr := os.Getenv("WVA_NODE_SELECTOR"); selectorStr != "" {
-		userSelector, err := labels.Parse(selectorStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid WVA_NODE_SELECTOR: %w", err)
-		}
-		userRequirements, _ = userSelector.Requirements()
+	nodes, err := d.listGPUNodes(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Query nodes for each GPU vendor separately
-	for _, vendor := range vendors {
-		prodKey := vendor + "/gpu.product"
-
-		req, err := labels.NewRequirement(prodKey, selection.Exists, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create label requirement for %s: %w", vendor, err)
-		}
-		selector := labels.NewSelector().Add(*req)
-
-		// Add user requirements for sharding
-		for _, userReq := range userRequirements {
-			selector = selector.Add(userReq)
-		}
-
-		var nodeList corev1.NodeList
-		if err := d.Client.List(ctx, &nodeList, &client.ListOptions{LabelSelector: selector}); err != nil {
-			return nil, fmt.Errorf("failed to list nodes for vendor %s: %w", vendor, err)
-		}
-
-		for _, node := range nodeList.Items {
-			if model, ok := node.Labels[prodKey]; ok {
-				nodeGPUType[node.Name] = model
+	out := make(map[string]string, len(nodes))
+	for name, n := range nodes {
+		// Iterate vendors in REVERSE order and break on first match so the
+		// last vendor in `vendors` wins (intel > amd > nvidia). Relies on the
+		// listGPUNodes invariant that n.Accelerators[model] exists whenever
+		// n.Labels[vendor+"/gpu.product"] == model.
+		for i := len(vendors) - 1; i >= 0; i-- {
+			prodKey := vendors[i] + "/gpu.product"
+			if model, ok := n.Labels[prodKey]; ok {
+				out[name] = model
+				break
 			}
 		}
 	}
-
-	return nodeGPUType, nil
+	return out, nil
 }
 
 // getPodGPURequests returns the total GPU requests for a pod across all containers.
