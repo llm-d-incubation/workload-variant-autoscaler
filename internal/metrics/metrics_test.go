@@ -2,8 +2,13 @@ package metrics
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/prometheus/client_golang/prometheus"
@@ -143,15 +148,6 @@ func TestRecordErrorMetricFormat(t *testing.T) {
 	err = testutil.CollectAndCompare(errorsTotal, strings.NewReader(expected))
 	assert.NoError(t, err, "Metric should match expected Prometheus format")
 }
-	"os"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
-)
 
 // resetMetrics clears package-level metric vars so each test starts fresh.
 // Callers MUST invoke InitMetrics before recording any metric afterwards —

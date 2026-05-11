@@ -118,6 +118,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "Total number of errors by component",
 		},
 		errorLabels,
+	)
 	saturationUtilization = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVASaturationUtilization,
@@ -447,6 +448,8 @@ func RecordError(ctx context.Context, component, errorType string) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 	errorsTotal.With(labels).Inc()
+}
+
 // SetConfigInfo sets the config info metric with the given analyzer name and feature flags.
 // The metric value is always set to 1 (info-style metric).
 func SetConfigInfo(analyzerName string, limiterEnabled, scaleToZeroEnabled bool) {
