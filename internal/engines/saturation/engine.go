@@ -36,6 +36,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -222,6 +223,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 	e.setActiveOptimizer(e.optimizer)
+	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)
 }
 
@@ -390,6 +392,20 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	return nil
 }
 
+// Resolve saturation config and record config metrics
+func (e *Engine) resolveSaturationConfig(
+	configMap map[string]config.SaturationScalingConfig,
+	modelID, namespace string,
+) config.SaturationScalingConfig {
+	config := resolveSaturationConfig(configMap, modelID, namespace)
+	// record config metric after resolution instead of where the configmaps are reconciled. Here we
+	// have the exact values being used by the optimize engine.
+	metrics.SetConfigKvSpareThreshold(config.KvSpareTrigger)
+	metrics.SetConfigQueueSpareThreshold(config.QueueSpareTrigger)
+	metrics.SetConfigInfo(config.AnalyzerName, config.EnableLimiter, e.Config.ScaleToZeroEnabled())
+	return config
+}
+
 // optimizeV1 runs the V1 percentage-based saturation analysis path (saturation-percentage-based).
 // Processes each model independently: analyze → enforce → convert → limiter.
 //
@@ -424,10 +440,11 @@ func (e *Engine) optimizeV1(
 			continue
 		}
 
-		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
+		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 
 		// Prepare model data once per model (single metrics collection pass).
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
+
 		if err != nil {
 			logger.Error(err, "Saturation data preparation failed", "modelID", modelID)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
@@ -606,6 +623,8 @@ func (e *Engine) optimizeV2(
 
 	// Stage 1: Collect ModelScalingRequests for all models
 	var requests []pipeline.ModelScalingRequest
+	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
+	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -623,8 +642,8 @@ func (e *Engine) optimizeV2(
 				"namespace", namespace, "modelID", modelID)
 			continue
 		}
-		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 
+		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
 			logger.Error(err, "Model data preparation failed", "modelID", modelID)
@@ -646,6 +665,7 @@ func (e *Engine) optimizeV2(
 		}
 
 		requests = append(requests, *req)
+		modelReplicaMetrics[modelID] = data.replicaMetrics
 	}
 
 	if len(requests) == 0 {
@@ -692,6 +712,11 @@ func (e *Engine) optimizeV2(
 				"modelID", req.ModelID)
 		}
 	}
+
+	// Stage 4: Enrich decisions with KV cache token data from replicaMetrics.
+	// Utilization, RequiredCapacity, and SpareCapacity are already set by
+	// buildDecisionsWithOptimizer from AnalyzerResult.
+	enrichDecisionsWithKvTokenData(allDecisions, modelReplicaMetrics)
 
 	return allDecisions
 }
@@ -891,6 +916,46 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 	}
 
 	return decisions
+}
+
+// enrichDecisionsWithKvTokenData sets KvCacheTokensUsed, KvCacheTokensCapacity, and
+// RequiredCapacityUnit on decisions from replica metrics aggregated per (model, variant).
+// Used by V2 path where Utilization and RequiredCapacity are already set from
+// AnalyzerResult.
+//
+// Aggregation is keyed by (modelID, variantName) — not just variantName — because
+// variant names can collide across different models in the same reconcile cycle.
+func enrichDecisionsWithKvTokenData(decisions []interfaces.VariantDecision, modelReplicaMetrics map[string][]interfaces.ReplicaMetrics) {
+	type kvAgg struct {
+		kvUsed  int64
+		kvTotal int64
+	}
+	type variantKey struct {
+		modelID string
+		variant string
+	}
+	agg := make(map[variantKey]*kvAgg)
+	for modelID, metrics := range modelReplicaMetrics {
+		for _, rm := range metrics {
+			k := variantKey{modelID: modelID, variant: rm.VariantName}
+			a, ok := agg[k]
+			if !ok {
+				a = &kvAgg{}
+				agg[k] = a
+			}
+			a.kvUsed += rm.TokensInUse
+			a.kvTotal += rm.TotalKvCapacityTokens
+		}
+	}
+
+	for i := range decisions {
+		d := &decisions[i]
+		d.RequiredCapacityUnit = constants.UnitContinuous
+		if a, ok := agg[variantKey{modelID: d.ModelID, variant: d.VariantName}]; ok {
+			d.KvCacheTokensUsed = a.kvUsed
+			d.KvCacheTokensCapacity = a.kvTotal
+		}
+	}
 }
 
 // hasMinReplicasAboveZero returns true if any variant in the states has MinReplicas > 0.
@@ -1270,6 +1335,16 @@ func (e *Engine) applySaturationDecisions(
 					"accelerator", acceleratorName)
 			}
 			updateVa.Status.Actuation.Applied = true
+		}
+
+		// Record saturation and capacity metrics when this cycle produced a
+		// fresh decision for the variant. When there is no fresh decision the
+		// existing series persist with their last-recorded values until
+		// Prometheus' staleness marker fires; surfacing freshness on the
+		// dashboard side is tracked in #1082 (an explicit "up" gauge per VA,
+		// rather than deleting series here).
+		if hasDecision {
+			act.RecordSaturationMetrics(ctx, decision)
 		}
 
 		// Update Shared State and Trigger Reconcile via Channel

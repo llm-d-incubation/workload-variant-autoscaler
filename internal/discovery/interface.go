@@ -20,8 +20,19 @@ type UsageDiscovery interface {
 	DiscoverUsage(ctx context.Context) (map[string]int, error)
 }
 
-// FullDiscovery combines capacity and usage discovery for complete inventory tracking.
+// NodeDiscovery defines the interface for discovering per-node information including
+// labels and accelerator capacity. Enables label-aware features that need to match
+// node selectors against cluster nodes (e.g., namespace-scoped inventory).
+type NodeDiscovery interface {
+	// DiscoverNodes returns per-node info keyed by node name. Only nodes with at
+	// least one discovered accelerator are included. The returned map and all
+	// nested maps are freshly allocated and safe to mutate.
+	DiscoverNodes(ctx context.Context) (map[string]NodeInfo, error)
+}
+
+// FullDiscovery combines capacity, usage, and node discovery for complete inventory tracking.
 type FullDiscovery interface {
 	CapacityDiscovery
 	UsageDiscovery
+	NodeDiscovery
 }

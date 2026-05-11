@@ -192,7 +192,35 @@ type VariantDecision struct {
 	// SpareCapacity indicates how much spare capacity this variant has.
 	// 0.0 = fully saturated, 1.0 = completely idle.
 	// Used by allocation algorithms to prioritize saturated variants.
+	// V1: threshold-relative spare KV capacity (AvgSpareKvCapacity).
+	// V2: 1.0 - Utilization (absolute spare).
 	SpareCapacity float64
+	// Utilization is the variant-level utilization ratio (0.0-1.0) reported for
+	// observability. The exact formula differs by analyzer because V1 and V2
+	// reason about saturation differently:
+	//   V1: mean of per-replica KvCacheUsage fractions (matches what V1's
+	//       per-replica threshold check operates on).
+	//   V2: TotalDemand / TotalCapacity from AnalyzerResult (token-demand-based).
+	// For uniform-capacity replicas the two are numerically equivalent; for
+	// mixed-capacity replicas V2's value is capacity-weighted.
+	Utilization float64
+	// KvCacheTokensUsed is the sum of TokensInUse across this variant's replicas.
+	KvCacheTokensUsed int64
+	// KvCacheTokensCapacity is the sum of TotalKvCapacityTokens across this variant's replicas.
+	KvCacheTokensCapacity int64
+	// RequiredCapacity is the model-level required capacity (>0 means scale-up needed).
+	// Same value for all variants of a model.
+	// V1: binary (1.0 if shouldScaleUp, else 0.0).
+	// V2: continuous token-based demand from AnalyzerResult.
+	// Use RequiredCapacityUnit to disambiguate the units when consuming this field
+	// (or its corresponding Prometheus metric).
+	RequiredCapacity float64
+	// RequiredCapacityUnit describes the unit of RequiredCapacity ("binary" or "continuous").
+	// Exposed as the `unit` Prometheus label on wva_required_capacity so dashboards
+	// can filter by semantics rather than by which analyzer produced the value.
+	//   "binary":     V1 path, value is 0.0 or 1.0
+	//   "continuous": V2 path, value is a token-demand magnitude
+	RequiredCapacityUnit string
 	// ScaleTargetRef references the Deployment/StatefulSet for scheduling constraints
 	ScaleTargetRef *autoscalingv2.CrossVersionObjectReference
 

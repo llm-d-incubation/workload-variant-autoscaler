@@ -26,8 +26,6 @@ SCALER_BACKEND              ?= prometheus-adapter  # prometheus-adapter (HPA), k
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
 E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
-BENCHMARK_SCENARIO          ?= prefill_heavy  # Options: prefill_heavy (phase3a), decode_heavy (decode-heavy), symmetrical
-
 # llm-d-benchmark CLI configuration
 BENCHMARK_REPO_URL   ?= https://github.com/llm-d/llm-d-benchmark.git
 BENCHMARK_REPO_DIR   ?= $(CURDIR)/llm-d-benchmark
@@ -40,15 +38,6 @@ BENCHMARK_FORCE      ?= true
 BENCHMARK_MONITORING ?= true
 BENCHMARK_UV         ?= false
 BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
-
-# Map scenario name to Ginkgo label filter
-ifeq ($(BENCHMARK_SCENARIO),decode_heavy)
-  BENCHMARK_LABEL_FILTER := decode-heavy
-else ifeq ($(BENCHMARK_SCENARIO),symmetrical)
-  BENCHMARK_LABEL_FILTER := symmetrical
-else
-  BENCHMARK_LABEL_FILTER := phase3a
-endif
 
 # Flags for deploy/install.sh installation script
 # Full e2e / CI-style cluster infra (WVA + llm-d, no chart VA/HPA): prefer `make deploy-e2e-infra`
@@ -298,39 +287,6 @@ undeploy-multi-model-infra: ## Undeploy multi-model infra. Use same MODELS=m1,m2
 	MODELS="$(MODELS)" \
 	./deploy/install-multi-model.sh --undeploy
 
-# Multi-model scaling test parameters
-MM_MIN_REPLICAS ?= 1
-MM_MAX_REPLICAS ?= 5
-
-# TODO: Merge test-multi-model-scaling into test-benchmark by detecting MODELS env var:
-#   $(eval LABEL_FILTER := $(if $(MODELS),multi-model,phase3a))
-# Then: make test-benchmark MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"
-# This eliminates the need for a separate target.
-.PHONY: test-multi-model-scaling
-test-multi-model-scaling: manifests generate fmt vet ## Run multi-model scaling benchmark (VA + HPA + GuideLLM per model)
-	@echo "Running multi-model scaling benchmark (MODELS=$(MODELS))..."
-	KUBECONFIG=$(KUBECONFIG) \
-	ENVIRONMENT=$(ENVIRONMENT) \
-	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	LLMD_NAMESPACE=$(LLMD_NS) \
-	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
-	USE_SIMULATOR=$(USE_SIMULATOR) \
-	SCALER_BACKEND=$(SCALER_BACKEND) \
-	MODEL_ID=$(MODEL_ID) \
-	MODELS="$(MODELS)" \
-	MM_MIN_REPLICAS=$(MM_MIN_REPLICAS) \
-	MM_MAX_REPLICAS=$(MM_MAX_REPLICAS) \
-	GATEWAY_SERVICE_NAME=multi-model-inference-gateway-istio \
-	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
-	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
-	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
-		-ginkgo.label-filter="multi-model"; \
-	TEST_EXIT_CODE=$$?; \
-	echo ""; \
-	echo "=========================================="; \
-	echo "Multi-model benchmark completed. Exit code: $$TEST_EXIT_CODE"; \
-	echo "=========================================="; \
-	exit $$TEST_EXIT_CODE
 
 # Deploy e2e infrastructure with KEDA as scaler backend (installs KEDA, skips Prometheus Adapter).
 # Runs a subset of smoke tests from the e2e suite.
@@ -393,32 +349,6 @@ test-e2e-smoke-with-setup: deploy-e2e-infra test-e2e-smoke
 .PHONY: test-e2e-full-with-setup
 test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full
 
-# Benchmark targets
-.PHONY: test-benchmark
-test-benchmark: manifests generate fmt vet ## Run benchmark tests. Use BENCHMARK_SCENARIO=decode_heavy for decode-heavy workload.
-	@echo "Running benchmark tests (scenario=$(BENCHMARK_SCENARIO), label=$(BENCHMARK_LABEL_FILTER))..."
-	KUBECONFIG=$(KUBECONFIG) \
-	ENVIRONMENT=$(ENVIRONMENT) \
-	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
-	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
-	USE_SIMULATOR=$(USE_SIMULATOR) \
-	SCALER_BACKEND=$(SCALER_BACKEND) \
-	MODEL_ID=$(MODEL_ID) \
-	BENCHMARK_SCENARIO=$(BENCHMARK_SCENARIO) \
-	PROMETHEUS_TOKEN=$$(oc whoami -t 2>/dev/null || echo "") \
-	go test ./test/benchmark/ -timeout 75m -v -ginkgo.v \
-		-ginkgo.label-filter="$(BENCHMARK_LABEL_FILTER)"; \
-	TEST_EXIT_CODE=$$?; \
-	echo ""; \
-	echo "=========================================="; \
-	echo "Benchmark execution completed. Exit code: $$TEST_EXIT_CODE"; \
-	echo "=========================================="; \
-	exit $$TEST_EXIT_CODE
-
-# Convenience target that deploys infra + runs benchmark tests.
-.PHONY: test-benchmark-with-setup
-test-benchmark-with-setup: deploy-e2e-infra test-benchmark
 
 ##@ llm-d-benchmark CLI (standup / run / teardown)
 
@@ -463,6 +393,25 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 		-p $(BENCHMARK_NAMESPACE) \
 		-l $(BENCHMARK_HARNESS) \
 		-w $(BENCHMARK_WORKLOAD) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
+
+BURSTY_WORKLOAD ?= bursty.yaml
+
+.PHONY: benchmark-run-bursty
+benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi-stage rates (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-bursty BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BURSTY_WORKLOAD)" ]; then \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BURSTY_WORKLOAD)" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/inference-perf/$(BURSTY_WORKLOAD)"; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+		-p $(BENCHMARK_NAMESPACE) \
+		-l inference-perf \
+		-w $(BURSTY_WORKLOAD) \
+		-U http://infra-llmdbench-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80 \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
 
 .PHONY: benchmark-run-all
