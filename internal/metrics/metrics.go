@@ -25,14 +25,10 @@ var (
 	modelsProcessedGauge *prometheus.GaugeVec
 
 	// pipeline stage visibility metrics
-	decisionsLimitedTotal      *prometheus.CounterVec
-	availableGpus              *prometheus.GaugeVec
-	enforcerModificationsTotal *prometheus.CounterVec
-	optimizerActive            *prometheus.GaugeVec
-	metricsCollectionDuration  *prometheus.HistogramVec
-	metricsCollectionErrors    *prometheus.CounterVec
-	metricsPodsDiscovered      *prometheus.GaugeVec
-	metricsFreshnessStatus     *prometheus.GaugeVec
+	decisionsLimitedTotal               *prometheus.CounterVec
+	availableGpus                       *prometheus.GaugeVec
+	enforcerModificationsTotal          *prometheus.CounterVec
+	optimizerActive                     *prometheus.GaugeVec
 	configInfoGauge                     *prometheus.GaugeVec
 	configKvSpareThresholdGauge         *prometheus.GaugeVec
 	configQueueSpareThresholdGauge      *prometheus.GaugeVec
@@ -224,6 +220,8 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "1 for active optimizer, 0 for inactive",
 		},
 		optimizerActiveLabels,
+	)
+
 	// Config info metric with labels
 	configInfoLabels := []string{constants.LabelAnalyzerName, constants.LabelLimiterEnabled, constants.LabelScaleToZeroEnabled}
 	if controllerInstance != "" {
@@ -343,6 +341,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(optimizerActive); err != nil {
 		return fmt.Errorf("failed to register optimizerActive metric: %w", err)
+	}
 	if err := registry.Register(configInfoGauge); err != nil {
 		return fmt.Errorf("failed to register configInfoGauge metric: %w", err)
 	}
@@ -546,6 +545,8 @@ func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespac
 	}
 
 	decisionsLimitedTotal.With(labels).Inc()
+}
+
 // SetConfigInfo sets the config info metric with the given analyzer name and feature flags.
 // The metric value is always set to 1 (info-style metric).
 func SetConfigInfo(analyzerName string, limiterEnabled, scaleToZeroEnabled bool) {
