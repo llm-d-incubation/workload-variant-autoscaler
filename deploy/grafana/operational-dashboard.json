@@ -661,11 +661,47 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(wva_metrics_collection_errors_total[5m])) by (query_type)",
+          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[5m]) or vector(0)",
           "instant": false,
-          "legendFormat": "{{query_type}}",
+          "legendFormat": "kv_cache",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[5m]) or vector(0)",
+          "instant": false,
+          "legendFormat": "queue_length",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"request_count\"}[5m]) or vector(0)",
+          "instant": false,
+          "legendFormat": "request_count",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[5m]) or vector(0)",
+          "instant": false,
+          "legendFormat": "cache_config",
+          "range": true,
+          "refId": "D"
         }
       ],
       "title": "Metric Collection Errors",
