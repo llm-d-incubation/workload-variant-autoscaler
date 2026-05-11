@@ -453,6 +453,146 @@ var _ = Describe("ConfigMapReconciler", func() {
 		})
 	})
 
+	Context("Reconcile - Custom Saturation ConfigMaps (Multi-Stack)", func() {
+		BeforeEach(func() {
+			By("Tracking the test namespace in datastore")
+			ds.NamespaceTrack("VariantAutoscaling", "test-va", testNamespace)
+		})
+
+		It("should reconcile a custom saturation ConfigMap with WVA label", func() {
+			By("Creating a custom saturation ConfigMap with WVA ownership label")
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stack-a-saturation-config",
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "workload-variant-autoscaler",
+					},
+				},
+				Data: map[string]string{
+					"default": "kvCacheThreshold: 0.55\nqueueLengthThreshold: 8\nkvSpareTrigger: 0.12\nqueueSpareTrigger: 4",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			By("Reconciling the ConfigMap")
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      cm.Name,
+					Namespace: cm.Namespace,
+				},
+			}
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			By("Verifying the scoped config was stored under the custom ConfigMap name")
+			satConfigMap := cfg.SaturationConfigForRef(testNamespace, "stack-a-saturation-config")
+			Expect(satConfigMap).NotTo(BeNil())
+			satConfig, exists := satConfigMap["default"]
+			Expect(exists).To(BeTrue())
+			Expect(satConfig.KvCacheThreshold).To(BeNumerically("~", 0.55, 0.01))
+		})
+
+		It("should handle deletion of a custom saturation ConfigMap", func() {
+			By("Creating and reconciling a custom saturation ConfigMap")
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stack-b-saturation-config",
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "workload-variant-autoscaler",
+					},
+				},
+				Data: map[string]string{
+					"default": "kvCacheThreshold: 0.65\nqueueLengthThreshold: 12",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      cm.Name,
+					Namespace: cm.Namespace,
+				},
+			}
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying config was stored")
+			satConfigMap := cfg.SaturationConfigForRef(testNamespace, "stack-b-saturation-config")
+			Expect(satConfigMap).NotTo(BeNil())
+			_, exists := satConfigMap["default"]
+			Expect(exists).To(BeTrue())
+
+			By("Deleting the ConfigMap")
+			Expect(k8sClient.Delete(ctx, cm)).To(Succeed())
+
+			By("Reconciling the deletion")
+			Eventually(func() bool {
+				_, err := reconciler.Reconcile(ctx, req)
+				return err == nil
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+
+			By("Verifying scoped config was cleaned up, fallback to global")
+			satConfigMap = cfg.SaturationConfigForRef(testNamespace, "stack-b-saturation-config")
+			if satConfig, exists := satConfigMap["default"]; exists {
+				Expect(satConfig.KvCacheThreshold).NotTo(BeNumerically("~", 0.65, 0.01))
+			}
+		})
+
+		It("should support multiple custom ConfigMaps in the same namespace independently", func() {
+			By("Creating first custom saturation ConfigMap")
+			cm1 := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stack-x-config",
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "workload-variant-autoscaler",
+					},
+				},
+				Data: map[string]string{
+					"default": "kvCacheThreshold: 0.50\nqueueLengthThreshold: 6",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cm1)).To(Succeed())
+
+			By("Creating second custom saturation ConfigMap")
+			cm2 := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stack-y-config",
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "workload-variant-autoscaler",
+					},
+				},
+				Data: map[string]string{
+					"default": "kvCacheThreshold: 0.90\nqueueLengthThreshold: 20",
+				},
+			}
+			Expect(k8sClient.Create(ctx, cm2)).To(Succeed())
+
+			By("Reconciling both ConfigMaps")
+			for _, cm := range []*corev1.ConfigMap{cm1, cm2} {
+				req := ctrl.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      cm.Name,
+						Namespace: cm.Namespace,
+					},
+				}
+				_, err := reconciler.Reconcile(ctx, req)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Verifying independent resolution")
+			configX := cfg.SaturationConfigForRef(testNamespace, "stack-x-config")
+			Expect(configX["default"].KvCacheThreshold).To(BeNumerically("~", 0.50, 0.01))
+
+			configY := cfg.SaturationConfigForRef(testNamespace, "stack-y-config")
+			Expect(configY["default"].KvCacheThreshold).To(BeNumerically("~", 0.90, 0.01))
+		})
+	})
+
 	Context("Error Handling", func() {
 		It("should handle invalid saturation config gracefully", func() {
 			By("Creating a ConfigMap with invalid YAML")

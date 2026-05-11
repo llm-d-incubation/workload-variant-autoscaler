@@ -190,3 +190,20 @@ func (va *VariantAutoscaling) GetScaleTargetName() string {
 func (va *VariantAutoscaling) GetScaleTargetKind() string {
 	return va.Spec.ScaleTargetRef.Kind
 }
+
+// SaturationConfigAnnotationKey is the annotation key on VariantAutoscaling resources
+// that specifies which saturation scaling ConfigMap to use. When set, the VA uses
+// the named ConfigMap instead of the default well-known ConfigMap.
+// The referenced ConfigMap must exist in the same namespace as the VA and have
+// the label app.kubernetes.io/name: workload-variant-autoscaler.
+const SaturationConfigAnnotationKey = "wva.llmd.ai/saturation-config"
+
+// SaturationConfigRef returns the name of the saturation scaling ConfigMap
+// this VA should use, as specified by the wva.llmd.ai/saturation-config annotation.
+// Returns empty string if not set, meaning the default well-known ConfigMap should be used.
+func (va *VariantAutoscaling) SaturationConfigRef() string {
+	if va.Annotations != nil {
+		return va.Annotations[SaturationConfigAnnotationKey]
+	}
+	return ""
+}

@@ -222,6 +222,55 @@ func jsonContainsKey(b []byte, key string) bool {
 	return ok
 }
 
+func TestSaturationConfigRef(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		expected    string
+	}{
+		{
+			name:        "no annotations returns empty",
+			annotations: nil,
+			expected:    "",
+		},
+		{
+			name:        "empty annotations returns empty",
+			annotations: map[string]string{},
+			expected:    "",
+		},
+		{
+			name: "annotation present returns value",
+			annotations: map[string]string{
+				"wva.llmd.ai/saturation-config": "my-custom-config",
+			},
+			expected: "my-custom-config",
+		},
+		{
+			name: "other annotations present but not saturation config",
+			annotations: map[string]string{
+				"some-other-annotation": "value",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			va := &VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-va",
+					Namespace:   "default",
+					Annotations: tt.annotations,
+				},
+			}
+			result := va.SaturationConfigRef()
+			if result != tt.expected {
+				t.Errorf("SaturationConfigRef() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMinMaxReplicasJSON(t *testing.T) {
 	minVal := int32(2)
 	va := &VariantAutoscaling{

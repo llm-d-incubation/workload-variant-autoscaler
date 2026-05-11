@@ -42,9 +42,15 @@ func ConfigMapPredicate(ds datastore.Datastore, cfg *config.Config) predicate.Pr
 			config.QMAnalyzerConfigMapName():       true,
 		}
 
-		// Check if this is a well-known ConfigMap name
+		// For non-well-known names, check the WVA ownership label.
+		// In multi-namespace mode the cache already filters by this label,
+		// but in single-namespace mode there is no cache label filter,
+		// so the predicate must enforce it.
 		if !wellKnownNames[name] {
-			return false
+			lbls := obj.GetLabels()
+			if lbls == nil || lbls["app.kubernetes.io/name"] != "workload-variant-autoscaler" {
+				return false
+			}
 		}
 
 		// Global ConfigMaps: must be in controller namespace

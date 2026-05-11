@@ -60,7 +60,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 				},
 			},
 			expectedGroups: 1,
-			expectedKeys:   []string{"llama-8b|default"},
+			expectedKeys:   []string{"llama-8b|default|"},
 		},
 		{
 			name: "same model same namespace groups together",
@@ -85,7 +85,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 				},
 			},
 			expectedGroups: 1,
-			expectedKeys:   []string{"llama-8b|default"},
+			expectedKeys:   []string{"llama-8b|default|"},
 		},
 		{
 			name: "different namespaces creates separate groups",
@@ -110,7 +110,97 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 				},
 			},
 			expectedGroups: 2,
-			expectedKeys:   []string{"llama-8b|ns1", "llama-8b|ns2"},
+			expectedKeys:   []string{"llama-8b|ns1|", "llama-8b|ns2|"},
+		},
+		{
+			name: "same model same namespace different config refs creates separate groups",
+			vas: []wvav1alpha1.VariantAutoscaling{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-stack-a",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"wva.llmd.ai/saturation-config": "stack-a-config",
+						},
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-stack-b",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"wva.llmd.ai/saturation-config": "stack-b-config",
+						},
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+			},
+			expectedGroups: 2,
+			expectedKeys:   []string{"llama-8b|default|stack-a-config", "llama-8b|default|stack-b-config"},
+		},
+		{
+			name: "same model same namespace one with config ref one without",
+			vas: []wvav1alpha1.VariantAutoscaling{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-custom",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"wva.llmd.ai/saturation-config": "custom-config",
+						},
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-default",
+						Namespace: "default",
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+			},
+			expectedGroups: 2,
+			expectedKeys:   []string{"llama-8b|default|custom-config", "llama-8b|default|"},
+		},
+		{
+			name: "same model same namespace same config ref groups together",
+			vas: []wvav1alpha1.VariantAutoscaling{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-1",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"wva.llmd.ai/saturation-config": "shared-config",
+						},
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "va-2",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"wva.llmd.ai/saturation-config": "shared-config",
+						},
+					},
+					Spec: wvav1alpha1.VariantAutoscalingSpec{
+						ModelID: "llama-8b",
+					},
+				},
+			},
+			expectedGroups: 1,
+			expectedKeys:   []string{"llama-8b|default|shared-config"},
 		},
 	}
 

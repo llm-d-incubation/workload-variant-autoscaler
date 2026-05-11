@@ -140,8 +140,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	}
 
 	cfg.saturation = saturationConfig{
-		global:           make(SaturationScalingConfigPerModel),
-		namespaceConfigs: make(map[string]SaturationScalingConfigPerModel),
+		global:        make(SaturationScalingConfigPerModel),
+		scopedConfigs: make(map[string]SaturationScalingConfigPerModel),
 	}
 
 	cfg.scaleToZero = scaleToZeroConfig{

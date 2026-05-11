@@ -2,6 +2,10 @@
 // This file contains Kubernetes label keys used for filtering and identification.
 package constants
 
+import (
+	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+)
+
 // Kubernetes Label Keys
 // Label keys used on Kubernetes resources for filtering and identification.
 const (
@@ -25,6 +29,10 @@ const (
 	// even if the namespace has VAs or opt-in labels.
 	// This provides explicit control to exclude namespaces from WVA management.
 	NamespaceExcludeAnnotationKey = "wva.llmd.ai/exclude"
+
+	// SaturationConfigAnnotationKey is re-exported from the API package for internal use.
+	// The canonical definition lives in api/v1alpha1.SaturationConfigAnnotationKey.
+	SaturationConfigAnnotationKey = wvav1alpha1.SaturationConfigAnnotationKey
 )
 
 // AnnotationValueTrue is the canonical string value for boolean annotations and labels.

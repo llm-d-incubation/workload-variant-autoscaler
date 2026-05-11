@@ -492,6 +492,186 @@ func TestConfig_MultipleNamespaces(t *testing.T) {
 	assert.Equal(t, 0.80, globalSatConfig2["default"].KvCacheThreshold, "Global config should be unchanged")
 }
 
+func TestConfig_ScopedSaturationConfig(t *testing.T) {
+	cfg := NewTestConfig()
+
+	defaultName := SaturationConfigMapName()
+
+	globalSat := map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.80,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	}
+	cfg.UpdateSaturationConfig(globalSat)
+
+	cfg.UpdateSaturationConfigScoped("prod", "custom-sat-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.60,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", defaultName, map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.70,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+
+	assert.Equal(t, 0.60, cfg.SaturationConfigForRef("prod", "custom-sat-config")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.70, cfg.SaturationConfigForRef("prod", defaultName)["default"].KvCacheThreshold)
+	assert.Equal(t, 0.70, cfg.SaturationConfigForRef("prod", "unknown-config")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.80, cfg.SaturationConfigForRef("staging", "custom-sat-config")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.70, cfg.SaturationConfigForNamespace("prod")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.80, cfg.SaturationConfigForNamespace("")["default"].KvCacheThreshold)
+}
+
+func TestConfig_RemoveScopedSaturationConfig(t *testing.T) {
+	cfg := NewTestConfig()
+
+	defaultName := SaturationConfigMapName()
+
+	cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.80,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", "custom-sat-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.60,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", defaultName, map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.70,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+
+	cfg.RemoveScopedSaturationConfig("prod", "custom-sat-config")
+	assert.Equal(t, 0.70, cfg.SaturationConfigForRef("prod", "custom-sat-config")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.70, cfg.SaturationConfigForRef("prod", defaultName)["default"].KvCacheThreshold)
+
+	cfg.RemoveScopedSaturationConfig("prod", defaultName)
+	assert.Equal(t, 0.80, cfg.SaturationConfigForNamespace("prod")["default"].KvCacheThreshold)
+}
+
+func TestConfig_RemoveNamespaceConfig_RemovesAllScoped(t *testing.T) {
+	cfg := NewTestConfig()
+
+	defaultName := SaturationConfigMapName()
+
+	cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.80,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", "custom-sat-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.60,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", defaultName, map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.70,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+
+	cfg.RemoveNamespaceConfig("prod")
+	assert.Equal(t, 0.80, cfg.SaturationConfigForNamespace("prod")["default"].KvCacheThreshold)
+}
+
+func TestConfig_MultiStackSameNamespace(t *testing.T) {
+	cfg := NewTestConfig()
+
+	cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.80,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", "stack-a-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.55,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", "stack-b-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.65,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+
+	require.Equal(t, 0.55, cfg.SaturationConfigForRef("prod", "stack-a-config")["default"].KvCacheThreshold)
+	require.Equal(t, 0.65, cfg.SaturationConfigForRef("prod", "stack-b-config")["default"].KvCacheThreshold)
+
+	cfg.UpdateSaturationConfigScoped("prod", "stack-a-config", map[string]SaturationScalingConfig{
+		"default": {
+			KvCacheThreshold:     0.50,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.10,
+			QueueSpareTrigger:    3,
+		},
+	})
+
+	assert.Equal(t, 0.50, cfg.SaturationConfigForRef("prod", "stack-a-config")["default"].KvCacheThreshold)
+	assert.Equal(t, 0.65, cfg.SaturationConfigForRef("prod", "stack-b-config")["default"].KvCacheThreshold)
+}
+
+func TestConfig_HasScopedSaturationConfig(t *testing.T) {
+	cfg := NewTestConfig()
+
+	cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{
+		"default": {KvCacheThreshold: 0.80},
+	})
+	cfg.UpdateSaturationConfigScoped("prod", "custom-config", map[string]SaturationScalingConfig{
+		"default": {KvCacheThreshold: 0.60},
+	})
+
+	assert.True(t, cfg.HasScopedSaturationConfig("prod", "custom-config"),
+		"Should find existing scoped config")
+	assert.False(t, cfg.HasScopedSaturationConfig("prod", "missing-config"),
+		"Should not find non-existent scoped config")
+	assert.False(t, cfg.HasScopedSaturationConfig("staging", "custom-config"),
+		"Should not find config in wrong namespace")
+	assert.False(t, cfg.HasScopedSaturationConfig("", "custom-config"),
+		"Should not find config with empty namespace")
+
+	cfg.RemoveScopedSaturationConfig("prod", "custom-config")
+	assert.False(t, cfg.HasScopedSaturationConfig("prod", "custom-config"),
+		"Should not find removed scoped config")
+}
+
 func TestQMAnalyzerConfig_GlobalGetSet(t *testing.T) {
 	cfg := NewTestConfig()
 

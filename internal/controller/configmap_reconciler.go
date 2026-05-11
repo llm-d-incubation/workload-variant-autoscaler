@@ -85,7 +85,9 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case config.QMAnalyzerConfigMapName():
 		r.handleQMAnalyzerConfigMap(ctx, cm, namespace, isGlobal)
 	default:
-		logger.V(1).Info("Ignoring unrecognized ConfigMap", "name", name, "namespace", namespace)
+		// Non-well-known ConfigMaps that reach here have passed the cache label
+		// filter and predicate, so they are WVA-owned custom saturation configs.
+		r.handleSaturationConfigMap(ctx, cm, namespace, isGlobal)
 	}
 
 	return ctrl.Result{}, nil
@@ -117,14 +119,18 @@ func (r *ConfigMapReconciler) handleConfigMapDeletion(ctx context.Context, name,
 	// Remove namespace-local config on deletion
 	switch name {
 	case config.SaturationConfigMapName():
-		r.Config.RemoveNamespaceConfig(namespace)
-		logger.Info("Removed namespace-local saturation config on ConfigMap deletion", "namespace", namespace)
+		r.Config.RemoveScopedSaturationConfig(namespace, name)
+		logger.Info("Removed namespace-local saturation config on ConfigMap deletion", "namespace", namespace, "configMap", name)
 	case config.DefaultScaleToZeroConfigMapName:
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local scale-to-zero config on ConfigMap deletion", "namespace", namespace)
 	case config.QMAnalyzerConfigMapName():
 		r.Config.RemoveNamespaceConfig(namespace)
 		logger.Info("Removed namespace-local queueing model config on ConfigMap deletion", "namespace", namespace)
+	default:
+		// Custom-named saturation ConfigMaps — remove only the specific scoped entry.
+		r.Config.RemoveScopedSaturationConfig(namespace, name)
+		logger.Info("Removed scoped saturation config on ConfigMap deletion", "namespace", namespace, "configMap", name)
 	}
 }
 
@@ -168,8 +174,8 @@ func (r *ConfigMapReconciler) handleSaturationConfigMap(ctx context.Context, cm 
 		r.Config.UpdateSaturationConfig(configs)
 		logger.Info("Updated global saturation config from ConfigMap", "entries", count)
 	} else {
-		r.Config.UpdateSaturationConfigForNamespace(namespace, configs)
-		logger.Info("Updated namespace-local saturation config from ConfigMap", "namespace", namespace, "entries", count)
+		r.Config.UpdateSaturationConfigScoped(namespace, cm.Name, configs)
+		logger.Info("Updated scoped saturation config from ConfigMap", "namespace", namespace, "configMap", cm.Name, "entries", count)
 	}
 }
 

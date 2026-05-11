@@ -33,9 +33,96 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
+
+var _ = Describe("ConfigMapPredicate - Custom Saturation ConfigMaps", func() {
+	var (
+		cfg *config.Config
+		ds  datastore.Datastore
+	)
+
+	BeforeEach(func() {
+		logging.NewTestLogger()
+		cfg = config.NewTestConfig()
+		ds = datastore.NewDatastore(cfg)
+	})
+
+	It("should allow a ConfigMap with the WVA ownership label in system namespace", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "custom-saturation-config",
+				Namespace: config.SystemNamespace(),
+				Labels: map[string]string{
+					"app.kubernetes.io/name": "workload-variant-autoscaler",
+				},
+			},
+		}
+		predicateFn := ConfigMapPredicate(ds, cfg)
+		result := predicateFn.Generic(event.GenericEvent{Object: cm})
+		Expect(result).To(BeTrue(), "Predicate should allow WVA-labelled ConfigMap in system namespace")
+	})
+
+	It("should reject a ConfigMap without label and non-well-known name", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "some-random-configmap",
+				Namespace: config.SystemNamespace(),
+			},
+		}
+		predicateFn := ConfigMapPredicate(ds, cfg)
+		result := predicateFn.Generic(event.GenericEvent{Object: cm})
+		Expect(result).To(BeFalse(), "Predicate should reject ConfigMap without label and non-well-known name")
+	})
+
+	It("should reject a ConfigMap with wrong label value", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-config",
+				Namespace: config.SystemNamespace(),
+				Labels: map[string]string{
+					"app.kubernetes.io/name": "some-other-app",
+				},
+			},
+		}
+		predicateFn := ConfigMapPredicate(ds, cfg)
+		result := predicateFn.Generic(event.GenericEvent{Object: cm})
+		Expect(result).To(BeFalse(), "Predicate should reject ConfigMap with wrong label value")
+	})
+
+	It("should allow a WVA-labelled ConfigMap in a tracked namespace", func() {
+		ds.NamespaceTrack("VariantAutoscaling", "test-va", "my-namespace")
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stack-a-saturation",
+				Namespace: "my-namespace",
+				Labels: map[string]string{
+					"app.kubernetes.io/name": "workload-variant-autoscaler",
+				},
+			},
+		}
+		predicateFn := ConfigMapPredicate(ds, cfg)
+		result := predicateFn.Generic(event.GenericEvent{Object: cm})
+		Expect(result).To(BeTrue(), "Predicate should allow WVA-labelled ConfigMap in tracked namespace")
+	})
+
+	It("should reject a WVA-labelled ConfigMap in an untracked namespace", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stack-a-saturation",
+				Namespace: "untracked-namespace",
+				Labels: map[string]string{
+					"app.kubernetes.io/name": "workload-variant-autoscaler",
+				},
+			},
+		}
+		predicateFn := ConfigMapPredicate(ds, cfg)
+		result := predicateFn.Generic(event.GenericEvent{Object: cm})
+		Expect(result).To(BeFalse(), "Predicate should reject WVA-labelled ConfigMap in untracked namespace")
+	})
+})
 
 var _ = Describe("VariantAutoscalingPredicate", func() {
 	var (

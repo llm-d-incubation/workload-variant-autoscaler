@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,13 +82,16 @@ type SaturationScalingConfigPerModel map[string]SaturationScalingConfig
 // for all models. Maps model ID (or "default" key) to its configuration.
 type QMAnalyzerConfigPerModel map[string]interfaces.QueueingModelScalingConfig
 
-// saturationConfig holds saturation scaling configuration (namespace-aware)
+// saturationConfig holds saturation scaling configuration (namespace-aware, multi-stack).
+// Scoped configs are keyed by "namespace/configMapName" to support multiple saturation
+// ConfigMaps per namespace. Each VA can reference a specific ConfigMap via annotation.
 type saturationConfig struct {
-	// Global default configuration
+	// Global default configuration (from system namespace)
 	global SaturationScalingConfigPerModel
 
-	// Namespace-local configuration overrides (keyed by namespace name)
-	namespaceConfigs map[string]SaturationScalingConfigPerModel
+	// Scoped configuration overrides keyed by "namespace/configMapName".
+	// Supports multiple ConfigMaps per namespace for multi-stack deployments.
+	scopedConfigs map[string]SaturationScalingConfigPerModel
 }
 
 // qmAnalyzerConfig holds queueing model scaling configuration (namespace-aware)
@@ -317,11 +321,30 @@ func (c *Config) SaturationConfig() map[string]SaturationScalingConfig {
 // resolveSaturationConfig resolves saturation config for a namespace (namespace-local > global).
 // Must be called while holding at least a read lock.
 func (c *Config) resolveSaturationConfig(namespace string) map[string]SaturationScalingConfig {
-	// Check namespace-local first (if namespace is provided)
+	return c.resolveSaturationConfigForRef(namespace, SaturationConfigMapName())
+}
+
+// resolveSaturationConfigForRef resolves saturation config for a specific namespace and ConfigMap name.
+// Resolution order: scoped(namespace/cmName) > scoped(namespace/defaultName) > global.
+// Must be called while holding at least a read lock.
+func (c *Config) resolveSaturationConfigForRef(namespace, cmName string) map[string]SaturationScalingConfig {
 	if namespace != "" {
-		if nsConfig, exists := c.saturation.namespaceConfigs[namespace]; exists {
-			if len(nsConfig) > 0 {
-				return nsConfig
+		// Check exact scoped config first
+		scopedKey := namespace + "/" + cmName
+		if cfg, exists := c.saturation.scopedConfigs[scopedKey]; exists {
+			if len(cfg) > 0 {
+				return cfg
+			}
+		}
+
+		// If cmName is not the default, also try the default name as fallback
+		defaultName := SaturationConfigMapName()
+		if cmName != defaultName {
+			defaultKey := namespace + "/" + defaultName
+			if cfg, exists := c.saturation.scopedConfigs[defaultKey]; exists {
+				if len(cfg) > 0 {
+					return cfg
+				}
 			}
 		}
 	}
@@ -363,6 +386,33 @@ func (c *Config) SaturationConfigForNamespace(namespace string) map[string]Satur
 	defer c.mu.RUnlock()
 	sourceConfig := c.resolveSaturationConfig(namespace)
 	return copySaturationConfig(sourceConfig)
+}
+
+// SaturationConfigForRef returns the saturation scaling configuration for a specific
+// namespace and ConfigMap name. Used for multi-stack support where VAs can reference
+// different saturation ConfigMaps via the wva.llmd.ai/saturation-config annotation.
+// Resolution order: scoped(namespace/cmName) > scoped(namespace/defaultName) > global
+// Thread-safe. Returns a copy to prevent external modifications.
+func (c *Config) SaturationConfigForRef(namespace, cmName string) map[string]SaturationScalingConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	sourceConfig := c.resolveSaturationConfigForRef(namespace, cmName)
+	return copySaturationConfig(sourceConfig)
+}
+
+// HasScopedSaturationConfig returns true if a scoped saturation config exists for
+// the given namespace and ConfigMap name. Used to verify that an explicitly referenced
+// ConfigMap has been loaded before using it for scaling decisions.
+// Thread-safe.
+func (c *Config) HasScopedSaturationConfig(namespace, cmName string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.saturation.scopedConfigs == nil {
+		return false
+	}
+	scopedKey := namespace + "/" + cmName
+	cfg, exists := c.saturation.scopedConfigs[scopedKey]
+	return exists && len(cfg) > 0
 }
 
 // copySaturationConfig creates a deep copy of the saturation config map.
@@ -418,35 +468,44 @@ func (c *Config) UpdateSaturationConfig(config map[string]SaturationScalingConfi
 // If namespace is empty, updates global config.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
 func (c *Config) UpdateSaturationConfigForNamespace(namespace string, config map[string]SaturationScalingConfig) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Make a copy to prevent external modifications
-	newConfig := make(map[string]SaturationScalingConfig, len(config))
-	maps.Copy(newConfig, config)
-
-	var oldCount int
 	if namespace == "" {
-		// Update global
-		oldCount = len(c.saturation.global)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		newConfig := make(map[string]SaturationScalingConfig, len(config))
+		maps.Copy(newConfig, config)
+		oldCount := len(c.saturation.global)
 		c.saturation.global = newConfig
 		newCount := len(c.saturation.global)
 		if oldCount != newCount {
 			ctrl.Log.Info("Updated global saturation config", "oldEntries", oldCount, "newEntries", newCount)
 		}
-	} else {
-		// Update namespace-local
-		if c.saturation.namespaceConfigs == nil {
-			c.saturation.namespaceConfigs = make(map[string]SaturationScalingConfigPerModel)
-		}
-		oldCount = len(c.saturation.namespaceConfigs[namespace])
-		c.saturation.namespaceConfigs[namespace] = newConfig
-		newCount := len(c.saturation.namespaceConfigs[namespace])
-		if oldCount != newCount {
-			ctrl.Log.Info("Updated namespace-local saturation config", "namespace", namespace, "oldEntries", oldCount, "newEntries", newCount)
-		}
+		return
+	}
+	c.UpdateSaturationConfigScoped(namespace, SaturationConfigMapName(), config)
+}
+
+// UpdateSaturationConfigScoped updates the saturation scaling configuration for a specific
+// namespace and ConfigMap name. Used for multi-stack support where different ConfigMaps
+// in the same namespace store different saturation configs.
+// Thread-safe. Takes a copy of the provided map to prevent external modifications.
+func (c *Config) UpdateSaturationConfigScoped(namespace, cmName string, config map[string]SaturationScalingConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	newConfig := make(map[string]SaturationScalingConfig, len(config))
+	maps.Copy(newConfig, config)
+
+	if c.saturation.scopedConfigs == nil {
+		c.saturation.scopedConfigs = make(map[string]SaturationScalingConfigPerModel)
 	}
 
+	scopedKey := namespace + "/" + cmName
+	oldCount := len(c.saturation.scopedConfigs[scopedKey])
+	c.saturation.scopedConfigs[scopedKey] = newConfig
+	newCount := len(c.saturation.scopedConfigs[scopedKey])
+	if oldCount != newCount {
+		ctrl.Log.Info("Updated scoped saturation config", "namespace", namespace, "configMap", cmName, "oldEntries", oldCount, "newEntries", newCount)
+	}
 }
 
 // UpdateScaleToZeroConfig updates the global scale-to-zero configuration.
@@ -594,10 +653,14 @@ func (c *Config) RemoveNamespaceConfig(namespace string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	removed := false
-	if c.saturation.namespaceConfigs != nil {
-		if _, exists := c.saturation.namespaceConfigs[namespace]; exists {
-			delete(c.saturation.namespaceConfigs, namespace)
-			removed = true
+	// Remove all scoped saturation configs for this namespace
+	if c.saturation.scopedConfigs != nil {
+		prefix := namespace + "/"
+		for key := range c.saturation.scopedConfigs {
+			if strings.HasPrefix(key, prefix) {
+				delete(c.saturation.scopedConfigs, key)
+				removed = true
+			}
 		}
 	}
 	if c.qmAnalyzer.namespaceConfigs != nil {
@@ -614,6 +677,24 @@ func (c *Config) RemoveNamespaceConfig(namespace string) {
 	}
 	if removed {
 		ctrl.Log.Info("Removed namespace-local config", "namespace", namespace)
+	}
+}
+
+// RemoveScopedSaturationConfig removes the saturation configuration for a specific
+// namespace and ConfigMap name. Used when a labelled saturation ConfigMap is deleted.
+// Thread-safe.
+func (c *Config) RemoveScopedSaturationConfig(namespace, cmName string) {
+	if namespace == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.saturation.scopedConfigs != nil {
+		scopedKey := namespace + "/" + cmName
+		if _, exists := c.saturation.scopedConfigs[scopedKey]; exists {
+			delete(c.saturation.scopedConfigs, scopedKey)
+			ctrl.Log.Info("Removed scoped saturation config", "namespace", namespace, "configMap", cmName)
+		}
 	}
 }
 
@@ -665,8 +746,8 @@ func NewTestConfig() *Config {
 			scaleFromZeroMaxConcurrency: 10,
 		},
 		saturation: saturationConfig{
-			global:           make(SaturationScalingConfigPerModel),
-			namespaceConfigs: make(map[string]SaturationScalingConfigPerModel),
+			global:        make(SaturationScalingConfigPerModel),
+			scopedConfigs: make(map[string]SaturationScalingConfigPerModel),
 		},
 		qmAnalyzer: qmAnalyzerConfig{
 			global:           make(QMAnalyzerConfigPerModel),

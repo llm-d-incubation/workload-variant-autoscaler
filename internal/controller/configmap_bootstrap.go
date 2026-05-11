@@ -9,6 +9,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -108,9 +109,61 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		}
 	}
 
+	// Bootstrap custom saturation ConfigMaps for each scanned namespace.
+	// These are non-well-known ConfigMaps with the app.kubernetes.io/name: workload-variant-autoscaler label,
+	// enabling multi-stack support where different VAs reference different saturation configs.
+	labelledCount := 0
+	for _, ns := range namespacesToScan {
+		count, err := r.bootstrapLabelledSaturationConfigMaps(ctx, ns)
+		if err != nil {
+			r.Config.MarkConfigMapsBootstrapFailed(err)
+			return err
+		}
+		labelledCount += count
+	}
+
 	r.Config.MarkConfigMapsBootstrapComplete()
-	logger.Info("Initial ConfigMap bootstrap completed", "targets", len(targets))
+	logger.Info("Initial ConfigMap bootstrap completed", "targets", len(targets), "labelledSaturationConfigs", labelledCount)
 	return nil
+}
+
+// bootstrapLabelledSaturationConfigMaps discovers and loads custom saturation ConfigMaps
+// with the app.kubernetes.io/name: workload-variant-autoscaler label in a namespace
+// (excluding well-known names which are already handled by bootstrapConfigMap).
+func (r *ConfigMapReconciler) bootstrapLabelledSaturationConfigMaps(ctx context.Context, namespace string) (int, error) {
+	logger := log.FromContext(ctx)
+
+	cmList := &corev1.ConfigMapList{}
+	labelSelector := labels.SelectorFromSet(labels.Set{
+		"app.kubernetes.io/name": "workload-variant-autoscaler",
+	})
+	if err := r.List(ctx, cmList, &client.ListOptions{
+		Namespace:     namespace,
+		LabelSelector: labelSelector,
+	}); err != nil {
+		return 0, fmt.Errorf("failed to list labelled saturation ConfigMaps in namespace %s: %w", namespace, err)
+	}
+
+	count := 0
+	wellKnownNames := map[string]bool{
+		config.ConfigMapName():                 true,
+		config.SaturationConfigMapName():       true,
+		config.DefaultScaleToZeroConfigMapName: true,
+		config.QMAnalyzerConfigMapName():       true,
+	}
+	for i := range cmList.Items {
+		cm := &cmList.Items[i]
+		if wellKnownNames[cm.Name] {
+			continue // Already handled by well-known name bootstrap
+		}
+		r.handleSaturationConfigMap(ctx, cm, namespace, false)
+		count++
+	}
+
+	if count > 0 {
+		logger.Info("Bootstrapped labelled saturation ConfigMaps", "namespace", namespace, "count", count)
+	}
+	return count, nil
 }
 
 func (r *ConfigMapReconciler) bootstrapConfigMap(ctx context.Context, name, namespace string, isGlobal bool) error {

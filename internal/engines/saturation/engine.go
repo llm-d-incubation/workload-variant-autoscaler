@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -386,18 +387,38 @@ func (e *Engine) optimizeV1(
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
 		namespace := modelVAs[0].Namespace
+		configRef := modelVAs[0].SaturationConfigRef()
 		logger.Info("Processing model (V1)",
 			"modelID", modelID,
 			"namespace", namespace,
 			"variantCount", len(modelVAs),
-			"groupKey", groupKey)
+			"groupKey", groupKey,
+			"configRef", configRef)
 
 		// Get namespace-aware saturation config (namespace-local > global)
-		saturationConfigMap := e.Config.SaturationConfigForNamespace(namespace)
+		var saturationConfigMap map[string]config.SaturationScalingConfig
+		if configRef != "" {
+			if !e.Config.HasScopedSaturationConfig(namespace, configRef) {
+				logger.Info("Referenced saturation ConfigMap not found, skipping model to avoid wrong config",
+					"namespace", namespace,
+					"modelID", modelID,
+					"configRef", configRef)
+				if e.Recorder != nil {
+					e.Recorder.Eventf(&modelVAs[0], corev1.EventTypeWarning, "SaturationConfigNotFound",
+						"Referenced saturation ConfigMap %q not found in namespace %q; model %q skipped",
+						configRef, namespace, modelID)
+				}
+				continue
+			}
+			saturationConfigMap = e.Config.SaturationConfigForRef(namespace, configRef)
+		} else {
+			saturationConfigMap = e.Config.SaturationConfigForNamespace(namespace)
+		}
 		if len(saturationConfigMap) == 0 {
 			logger.Info("Saturation scaling config not loaded yet for namespace, skipping model",
 				"namespace", namespace,
-				"modelID", modelID)
+				"modelID", modelID,
+				"configRef", configRef)
 			continue
 		}
 
@@ -587,17 +608,36 @@ func (e *Engine) optimizeV2(
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
 		namespace := modelVAs[0].Namespace
+		configRef := modelVAs[0].SaturationConfigRef()
 		logger.Info("Processing model (V2)",
 			"modelID", modelID,
 			"namespace", namespace,
 			"variantCount", len(modelVAs),
-			"groupKey", groupKey)
+			"groupKey", groupKey,
+			"configRef", configRef)
 
 		// Get namespace-aware saturation config
-		saturationConfigMap := e.Config.SaturationConfigForNamespace(namespace)
+		var saturationConfigMap map[string]config.SaturationScalingConfig
+		if configRef != "" {
+			if !e.Config.HasScopedSaturationConfig(namespace, configRef) {
+				logger.Info("Referenced saturation ConfigMap not found, skipping model to avoid wrong config",
+					"namespace", namespace,
+					"modelID", modelID,
+					"configRef", configRef)
+				if e.Recorder != nil {
+					e.Recorder.Eventf(&modelVAs[0], corev1.EventTypeWarning, "SaturationConfigNotFound",
+						"Referenced saturation ConfigMap %q not found in namespace %q; model %q skipped",
+						configRef, namespace, modelID)
+				}
+				continue
+			}
+			saturationConfigMap = e.Config.SaturationConfigForRef(namespace, configRef)
+		} else {
+			saturationConfigMap = e.Config.SaturationConfigForNamespace(namespace)
+		}
 		if len(saturationConfigMap) == 0 {
 			logger.Info("Saturation scaling config not loaded yet for namespace, skipping model",
-				"namespace", namespace, "modelID", modelID)
+				"namespace", namespace, "modelID", modelID, "configRef", configRef)
 			continue
 		}
 		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)

@@ -14,23 +14,29 @@ rules:
   verbs:
   - list
   - watch
-  # Note: This broad permission is required for namespace-local ConfigMap overrides.
-  # The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config)
-  # in its predicate logic, providing effective access control.
+  # Note: This broad list/watch/get permission is required for namespace-local ConfigMap overrides
+  # and custom saturation ConfigMaps (multi-stack). The controller filters by the
+  # app.kubernetes.io/name label (cache) and well-known names (predicate), providing
+  # effective access control. The cache only watches labelled ConfigMaps.
 - apiGroups:
   - ""
   resources:
   - configmaps
+  verbs:
+  - get
   {{- if not .Values.wva.namespaceScoped }}
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
   resourceNames:
   - {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
   - {{ include "workload-variant-autoscaler.fullname" . }}-wva-saturation-scaling-config
   - wva-model-scale-to-zero-config
   - wva-queueing-model-config
-{{- end }}
   verbs:
-  - get
   - update
+{{- end }}
 - apiGroups:
   - ""
   resources:
