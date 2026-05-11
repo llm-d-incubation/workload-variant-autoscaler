@@ -16,6 +16,8 @@ const (
 	kubePrometheusStackGrafanaName = "kube-prometheus-stack-grafana"
 	// httpPortName is the standard name for HTTP service ports
 	httpPortName = "http"
+	// wvaOperationDashboardConfigMapName is the name of the ConfigMap containing the WVA operational dashboard
+	wvaOperationDashboardConfigMapName = "wva-operation-dashboard"
 )
 
 // OperationalDashboard tests validate Grafana deployment and dashboard functionality.
@@ -758,7 +760,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			}
 
 			By("Verifying operational dashboard ConfigMap exists")
-			configMapName := "wva-operation-dashboard"
+			configMapName := wvaOperationDashboardConfigMapName
 			GinkgoWriter.Printf("  Checking ConfigMap: %s in namespace: %s\n", configMapName, cfg.MonitoringNS)
 			configMap, err := k8sClient.CoreV1().ConfigMaps(cfg.MonitoringNS).Get(ctx,
 				configMapName, metav1.GetOptions{})
@@ -973,6 +975,92 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 			}
 
 			GinkgoWriter.Printf("  ✓ WVA Operational Dashboard is correctly provisioned in Grafana\n")
+		})
+
+		It("should verify 'Models Processed' panel exists in dashboard", func() {
+			if !grafanaFound {
+				Skip("Grafana is not deployed - skipping dashboard panel test")
+			}
+
+			By("Verifying operational dashboard ConfigMap contains Models Processed panel")
+			configMapName := wvaOperationDashboardConfigMapName
+			GinkgoWriter.Printf("  Checking ConfigMap: %s in namespace: %s\n", configMapName, cfg.MonitoringNS)
+			configMap, err := k8sClient.CoreV1().ConfigMaps(cfg.MonitoringNS).Get(ctx,
+				configMapName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "Operational dashboard ConfigMap should exist")
+			GinkgoWriter.Printf("  ✓ ConfigMap found: %s\n", configMap.Name)
+
+			dashboardJSON, hasDashboard := configMap.Data["operational-dashboard.json"]
+			Expect(hasDashboard).To(BeTrue(), "ConfigMap should contain operational-dashboard.json")
+			GinkgoWriter.Printf("  ✓ Dashboard JSON found\n")
+
+			By("Verifying dashboard contains 'Models Processed' panel")
+			Expect(dashboardJSON).To(ContainSubstring("\"title\": \"Models Processed\""),
+				"Dashboard should contain a panel titled 'Models Processed'")
+			GinkgoWriter.Printf("  ✓ Found panel with title: 'Models Processed'\n")
+
+			By("Verifying Models Processed panel has correct metric")
+			Expect(dashboardJSON).To(ContainSubstring("wva_models_processed"),
+				"Models Processed panel should query wva_models_processed metric")
+			GinkgoWriter.Printf("  ✓ Panel queries metric: wva_models_processed\n")
+
+			By("Verifying Models Processed panel has description")
+			Expect(dashboardJSON).To(ContainSubstring("Number of models processed in the last optimization cycle"),
+				"Models Processed panel should have a description")
+			GinkgoWriter.Printf("  ✓ Panel has description about optimization cycle\n")
+
+			GinkgoWriter.Printf("  ✓ 'Models Processed' panel is correctly configured\n")
+		})
+
+		It("should verify 'Optimization Duration - Percentiles and Average' panel exists in dashboard", func() {
+			if !grafanaFound {
+				Skip("Grafana is not deployed - skipping dashboard panel test")
+			}
+
+			By("Verifying operational dashboard ConfigMap contains Optimization Duration panel")
+			configMapName := wvaOperationDashboardConfigMapName
+			GinkgoWriter.Printf("  Checking ConfigMap: %s in namespace: %s\n", configMapName, cfg.MonitoringNS)
+			configMap, err := k8sClient.CoreV1().ConfigMaps(cfg.MonitoringNS).Get(ctx,
+				configMapName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "Operational dashboard ConfigMap should exist")
+			GinkgoWriter.Printf("  ✓ ConfigMap found: %s\n", configMap.Name)
+
+			dashboardJSON, hasDashboard := configMap.Data["operational-dashboard.json"]
+			Expect(hasDashboard).To(BeTrue(), "ConfigMap should contain operational-dashboard.json")
+			GinkgoWriter.Printf("  ✓ Dashboard JSON found\n")
+
+			By("Verifying dashboard contains 'Optimization Duration - Percentiles and Average' panel")
+			Expect(dashboardJSON).To(ContainSubstring("\"title\": \"Optimization Duration - Percentiles and Average\""),
+				"Dashboard should contain a panel titled 'Optimization Duration - Percentiles and Average'")
+			GinkgoWriter.Printf("  ✓ Found panel with title: 'Optimization Duration - Percentiles and Average'\n")
+
+			By("Verifying Optimization Duration panel has histogram quantile queries")
+			Expect(dashboardJSON).To(ContainSubstring("histogram_quantile(0.50"),
+				"Panel should contain p50 histogram quantile query")
+			Expect(dashboardJSON).To(ContainSubstring("histogram_quantile(0.95"),
+				"Panel should contain p95 histogram quantile query")
+			Expect(dashboardJSON).To(ContainSubstring("histogram_quantile(0.99"),
+				"Panel should contain p99 histogram quantile query")
+			GinkgoWriter.Printf("  ✓ Panel contains p50, p95, p99 histogram quantile queries\n")
+
+			By("Verifying Optimization Duration panel has average calculation")
+			Expect(dashboardJSON).To(ContainSubstring("wva_optimization_duration_seconds_sum"),
+				"Panel should contain sum metric for average calculation")
+			Expect(dashboardJSON).To(ContainSubstring("wva_optimization_duration_seconds_count"),
+				"Panel should contain count metric for average calculation")
+			GinkgoWriter.Printf("  ✓ Panel contains average calculation (sum/count)\n")
+
+			By("Verifying Optimization Duration panel has bucket metric")
+			Expect(dashboardJSON).To(ContainSubstring("wva_optimization_duration_seconds_bucket"),
+				"Panel should contain bucket metric for histogram quantiles")
+			GinkgoWriter.Printf("  ✓ Panel queries metric: wva_optimization_duration_seconds_bucket\n")
+
+			By("Verifying Optimization Duration panel has description")
+			Expect(dashboardJSON).To(ContainSubstring("Duration of optimization loop cycles in seconds"),
+				"Optimization Duration panel should have a description")
+			GinkgoWriter.Printf("  ✓ Panel has description about optimization loop cycles\n")
+
+			GinkgoWriter.Printf("  ✓ 'Optimization Duration - Percentiles and Average' panel is correctly configured\n")
 		})
 	})
 
