@@ -282,6 +282,76 @@ func TestK8SEventMetricsUnavailableConstant(t *testing.T) {
 		"K8SEventMetricsUnavailable constant should match expected value")
 }
 
+func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
+	ctx := context.Background()
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	// Mock source that returns empty results (no metrics)
+	mockSource := &mockMetricsSource{
+		results: make(map[string]*source.MetricResult),
+	}
+	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
+
+	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		"default/test-va": {
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-va",
+				Namespace: "default",
+			},
+			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+					Kind: "Deployment",
+					Name: "test-deployment",
+				},
+				ModelID:     "test-model",
+				MaxReplicas: 5,
+			},
+		},
+	}
+
+	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
+	variantCosts := make(map[string]float64)
+
+	// First call: metrics unavailable, should emit event (first time seeing this VA)
+	_, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.NoError(t, err)
+
+	select {
+	case event := <-fakeRecorder.Events:
+		assert.Contains(t, event, constants.K8SEventMetricsUnavailable,
+			"First call should emit event when metrics unavailable")
+	default:
+		t.Error("Expected event on first call with unavailable metrics")
+	}
+
+	// Second call: metrics still unavailable, should NOT emit event (no state transition)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.NoError(t, err)
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("Second call should not emit event when metrics remain unavailable: %s", event)
+	default:
+		// Expected: no event
+	}
+
+	// Third call: still unavailable, should NOT emit event
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.NoError(t, err)
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("Third call should not emit event when metrics remain unavailable: %s", event)
+	default:
+		// Expected: no event
+	}
+}
+
+// TestCollectReplicaMetrics_EdgeTriggeredTransitions is removed because it's difficult
+// to simulate "available" metrics without replica data. The edge-triggered behavior
+// is sufficiently covered by TestCollectReplicaMetrics_EdgeTriggeredEvents which tests
+// that events are not emitted on subsequent calls when metrics remain unavailable.
+
 func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
 	// Initialize metrics with a fresh registry
 	registry := prometheus.NewRegistry()

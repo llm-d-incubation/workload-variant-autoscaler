@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,15 +74,21 @@ type ReplicaMetricsCollector struct {
 	k8sClient   client.Client
 	podVAMapper *source.PodVAMapper
 	recorder    record.EventRecorder
+
+	// metricsAvailableState tracks whether metrics were available in the previous
+	// cycle for each VA (keyed by namespace/name). Used for edge-triggered events.
+	metricsAvailableState map[string]bool
+	mu                    sync.Mutex
 }
 
 // NewReplicaMetricsCollector creates a new replica metrics collector.
 func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client, recorder record.EventRecorder) *ReplicaMetricsCollector {
 	return &ReplicaMetricsCollector{
-		source:      metricsSource,
-		k8sClient:   k8sClient,
-		podVAMapper: source.NewPodVAMapper(k8sClient),
-		recorder:    recorder,
+		source:                metricsSource,
+		k8sClient:             k8sClient,
+		podVAMapper:           source.NewPodVAMapper(k8sClient),
+		recorder:              recorder,
+		metricsAvailableState: make(map[string]bool),
 	}
 }
 
@@ -89,38 +96,22 @@ func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	reason string,
 ) {
+	if c.recorder == nil {
+		return
+	}
 	for _, va := range variantAutoscalings {
 		c.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
 	}
 }
 
-// This function wraps collectReplicaMetrics to make sure to always record K8S events if needed.
-func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
-	ctx context.Context,
-	modelID string,
-	namespace string,
-	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
-	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	variantCosts map[string]float64,
-) ([]interfaces.ReplicaMetrics, error) {
-	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
-	if err != nil {
-		c.recordMetricsUnavailableEvent(variantAutoscalings, "Failed to collect metrics for model")
-		return nil, err
-	}
-	if len(replicaMetrics) == 0 {
-		c.recordMetricsUnavailableEvent(variantAutoscalings, "No saturation metrics available for model")
-	}
-	return replicaMetrics, nil
-}
-
-// CollectReplicaMetrics collects per-replica metrics for all replicas of a model.
+// CollectReplicaMetrics collects per-replica metrics for all replicas of a model and records
+// K8S events on failures. This wrapper ensures MetricsUnavailable events are emitted when
+// metrics collection fails or returns no data, using edge-triggered emission (only on
+// transitions from available → unavailable) to avoid flooding the event stream.
+//
 // The collected metrics serve both the saturation analyzer and the queueing model analyzer:
 //   - Saturation metrics: KV cache usage, queue length, token capacity, prefix cache hit rate
 //   - Queueing model metrics: scheduler dispatch rate (arrival rate), max batch size
-//
-// Prometheus-sourced metrics are fetched via registered query templates.
-// MaxBatchSize is parsed from the Deployment/LWS's container args (--max-num-seqs).
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -133,6 +124,50 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 // Returns:
 //   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
+func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
+	ctx context.Context,
+	modelID string,
+	namespace string,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	variantCosts map[string]float64,
+) ([]interfaces.ReplicaMetrics, error) {
+	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
+
+	// Determine if metrics are available in this cycle
+	metricsAvailable := err == nil && len(replicaMetrics) > 0
+
+	// Check previous state and emit events only on available → unavailable transitions
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key, va := range variantAutoscalings {
+		previouslyAvailable, seen := c.metricsAvailableState[key]
+
+		// Edge-triggered: only emit event when:
+		// 1. First time seeing this VA and metrics are unavailable (assume previous state was available)
+		// 2. Transitioning from available → unavailable
+		shouldEmitEvent := (!seen && !metricsAvailable) || (seen && previouslyAvailable && !metricsAvailable)
+
+		if shouldEmitEvent {
+			if err != nil {
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, "Failed to collect metrics for model")
+			} else if len(replicaMetrics) == 0 {
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, "No saturation metrics available for model")
+			}
+		}
+
+		// Update state for next cycle
+		c.metricsAvailableState[key] = metricsAvailable
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return replicaMetrics, nil
+}
+
+// collectReplicaMetrics is the internal implementation that collects per-replica metrics.
 func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	ctx context.Context,
 	modelID string,

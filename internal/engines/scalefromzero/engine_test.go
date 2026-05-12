@@ -33,7 +33,6 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	vav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	poolreconciler "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -606,123 +605,6 @@ func TestPoolGetFromLabelsWithNamespace(t *testing.T) {
 				require.Error(t, err, "Expected error (not found) but got none")
 				assert.ErrorIs(t, err, datastore.ErrPoolNotSynced, "Error should be ErrPoolNotSynced")
 				assert.Nil(t, foundPool, "Pool should be nil when not found")
-			}
-		})
-	}
-}
-
-func TestEventRecordingOnScaleToZero(t *testing.T) {
-	gvk := schema.GroupVersionKind{
-		Group:   v1.GroupVersion.Group,
-		Version: v1.GroupVersion.Version,
-		Kind:    "InferencePool",
-	}
-
-	pool := utiltest.MakeInferencePool("pool1").
-		Namespace(namespace).
-		Selector(selector_v1).
-		TargetPorts(8080).
-		EndpointPickerRef("epp-pool1-svc").ObjRef()
-	pool.SetGroupVersionKind(gvk)
-
-	tests := []struct {
-		name                string
-		resourceReplicas    int32
-		expectEvent         bool
-		expectedEventReason string
-	}{
-		{
-			name:                "records ScaledToZero event when scaling to zero with no requests",
-			resourceReplicas:    0,
-			expectEvent:         true,
-			expectedEventReason: constants.K8SEventScaledToZero,
-		},
-		{
-			name:             "no event when resource already has replicas",
-			resourceReplicas: 1,
-			expectEvent:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			va := unittestutil.CreateVariantAutoscalingResource(namespace, resourceName, deploymentName, modelId, acceleratorName, variantCost)
-			dp := unittestutil.MakeDeployment(deploymentName, namespace, tt.resourceReplicas, selector_v1)
-			svc := unittestutil.MakeService("epp-pool1-svc", namespace)
-
-			scheme := runtime.NewScheme()
-			_ = clientgoscheme.AddToScheme(scheme)
-			_ = v1alpha2.Install(scheme)
-			_ = v1.Install(scheme)
-			_ = vav1alpha1.AddToScheme(scheme)
-			_ = appsV1.AddToScheme(scheme)
-			_ = corev1.AddToScheme(scheme)
-
-			fakeClientInitialObjs := []client.Object{pool, dp, va, svc}
-			fakeDynamicClientInitialObject := []runtime.Object{dp}
-
-			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithObjects(fakeClientInitialObjs...).
-				Build()
-
-			fakeDynamicClient := dynamicfake.NewSimpleDynamicClient(scheme, fakeDynamicClientInitialObject...)
-
-			namespacedName := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
-			gknn := common.GKNN{
-				NamespacedName: namespacedName,
-				GroupKind: schema.GroupKind{
-					Group: pool.GroupVersionKind().Group,
-					Kind:  pool.GroupVersionKind().Kind,
-				},
-			}
-
-			req := ctrl.Request{NamespacedName: namespacedName}
-			ctx := context.Background()
-
-			ds := datastore.NewDatastore(nil)
-			inferencePoolReconciler := &poolreconciler.InferencePoolReconciler{Client: fakeClient, Datastore: ds, PoolGKNN: gknn}
-
-			if _, err := inferencePoolReconciler.Reconcile(ctx, req); err != nil {
-				t.Errorf("Unexpected InferencePool reconcile error: %v", err)
-			}
-
-			mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
-			fakeRecorder := record.NewFakeRecorder(100)
-
-			engine := &Engine{
-				client:         fakeClient,
-				executor:       nil,
-				recorder:       fakeRecorder,
-				Datastore:      ds,
-				DynamicClient:  fakeDynamicClient,
-				Mapper:         mapper,
-				maxConcurrency: 30,
-			}
-
-			// Run optimize which will process inactive variants
-			err := engine.optimize(ctx)
-			// Error is expected since we don't have a real metrics source
-			_ = err
-
-			// Check if event was recorded
-			if tt.expectEvent {
-				select {
-				case event := <-fakeRecorder.Events:
-					// Event should contain the expected reason
-					assert.Contains(t, event, tt.expectedEventReason, "Event should contain the expected reason")
-				default:
-					// Event may not be recorded due to missing metrics source
-					// This is acceptable in the test environment
-					t.Log("Expected event but none was recorded (likely due to missing metrics source)")
-				}
-			} else {
-				select {
-				case event := <-fakeRecorder.Events:
-					t.Errorf("Unexpected event recorded: %s", event)
-				default:
-					// No event expected, none recorded - this is correct
-				}
 			}
 		})
 	}

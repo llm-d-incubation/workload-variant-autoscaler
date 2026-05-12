@@ -374,6 +374,9 @@ func (e *Engine) recordOptimizationFailedEvent(
 	variantAutoscalings []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	reason string,
 ) {
+	if e.recorder == nil {
+		return
+	}
 	for _, va := range variantAutoscalings {
 		e.recorder.Eventf(&va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, reason)
 	}
@@ -433,8 +436,9 @@ func (e *Engine) optimizeV1(
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 
 		if err != nil {
-			e.recordOptimizationFailedEvent(modelVAs, "Saturation data preparation failed: "+err.Error())
-			logger.Error(err, "Saturation data preparation failed", "modelID", modelID)
+			msg := "Saturation data preparation failed"
+			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
@@ -1172,7 +1176,9 @@ func (e *Engine) applySaturationDecisions(
 		var updateVa llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 		if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
 			msg := "Failed to get latest VA from API server"
-			e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg+": "+err.Error()) // provide details
+			if e.recorder != nil {
+				e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg)
+			}
 			logger.Error(err, msg, "name", va.Name)
 			continue
 		}
@@ -1320,7 +1326,10 @@ func (e *Engine) applySaturationDecisions(
 
 		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			msg := "Failed to emit metrics for external autoscalers"
-			e.recorder.Eventf(&updateVa, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg+": "+err.Error()) // provide details
+			if e.recorder != nil {
+				// K8s best practice: events should reference the current resource version
+				e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg)
+			}
 			logger.Error(err, msg, "variant", updateVa.Name)
 		} else {
 			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
@@ -1336,7 +1345,7 @@ func (e *Engine) applySaturationDecisions(
 						// do nothing
 					}
 					if decision.WasLimited {
-						e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, "")
+						e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
 					}
 				}
 
