@@ -28,14 +28,12 @@ Cluster object builders and ensure/delete helpers live in [`fixtures/`](./fixtur
 
 ### Infrastructure Setup
 
-Before running tests, deploy the infrastructure in "infra-only" mode:
+Before running tests, deploy **WVA + monitoring + scaler + llm-d EPP/gateway** (no chart VA/HPA; tests create those):
 
 ```bash
-# Deploy only WVA controller + llm-d infrastructure (no VA/HPA resources)
-cd deploy
-export ENVIRONMENT="kind-emulator"  # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
+# From repository root (recommended)
+export ENVIRONMENT=kind-emulator   # or openshift, kubernetes
+make deploy-e2e-infra IMG=localhost/llm-d-workload-variant-autoscaler:dev
 ```
 
 This deploys:
@@ -45,7 +43,7 @@ This deploys:
 - ✅ Prometheus Adapter (external metrics API)
 - ❌ **NO** VariantAutoscaling resources (tests create these)
 - ❌ **NO** HPA resources (tests create these)
-- ❌ **NO** Model services (tests create these)
+- ❌ **NO** default chart ModelService (`make deploy-e2e-infra` skips it; tests create workloads)
 
 ### Verify Infrastructure
 
@@ -125,7 +123,9 @@ export E2E_PROM_ADAPTER_PROBE_SEC=90
 
 `deploy/install.sh` runs **`helm repo update`** by default. To skip (faster but requires existing repo indexes), set **`SKIP_HELM_REPO_UPDATE=true`**.
 
-For infra-only e2e deploys, **`E2E_DEPLOY_WAIT_TIMEOUT`** (default **`120s`**) bounds how long `install.sh` waits for the EPP deployment and inference-gateway deployment to become Available after llm-d Helm apply. Increase if your cluster is slow to pull images.
+When using **`LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true`** (as in `make deploy-e2e-infra`), **`E2E_DEPLOY_WAIT_TIMEOUT`** (default **`120s`**) bounds how long `install-llmd-infra.sh` waits for the EPP and inference-gateway deployments to become Available. Increase if your cluster is slow to pull images.
+
+Emulated Kind post-deploy ModelService cleanup (prefill removal; decode removal when **`LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`**, the default) lives in **`deploy/lib/infra_llmd.sh`**, not in `deploy/kind-emulator/install.sh`.
 
 ### Example: Run on Kind with Emulated GPUs
 
@@ -182,7 +182,6 @@ USE_SIMULATOR=true \
 SCALE_TO_ZERO_ENABLED=false \
 CREATE_CLUSTER=true \
 INSTALL_GATEWAY_CTRLPLANE=true \
-E2E_TESTS_ENABLED=true \
 IMG=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:0.0.1-test \
 DELETE_CLUSTER=false \
 SCALER_BACKEND=keda \
@@ -232,7 +231,7 @@ ginkgo -v --label-filter="smoke" ./test/e2e/
 
 **Tests:**
 1. **Scale-From-Zero** (~7 min)
-   - Requires EPP flow control (`E2E_TESTS_ENABLED=true` or `ENABLE_SCALE_TO_ZERO=true` patches EPP). The scale-from-zero spec applies **InferenceObjective** `e2e-default` via `test/e2e/fixtures` when the CRD exists (install.sh no longer applies it for e2e).
+   - Requires EPP flow control (`LLMD_PATCH_EPP_FLOW_CONTROL=true` / `ENABLE_SCALE_TO_ZERO=true` on `install-llmd-infra.sh`, or `make deploy-e2e-infra`). The scale-from-zero spec applies **InferenceObjective** `e2e-default` via `test/e2e/fixtures` when the CRD exists.
    - Create HPA (or KEDA ScaledObject) with minReplicas=0
    - Verify deployment scales to 0 when idle
    - Generate first request, verify scale-up from 0 → 1
@@ -405,7 +404,7 @@ Use this when smoke/full tests fail on **VA reconciliation**, **HPA / desired re
 **Things to verify:**
 1. **Prometheus** is scraping model/EPP targets; **`MetricsAvailable`** on the VA in `kubectl describe`.
 2. **`external.metrics.k8s.io`** works when using **`SCALER_BACKEND=prometheus-adapter`**; on kind-emulator, the default `auto` mode already probes adapter pod Ready + `external.metrics.k8s.io/v1beta1` discovery. If the API is still empty after install, set **`RESTART_PROMETHEUS_ADAPTER=true`** to force a restart.
-3. **Scale-from-zero:** infra deployed with **`E2E_TESTS_ENABLED=true`** (or **`ENABLE_SCALE_TO_ZERO=true`**) so EPP flow control is on; raise **`E2E_EVENTUALLY_*`** / **`SCALE_UP_TIMEOUT`** if cold start is slow; see **Tier 2** trigger job tunables.
+3. **Scale-from-zero:** infra deployed with **`make deploy-e2e-infra`** (or **`LLMD_PATCH_EPP_FLOW_CONTROL=true`** / **`ENABLE_SCALE_TO_ZERO=true`** on `install-llmd-infra.sh`) so EPP flow control is on; raise **`E2E_EVENTUALLY_*`** / **`SCALE_UP_TIMEOUT`** if cold start is slow; see **Tier 2** trigger job tunables.
 
 **Debug commands** (adjust `-n` to your llm-d namespace, e.g. `LLMD_NAMESPACE`):
 ```bash
@@ -474,4 +473,4 @@ var _ = Describe("My New Test", Label("full"), Ordered, func() {
 
 - [Developer Testing Guide](../../docs/developer-guide/testing.md)
 - [Deployment Guide](../../deploy/README.md)
-- [INFRA_ONLY Mode Documentation](../../deploy/README.md#example-7-infra-only-mode-for-e2e-testing)
+- [Deploy README — e2e-style stack](../../deploy/README.md#example-2-e2e-style-stack-same-as-make-deploy-e2e-infra)

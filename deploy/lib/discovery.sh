@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Runtime environment discovery helpers for deploy/install.sh.
+# Runtime environment discovery helpers for deploy/install-llmd-infra.sh (GPU / InferencePool group).
 # Requires vars: LLMD_NS, POOL_DETECT_RETRIES, DEFAULT_MODEL_ID.
 # Requires funcs: log_info/log_warning/log_success.
-# Sets/exports: ACCELERATOR_TYPE, DEPLOY_LLM_D_INFERENCE_SIM, DETECTED_POOL_GROUP.
+# Sets: ACCELERATOR_TYPE, DEPLOY_LLM_D_INFERENCE_SIM (when no cluster GPUs); DETECTED_POOL_GROUP (detect_inference_pool_api_group).
 #
 
 detect_gpu_type() {
@@ -24,7 +24,7 @@ detect_gpu_type() {
             log_warning "Install NVIDIA GPU Operator"
         else
             log_warning "No GPUs detected on host either"
-            log_info "Setting DEPLOY_LLM_D_INFERENCE_SIM=true for demo mode"
+            log_info "Setting DEPLOY_LLM_D_INFERENCE_SIM=true for demo mode (no cluster GPUs visible)"
             DEPLOY_LLM_D_INFERENCE_SIM=true
         fi
     else
@@ -56,7 +56,6 @@ detect_gpu_type() {
     fi
 
     export ACCELERATOR_TYPE
-    export DEPLOY_LLM_D_INFERENCE_SIM
     log_info "Using detected accelerator type: $ACCELERATOR_TYPE"
 }
 

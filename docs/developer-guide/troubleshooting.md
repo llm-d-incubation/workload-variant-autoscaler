@@ -15,7 +15,7 @@
    
    WVA watches a single InferencePool API group (`inference.networking.k8s.io` or `inference.networking.x-k8s.io`). If the cluster's pools use the other group, the datastore stays empty and scale-from-zero never gets a recommendation.
    
-   **Solution**: Ensure InferencePool is created and reconciled before creating VariantAutoscaling. When using `deploy/install.sh` with llm-d (e.g. kind-emulator or CI), the script auto-detects the pool API group after llm-d deploy and upgrades WVA with the correct `wva.poolGroup` so both local and CI work regardless of llm-d version.
+   **Solution**: Ensure InferencePool is created and reconciled before creating VariantAutoscaling. When using **`deploy/install-llmd-infra.sh`** after `deploy/install.sh` (e.g. `make deploy-e2e-infra`), the llm-d script detects the pool API group after deploy and upgrades WVA with the correct `wva.poolGroup` so both local and CI work regardless of llm-d version.
 
 2. **Labels mismatch**:
    ```bash
@@ -58,7 +58,7 @@
 
 ### E2E and infra-only deploys
 
-For e2e and infra-only deploys, the install script enables EPP flow control when `E2E_TESTS_ENABLED=true` or `ENABLE_SCALE_TO_ZERO=true`. The **InferenceObjective** `e2e-default` is applied by scale-from-zero e2e code when the API exists; non-e2e scale-to-zero still uses `install.sh` with [deploy/inference-objective-e2e.yaml](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/inference-objective-e2e.yaml). See [deploy/install.sh](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/install.sh).
+For e2e-style deploys, **`install-llmd-infra.sh`** enables EPP flow control when `LLMD_PATCH_EPP_FLOW_CONTROL=true` or `ENABLE_SCALE_TO_ZERO=true`. The **InferenceObjective** `e2e-default` is applied by scale-from-zero e2e code when the API exists; non-e2e scale-to-zero can still use **`install-llmd-infra.sh`** with [deploy/inference-objective-e2e.yaml](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/inference-objective-e2e.yaml). See [deploy/install-llmd-infra.sh](https://github.com/llm-d/llm-d-workload-variant-autoscaler/blob/main/deploy/install-llmd-infra.sh).
 
 ## Slow Scale-Up Response
 

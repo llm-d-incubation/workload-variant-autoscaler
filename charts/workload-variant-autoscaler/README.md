@@ -115,7 +115,7 @@ helm install wva-model-b ./workload-variant-autoscaler \
 | hpa.maxReplicas | int | `10` |  |
 | hpa.targetAverageValue | string | `"1"` |  |
 | llmd.modelID | string | `"unsloth/Meta-Llama-3.1-8B"` |  |
-| llmd.modelName | string | `"ms-inference-scheduling-llm-d-modelservice"` |  |
+| llmd.modelName | string | `"ms-inference-scheduling-llm-d-modelservice"` | Example matches older llm-d guide basenames; llm-d main uses [guides/optimized-baseline](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) — align with your cluster’s ModelService name. |
 | llmd.namespace | string | `"llm-d-autoscaler"` |  |
 | va.accelerator | string | `"H100"` |  |
 | va.enabled | bool | `true` |  |
@@ -229,15 +229,6 @@ helm install workload-variant-autoscaler ./workload-variant-autoscaler \
   --set hpa.behavior.scaleDown.stabilizationWindowSeconds=30
 ```
 
-**Configuration via install.sh:**
-```bash
-# Set stabilization window via environment variable
-HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
-
-# Production default (240s)
-./deploy/install.sh
-```
-
 **Key Parameters:**
 - **stabilizationWindowSeconds**: Time to wait before applying scaling decisions (prevents flapping)
 - **selectPolicy**: How to choose from multiple policies (`Max`, `Min`, `Disabled`)
@@ -311,7 +302,7 @@ When running multiple WVA controllers in the same cluster (e.g., for parallel e2
 For parallel e2e tests, each test run can use a unique controller instance:
 ```bash
 # Each PR/run uses its namespace as the controller instance
-CONTROLLER_INSTANCE="llm-d-autoscaler-pr-123" ./deploy/install.sh
+CONTROLLER_INSTANCE="llm-d-autoscaler-pr-123" ./deploy/install.sh -e kubernetes
 ```
 
 This ensures that:

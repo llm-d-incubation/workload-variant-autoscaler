@@ -103,12 +103,11 @@ export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (bat
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 ```
 
-**Deployment flags** - Control which components to deploy:
+**Deployment flags** (`deploy/install.sh`) — llm-d is **`deploy/install-llmd-infra.sh`** after base infra:
 
 ```bash
 export DEPLOY_WVA=true                    # Deploy WVA controller
-export DEPLOY_LLM_D=true                  # Deploy llm-d infrastructure
-export DEPLOY_PROMETHEUS_ADAPTER=true     # Deploy Prometheus Adapter
+export DEPLOY_PROMETHEUS_ADAPTER=true     # Deploy Prometheus Adapter (unless SCALER_BACKEND=keda)
 ```
 
 **Note**: OpenShift uses the built-in User Workload Monitoring (Thanos) instead of deploying a separate Prometheus stack.
@@ -131,21 +130,17 @@ export MODEL_ID="meta-llama/Llama-2-7b-hf"
 make deploy-wva-on-openshift
 ```
 
-### Example 3: E2E Testing Configuration
+### Example 3: CI-style stack (WVA + llm-d)
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-export HPA_STABILIZATION_SECONDS=30  # Fast scaling for testing
-export VLLM_MAX_NUM_SEQS=8          # Low batch size for easy saturation
-export E2E_TESTS_ENABLED=true
-make deploy-wva-on-openshift
+make deploy-wva-on-openshift   # install.sh + install-llmd-infra.sh
 ```
 
-### Example 4: Deploy Only WVA (llm-d Already Deployed)
+### Example 4: Deploy Only WVA (llm-d already deployed)
 
 ```bash
 export DEPLOY_WVA=true
-export DEPLOY_LLM_D=false
 export DEPLOY_PROMETHEUS_ADAPTER=false
 make deploy-wva-on-openshift
 ```

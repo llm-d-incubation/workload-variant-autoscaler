@@ -20,12 +20,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
+# Configuration (Kind emulator). llm-d deploy is via deploy/install-llmd-infra.sh — set MODEL_ID / gateway vars there or in Makefile.
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
+LLM_D_PROJECT=${LLM_D_PROJECT:-llm-d}
 WELL_LIT_PATH_NAME="simulated-accelerators"
 NAMESPACE_SUFFIX="sim"
 EXAMPLE_DIR="$WVA_PROJECT/$LLM_D_PROJECT/guides/$WELL_LIT_PATH_NAME"
-DEPLOY_LLM_D_INFERENCE_SIM=true
 
 # Namespaces
 LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
@@ -36,26 +36,15 @@ WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconcile interval - tests set 30s interval
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
-# Initial WVA pool group; install.sh auto-detects the actual InferencePool API group after llm-d deploy and upgrades WVA (scale-from-zero).
 POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
 
-# llm-d Configuration
+# llm-d naming (used by WVA ServiceMonitor / install-llmd-infra; kind uses guides/simulated-accelerators, not optimized-baseline)
 LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
 LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
 
 LLM_D_MODELSERVICE_NAME="ms-$NAMESPACE_SUFFIX-llm-d-modelservice"
 LLM_D_MODELSERVICE_VALUES="ms-$NAMESPACE_SUFFIX/values.yaml"
 LLM_D_EPP_NAME="gaie-$NAMESPACE_SUFFIX-epp"
-
-# Model and SLO Configuration
-MODEL_ID=${MODEL_ID:-"unsloth/Meta-Llama-3.1-8B"}
-DEFAULT_MODEL_ID="random"
-ACCELERATOR_TYPE="A100"
-SLO_TPOT=24     # Target time-per-output-token SLO (in ms)
-SLO_TTFT=500  # Target time-to-first-token SLO (in ms)
-
-# Gateway Configuration
-INSTALL_GATEWAY_CTRLPLANE="true" # if true, installs gateway control plane providers - defaults to true for emulated clusters
 
 # Prometheus Configuration
 PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
@@ -72,8 +61,6 @@ CLUSTER_GPU_TYPE=${CLUSTER_GPU_TYPE:-"mix"}
 
 # Flags for deployment steps
 CREATE_CLUSTER=${CREATE_CLUSTER:-false}
-DEPLOY_LLM_D_INFERENCE_SIM=${DEPLOY_LLM_D_INFERENCE_SIM:-true}
-E2E_TESTS_ENABLED=${E2E_TESTS_ENABLED:-false}
 
 # Undeployment flags
 DELETE_CLUSTER=${DELETE_CLUSTER:-false}
@@ -301,32 +288,6 @@ _wva_deploy_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib"
 source "${_wva_deploy_lib}/deploy_prometheus_kube_stack.sh"
 # shellcheck source=kube_like_adapter.sh
 source "${_wva_deploy_lib}/kube_like_adapter.sh"
-
-# REQUIRED FUNCTION - only for emulated environments ####
-# Apply llm-d infrastructure fixes for Kind emulated clusters - e.g., remove prefill deployments, remove decode deployments if tests are enabled
-apply_llm_d_infrastructure_fixes() {
-    log_info "Applying llm-d infrastructure fixes for KIND emulator..."
-    # Skip cleanup when modelservice release is not installed (e.g., e2e infra-only
-    # path now excludes it via helmfile selector).
-    if ! helm list -n "$LLMD_NS" --short 2>/dev/null | grep -q '^ms-'; then
-        log_info "No llm-d modelservice release detected in $LLMD_NS; skipping prefill/decode cleanup"
-        return
-    fi
-
-    # Delete prefill deployment
-    # TODO: remove once WVA supports both prefill and decode
-    log_info "Deleting prefill deployments..."
-    kubectl delete deployments.apps \
-        $LLM_D_MODELSERVICE_NAME-prefill \
-        --ignore-not-found -n "$LLMD_NS"
-        
-    if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-        log_info "Deleting decode deployments for tests..."
-        kubectl delete deployments.apps \
-            $LLM_D_MODELSERVICE_NAME-decode \
-            --ignore-not-found -n "$LLMD_NS"
-    fi
-}
 
 #### REQUIRED FUNCTION used by deploy/install.sh ####
 delete_namespaces() {
