@@ -91,13 +91,14 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 	}
 	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
 	labels := map[string]string{
-		"app":                        appLabel,
-		"llm-d.ai/inferenceServing":  defaultLabelValueTrue,
-		"llm-d.ai/model":             defaultModelServiceLabelValue,
-		"llm-d.ai/model-pool":        poolName,
-		"test-resource":              defaultTestResourceLabelValue,
-		"llm-d.ai/guide":             defaultGuideLabelValue,
-		"llm-d.ai/inference-serving": defaultLabelValueTrue,
+		"app":                          appLabel,
+		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
+		"llm-d.ai/model":               defaultModelServiceLabelValue,
+		"llm-d.ai/model-pool":          poolName,
+		"test-resource":                defaultTestResourceLabelValue,
+		"llm-d.ai/guide":               defaultGuideLabelValue,
+		"llm-d.ai/inference-serving":   defaultLabelValueTrue,
+		"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
 	}
 
 	envVars := []corev1.EnvVar{
@@ -141,12 +142,13 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app":                        appLabel,
-					"llm-d.ai/inferenceServing":  defaultLabelValueTrue,
-					"llm-d.ai/model":             defaultModelServiceLabelValue,
-					"llm-d.ai/model-pool":        poolName,
-					"llm-d.ai/guide":             defaultGuideLabelValue,
-					"llm-d.ai/inference-serving": defaultLabelValueTrue,
+					"app":                          appLabel,
+					"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
+					"llm-d.ai/model":               defaultModelServiceLabelValue,
+					"llm-d.ai/model-pool":          poolName,
+					"llm-d.ai/guide":               defaultGuideLabelValue,
+					"llm-d.ai/inference-serving":   defaultLabelValueTrue,
+					"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
 				},
 			},
 			Template: corev1.PodTemplateSpec{

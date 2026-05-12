@@ -24,23 +24,23 @@ spec:
         # Required: Prometheus server URL
         - name: PROMETHEUS_BASE_URL
           value: "https://prometheus-k8s.monitoring.svc.cluster.local:9091"
-        
+
         # Optional: TLS configuration
         - name: PROMETHEUS_TLS_INSECURE_SKIP_VERIFY
           value: "false"  # Set to "true" only for testing/development
-        
+
         - name: PROMETHEUS_CA_CERT_PATH
           value: "/etc/prometheus-certs/ca.crt"
-        
+
         - name: PROMETHEUS_CLIENT_CERT_PATH
           value: "/etc/prometheus-certs/client.crt"
-        
+
         - name: PROMETHEUS_CLIENT_KEY_PATH
           value: "/etc/prometheus-certs/client.key"
-        
+
         - name: PROMETHEUS_SERVER_NAME
           value: "prometheus-k8s.monitoring.svc.cluster.local"
-        
+
         # Optional: Bearer token authentication
         - name: PROMETHEUS_BEARER_TOKEN
           valueFrom:
@@ -101,7 +101,7 @@ data:
   ```bash
   # Terminal 1: Port forward Prometheus
   kubectl port-forward -n monitoring svc/prometheus-k8s 9091:9091
-  
+
   # Terminal 2: Set environment for local development
   export PROMETHEUS_BASE_URL=https://127.0.0.1:9091
   export PROMETHEUS_TLS_INSECURE_SKIP_VERIFY=true

@@ -109,19 +109,19 @@ main() {
     deploy_monitoring_stack
     deploy_optional_benchmark_grafana
 
-    # Deploy WVA prerequisites (environment-specific)
+    # Deploy WVA prerequisites first (environment-specific)
     if [ "$DEPLOY_WVA" = "true" ]; then
         deploy_wva_prerequisites
     fi
 
-    # Deploy WVA
+    # Deploy WVA controller before llm-d infrastructure
     if [ "$DEPLOY_WVA" = "true" ]; then
         deploy_wva_controller
     else
         log_info "Skipping WVA deployment (DEPLOY_WVA=false)"
     fi
 
-    # Deploy llm-d
+    # Deploy llm-d infrastructure after WVA (includes InferencePool CRD)
     if [ "$DEPLOY_LLM_D" = "true" ]; then
         deploy_llm_d_infrastructure
 
@@ -131,7 +131,6 @@ main() {
         else
             log_info "Skipping llm-d related fixes for non-emulated environment (ENVIRONMENT=$ENVIRONMENT)"
         fi
-
     else
         log_info "Skipping llm-d deployment (DEPLOY_LLM_D=false)"
     fi

@@ -143,7 +143,7 @@ func cleanupScaleFromZeroResources() {
 // so use SCALER_BACKEND=keda for this Describe when running on OpenShift.
 // On platforms without the HPAScaleToZero feature gate (e.g. OpenShift), set SCALER_BACKEND=keda
 // so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
-var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Label("flaky"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-pool"
 		modelServiceName = "scale-from-zero-ms"
@@ -393,7 +393,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Label("flaky"
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero", Label("flaky"), func() {
+		It("should detect pending requests and trigger scale-from-zero", func() {
 			By("Discovering inference gateway service")
 			// Discover the inference gateway service
 			gatewayServiceName := ""
@@ -608,7 +608,7 @@ fi
 }
 
 // Scale-from-zero test for LeaderWorkerSet
-var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("full"), Label("flaky"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-lws-pool"
 		modelServiceName = "scale-from-zero-lws-ms"
@@ -908,7 +908,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero for LWS", Label("flaky"), func() {
+		It("should detect pending requests and trigger scale-from-zero for LWS", func() {
 			By("Discovering inference gateway service")
 			gatewayServiceName := ""
 			serviceList, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
@@ -1029,7 +1029,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 })
 
 // Scale-from-zero test for LeaderWorkerSet (single-node)
-var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", Serial, Label("full"), Label("flaky"), Ordered, func() {
+var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", Serial, Label("full"), Ordered, func() {
 	var (
 		poolName         = "scale-from-zero-lws-single-pool"
 		modelServiceName = "scale-from-zero-lws-single-ms"
@@ -1329,7 +1329,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			}
 		})
 
-		It("should detect pending requests and trigger scale-from-zero for single-node LWS", Label("flaky"), func() {
+		It("should detect pending requests and trigger scale-from-zero for single-node LWS", func() {
 			By("Discovering inference gateway service")
 			gatewayServiceName := ""
 			serviceList, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})

@@ -310,23 +310,7 @@ deploy_llm_d_infrastructure() {
     # (required for scale-from-zero: the image must support flow control for queue metrics).
     if [ "$ENABLE_SCALE_TO_ZERO" == "true" ] || [ "$E2E_TESTS_ENABLED" == "true" ]; then
         if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
-            # Get the current image from the deployment
-            local CURRENT_IMAGE=$(kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o jsonpath='{.spec.template.spec.containers[0].image}')
-            
-            # Only patch if the image is different
-            if [ "$CURRENT_IMAGE" != "$LLM_D_INFERENCE_SCHEDULER_IMG" ]; then
-                log_info "Patching llm-d-inference-scheduler deployment: updating image from $CURRENT_IMAGE to $LLM_D_INFERENCE_SCHEDULER_IMG"
-                kubectl patch deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[
-                    {
-                        "op": "replace",
-                        "path": "/spec/template/spec/containers/0/image",
-                        "value": "'$LLM_D_INFERENCE_SCHEDULER_IMG'"
-                    }
-                ]'
-            else
-                log_info "Skipping image patch: llm-d-inference-scheduler already using $LLM_D_INFERENCE_SCHEDULER_IMG"
-            fi
-
+        
             # Enable flowControl feature gate in the EPP ConfigMap
             if kubectl get configmap "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
                 # Check if flowControl is already enabled
@@ -390,6 +374,31 @@ deploy_llm_d_infrastructure() {
         fi
     fi
 
+    # Patch EPP and Gateway CPU requests for resource-constrained environments (e.g., KIND)
+    # This reduces CPU requests from 4 cores to 500m (0.5 cores) each to allow scheduling on smaller clusters
+    log_info "Patching EPP and Gateway CPU requests for resource-constrained environments..."
+    
+    if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &>/dev/null; then
+        local current_epp_cpu=$(kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo "unknown")
+        log_info "Current EPP CPU request: $current_epp_cpu"
+        
+        if [ "$current_epp_cpu" != "500m" ]; then
+            log_info "Patching EPP deployment to request 500m CPUs instead of $current_epp_cpu"
+            kubectl patch deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[
+                {
+                    "op": "replace",
+                    "path": "/spec/template/spec/containers/0/resources/requests/cpu",
+                    "value": "500m"
+                }
+            ]' && log_success "EPP CPU request patched to 500m" || log_warning "Failed to patch EPP CPU request"
+        else
+            log_info "EPP already requesting 500m CPUs, skipping patch"
+        fi
+    else
+        log_warning "EPP deployment not found: $LLM_D_EPP_NAME"
+    fi
+    
+
     # For deterministic e2e infra-only runs, avoid waiting on all llm-d deployments.
     # The full wait often blocks on modelservice decode/prefill readiness, which is
     # unnecessary for the e2e suite because tests create/manage their own workloads.
@@ -405,12 +414,32 @@ deploy_llm_d_infrastructure() {
         fi
 
         # Gateway deployment name includes release prefix and can vary by environment.
-        # Wait only if we can detect one, otherwise continue.
+        # Patch Gateway CPU request before waiting
         local gateway_deploy
         gateway_deploy=$(kubectl get deployment -n "$LLMD_NS" -o name 2>/dev/null | grep "inference-gateway-istio" | head -1 || true)
         if [ -n "$gateway_deploy" ]; then
+            local gateway_name=$(echo "$gateway_deploy" | sed 's|deployment.apps/||')
+            local current_gw_cpu=$(kubectl get deployment "$gateway_name" -n "$LLMD_NS" -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo "unknown")
+            log_info "Current Gateway CPU request: $current_gw_cpu"
+            
+            if [ "$current_gw_cpu" != "500m" ] && [ "$current_gw_cpu" != "unknown" ]; then
+                log_info "Patching Gateway deployment to request 500m CPUs instead of $current_gw_cpu"
+                kubectl patch deployment "$gateway_name" -n "$LLMD_NS" --type='json' -p='[
+                    {
+                        "op": "replace",
+                        "path": "/spec/template/spec/containers/0/resources/requests/cpu",
+                        "value": "500m"
+                    }
+                ]' && log_success "Gateway CPU request patched to 500m" || log_warning "Failed to patch Gateway CPU request"
+            else
+                log_info "Gateway already requesting 500m CPUs or resources not set, skipping patch"
+            fi
+            
+            # Now wait for Gateway to be available
             kubectl wait --for=condition=Available "$gateway_deploy" -n "$LLMD_NS" --timeout="$E2E_DEPLOY_WAIT_TIMEOUT" || \
                 log_warning "Gateway deployment not ready yet: $gateway_deploy"
+        else
+            log_warning "Gateway deployment not found in $LLMD_NS"
         fi
     else
         # Model-serving pods (vLLM) can take several minutes to download and load
@@ -440,7 +469,12 @@ deploy_llm_d_infrastructure() {
             log_warning "Could not detect InferencePool API group - WVA may have empty datastore for scale-from-zero"
         fi
     fi
+    
+    # List all pods in llm-d namespace
+    log_info "Listing all pods in $LLMD_NS namespace:"
+    kubectl get pods -n "$LLMD_NS" -o wide || log_warning "Failed to list pods in $LLMD_NS"
 
     cd "$WVA_PROJECT"
+    
     log_success "llm-d infrastructure deployment complete"
 }

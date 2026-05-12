@@ -38,6 +38,7 @@ BENCHMARK_FORCE      ?= true
 BENCHMARK_MONITORING ?= true
 BENCHMARK_UV         ?= false
 BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
+BENCHMARK_MODEL_ID   ?= $(MODEL_ID)
 
 # Flags for deploy/install.sh installation script
 # Full e2e / CI-style cluster infra (WVA + llm-d, no chart VA/HPA): prefer `make deploy-e2e-infra`
@@ -370,17 +371,18 @@ benchmark-install: ## Clone llm-d-benchmark and install the llmdbenchmark CLI
 	@cd $(BENCHMARK_REPO_DIR) && ./install.sh $(if $(filter true,$(BENCHMARK_UV)),--uv,--no-uv)
 
 .PHONY: benchmark-standup
-benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>)
+benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-standup BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
 	fi
 	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
 		-p $(BENCHMARK_NAMESPACE) \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
 
 .PHONY: benchmark-run
-benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>)
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
@@ -393,12 +395,13 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 		-p $(BENCHMARK_NAMESPACE) \
 		-l $(BENCHMARK_HARNESS) \
 		-w $(BENCHMARK_WORKLOAD) \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
 
 BURSTY_WORKLOAD ?= bursty.yaml
 
 .PHONY: benchmark-run-bursty
-benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi-stage rates (set BENCHMARK_NAMESPACE=<namespace>)
+benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi-stage rates (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-bursty BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
@@ -412,10 +415,11 @@ benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi
 		-l inference-perf \
 		-w $(BURSTY_WORKLOAD) \
 		-U http://infra-llmdbench-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80 \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
 
 .PHONY: benchmark-run-all
-benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenario (set BENCHMARK_NAMESPACE=<namespace>)
+benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenario (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-all BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
@@ -434,6 +438,7 @@ benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenar
 		echo "=========================================="; \
 		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
 			-p $(BENCHMARK_NAMESPACE) \
+			$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 			$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,) || { \
 			echo "ERROR: Standup failed for $$scenario_name"; \
 			exit 1; \
@@ -445,7 +450,8 @@ benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenar
 		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
 			-p $(BENCHMARK_NAMESPACE) \
 			-l $(BENCHMARK_HARNESS) \
-			-w "$$scenario_name" || { \
+			-w "$$scenario_name" \
+			$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) || { \
 			echo "ERROR: Scenario $$scenario_name failed"; \
 			exit 1; \
 		}; \
