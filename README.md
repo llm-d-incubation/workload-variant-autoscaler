@@ -17,9 +17,8 @@ In WVA, a **variant** is a way of serving a given model: a scale target (Deploym
 
 - **Intelligent Autoscaling**: Optimizes replica count by observing the current state of the system
 - **Cost Optimization**: Minimizes infrastructure costs by picking the correct accelerator variant
-<!-- 
-- **Performance Modeling**: Uses queueing theory (M/M/1/k, M/G/1 models) for accurate latency and throughput prediction
-- **Multi-Model Support**: Manages multiple models with different service classes and priorities -->
+- **GPU Limiter** (Experimental): Constrains scaling decisions based on actual GPU availability per accelerator type
+- **Scale to Zero**: Automatically scales idle models to zero replicas, freeing GPU resources
 
 ## Documentation
 
@@ -27,6 +26,8 @@ In WVA, a **variant** is a way of serving a given model: a scale target (Deploym
 - [Installation Guide](docs/user-guide/installation.md)
 - [Configuration](docs/user-guide/configuration.md)
 - [CRD Reference](docs/user-guide/crd-reference.md)
+- [GPU Limiter](docs/user-guide/gpu-limiter.md) - Resource-aware scaling constraints (Experimental)
+- [Scale to Zero](docs/user-guide/scale-to-zero.md) - Automatic scaling for idle models
 - [Multi-Controller Isolation](docs/user-guide/multi-controller-isolation.md)
 
 ### Integrations

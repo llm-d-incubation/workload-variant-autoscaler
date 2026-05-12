@@ -191,6 +191,71 @@ wva:
 
 See `docs/saturation-scaling-config.md` for detailed configuration documentation.
 
+### GPU Limiter Configuration (Experimental)
+
+The GPU Limiter constrains scaling decisions based on actual GPU availability in your cluster. It ensures scale-up decisions are feasible and fairly distributed across models competing for limited GPU resources.
+
+**Enable via Helm:**
+```bash
+helm install workload-variant-autoscaler ./workload-variant-autoscaler \
+  --set wva.capacityScaling.default.enableLimiter=true
+```
+
+**Via values.yaml:**
+```yaml
+wva:
+  capacityScaling:
+    default:
+      enableLimiter: true  # Enable GPU-aware scaling constraints
+```
+
+**Key Features:**
+- Tracks GPU capacity per accelerator type (H100, A100, MI300X, etc.)
+- Uses greedy-by-saturation algorithm to prioritize most saturated models
+- Prevents unfulfillable scale-up requests
+
+See [GPU Limiter Guide](../../docs/user-guide/gpu-limiter.md) for detailed documentation.
+
+### Scale to Zero Configuration
+
+Scale-to-Zero automatically scales idle model deployments to zero replicas after a configurable retention period, freeing GPU resources.
+
+**Enable via Helm:**
+```bash
+helm install workload-variant-autoscaler ./workload-variant-autoscaler \
+  --set wva.scaleToZero=true
+```
+
+**Via values.yaml:**
+```yaml
+wva:
+  scaleToZero: true  # Enable scaling to zero for idle models
+```
+
+**ConfigMap Configuration** (for retention periods and per-model settings):
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-scale-to-zero-config
+  namespace: workload-variant-autoscaler-system
+data:
+  default: |
+    enable_scale_to_zero: true
+    retention_period: "15m"
+
+  # Disable for critical model
+  critical-model: |
+    model_id: production/critical-api
+    enable_scale_to_zero: false
+```
+
+**Prerequisites:**
+- Kubernetes 1.27+ (HPAScaleToZero feature gate enabled by default)
+- HPA configured with `minReplicas: 0`
+
+See [Scale to Zero Guide](../../docs/user-guide/scale-to-zero.md) for detailed documentation.
+
 ### HPA Behavior Configuration
 
 The chart provides full control over HPA scaling behavior through the `hpa.behavior` section. This allows you to configure stabilization windows and scaling policies without post-deployment patching.

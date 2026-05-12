@@ -540,6 +540,36 @@ WARN Failed to load initial saturation scaling config, will use defaults
    kubectl logs -n <workload-variant-autoscaler-namespace> deployment/wva-controller | grep "Saturation scaling configuration loaded"
    ```
 
+### GPU Limiter Issues
+
+#### Verify Limiter Configuration
+
+1. **Check ConfigMap**: Ensure `enableLimiter: true` is set
+   ```bash
+   kubectl get cm saturation-scaling-config -n workload-variant-autoscaler-system -o yaml
+   ```
+
+2. **Check controller logs**: Look for limiter-related messages
+   ```bash
+   kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager | grep -i limiter
+   ```
+
+3. **Verify GPU discovery**: Check if GPUs are detected
+   ```bash
+   kubectl get nodes -o json | jq '.items[].status.allocatable | with_entries(select(.key | contains("gpu")))'
+   ```
+
+#### GPU Allocation Issues
+
+1. **Verify GPU requests**: Ensure deployment specifies correct GPU requirements
+2. **Check saturation levels**: Lower saturation models may be deprioritized
+3. **Verify GPU type**: Ensure the deployment's GPU type matches available cluster GPUs
+
+#### Scaling Behavior Issues
+
+1. **Check saturation configuration**: Review thresholds in your ConfigMap
+2. **Review VA status**: Check `desiredOptimizedAlloc` vs current replicas
+
 ## Example: Production Setup
 
 **deploy/configmap-saturation-scaling.yaml:**

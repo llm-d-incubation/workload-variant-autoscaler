@@ -46,11 +46,22 @@ wva:
     #   YOUR_CA_CERTIFICATE_HERE
     #   -----END CERTIFICATE-----
 
-  limitedMode: false  # Enable limited mode (default: false)
+  # GPU Limiter mode - constrains scaling based on actual GPU availability (Experimental)
+  # When enabled, scale-up decisions are limited by available GPUs per accelerator type
+  # Uses greedy-by-saturation algorithm to prioritize most saturated models
+  # See docs/user-guide/gpu-limiter.md for details
+  limitedMode: false
+
   # Node selector for sharding WVA instances
   # Example: "wva.llmd.ai/shard=instance-a"
   nodeSelector: ""
-  scaleToZero: false  # Enable scaling variants to zero replicas (default: false)
+
+  # Scale to Zero - automatically scale idle models to zero replicas
+  # When enabled, models with no traffic for the retention period will scale to 0
+  # Requires: Kubernetes 1.27+ (HPAScaleToZero feature gate) and HPA minReplicas: 0
+  # Configure retention periods via model-scale-to-zero-config ConfigMap
+  # See docs/user-guide/scale-to-zero.md for details
+  scaleToZero: false
   # Controller instance identifier for multi-controller isolation
   # When set, adds controller_instance label to all emitted metrics
   # Used with HPA selector to filter metrics from specific controller instances
@@ -72,6 +83,7 @@ wva:
       queueLengthThreshold: 5     # Replica saturated if queue length >= threshold
       kvSpareTrigger: 0.1         # Scale-up if avg spare KV capacity < trigger (0.0-1.0)
       queueSpareTrigger: 3        # Scale-up if avg spare queue capacity < trigger
+      enableLimiter: false        # GPU Limiter: constrain scaling based on GPU availability (Experimental)
     
     # Per-model/namespace overrides (optional)
     # Example:

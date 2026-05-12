@@ -1,0 +1,36 @@
+# Sample ConfigMap for saturation-based scaling configuration
+#
+# This ConfigMap controls the saturation analyzer thresholds and GPU Limiter feature.
+# See docs/user-guide/gpu-limiter.md and docs/saturation-scaling-config.md for details.
+#
+# Configuration structure:
+# - 'default' entry: Global defaults applied to all models
+# - Override entries: Per-model/namespace custom settings (requires model_id field)
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saturation-scaling-config
+  namespace: workload-variant-autoscaler-system
+data:
+  # Global defaults applied to all models unless overridden
+  default: |
+    kvCacheThreshold: 0.80       # Replica saturated if KV cache >= 80%
+    queueLengthThreshold: 5      # Replica saturated if queue >= 5 requests
+    kvSpareTrigger: 0.1          # Scale-up if spare KV capacity < 10%
+    queueSpareTrigger: 3         # Scale-up if spare queue capacity < 3
+    enableLimiter: true          # GPU Limiter: constrain scaling by GPU availability
+
+  # Example: Override for production model (more conservative)
+  # production-model: |
+  #   model_id: my-org/production-model
+  #   namespace: production
+  #   kvCacheThreshold: 0.75
+  #   kvSpareTrigger: 0.15
+
+  # Example: Override for development model (more aggressive)
+  # dev-model: |
+  #   model_id: my-org/dev-model
+  #   namespace: development
+  #   kvCacheThreshold: 0.90
+  #   queueLengthThreshold: 10
