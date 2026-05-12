@@ -534,9 +534,9 @@ var _ = Describe("ConfigMapReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Recording different error types")
-			metrics.RecordError(ctx, constants.ComponentController, "Failed to get ConfigMap")
-			metrics.RecordError(ctx, constants.ComponentController, "Failed to update ConfigMap")
-			metrics.RecordError(ctx, constants.ComponentCollector, "Failed to collect metrics")
+			metrics.RecordError(constants.ComponentController, "Failed to get ConfigMap")
+			metrics.RecordError(constants.ComponentController, "Failed to update ConfigMap")
+			metrics.RecordError(constants.ComponentCollector, "Failed to collect metrics")
 
 			By("Verifying all errors were recorded")
 			metricFamilies, err := testRegistry.Gather()

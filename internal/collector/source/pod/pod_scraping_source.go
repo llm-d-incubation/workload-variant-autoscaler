@@ -236,7 +236,7 @@ func (p *PodScrapingSource) scrapeAllPods(ctx context.Context, pods []*corev1.Po
 				errorType := "Failed to scrape pod"
 				logger.V(logging.VERBOSE).Error(err, errorType,
 					"pod", pod.Name)
-				metrics.RecordError(ctx, constants.ComponentCollector, errorType)
+				metrics.RecordError(constants.ComponentCollector, errorType)
 				return
 			}
 

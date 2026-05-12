@@ -23,7 +23,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		err := errors.New("config is nil")
 		errorType := "Config is nil in ConfigMapReconciler bootstrap"
 		logger.Error(err, errorType)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return err
 	}
 
@@ -56,7 +56,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		if err := r.List(ctx, namespaceList, &client.ListOptions{}); err != nil {
 			errorType := "Failed to list namespaces during bootstrap"
 			logger.Error(err, errorType)
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			r.Config.MarkConfigMapsBootstrapFailed(err)
 			return fmt.Errorf("failed to list namespaces: %w", err)
 		}

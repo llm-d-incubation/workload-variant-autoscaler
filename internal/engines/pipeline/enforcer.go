@@ -90,7 +90,7 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 		logger.Error(err, errorType,
 			"modelID", modelID,
 			"namespace", namespace)
-		metrics.RecordError(ctx, constants.ComponentEnforcer, errorType)
+		metrics.RecordError(constants.ComponentEnforcer, errorType)
 		return false
 	}
 

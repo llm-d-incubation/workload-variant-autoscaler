@@ -646,9 +646,9 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Recording different error types")
-			metrics.RecordError(ctx, constants.ComponentController, "Unable to fetch VariantAutoscaling")
-			metrics.RecordError(ctx, constants.ComponentController, "Failed to update VariantAutoscaling status")
-			metrics.RecordError(ctx, constants.ComponentController, "Failed to get scale target Deployment")
+			metrics.RecordError(constants.ComponentController, "Unable to fetch VariantAutoscaling")
+			metrics.RecordError(constants.ComponentController, "Failed to update VariantAutoscaling status")
+			metrics.RecordError(constants.ComponentController, "Failed to get scale target Deployment")
 
 			By("Verifying all errors were recorded separately")
 			metricFamilies, err := testRegistry.Gather()

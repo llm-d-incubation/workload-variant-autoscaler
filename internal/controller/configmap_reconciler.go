@@ -62,7 +62,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		errorType := "Failed to get ConfigMap"
 		logger.Error(err, errorType, "name", req.Name, "namespace", req.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -165,7 +165,7 @@ func (r *ConfigMapReconciler) handleSaturationConfigMap(ctx context.Context, cm 
 	logger := log.FromContext(ctx)
 
 	// Parse saturation scaling config entries
-	configs, count := parseSaturationConfig(ctx, cm.Data, logger)
+	configs, count := parseSaturationConfig(cm.Data, logger)
 
 	// Update global or namespace-local config
 	if isGlobal {
@@ -209,7 +209,7 @@ func (r *ConfigMapReconciler) handleQMAnalyzerConfigMap(ctx context.Context, cm 
 	logger := log.FromContext(ctx)
 
 	// Parse queue model based scaling config entries
-	configs, count := parseQMAnalyzerConfig(ctx, cm.Data, logger)
+	configs, count := parseQMAnalyzerConfig(cm.Data, logger)
 
 	// Update global or namespace-local config
 	if isGlobal {

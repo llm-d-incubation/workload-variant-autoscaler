@@ -32,7 +32,7 @@ import (
 
 // parseSaturationConfig parses saturation scaling configuration from ConfigMap data.
 // Returns the parsed configs and count of successfully parsed entries.
-func parseSaturationConfig(ctx context.Context, cmData map[string]string, logger logr.Logger) (config.SaturationScalingConfigPerModel, int) {
+func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config.SaturationScalingConfigPerModel, int) {
 	configs := make(config.SaturationScalingConfigPerModel)
 	count := 0
 	for key, yamlStr := range cmData {
@@ -40,7 +40,7 @@ func parseSaturationConfig(ctx context.Context, cmData map[string]string, logger
 		if err := yaml.Unmarshal([]byte(yamlStr), &satConfig); err != nil {
 			errorType := "Failed to parse saturation scaling config entry"
 			logger.Error(err, errorType, "key", key)
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		// Apply defaults before validation (handles omitempty zero-values like scaleUpThreshold)
@@ -48,7 +48,7 @@ func parseSaturationConfig(ctx context.Context, cmData map[string]string, logger
 		if err := satConfig.Validate(); err != nil {
 			errorType := "Invalid saturation scaling config entry"
 			logger.Error(err, errorType, "key", key)
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		configs[key] = satConfig
@@ -60,7 +60,7 @@ func parseSaturationConfig(ctx context.Context, cmData map[string]string, logger
 // parseQMAnalyzerConfig parses queueing model configuration from ConfigMap data.
 // Returns the parsed configs and count of successfully parsed entries.
 // Invalid or unparseable entries are skipped with an error log.
-func parseQMAnalyzerConfig(ctx context.Context, cmData map[string]string, logger logr.Logger) (config.QMAnalyzerConfigPerModel, int) {
+func parseQMAnalyzerConfig(cmData map[string]string, logger logr.Logger) (config.QMAnalyzerConfigPerModel, int) {
 	configs := make(config.QMAnalyzerConfigPerModel)
 	count := 0
 	for key, yamlStr := range cmData {
@@ -68,13 +68,13 @@ func parseQMAnalyzerConfig(ctx context.Context, cmData map[string]string, logger
 		if err := yaml.Unmarshal([]byte(yamlStr), &qmConfig); err != nil {
 			errorType := "Failed to parse queueing model config entry"
 			logger.Error(err, errorType, "key", key)
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		if err := qmConfig.Validate(); err != nil {
 			errorType := "Invalid queueing model config entry"
 			logger.Error(err, errorType, "key", key)
-			metrics.RecordError(ctx, constants.ComponentController, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		configs[key] = qmConfig

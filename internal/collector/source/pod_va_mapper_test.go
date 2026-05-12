@@ -475,9 +475,9 @@ var _ = Describe("PodVAMapper", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Recording different error types")
-			metrics.RecordError(ctx, constants.ComponentCollector, errorTypeVANotFound)
-			metrics.RecordError(ctx, constants.ComponentCollector, "failed to get pod")
-			metrics.RecordError(ctx, constants.ComponentCollector, "failed to get ReplicaSet")
+			metrics.RecordError(constants.ComponentCollector, errorTypeVANotFound)
+			metrics.RecordError(constants.ComponentCollector, "failed to get pod")
+			metrics.RecordError(constants.ComponentCollector, "failed to get ReplicaSet")
 
 			By("Verifying all errors were recorded separately")
 			metricFamilies, err := testRegistry.Gather()

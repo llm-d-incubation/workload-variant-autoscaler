@@ -59,14 +59,14 @@ func (m *PodVAMapper) FindVAForPod(
 		va, err = indexers.FindVAForDeployment(ctx, m.k8sClient, scaleTargetName, namespace)
 		if err != nil {
 			logger.V(logging.DEBUG).Error(err, errorType, "scaleTarget", scaleTargetName, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, errorType)
+			metrics.RecordError(constants.ComponentCollector, errorType)
 			return ""
 		}
 	case "LeaderWorkerSet":
 		va, err = indexers.FindVAForLeaderWorkerSet(ctx, m.k8sClient, scaleTargetName, namespace)
 		if err != nil {
 			logger.V(logging.DEBUG).Error(err, errorType, "scaleTarget", scaleTargetName, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, errorType)
+			metrics.RecordError(constants.ComponentCollector, errorType)
 			return ""
 		}
 	}
@@ -92,7 +92,7 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 	if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
 		errorType := "failed to get pod"
 		logger.V(logging.DEBUG).Error(err, errorType, "pod", podName, "namespace", namespace)
-		metrics.RecordError(ctx, constants.ComponentCollector, errorType)
+		metrics.RecordError(constants.ComponentCollector, errorType)
 		return "", ""
 	}
 
@@ -108,7 +108,7 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 		rs := &appsv1.ReplicaSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
 			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "replicaset", owner.Name, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
+			metrics.RecordError(constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs
@@ -116,7 +116,7 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 		rs := &appsv1.StatefulSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
 			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "statefulset", owner.Name, "namespace", namespace)
-			metrics.RecordError(ctx, constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
+			metrics.RecordError(constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs

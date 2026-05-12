@@ -434,7 +434,7 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 // metric vars are nil otherwise, and the Set calls below would panic).
 // InitMetricsAndEmitter is the recommended construction path because it
 // performs the registration before returning the emitter.
-func RecordError(ctx context.Context, component, errorType string) {
+func RecordError(component, errorType string) {
 	if errorsTotal == nil {
 		return
 	}

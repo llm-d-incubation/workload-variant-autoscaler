@@ -135,7 +135,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		logger.Error(err, errorType,
 			"name", req.Name,
 			"namespace", req.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -179,7 +179,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
 				errorType := "Failed to update VariantAutoscaling status"
 				logger.Error(err, errorType)
-				metrics.RecordError(ctx, constants.ComponentController, errorType)
+				metrics.RecordError(constants.ComponentController, errorType)
 				return ctrl.Result{}, err
 			}
 
@@ -192,7 +192,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			"name", scaleTargetName,
 			"namespace", va.Namespace,
 			"scale target", va.Spec.ScaleTargetRef.Kind)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -265,7 +265,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		errorType := "Failed to update VariantAutoscaling status"
 		logger.Error(err, errorType,
 			"name", va.Name)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -310,7 +310,7 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 		logger.Error(err, errorType,
 			"deployment", deploy.Name,
 			"namespace", deploy.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return nil
 	}
 
@@ -350,7 +350,7 @@ func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Co
 		logger.Error(err, errorType,
 			"leaderWorkerSet", lws.Name,
 			"namespace", lws.Namespace)
-		metrics.RecordError(ctx, constants.ComponentController, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return nil
 	}
 

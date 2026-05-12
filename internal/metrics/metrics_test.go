@@ -57,11 +57,9 @@ func TestRecordError(t *testing.T) {
 			err := InitMetrics(registry)
 			require.NoError(t, err)
 
-			ctx := context.Background()
-
 			// Call RecordError the specified number of times
 			for i := 0; i < tt.callCount; i++ {
-				RecordError(ctx, tt.component, tt.errorType)
+				RecordError(tt.component, tt.errorType)
 			}
 
 			// Method 1: Using testutil.ToFloat64 - simplest for single metric
@@ -120,12 +118,10 @@ func TestRecordErrorNotInitialized(t *testing.T) {
 	// Set errorsTotal to nil to simulate uninitialized state
 	errorsTotal = nil
 
-	ctx := context.Background()
-
 	// RecordError should not panic when errorsTotal is nil - it returns early gracefully
 	// to handle cases where metrics may not be initialized
 	require.NotPanics(t, func() {
-		RecordError(ctx, constants.ComponentController, "TestError")
+		RecordError(constants.ComponentController, "TestError")
 	}, "RecordError should not panic when errorsTotal is nil (metrics not initialized)")
 }
 
@@ -135,8 +131,7 @@ func TestRecordErrorMetricFormat(t *testing.T) {
 	err := InitMetrics(registry)
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	RecordError(ctx, constants.ComponentController, "ConfigMapError")
+	RecordError(constants.ComponentController, "ConfigMapError")
 
 	// Use testutil.CollectAndCompare to verify metric format
 	expected := `
