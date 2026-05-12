@@ -192,6 +192,8 @@ const (
 	LabelVariantName        = "variant_name"
 	LabelDirection          = "direction"
 	LabelReason             = "reason"
+	LabelAcceleratorVendor  = "accelerator_vendor"
+	LabelAcceleratorModel   = "accelerator_model"
 	LabelAcceleratorType    = "accelerator_type"
 	LabelControllerInstance = "controller_instance"
 	LabelStatus             = "status"

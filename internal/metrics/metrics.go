@@ -186,7 +186,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 		decisionsLimitedLabels,
 	)
 
-	availableGpusLabels := []string{constants.LabelAcceleratorType}
+	availableGpusLabels := []string{constants.LabelAcceleratorVendor, constants.LabelAcceleratorModel, constants.LabelAcceleratorType}
 	if controllerInstance != "" {
 		availableGpusLabels = append(availableGpusLabels, constants.LabelControllerInstance)
 	}
@@ -484,6 +484,9 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 // RecordOptimizerActiveMetric records which optimizer is currently active.
 // Only one optimizer should be active at a time (isActive=true), while others are inactive (isActive=false).
 func (m *MetricsEmitter) RecordOptimizerActiveMetric(optimizerName string, isActive bool) {
+	if optimizerActive == nil {
+		return
+	}
 	labels := prometheus.Labels{
 		constants.LabelOptimizerName: optimizerName,
 	}
@@ -501,8 +504,11 @@ func (m *MetricsEmitter) RecordOptimizerActiveMetric(optimizerName string, isAct
 }
 
 // RecordEnforcerMetric records a decision modification made by the enforcer.
-// The policyType identifies which enforcement policy (e.g., "scale-to-zero", "minimum-replica") was applied.
+// The policyType identifies which enforcement policy (e.g., "scale_to_zero", "minimum_replicas") was applied.
 func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
+	if enforcerModificationsTotal == nil {
+		return
+	}
 	labels := prometheus.Labels{
 		constants.LabelPolicyType: policyType,
 	}
@@ -515,11 +521,17 @@ func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
 	enforcerModificationsTotal.With(labels).Inc()
 }
 
-// RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type.
+// RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type. acceleratorModel is
+// accelerator full name, acceleratorType is short name.
 // This metric is updated during GPU discovery and reflects cluster GPU capacity.
-func (m *MetricsEmitter) RecordAvailableGPUsMetric(acceleratorType string, count int32) {
+func (m *MetricsEmitter) RecordAvailableGPUsMetric(vendor, acceleratorModel, acceleratorType string, count int32) {
+	if availableGpus == nil {
+		return
+	}
 	labels := prometheus.Labels{
-		constants.LabelAcceleratorType: acceleratorType,
+		constants.LabelAcceleratorVendor: vendor,
+		constants.LabelAcceleratorModel:  acceleratorModel,
+		constants.LabelAcceleratorType:   acceleratorType,
 	}
 
 	// Add controller_instance label if configured
@@ -533,6 +545,9 @@ func (m *MetricsEmitter) RecordAvailableGPUsMetric(acceleratorType string, count
 // RecordDecisionsLimitedTotalMetric records when a scaling decision was constrained by a limiter.
 // This tracks how often the limiter prevents scaling actions due to resource constraints.
 func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespace, limiterName string) {
+	if decisionsLimitedTotal == nil {
+		return
+	}
 	labels := prometheus.Labels{
 		constants.LabelVariantName: variantName,
 		constants.LabelNamespace:   namespace,

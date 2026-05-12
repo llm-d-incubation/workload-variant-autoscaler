@@ -31,14 +31,14 @@ func TestRecordEnforcerMetric(t *testing.T) {
 
 	emitter := NewMetricsEmitter()
 
-	// Emit enforcer metric for scale-to-zero policy
-	emitter.RecordEnforcerMetric("scale-to-zero")
+	// Emit enforcer metric for scale_to_zero policy
+	emitter.RecordEnforcerMetric(constants.EnforcerPolicyTypeScaleToZero)
 
-	// Emit enforcer metric for minimum-replica policy
-	emitter.RecordEnforcerMetric("minimum-replica")
+	// Emit enforcer metric for minimum_replicas policy
+	emitter.RecordEnforcerMetric(constants.EnforcerPolicyTypeMinimumReplicas)
 
 	// Emit multiple times for the same policy (counter should increment)
-	emitter.RecordEnforcerMetric("scale-to-zero")
+	emitter.RecordEnforcerMetric(constants.EnforcerPolicyTypeScaleToZero)
 
 	// Verify the counter was recorded
 	metrics, err := registry.Gather()
@@ -63,13 +63,13 @@ func TestRecordEnforcerMetric(t *testing.T) {
 				// Check policy_type label
 				policyType := getLabelValue(m, constants.LabelPolicyType)
 				switch policyType {
-				case "scale-to-zero":
+				case constants.EnforcerPolicyTypeScaleToZero:
 					if c.GetValue() != 2 {
-						t.Errorf("Expected scale-to-zero counter to be 2, got %f", c.GetValue())
+						t.Errorf("Expected %s counter to be 2, got %f", constants.EnforcerPolicyTypeScaleToZero, c.GetValue())
 					}
-				case "minimum-replica":
+				case constants.EnforcerPolicyTypeMinimumReplicas:
 					if c.GetValue() != 1 {
-						t.Errorf("Expected minimum-replica counter to be 1, got %f", c.GetValue())
+						t.Errorf("Expected %s counter to be 1, got %f", constants.EnforcerPolicyTypeMinimumReplicas, c.GetValue())
 					}
 				default:
 					t.Errorf("Unexpected policy_type label: %s", policyType)
@@ -102,7 +102,7 @@ func TestRecordEnforcerMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit enforcer metric
-	emitter.RecordEnforcerMetric("scale-to-zero")
+	emitter.RecordEnforcerMetric(constants.EnforcerPolicyTypeScaleToZero)
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()
@@ -123,8 +123,8 @@ func TestRecordEnforcerMetric_WithControllerInstance(t *testing.T) {
 				t.Errorf("Expected controller_instance=controller-1, got %s", instance)
 			}
 			policyType := getLabelValue(m, constants.LabelPolicyType)
-			if policyType != "scale-to-zero" {
-				t.Errorf("Expected policy_type=scale-to-zero, got %s", policyType)
+			if policyType != constants.EnforcerPolicyTypeScaleToZero {
+				t.Errorf("Expected policy_type=%s, got %s", constants.EnforcerPolicyTypeScaleToZero, policyType)
 			}
 		}
 	}
@@ -143,8 +143,8 @@ func TestRecordEnforcerMetric_MultiplePolicyTypes(t *testing.T) {
 
 	// Test various policy types
 	policyTypes := []string{
-		"scale-to-zero",
-		"minimum-replica",
+		constants.EnforcerPolicyTypeScaleToZero,
+		constants.EnforcerPolicyTypeMinimumReplicas,
 		"custom-policy",
 	}
 

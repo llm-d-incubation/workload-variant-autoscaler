@@ -37,8 +37,8 @@ func TestRecordAvailableGPUsMetric(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit available GPU metrics for different accelerator types
-	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
-	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeH100, 4)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-A100-PCIE-80GB", testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-H100-SXM5-80GB", testAcceleratorTypeH100, 4)
 
 	// Verify the gauge was recorded
 	metrics, err := registry.Gather()
@@ -91,10 +91,10 @@ func TestRecordAvailableGPUsMetric_Update(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// First set A100 count to 8
-	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-A100-PCIE-80GB", testAcceleratorTypeA100, 8)
 
 	// Then update A100 count to 5
-	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 5)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-A100-PCIE-80GB", testAcceleratorTypeA100, 5)
 
 	// Verify the gauge reflects the latest value
 	metrics, err := registry.Gather()
@@ -147,7 +147,7 @@ func TestRecordAvailableGPUsMetric_WithControllerInstance(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit available GPU metric
-	emitter.RecordAvailableGPUsMetric(testAcceleratorTypeA100, 8)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-A100-PCIE-80GB", testAcceleratorTypeA100, 8)
 
 	// Verify the metric includes controller_instance label
 	metrics, err := registry.Gather()
@@ -188,17 +188,19 @@ func TestRecordAvailableGPUsMetric_MultipleAcceleratorTypes(t *testing.T) {
 
 	// Test various accelerator types
 	testCases := []struct {
+		vendor          string
+		model           string
 		acceleratorType string
 		count           int32
 	}{
-		{testAcceleratorTypeA100, 8},
-		{testAcceleratorTypeH100, 4},
-		{"V100", 16},
-		{"T4", 2},
+		{"nvidia.com", "NVIDIA-A100-PCIE-80GB", testAcceleratorTypeA100, 8},
+		{"nvidia.com", "NVIDIA-H100-SXM5-80GB", testAcceleratorTypeH100, 4},
+		{"nvidia.com", "NVIDIA-V100-PCIE-16GB", "V100", 16},
+		{"nvidia.com", "NVIDIA-T4-16GB", "T4", 2},
 	}
 
 	for _, tc := range testCases {
-		emitter.RecordAvailableGPUsMetric(tc.acceleratorType, tc.count)
+		emitter.RecordAvailableGPUsMetric(tc.vendor, tc.model, tc.acceleratorType, tc.count)
 	}
 
 	// Verify all accelerator types were recorded
@@ -249,7 +251,7 @@ func TestRecordAvailableGPUsMetric_ZeroCount(t *testing.T) {
 	emitter := NewMetricsEmitter()
 
 	// Emit zero count (all GPUs in use)
-	emitter.RecordAvailableGPUsMetric("A100", 0)
+	emitter.RecordAvailableGPUsMetric("nvidia.com", "NVIDIA-A100-PCIE-80GB", "A100", 0)
 
 	// Verify the gauge shows 0
 	metrics, err := registry.Gather()

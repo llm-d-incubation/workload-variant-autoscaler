@@ -228,6 +228,10 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 }
 
 func (e *Engine) setActiveOptimizer(optimizer pipeline.ScalingOptimizer) {
+	if e.optimizer == optimizer {
+		return // nothing to do
+	}
+
 	// Update the engine's optimizer
 	e.optimizer = optimizer
 

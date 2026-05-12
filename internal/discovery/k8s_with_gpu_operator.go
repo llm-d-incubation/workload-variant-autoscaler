@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
@@ -77,7 +78,7 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 		}
 
 		// Process nodes for this vendor
-		total := 0
+		accelerators := make(map[string]int)
 		for _, node := range nodeList.Items {
 			model, ok := node.Labels[prodKey]
 			if !ok {
@@ -87,7 +88,6 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 			count := 0
 			if cap, ok := node.Status.Allocatable[corev1.ResourceName(vendor+"/gpu")]; ok {
 				count = int(cap.Value())
-				total += count
 			}
 
 			ni, exists := nodes[node.Name]
@@ -103,9 +103,13 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 				Memory: node.Labels[memKey],
 			}
 			nodes[node.Name] = ni
+			accelerators[model] += count
 		}
 
-		d.metricsEmitter.RecordAvailableGPUsMetric(vendor, int32(total)) // record as soon as discovered
+		// record metric as soon as accelerators are discovered. For this vendor, record number of GPUs per accelerator type.
+		for model, count := range accelerators {
+			d.metricsEmitter.RecordAvailableGPUsMetric(vendor, model, utils.NormalizeAcceleratorName(model), int32(count))
+		}
 	}
 
 	return nodes, nil

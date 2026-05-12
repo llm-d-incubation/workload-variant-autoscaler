@@ -8,6 +8,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
@@ -113,7 +114,7 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 			continue
 		}
 		d.TargetReplicas = 0
-		updateDecisionAction(d, optimizerName, "scale_to_zero", e.metricsEmitter)
+		updateDecisionAction(d, optimizerName, constants.EnforcerPolicyTypeScaleToZero, e.metricsEmitter)
 	}
 
 	return true
@@ -164,7 +165,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 
 	if cheapestIdx >= 0 {
 		decisions[cheapestIdx].TargetReplicas = 1
-		updateDecisionAction(&decisions[cheapestIdx], optimizerName, "minimum_replicas", e.metricsEmitter)
+		updateDecisionAction(&decisions[cheapestIdx], optimizerName, constants.EnforcerPolicyTypeMinimumReplicas, e.metricsEmitter)
 		logger.Info("Preserving minimum replica on cheapest variant (scale-to-zero disabled)",
 			"modelID", modelID,
 			"variant", decisions[cheapestIdx].VariantName,
