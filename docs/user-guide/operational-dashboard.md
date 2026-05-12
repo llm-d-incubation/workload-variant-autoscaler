@@ -23,3 +23,9 @@ Once the operational dashboard is enabled, Grafana is installed, configured, and
   Z9FEW12xG2k2tTZJVML75Kd80qi2oI0nJBsCjv7q
   ```
 - Point browser to `http://localhost:3000/`, login with username `admin` and the password obtained in previous step.
+
+## Operational Metrics
+
+| Catagory | Name | Type | Description  |
+| -------- | -------- | --- | --- |
+| Pipeline stage | wva_available_gpus | gauge | Number of currently available GPUs group by accelerator type (e.g. "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. |
