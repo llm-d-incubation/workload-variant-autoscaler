@@ -1,7 +1,7 @@
 # This rule is not used by the project workload-variant-autoscaler itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants read-only access to llmd.llm-d.ai resources.
+# Grants read-only access to llm-d.ai resources.
 # This role is intended for users who need visibility into these resources
 # without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
 
@@ -11,19 +11,19 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
-  name: VariantAutoscalings-viewer-role
+  name: variantautoscaling-viewer-role
 rules:
 - apiGroups:
-  - llmd.llm-d.ai
+  - llm-d.ai
   resources:
-  - VariantAutoscalingss
+  - variantautoscalings
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - llmd.llm-d.ai
+  - llm-d.ai
   resources:
-  - VariantAutoscalingss/status
+  - variantautoscalings/status
   verbs:
   - get

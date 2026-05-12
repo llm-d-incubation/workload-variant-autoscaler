@@ -114,7 +114,7 @@ The [llm-d](https://github.com/llm-d/llm-d) repo hosts a **workload-autoscaling 
    - In `guides/workload-autoscaling/README.md`, update the "Version Compatibility" callout to state the new WVA version (e.g. "tested and validated with **WVA vX.Y.Z**").
 
 2. **URLs that embed the version tag**  
-   - **CRD install (Step 4):** URLs like `.../workload-variant-autoscaler/vX.Y.Z/charts/.../crds/llmd.ai_variantautoscalings.yaml` — replace the version segment with the new release tag.
+   - **CRD install (Step 4):** URLs like `.../workload-variant-autoscaler/vX.Y.Z/charts/.../crds/llm-d.ai_variantautoscalings.yaml` — replace the version segment with the new release tag.
    - **Prometheus Adapter values (Step 6):** All `curl`/download URLs that point at `.../workload-variant-autoscaler/vX.Y.Z/config/samples/...` (e.g. `prometheus-adapter-values.yaml`, `prometheus-adapter-values-ocp.yaml`).
    - **Upgrading section:** Any CRD or sample URLs in the "Upgrading" section that include the version tag.
 

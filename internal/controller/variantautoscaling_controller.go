@@ -75,9 +75,9 @@ func NewVariantAutoscalingReconciler(
 	}
 }
 
-// +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=llmd.ai,resources=variantautoscalings/finalizers,verbs=update
+// +kubebuilder:rbac:groups=llm-d.ai,resources=variantautoscalings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=llm-d.ai,resources=variantautoscalings/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=llm-d.ai,resources=variantautoscalings/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes/status,verbs=get;list;update;patch;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch

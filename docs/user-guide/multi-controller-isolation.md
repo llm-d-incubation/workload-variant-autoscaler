@@ -158,7 +158,7 @@ spec:
 When `controllerInstance` is set, the Helm chart automatically adds the label to VA resources:
 
 ```yaml
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-autoscaler
@@ -265,7 +265,7 @@ controllerInstance: "test"
 For manually created VAs, ensure labels match the target controller:
 
 ```yaml
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   labels:

@@ -1,5 +1,5 @@
 {{- if .Values.va.enabled }}
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 # Optimizing a variant, create only when the model is deployed and serving traffic
 # this is for the collector the collect existing (previous) running metrics of the variant.
 kind: VariantAutoscaling

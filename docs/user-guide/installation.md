@@ -54,7 +54,7 @@ See [KEDA Integration Guide](keda-integration.md)
 
 2. **Verify CRDs are installed:**
    ```bash
-   kubectl get crd variantautoscalings.llmd.ai
+   kubectl get crd variantautoscalings.llm-d.ai
    ```
 
 3. **Check controller logs:**

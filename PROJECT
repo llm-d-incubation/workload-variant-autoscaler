@@ -13,7 +13,7 @@ resources:
     namespaced: true
   controller: true
   domain: ai
-  group: llmd
+  group: llm-d
   kind: VariantAutoscaling
   path: github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1
   version: v1alpha1

@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: variantautoscalings.llmd.ai
+  name: variantautoscalings.llm-d.ai
 spec:
-  group: llmd.ai
+  group: llm-d.ai
   names:
     kind: VariantAutoscaling
     listKind: VariantAutoscalingList

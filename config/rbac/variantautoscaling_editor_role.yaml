@@ -1,7 +1,7 @@
 # This rule is not used by the project workload-variant-autoscaler itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the llmd.llm-d.ai.
+# Grants permissions to create, update, and delete resources within the llm-d.ai.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -14,7 +14,7 @@ metadata:
   name: variantautoscaling-editor-role
 rules:
 - apiGroups:
-  - llmd.llm-d.ai
+  - llm-d.ai
   resources:
   - variantautoscalings
   verbs:
@@ -26,8 +26,8 @@ rules:
   - update
   - watch
 - apiGroups:
-  - llmd.llm-d.ai
+  - llm-d.ai
   resources:
-  - VariantAutoscalingss/status
+  - variantautoscalings/status
   verbs:
   - get

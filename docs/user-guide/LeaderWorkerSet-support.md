@@ -160,7 +160,7 @@ Verify the sample variant. Here we include and high-light the important fields:
 ```
 kubectl get va lws-va-workload-variant-autoscaler-va -n llm-d-sim -o yaml
 
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   ...

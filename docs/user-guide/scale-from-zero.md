@@ -77,7 +77,7 @@ spec:
 2. **Create a VariantAutoscaling resource**:
 
 ```yaml
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-autoscaler

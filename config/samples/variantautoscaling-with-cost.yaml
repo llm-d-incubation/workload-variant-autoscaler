@@ -14,7 +14,7 @@
 # CR itself only specifies the cost via the variantCost field.
 
 ---
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-70b-premium-h100
@@ -37,7 +37,7 @@ spec:
   variantCost: "80.0"  # Cost per replica (reflects H100 premium pricing)
 
 ---
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-70b-standard-a100
@@ -61,7 +61,7 @@ spec:
 
 ---
 # Example: Budget variant with lower cost for best-effort workloads
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-budget-t4
@@ -85,7 +85,7 @@ spec:
 ---
 # Example: Multi-tenant cost tracking
 # Assign different costs to the same accelerator for different tenants
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-tenant-gold
@@ -105,7 +105,7 @@ spec:
   variantCost: "25.0"  # Higher cost reflects priority/SLA
 
 ---
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-tenant-silver
@@ -127,7 +127,7 @@ spec:
 ---
 # Note: If variantCost is not specified, it defaults to 10.0
 # Example of default behavior:
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-default-cost

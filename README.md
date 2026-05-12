@@ -93,7 +93,7 @@ For detailed architecture information, see the [design documentation](docs/desig
 ## Example
 
 ```yaml
-apiVersion: llmd.ai/v1alpha1
+apiVersion: llm-d.ai/v1alpha1
 kind: VariantAutoscaling
 metadata:
   name: llama-8b-autoscaler
@@ -144,7 +144,7 @@ To check if your cluster has the latest CRD schema:
 
 ```bash
 # Check the CRD fields
-kubectl get crd variantautoscalings.llmd.ai -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties}' | jq 'keys'
+kubectl get crd variantautoscalings.llm-d.ai -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties}' | jq 'keys'
 ```
 
 ## Contributing
