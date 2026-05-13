@@ -24,8 +24,14 @@ Once the operational dashboard is enabled, Grafana is installed, configured, and
   ```
 - Point browser to `http://localhost:3000/`, login with username `admin` and the password obtained in previous step.
 
-## Operational Metrics
+- Browse to "Connections/Data sources", you should see a Prometheus data source `https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090`. Click on `Test` button to test the data source.
 
-| Catagory | Name | Type | Description  |
-| -------- | -------- | --- | --- |
-| Pipeline stage | wva_available_gpus | gauge | Number of currently available GPUs group by accelerator type (e.g. "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. |
+- Browse to "Dashboards", you should see a dashboard called `WVA Operational Dashboard`.
+
+
+## Import Operational Dashboard
+The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA Operational Dashboard` to a new dashboard so you can update the dashboard as follows:
+- Browse to "Dashboards", you should see a dashboard called `WVA Operational Dashboard/New/Import`.
+- Copy and paste the content of `deploy/grafana/operational-dashboard.json`.
+- Name the new dashboard such as `My WVA Operational Dashboard`.
+- Your new dashboard now is the same as `WVA Operational Dashboard` except that you can edit and save.
