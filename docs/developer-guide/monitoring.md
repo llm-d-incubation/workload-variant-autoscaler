@@ -38,5 +38,59 @@ The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA 
 
 
 ## Troubleshooting
+### services "kube-prometheus-stack-grafana" not found
+  - Make sure to install WVA cluster with `DEPLOY_OPERATIONAL_DASHBOARD=true` as this would install Grafana.
+  
 ### No Data
   - Check the datasource by browse to "Connections/Data sources", you should see a Prometheus data source `https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090`. Click on `Test` button to test the data source.
+  - Check data source which is defined in `kube-prometheus-stack-grafana-datasource` configmap:
+    ```
+      $ oc get cm kube-prometheus-stack-grafana-datasource -n workload-
+    variant-autoscaler-monitoring -o yaml
+    apiVersion: v1
+    data:
+      datasource.yaml: |-
+        apiVersion: 1
+        datasources:
+        - name: "Prometheus"
+          type: prometheus
+          uid: prometheus
+          url: http://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring:9090/
+          access: proxy
+          isDefault: true
+          jsonData:
+            httpMethod: POST
+            timeInterval: 30s
+        - name: "Alertmanager"
+          type: alertmanager
+          uid: alertmanager
+          url: http://kube-prometheus-stack-alertmanager.workload-variant-autoscaler-monitoring:9093/
+          access: proxy
+    ...
+    ```
+  ### Dashboard Not Found
+  - Dashboard is stored in `wva-operation-dashboard` configmap:
+
+    ```
+    $ oc get cm wva-operation-dashboard -n workload-variant-autoscaler-monitoring -o yaml
+    apiVersion: v1
+    data:
+      operational-dashboard.json: |
+        {
+          "annotations": {
+            "list": [
+              {
+                "builtIn": 1,
+                "datasource": {
+                  "type": "grafana",
+                  "uid": "-- Grafana --"
+                },
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+              }
+            ]
+        ...
+    ```
