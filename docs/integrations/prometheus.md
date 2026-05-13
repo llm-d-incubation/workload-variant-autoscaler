@@ -357,6 +357,16 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 - **Labels**: None (global configuration)
 - **Use Case**: Track how frequently the optimization loop runs
 
+### Error Tracking
+
+### `wva_errors_total`
+- **Type**: Counter
+- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the compoments currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
+- **Labels**:
+  - `component`: Component where the error occurred
+  - `error_type`: Type or category of the error
+- **Use Case**: Track error rates across different components to identify problematic areas and monitor system health
+
 
 
 ## Example Queries
@@ -431,4 +441,16 @@ wva_config_queue_spare_threshold
 
 # Optimization loop interval
 wva_config_optimization_interval_seconds
+
+# Total errors by component
+wva_errors_total
+
+# Error rate over time
+rate(wva_errors_total[5m])
+
+# Error rate by component
+rate(wva_errors_total[5m]) by (component)
+
+# Error rate by error type
+rate(wva_errors_total[5m]) by (error_type)
 ```
