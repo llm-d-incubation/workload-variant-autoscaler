@@ -382,6 +382,37 @@ func (e *Engine) recordOptimizationFailedEvent(
 	}
 }
 
+func (e *Engine) recordScalingEvent(
+	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	action interfaces.SaturationAction,
+	targetReplicas int,
+	reason string,
+) {
+	if e.recorder == nil {
+		return
+	}
+	switch action {
+	case interfaces.ActionScaleUp:
+		e.recorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
+	case interfaces.ActionScaleDown:
+		if targetReplicas == 0 {
+			e.recorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, reason)
+		} else {
+			e.recorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, reason)
+		}
+	}
+}
+
+func (e *Engine) recordResourceConstrainedEvent(
+	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	reason string,
+) {
+	if e.recorder == nil {
+		return
+	}
+	e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, reason)
+}
+
 // Resolve saturation config and record config metrics
 func (e *Engine) resolveSaturationConfig(
 	configMap map[string]config.SaturationScalingConfig,
@@ -641,8 +672,8 @@ func (e *Engine) optimizeV2(
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
 			msg := "Model data preparation failed"
-			e.recordOptimizationFailedEvent(modelVAs, msg+": "+err.Error()) // provide details
 			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
@@ -656,8 +687,8 @@ func (e *Engine) optimizeV2(
 			data.scaleTargets, data.variantAutoscalings)
 		if err != nil {
 			msg := "V2 analysis failed"
-			e.recordOptimizationFailedEvent(modelVAs, msg+": "+err.Error()) // provide details
 			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			continue
 		}
@@ -1176,9 +1207,7 @@ func (e *Engine) applySaturationDecisions(
 		var updateVa llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 		if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
 			msg := "Failed to get latest VA from API server"
-			if e.recorder != nil {
-				e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg)
-			}
+			e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, msg)
 			logger.Error(err, msg, "name", va.Name)
 			continue
 		}
@@ -1326,27 +1355,16 @@ func (e *Engine) applySaturationDecisions(
 
 		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			msg := "Failed to emit metrics for external autoscalers"
-			if e.recorder != nil {
-				// K8s best practice: events should reference the current resource version
-				e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, msg)
-			}
+			// K8s best practice: events should reference the current resource version
+			e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{updateVa}, msg)
 			logger.Error(err, msg, "variant", updateVa.Name)
 		} else {
 			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
 			if hasDecision {
 				// Emit Kubernetes event for observability
-				if e.recorder != nil {
-					switch decision.Action {
-					case interfaces.ActionScaleUp:
-						e.recorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
-					case interfaces.ActionScaleDown:
-						e.recorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
-					default:
-						// do nothing
-					}
-					if decision.WasLimited {
-						e.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
-					}
+				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason)
+				if decision.WasLimited {
+					e.recordResourceConstrainedEvent(&updateVa, decision.Reason)
 				}
 
 				logger.Info("Successfully emitted metrics",

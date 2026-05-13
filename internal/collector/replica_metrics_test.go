@@ -151,86 +151,13 @@ func TestRecordMetricsUnavailableEvent(t *testing.T) {
 }
 
 func TestCollectReplicaMetrics_ErrorRecordsEvent(t *testing.T) {
+	// This test verifies edge-triggered event emission for metrics collection errors.
+	// Note: Without actual pod data in the k8s client, replicaMetrics is always empty,
+	// so we can't test the full "available → error" transition. This test focuses on
+	// verifying that repeated errors don't flood the event stream.
+
 	ctx := context.Background()
 	fakeRecorder := record.NewFakeRecorder(100)
-
-	tests := []struct {
-		name          string
-		refreshError  error
-		expectedEvent bool
-		eventReason   string
-	}{
-		{
-			name:          "records event when refresh fails",
-			refreshError:  errors.New("prometheus connection failed"),
-			expectedEvent: true,
-			eventReason:   "Failed to collect metrics for model",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockSource := &mockMetricsSource{
-				refreshError: tt.refreshError,
-			}
-			collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
-
-			variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-				"default/test-va": {
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-va",
-						Namespace: "default",
-					},
-					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-							Kind: "Deployment",
-							Name: "test-deployment",
-						},
-						ModelID:     "test-model",
-						MaxReplicas: 5,
-					},
-				},
-			}
-
-			scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
-			variantCosts := make(map[string]float64)
-
-			metrics, err := collector.CollectReplicaMetrics(
-				ctx,
-				"test-model",
-				"default",
-				scaleTargets,
-				variantAutoscalings,
-				variantCosts,
-			)
-
-			require.Error(t, err, "Should return error when refresh fails")
-			require.Nil(t, metrics, "Should return nil metrics on error")
-
-			if tt.expectedEvent {
-				select {
-				case event := <-fakeRecorder.Events:
-					assert.Contains(t, event, constants.K8SEventMetricsUnavailable,
-						"Event should contain K8SEventMetricsUnavailable constant")
-					assert.Contains(t, event, tt.eventReason,
-						"Event should contain the expected reason")
-				default:
-					t.Error("Expected event to be recorded but none was found")
-				}
-			}
-		})
-	}
-}
-
-func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
-	ctx := context.Background()
-	fakeRecorder := record.NewFakeRecorder(100)
-
-	// Mock source that returns no error but empty results (no metrics)
-	mockSource := &mockMetricsSource{
-		results: make(map[string]*source.MetricResult),
-	}
-	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
 	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 		"default/test-va": {
@@ -252,27 +179,102 @@ func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
 	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
 	variantCosts := make(map[string]float64)
 
-	metrics, err := collector.CollectReplicaMetrics(
-		ctx,
-		"test-model",
-		"default",
-		scaleTargets,
-		variantAutoscalings,
-		variantCosts,
-	)
+	// Simulate metrics collection failure
+	mockSource := &mockMetricsSource{
+		refreshError: errors.New("prometheus connection failed"),
+	}
+	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
+	// First call with error: no event (first observation, unknown previous state)
+	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.Error(t, err, "Should return error when refresh fails")
+	require.Nil(t, metrics, "Should return nil metrics on error")
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("No event expected on first observation: %s", event)
+	default:
+		// Expected: no event
+	}
+
+	// Second call: metrics still fail, should NOT emit event (no state transition)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.Error(t, err, "Should still return error")
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("No event expected when metrics remain unavailable: %s", event)
+	default:
+		// Expected: no event
+	}
+}
+
+func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
+	// This test verifies edge-triggered event emission when no metrics are available.
+	// Simulates a VA scaled to zero (no pods = no metrics) to verify that repeated
+	// "no metrics" states don't flood the event stream.
+
+	ctx := context.Background()
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		"default/test-va": {
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-va",
+				Namespace: "default",
+			},
+			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+					Kind: "Deployment",
+					Name: "test-deployment",
+				},
+				ModelID:     "test-model",
+				MaxReplicas: 5,
+			},
+		},
+	}
+
+	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
+	variantCosts := make(map[string]float64)
+
+	// Mock source with no metrics (e.g., VA scaled to zero)
+	mockSource := &mockMetricsSource{
+		results: make(map[string]*source.MetricResult),
+	}
+	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
+
+	// First call: no metrics, should NOT emit event (first observation, unknown previous state)
+	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
 	require.NoError(t, err, "Should not return error when no metrics available")
 	require.Empty(t, metrics, "Should return empty metrics slice")
 
-	// Should record event for no metrics available
 	select {
 	case event := <-fakeRecorder.Events:
-		assert.Contains(t, event, constants.K8SEventMetricsUnavailable,
-			"Event should contain K8SEventMetricsUnavailable constant")
-		assert.Contains(t, event, "No saturation metrics available for model",
-			"Event should contain the expected reason")
+		t.Errorf("No event expected on first observation: %s", event)
 	default:
-		t.Error("Expected event to be recorded but none was found")
+		// Expected: no event
+	}
+
+	// Second call: still no metrics, should NOT emit event (no state transition)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.NoError(t, err, "Should not return error")
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("No event expected when metrics remain unavailable: %s", event)
+	default:
+		// Expected: no event
+	}
+
+	// Third call: still no metrics, should NOT emit event (no state transition)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	require.NoError(t, err, "Should not return error")
+
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Errorf("No event expected when metrics remain unavailable: %s", event)
+	default:
+		// Expected: no event
 	}
 }
 
@@ -283,14 +285,12 @@ func TestK8SEventMetricsUnavailableConstant(t *testing.T) {
 }
 
 func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
+	// This test verifies the core edge-triggered behavior: events are emitted only on
+	// state transitions, not on every cycle with unavailable metrics. This prevents
+	// event flooding when a VA is legitimately scaled to zero.
+
 	ctx := context.Background()
 	fakeRecorder := record.NewFakeRecorder(100)
-
-	// Mock source that returns empty results (no metrics)
-	mockSource := &mockMetricsSource{
-		results: make(map[string]*source.MetricResult),
-	}
-	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
 	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 		"default/test-va": {
@@ -312,16 +312,21 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
 	variantCosts := make(map[string]float64)
 
-	// First call: metrics unavailable, should emit event (first time seeing this VA)
+	// Mock source that starts with no metrics (simulates VA scaled to zero)
+	mockSource := &mockMetricsSource{
+		results: make(map[string]*source.MetricResult),
+	}
+	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
+
+	// First call: metrics unavailable, should NOT emit event (first observation, unknown previous state)
 	_, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
 	require.NoError(t, err)
 
 	select {
 	case event := <-fakeRecorder.Events:
-		assert.Contains(t, event, constants.K8SEventMetricsUnavailable,
-			"First call should emit event when metrics unavailable")
+		t.Errorf("First call should not emit event (unknown previous state): %s", event)
 	default:
-		t.Error("Expected event on first call with unavailable metrics")
+		// Expected: no event - prevents false positive for VAs that start at zero
 	}
 
 	// Second call: metrics still unavailable, should NOT emit event (no state transition)
@@ -332,7 +337,7 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 	case event := <-fakeRecorder.Events:
 		t.Errorf("Second call should not emit event when metrics remain unavailable: %s", event)
 	default:
-		// Expected: no event
+		// Expected: no event - prevents flooding on every optimization cycle
 	}
 
 	// Third call: still unavailable, should NOT emit event
@@ -346,11 +351,6 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 		// Expected: no event
 	}
 }
-
-// TestCollectReplicaMetrics_EdgeTriggeredTransitions is removed because it's difficult
-// to simulate "available" metrics without replica data. The edge-triggered behavior
-// is sufficiently covered by TestCollectReplicaMetrics_EdgeTriggeredEvents which tests
-// that events are not emitted on subsequent calls when metrics remain unavailable.
 
 func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
 	// Initialize metrics with a fresh registry

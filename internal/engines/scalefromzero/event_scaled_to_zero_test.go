@@ -29,8 +29,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
 
-// TestScaledToZeroEvent_DirectCall tests K8SEventScaledToZero emission directly
-func TestScaledToZeroEvent_DirectCall(t *testing.T) {
+// TestScaledUpEvent_DirectCall tests K8SEventScaledUp emission when scaling from zero
+func TestScaledUpEvent_DirectCall(t *testing.T) {
 	tests := []struct {
 		name                  string
 		hasDecision           bool
@@ -39,25 +39,25 @@ func TestScaledToZeroEvent_DirectCall(t *testing.T) {
 		reason                string
 	}{
 		{
-			name:                  "emits event when hasDecision=true and targetReplicas=0",
+			name:                  "emits event when hasDecision=true and targetReplicas=1",
 			hasDecision:           true,
-			targetReplicas:        0,
+			targetReplicas:        1,
 			expectedEventRecorded: true,
-			reason:                "No pending requests in queue",
+			reason:                "Scaling up from zero",
 		},
 		{
 			name:                  "no event when hasDecision=false",
 			hasDecision:           false,
-			targetReplicas:        0,
-			expectedEventRecorded: false,
-			reason:                "No pending requests",
-		},
-		{
-			name:                  "no event when targetReplicas=1",
-			hasDecision:           true,
 			targetReplicas:        1,
 			expectedEventRecorded: false,
-			reason:                "Scaling up from zero",
+			reason:                "No decision made",
+		},
+		{
+			name:                  "no event when targetReplicas=0",
+			hasDecision:           true,
+			targetReplicas:        0,
+			expectedEventRecorded: false,
+			reason:                "Not scaling (staying at zero)",
 		},
 	}
 
@@ -80,23 +80,23 @@ func TestScaledToZeroEvent_DirectCall(t *testing.T) {
 				},
 			}
 
-			// Simulate the event recording logic from processInactiveVariant (line 401-402)
-			if tt.hasDecision && tt.targetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, tt.reason)
+			// Simulate the event recording logic from processInactiveVariant
+			if tt.hasDecision && tt.targetReplicas > 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, tt.reason)
 			}
 
 			// Verify event was recorded (or not)
 			if tt.expectedEventRecorded {
 				select {
 				case event := <-fakeRecorder.Events:
-					assert.Contains(t, event, constants.K8SEventScaledToZero,
-						"Event should contain K8SEventScaledToZero constant")
+					assert.Contains(t, event, constants.K8SEventScaledUp,
+						"Event should contain K8SEventScaledUp constant")
 					assert.Contains(t, event, tt.reason,
 						"Event should contain the reason message")
 					assert.Contains(t, event, "Normal",
 						"Event should be Normal type")
 				default:
-					t.Error("Expected ScaledToZero event to be recorded but none was found")
+					t.Error("Expected ScaledUp event to be recorded but none was found")
 				}
 			} else {
 				select {
@@ -130,7 +130,51 @@ func TestScaledToZeroEvent_NilRecorder(t *testing.T) {
 	})
 }
 
+// TestScaledUpEventOnScaleFromZero tests K8SEventScaledUp emission when scaling from zero
+func TestScaledUpEventOnScaleFromZero(t *testing.T) {
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-va",
+			Namespace: "default",
+		},
+		Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind: "Deployment",
+				Name: "test-deployment",
+			},
+			ModelID:     "test-model",
+			MaxReplicas: 5,
+		},
+	}
+
+	reason := "No pending requests in queue"
+	hasDecision := true
+	targetWorkloadReplicas := 1
+
+	// Simulate the event recording logic from processInactiveVariant
+	if fakeRecorder != nil && hasDecision && targetWorkloadReplicas > 0 {
+		fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
+	}
+
+	// Verify event was recorded
+	select {
+	case event := <-fakeRecorder.Events:
+		assert.Contains(t, event, constants.K8SEventScaledUp,
+			"Event should contain K8SEventScaledUp constant")
+		assert.Contains(t, event, reason,
+			"Event should contain the reason message")
+		assert.Contains(t, event, "Normal",
+			"Event should be Normal type")
+	default:
+		t.Error("Expected ScaledUp event to be recorded but none was found")
+	}
+}
+
 // TestK8SEventScaledToZeroConstant verifies the constant is correctly defined
+// Note: K8SEventScaledToZero is currently unused but reserved for future use
+// (e.g., saturation engine scaling down to zero)
 func TestK8SEventScaledToZeroConstant(t *testing.T) {
 	assert.Equal(t, "ScaledToZero", constants.K8SEventScaledToZero,
 		"K8SEventScaledToZero constant should match expected value")

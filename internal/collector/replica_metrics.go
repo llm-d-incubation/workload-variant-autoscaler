@@ -144,10 +144,9 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	for key, va := range variantAutoscalings {
 		previouslyAvailable, seen := c.metricsAvailableState[key]
 
-		// Edge-triggered: only emit event when:
-		// 1. First time seeing this VA and metrics are unavailable (assume previous state was available)
-		// 2. Transitioning from available → unavailable
-		shouldEmitEvent := (!seen && !metricsAvailable) || (seen && previouslyAvailable && !metricsAvailable)
+		// Edge-triggered: only emit event on available → unavailable transition
+		// Don't emit on first observation (we don't know previous state - VA may have started at zero)
+		shouldEmitEvent := seen && previouslyAvailable && !metricsAvailable
 
 		if shouldEmitEvent {
 			if err != nil {

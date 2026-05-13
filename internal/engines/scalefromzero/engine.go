@@ -398,8 +398,8 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		"scalefromzero decision: "+reason)
 
 	// Record event just before Actuation.Applied = true
-	if hasDecision && targetWorkloadReplicas == 0 {
-		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, reason)
+	if hasDecision && targetWorkloadReplicas > 0 {
+		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
 	}
 	va.Status.Actuation.Applied = true
 

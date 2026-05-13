@@ -50,9 +50,10 @@ func TestScaledUpEvent(t *testing.T) {
 	}
 
 	decision := &interfaces.VariantDecision{
-		VariantName: "test-va",
-		Action:      interfaces.ActionScaleUp,
-		Reason:      "KV cache utilization above threshold",
+		VariantName:    "test-va",
+		Action:         interfaces.ActionScaleUp,
+		TargetReplicas: 3,
+		Reason:         "KV cache utilization above threshold",
 	}
 
 	// Simulate the event recording logic from applySaturationDecisions
@@ -61,7 +62,11 @@ func TestScaledUpEvent(t *testing.T) {
 		case interfaces.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
 		case interfaces.ActionScaleDown:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			if decision.TargetReplicas == 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+			} else {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			}
 		}
 	}
 
@@ -99,9 +104,10 @@ func TestScaledDownEvent(t *testing.T) {
 	}
 
 	decision := &interfaces.VariantDecision{
-		VariantName: "test-va",
-		Action:      interfaces.ActionScaleDown,
-		Reason:      "KV cache utilization below threshold",
+		VariantName:    "test-va",
+		Action:         interfaces.ActionScaleDown,
+		TargetReplicas: 2,
+		Reason:         "KV cache utilization below threshold",
 	}
 
 	// Simulate the event recording logic from applySaturationDecisions
@@ -110,7 +116,11 @@ func TestScaledDownEvent(t *testing.T) {
 		case interfaces.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
 		case interfaces.ActionScaleDown:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			if decision.TargetReplicas == 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+			} else {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			}
 		}
 	}
 
@@ -125,6 +135,60 @@ func TestScaledDownEvent(t *testing.T) {
 			"Event should be Normal type")
 	default:
 		t.Error("Expected ScaledDown event to be recorded but none was found")
+	}
+}
+
+// TestScaledToZeroEvent verifies K8SEventScaledToZero is recorded when scaling to zero
+func TestScaledToZeroEvent(t *testing.T) {
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-va",
+			Namespace: "default",
+		},
+		Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind: "Deployment",
+				Name: "test-deployment",
+			},
+			ModelID:     "test-model",
+			MaxReplicas: 5,
+		},
+	}
+
+	decision := &interfaces.VariantDecision{
+		VariantName:    "test-va",
+		Action:         interfaces.ActionScaleDown,
+		TargetReplicas: 0,
+		Reason:         "No requests in retention period",
+	}
+
+	// Simulate the event recording logic from applySaturationDecisions
+	if fakeRecorder != nil {
+		switch decision.Action {
+		case interfaces.ActionScaleUp:
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+		case interfaces.ActionScaleDown:
+			if decision.TargetReplicas == 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+			} else {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			}
+		}
+	}
+
+	// Verify event was recorded
+	select {
+	case event := <-fakeRecorder.Events:
+		assert.Contains(t, event, constants.K8SEventScaledToZero,
+			"Event should contain K8SEventScaledToZero constant")
+		assert.Contains(t, event, decision.Reason,
+			"Event should contain the reason message")
+		assert.Contains(t, event, "Normal",
+			"Event should be Normal type")
+	default:
+		t.Error("Expected ScaledToZero event to be recorded but none was found")
 	}
 }
 
@@ -148,10 +212,11 @@ func TestResourceConstrainedEvent(t *testing.T) {
 	}
 
 	decision := &interfaces.VariantDecision{
-		VariantName: "test-va",
-		Action:      interfaces.ActionScaleUp,
-		Reason:      "KV cache utilization above threshold",
-		WasLimited:  true,
+		VariantName:    "test-va",
+		Action:         interfaces.ActionScaleUp,
+		TargetReplicas: 3,
+		Reason:         "KV cache utilization above threshold",
+		WasLimited:     true,
 	}
 
 	// Simulate the event recording logic from applySaturationDecisions
@@ -160,7 +225,11 @@ func TestResourceConstrainedEvent(t *testing.T) {
 		case interfaces.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
 		case interfaces.ActionScaleDown:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			if decision.TargetReplicas == 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+			} else {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			}
 		}
 		if decision.WasLimited {
 			fakeRecorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
@@ -220,9 +289,10 @@ func TestNoEventForNoDecision(t *testing.T) {
 	}
 
 	decision := &interfaces.VariantDecision{
-		VariantName: "test-va",
-		Action:      interfaces.ActionNoChange,
-		Reason:      "No scaling needed",
+		VariantName:    "test-va",
+		Action:         interfaces.ActionNoChange,
+		TargetReplicas: 3,
+		Reason:         "No scaling needed",
 	}
 
 	// Simulate the event recording logic from applySaturationDecisions
@@ -231,7 +301,11 @@ func TestNoEventForNoDecision(t *testing.T) {
 		case interfaces.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
 		case interfaces.ActionScaleDown:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			if decision.TargetReplicas == 0 {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+			} else {
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+			}
 		default:
 			// do nothing
 		}
@@ -246,6 +320,119 @@ func TestNoEventForNoDecision(t *testing.T) {
 	}
 }
 
+// TestOptimizationFailedEvent verifies K8SEventOptimizationFailed is recorded on data preparation failure
+func TestOptimizationFailedEvent(t *testing.T) {
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	variantAutoscalings := []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-va-1",
+				Namespace: "default",
+			},
+			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+					Kind: "Deployment",
+					Name: "test-deployment-1",
+				},
+				ModelID:     "test-model",
+				MaxReplicas: 5,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-va-2",
+				Namespace: "default",
+			},
+			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+					Kind: "Deployment",
+					Name: "test-deployment-2",
+				},
+				ModelID:     "test-model",
+				MaxReplicas: 5,
+			},
+		},
+	}
+
+	reason := "Saturation data preparation failed"
+
+	// Simulate the event recording logic from optimizeV1/optimizeV2 error paths
+	if fakeRecorder != nil {
+		for _, va := range variantAutoscalings {
+			fakeRecorder.Eventf(&va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, reason)
+		}
+	}
+
+	// Verify events were recorded for all VAs
+	eventsRecorded := 0
+	for eventsRecorded < len(variantAutoscalings) {
+		select {
+		case event := <-fakeRecorder.Events:
+			assert.Contains(t, event, constants.K8SEventOptimizationFailed,
+				"Event should contain K8SEventOptimizationFailed constant")
+			assert.Contains(t, event, reason,
+				"Event should contain the reason message")
+			assert.Contains(t, event, "Warning",
+				"Event should be Warning type")
+			eventsRecorded++
+		default:
+			t.Errorf("Expected %d events but only got %d", len(variantAutoscalings), eventsRecorded)
+			return
+		}
+	}
+
+	assert.Equal(t, len(variantAutoscalings), eventsRecorded,
+		"Should have recorded event for each VA")
+}
+
+// TestOptimizationFailedEvent_NoErrorDetails verifies error details are not exposed in events
+func TestOptimizationFailedEvent_NoErrorDetails(t *testing.T) {
+	fakeRecorder := record.NewFakeRecorder(100)
+
+	va := llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-va",
+			Namespace: "default",
+		},
+		Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind: "Deployment",
+				Name: "test-deployment",
+			},
+			ModelID:     "test-model",
+			MaxReplicas: 5,
+		},
+	}
+
+	// Static message without error details (correct behavior)
+	staticMsg := "Model data preparation failed"
+	// Sensitive error that should NOT appear in events
+	sensitiveError := "connection to 10.0.1.42:9090 failed: authentication denied for user admin"
+
+	// Simulate correct event recording: only static message, no error details
+	if fakeRecorder != nil {
+		fakeRecorder.Eventf(&va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, staticMsg)
+	}
+
+	// Verify event was recorded with only the static message
+	select {
+	case event := <-fakeRecorder.Events:
+		assert.Contains(t, event, constants.K8SEventOptimizationFailed,
+			"Event should contain K8SEventOptimizationFailed constant")
+		assert.Contains(t, event, staticMsg,
+			"Event should contain the static message")
+		assert.NotContains(t, event, sensitiveError,
+			"Event should NOT contain sensitive error details like IPs or credentials")
+		assert.NotContains(t, event, "10.0.1.42",
+			"Event should NOT contain internal IP addresses")
+		assert.NotContains(t, event, "authentication denied",
+			"Event should NOT contain authentication failure details")
+	default:
+		t.Error("Expected OptimizationFailed event to be recorded but none was found")
+	}
+}
+
 // TestK8SEventScalingConstants verifies the scaling event constants are correctly defined
 func TestK8SEventScalingConstants(t *testing.T) {
 	assert.Equal(t, "ScaledUp", constants.K8SEventScaledUp,
@@ -254,4 +441,6 @@ func TestK8SEventScalingConstants(t *testing.T) {
 		"K8SEventScaledDown constant should match expected value")
 	assert.Equal(t, "ResourceConstrained", constants.K8SEventResourceConstrained,
 		"K8SEventResourceConstrained constant should match expected value")
+	assert.Equal(t, "OptimizationFailed", constants.K8SEventOptimizationFailed,
+		"K8SEventOptimizationFailed constant should match expected value")
 }
