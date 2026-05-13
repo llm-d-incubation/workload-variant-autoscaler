@@ -21,6 +21,23 @@ limitations under the License.
 // source infrastructure. Saturation metrics (KV cache, queue length, token
 // capacity) and queueing model metrics (scheduler dispatch rate, max batch
 // size) are collected together and exposed via the shared ReplicaMetrics struct.
+//
+// # Pod label fallback
+//
+// Every processing block in Refresh() extracts a pod identity from Prometheus
+// labels using a two-step fallback:
+//
+//	podName := value.Labels["pod"]
+//	if podName == "" {
+//	    podName = value.Labels["pod_name"]
+//	}
+//
+// vLLM metrics are typically scraped via a PodMonitor or ServiceMonitor that
+// applies the Prometheus operator's default target-relabeling, which produces
+// a "pod" label. Some scrape configurations (e.g., raw Prometheus scrape jobs,
+// kube-state-metrics–style configs) instead expose the pod identity as
+// "pod_name". The fallback handles both conventions so the collector works
+// regardless of how the Prometheus scrape is configured.
 package collector
 
 import (
@@ -102,6 +119,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	// - Saturation: KV cache, queue length, cache config, prefix cache hit rate
 	// - Shared (saturation + queueing model): avg input tokens, avg output tokens
 	// - Queueing model: scheduler dispatch rate, avg TTFT, avg ITL
+	// - Throughput analyzer: generation token rate, instantaneous KV usage (k*), vLLM request rate
 	queries := []string{
 		registration.QueryKvCacheUsage,
 		registration.QueryQueueLength,
@@ -112,6 +130,9 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		registration.QuerySchedulerDispatchRate,
 		registration.QueryAvgTTFT,
 		registration.QueryAvgITL,
+		registration.QueryGenerationTokenRate,
+		registration.QueryKvUsageInstant,
+		registration.QueryVLLMRequestRate,
 	}
 
 	// Execute the query with timing
@@ -130,7 +151,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeKVCache, reason)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeCacheConfig, reason)
-		return nil, fmt.Errorf("failed to refresh saturation metrics: %w", err)
+		return nil, fmt.Errorf("failed to refresh replica metrics: %w", err)
 	}
 
 	// podMetricData holds per-pod metric values and timestamps
@@ -160,6 +181,10 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		avgTTFTTimestamp     time.Time
 		avgITL               float64
 		avgITLTimestamp      time.Time
+		// Throughput analyzer fields
+		generationTokenRate float64
+		kvUsageInstant      float64
+		vllmRequestRate     float64
 	}
 
 	// trackMetricFreshness determines the freshness status of metrics in podMetricData
@@ -460,6 +485,69 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 		}
 	}
 
+	// Process generation token rate results (tokens/sec) — throughput analyzer μ_dec^obs
+	if result := results[registration.QueryGenerationTokenRate]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					continue
+				}
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 {
+					podData[podName].generationTokenRate = value.Value
+				}
+			}
+		}
+	}
+
+	// Process instantaneous KV usage (k*) results (0.0–1.0) — throughput analyzer k*
+	if result := results[registration.QueryKvUsageInstant]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					continue
+				}
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 && value.Value <= 1 {
+					podData[podName].kvUsageInstant = value.Value
+				}
+			}
+		}
+	}
+
+	// Process vLLM request completion rate (req/s) — throughput analyzer fallback λ_req
+	if result := results[registration.QueryVLLMRequestRate]; result != nil {
+		if !result.HasError() {
+			for _, value := range result.Values {
+				podName := value.Labels["pod"]
+				if podName == "" {
+					podName = value.Labels["pod_name"]
+				}
+				if podName == "" {
+					continue
+				}
+				if podData[podName] == nil {
+					podData[podName] = &podMetricData{}
+				}
+				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 {
+					podData[podName].vllmRequestRate = value.Value
+				}
+			}
+		}
+	}
+
 	// Pre-compute MaxBatchSize per scale target from container args.
 	// MaxBatchSize (--max-num-seqs) is not a Prometheus metric; it is parsed
 	// from the Deployment/LWS spec using the vLLM argument parser.
@@ -590,6 +678,9 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 			MaxBatchSize:          maxBatchSize,
 			AvgTTFT:               data.avgTTFT,
 			AvgITL:                data.avgITL,
+			GenerationTokenRate:   data.generationTokenRate,
+			KvUsageInstant:        data.kvUsageInstant,
+			VLLMRequestRate:       data.vllmRequestRate,
 			Metadata: &interfaces.ReplicaMetricsMetadata{
 				CollectedAt:     collectedAt,
 				Age:             0, // Fresh

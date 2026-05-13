@@ -70,10 +70,8 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 ```bash
 export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
 export DEPLOY_WVA=true                # Deploy WVA controller
-export DEPLOY_LLM_D=true              # Deploy llm-d infrastructure (emulated)
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-export DEPLOY_VA=true                 # Opt in: chart VariantAutoscaling (default in script: false)
-export DEPLOY_HPA=true                # Opt in: chart HPA (default in script: false)
+# llm-d: `make deploy-wva-emulated-on-kind` runs install.sh then install-llmd-infra.sh
 ```
 
 ### Step-by-Step Setup
@@ -90,20 +88,15 @@ make create-kind-cluster KIND_ARGS="-t mix -n 4 -g 2"
 # -g: GPUs per node
 ```
 
-**2. Deploy WVA only:**
+**2. Deploy WVA + monitoring only (no llm-d):**
 
 ```bash
-export DEPLOY_WVA=true
-export DEPLOY_LLM_D=false
-export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
-export VLLM_SVC_ENABLED=true
-export DEPLOY_PROMETHEUS_ADAPTER=false
-export DEPLOY_VA=false
-export DEPLOY_HPA=false
-make deploy-wva-emulated-on-kind
+cd /path/to/repo
+export ENVIRONMENT=kind-emulator
+./deploy/install.sh
 ```
 
-**3. Deploy with llm-d (by default):**
+**3. Full stack (WVA + llm-d emulated):**
 
 ```bash
 make deploy-wva-emulated-on-kind
@@ -142,6 +135,10 @@ Destroys the Kind cluster.
 ```bash
 ./teardown.sh
 ```
+
+### install.sh (Kind environment plugin)
+
+`deploy/kind-emulator/install.sh` is **sourced** by `deploy/install-llmd-infra.sh` when `ENVIRONMENT=kind-emulator`. It handles Kind-specific setup (namespaces, image load, monitoring wiring, and related helpers). **llm-d ModelService post-deploy cleanup** for emulated clusters (remove chart prefill; optionally remove chart decode when `LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`, the default) runs from **`deploy/lib/infra_llmd.sh`** inside `deploy_llm_d_infrastructure`, not from this `install.sh`.
 
 ## Cluster Configuration
 
@@ -290,17 +287,17 @@ This can happen when loading a multi-platform image into Kind: the image manifes
 
 ```bash
 # Force linux/amd64 (e.g. for Intel or emulated nodes)
-KIND_IMAGE_PLATFORM=linux/amd64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true DEPLOY_LLM_D=true
+KIND_IMAGE_PLATFORM=linux/amd64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
 
 # Force linux/arm64 (e.g. for Apple Silicon with native arm64 nodes)
-KIND_IMAGE_PLATFORM=linux/arm64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true DEPLOY_LLM_D=true
+KIND_IMAGE_PLATFORM=linux/arm64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
 ```
 
 Alternatively, build the image locally and deploy with `IfNotPresent` so the script skips the registry pull and loads your local single-platform image:
 
 ```bash
 make docker-build IMG=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:latest
-WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUSTER=true DEPLOY_LLM_D=true
+WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
 ```
 
 ## Development Workflow

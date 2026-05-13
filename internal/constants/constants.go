@@ -55,6 +55,7 @@ var (
 	SpecReplicasFallback int32 = 1 // in case Spec.Replicas is nil
 )
 
+// Kubernetes resource kinds and API versions for supported scale targets.
 const (
 	DeploymentKind            = "Deployment"
 	DeploymentAPIVersion      = "apps/v1"
@@ -63,4 +64,14 @@ const (
 
 	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
 	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
+)
+
+// Component names identify WVA components for observability (metrics, logging, tracing).
+const (
+	ComponentCollector  = "collector"
+	ComponentAnalyzer   = "analyzer"
+	ComponentOptimizer  = "optimizer"
+	ComponentLimiter    = "limiter"
+	ComponentEnforcer   = "enforcer"
+	ComponentController = "controller"
 )

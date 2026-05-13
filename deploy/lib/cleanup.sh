@@ -120,9 +120,7 @@ cleanup() {
         undeploy_prometheus_adapter
     fi
 
-    if [ "$DEPLOY_LLM_D" = "true" ]; then
-        undeploy_llm_d_infrastructure
-    fi
+    # llm-d is not torn down here: use deploy/install-llmd-infra.sh --undeploy (releases + optional gateway helmfile).
 
     if [ "$DEPLOY_WVA" = "true" ]; then
         undeploy_wva_controller
@@ -150,7 +148,6 @@ cleanup() {
     echo "Removed components:"
     [ "$SCALER_BACKEND" = "keda" ] && echo "✓ KEDA"
     [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ] && echo "✓ Prometheus Adapter"
-    [ "$DEPLOY_LLM_D" = "true" ] && echo "✓ llm-d Infrastructure"
     [ "$DEPLOY_WVA" = "true" ] && echo "✓ WVA Controller"
     [ "$DEPLOY_PROMETHEUS" = "true" ] && echo "✓ Prometheus Stack"
 

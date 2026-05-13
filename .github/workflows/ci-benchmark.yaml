@@ -243,9 +243,20 @@ jobs:
           go-version: "1.25.x"
           cache-dependency-path: ./go.sum
 
-      - name: Install tools (kubectl, oc, helm, make)
+      - name: Install tools (kubectl, oc, helm, make, jq, yq)
         run: |
-          sudo apt-get update && sudo apt-get install -y make
+          sudo apt-get update && sudo apt-get install -y make jq
+          YQ_VERSION="v4.45.1"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)  YQ_ARCH="amd64" ;;
+            aarch64) YQ_ARCH="arm64" ;;
+            *) echo "::error::Unsupported arch for yq: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
+          chmod +x yq
+          sudo mv yq /usr/local/bin/
+          yq --version
           KUBECTL_VERSION="v1.31.0"
           curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x kubectl
@@ -287,17 +298,18 @@ jobs:
       - name: Deploy WVA and llm-d infrastructure
         env:
           ENVIRONMENT: openshift
+          # Cluster provides gateway — skip install-llmd gateway helmfile.
           INSTALL_GATEWAY_CTRLPLANE: "false"
-          E2E_TESTS_ENABLED: "true"
           NAMESPACE_SCOPED: "false"
           LLMD_NS: ${{ env.LLMD_NAMESPACE }}
           WVA_NS: ${{ env.WVA_NAMESPACE }}
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
-          DEPLOY_VA: "false"
-          DEPLOY_HPA: "false"
+          # Benchmark does not use chart VA/HPA from install — workloads and autoscalers come from the benchmark job.
           DECODE_REPLICAS: "1"
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
+          # See OpenShift e2e: user-workload Prometheus cannot bearer-auth to WVA /metrics.
           WVA_METRICS_SECURE: "false"
+          # Full capacity-scaling chart values (install.sh no longer passes these).
           KV_CACHE_THRESHOLD: "0.90"
           QUEUE_LENGTH_THRESHOLD: "10"
           KV_SPARE_TRIGGER: "0.05"
@@ -309,8 +321,22 @@ jobs:
           VLLM_BLOCK_SIZE: "64"
           VLLM_ENFORCE_EAGER: "true"
           INSTALL_GRAFANA: "true"
+          MODEL_ID: ${{ env.MODEL_ID }}
+          ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
+          LLMD_PATCH_EPP_FLOW_CONTROL: "true"
+          LLMD_SKIP_INFERENCE_OBJECTIVE: "true"
+          # EPP + gateway only here; "Wait for infrastructure" rolls out decode (real vLLM).
+          LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
+          E2E_DEPLOY_WAIT_TIMEOUT: "300s"
         run: |
-          ./deploy/install.sh --model "$MODEL_ID" --accelerator "$ACCELERATOR_TYPE" --release-name "$WVA_RELEASE_NAME" --environment openshift
+          # Split deploy: WVA base (install.sh) → llm-d (install-llmd-infra.sh) → chart capacity tuning (helm upgrade).
+          ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
+          ./deploy/install-llmd-infra.sh -e openshift
+          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
+            --set wva.capacityScaling.default.kvCacheThreshold="${KV_CACHE_THRESHOLD}" \
+            --set wva.capacityScaling.default.queueLengthThreshold="${QUEUE_LENGTH_THRESHOLD}" \
+            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
+            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
 
       - name: Label namespaces for OpenShift monitoring
         run: |

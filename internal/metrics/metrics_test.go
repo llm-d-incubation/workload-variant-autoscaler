@@ -3,14 +3,146 @@ package metrics
 import (
 	"context"
 	"os"
+	"strings"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRecordError(t *testing.T) {
+	tests := []struct {
+		name          string
+		component     string
+		errorType     string
+		callCount     int
+		expectedValue float64
+	}{
+		{
+			name:          "single error increment",
+			component:     constants.ComponentController,
+			errorType:     "TestError",
+			callCount:     1,
+			expectedValue: 1.0,
+		},
+		{
+			name:          "multiple error increments",
+			component:     constants.ComponentController,
+			errorType:     "AnotherError",
+			callCount:     3,
+			expectedValue: 3.0,
+		},
+		{
+			name:          "analyzer error",
+			component:     constants.ComponentAnalyzer,
+			errorType:     "AnalyzerError",
+			callCount:     2,
+			expectedValue: 2.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a new registry for each test to ensure isolation
+			registry := prometheus.NewRegistry()
+
+			// Initialize metrics with the test registry
+			err := InitMetrics(registry)
+			require.NoError(t, err)
+
+			// Call RecordError the specified number of times
+			for i := 0; i < tt.callCount; i++ {
+				RecordError(tt.component, tt.errorType)
+			}
+
+			// Method 1: Using testutil.ToFloat64 - simplest for single metric
+			metricName := constants.WVAErrorsTotal
+			labels := prometheus.Labels{
+				constants.LabelComponent: tt.component,
+				constants.LabelErrorType: tt.errorType,
+			}
+			actualValue := testutil.ToFloat64(errorsTotal.With(labels))
+			assert.Equal(t, tt.expectedValue, actualValue,
+				"Counter should be incremented to %v", tt.expectedValue)
+
+			// Method 2: Using Gather and manual inspection
+			metricFamilies, err := registry.Gather()
+			require.NoError(t, err)
+
+			found := false
+			for _, mf := range metricFamilies {
+				if mf.GetName() == metricName {
+					for _, metric := range mf.GetMetric() {
+						// Check if labels match
+						labelMatch := true
+						for _, label := range metric.GetLabel() {
+							expectedVal, exists := labels[label.GetName()]
+							if exists && label.GetValue() != expectedVal {
+								labelMatch = false
+								break
+							}
+						}
+
+						if labelMatch {
+							found = true
+							assert.Equal(t, tt.expectedValue, metric.GetCounter().GetValue(),
+								"Counter value from Gather should match expected")
+						}
+					}
+				}
+			}
+			assert.True(t, found, "Metric with matching labels should be found")
+		})
+	}
+}
+
+// Note: Testing with controller_instance label requires a separate test run
+// because Prometheus metrics cannot change their label cardinality after creation.
+// To test controller_instance behavior, set CONTROLLER_INSTANCE env var before
+// running the test suite, or test it in integration/e2e tests.
+
+func TestRecordErrorNotInitialized(t *testing.T) {
+	// Save original errorsTotal
+	originalErrorsTotal := errorsTotal
+	defer func() {
+		errorsTotal = originalErrorsTotal
+	}()
+
+	// Set errorsTotal to nil to simulate uninitialized state
+	errorsTotal = nil
+
+	// RecordError should not panic when errorsTotal is nil - it returns early gracefully
+	// to handle cases where metrics may not be initialized
+	require.NotPanics(t, func() {
+		RecordError(constants.ComponentController, "TestError")
+	}, "RecordError should not panic when errorsTotal is nil (metrics not initialized)")
+}
+
+func TestRecordErrorMetricFormat(t *testing.T) {
+	// Test that the metric can be scraped in Prometheus exposition format
+	registry := prometheus.NewRegistry()
+	err := InitMetrics(registry)
+	require.NoError(t, err)
+
+	RecordError(constants.ComponentController, "ConfigMapError")
+
+	// Use testutil.CollectAndCompare to verify metric format
+	expected := `
+		# HELP wva_errors_total Total number of errors by component
+		# TYPE wva_errors_total counter
+		wva_errors_total{component="controller",error_type="ConfigMapError"} 1
+	`
+
+	err = testutil.CollectAndCompare(errorsTotal, strings.NewReader(expected))
+	assert.NoError(t, err, "Metric should match expected Prometheus format")
+}
 
 // resetMetrics clears package-level metric vars so each test starts fresh.
 // Callers MUST invoke InitMetrics before recording any metric afterwards —

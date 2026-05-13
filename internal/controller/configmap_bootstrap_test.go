@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,6 +30,8 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("ConfigMap Bootstrap", func() {
@@ -363,5 +367,74 @@ var _ = Describe("ConfigMap Bootstrap", func() {
 				Expect(satConfig.QueueLengthThreshold).NotTo(BeNumerically("==", 12))
 			}
 		}
+	})
+
+	Describe("ConfigMap Bootstrap Error Metrics", func() {
+		var (
+			ctx      context.Context
+			registry *prometheus.Registry
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			// Create a new registry for each test to ensure metric isolation
+			registry = prometheus.NewRegistry()
+			err := metrics.InitMetrics(registry)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should record error metric when Config is nil", func() {
+			By("Creating reconciler with nil Config")
+			reconciler := &ConfigMapReconciler{
+				Reader: k8sClient,
+				Config: nil, // nil config to trigger error
+			}
+
+			By("Attempting to bootstrap ConfigMaps")
+			err := reconciler.BootstrapInitialConfigMaps(ctx)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("config is nil"))
+
+			By("Verifying error metric was incremented")
+			metricValue := testutil.GetErrorMetricValue(registry, constants.ComponentController, "Config is nil in ConfigMapReconciler bootstrap")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Config is nil")
+		})
+
+		It("should record error metric when List fails", func() {
+			By("Creating a test config")
+			cfg, err := newTestConfigWithPrometheus("https://prometheus:9090")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a failing client that errors on List")
+			failingClient := &failingK8sClient{
+				Reader:    k8sClient,
+				failGet:   false,
+				failList:  true,
+				listError: errors.New("simulated list error"),
+			}
+
+			reconciler := &ConfigMapReconciler{
+				Reader: failingClient,
+				Config: cfg,
+			}
+
+			By("Attempting to bootstrap ConfigMaps")
+			err = reconciler.BootstrapInitialConfigMaps(ctx)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to list namespaces"))
+
+			By("Verifying error metric was incremented")
+			metricValue := testutil.GetErrorMetricValue(registry, constants.ComponentController, "Failed to list namespaces during bootstrap")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when List fails")
+
+			By("Verifying bootstrap failed state was marked")
+			Expect(cfg.ConfigMapsBootstrapComplete()).To(BeFalse())
+		})
 	})
 })

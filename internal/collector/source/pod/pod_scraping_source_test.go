@@ -10,12 +10,16 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sourcepkg "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("PodScrapingSource", func() {
@@ -517,9 +521,14 @@ vllm_num_requests_waiting{namespace="test-ns"} 5
 			readyPod2   *corev1.Pod
 			mockServer1 *httptest.Server
 			mockServer2 *httptest.Server
+			registry    *prometheus.Registry
 		)
 
 		BeforeEach(func() {
+			// Initialize metrics for error recording
+			registry = prometheus.NewRegistry()
+			Expect(metrics.InitMetrics(registry)).To(Succeed())
+
 			service = &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pool-epp",
@@ -941,3 +950,77 @@ func (m *mockReader) Read(p []byte) (n int, err error) {
 	m.pos += n
 	return n, nil
 }
+
+var _ = Describe("Error metrics recording", func() {
+	var (
+		ctx      context.Context
+		registry *prometheus.Registry
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		// Create fresh registry for each test
+		registry = prometheus.NewRegistry()
+		Expect(metrics.InitMetrics(registry)).To(Succeed())
+	})
+
+	It("should record error metric when pod scraping fails", func() {
+		// Create service and pod but no HTTP server (scraping will fail)
+		service := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pool-epp",
+				Namespace: "test-ns",
+			},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{
+					"inferencepool": "test-pool-epp",
+				},
+			},
+		}
+
+		readyPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "epp-pod-1",
+				Namespace: "test-ns",
+				Labels: map[string]string{
+					"inferencepool": "test-pool-epp",
+				},
+			},
+			Status: corev1.PodStatus{
+				PodIP: "192.0.2.1", // Invalid/unreachable IP (TEST-NET-1)
+				Conditions: []corev1.PodCondition{
+					{
+						Type:   corev1.PodReady,
+						Status: corev1.ConditionTrue,
+					},
+				},
+			},
+		}
+
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(service, readyPod).
+			Build()
+
+		config := PodScrapingSourceConfig{
+			ServiceName:      "test-pool-epp",
+			ServiceNamespace: "test-ns",
+			MetricsPort:      9999, // Unreachable port
+			ScrapeTimeout:    500 * time.Millisecond,
+		}
+
+		source, err := NewPodScrapingSource(ctx, client, config)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Refresh should not error but scraping will fail
+		_, err = source.Refresh(ctx, sourcepkg.RefreshSpec{})
+		Expect(err).NotTo(HaveOccurred())
+
+		// Verify error metric was recorded
+		count := testutil.GetErrorMetricValue(registry, constants.ComponentCollector, "Failed to scrape pod")
+		Expect(count).To(BeNumerically(">", 0), "Error metric should be incremented when pod scraping fails")
+	})
+})

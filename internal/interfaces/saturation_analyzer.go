@@ -94,8 +94,33 @@ type ReplicaMetrics struct {
 	// AvgITL is the average inter-token latency on this replica in seconds.
 	// Derived from rate(vllm:time_per_output_token_seconds_sum[5m]) / rate(..._count[5m]).
 	// Used by queueing model tuner as observed ITL for Kalman filter parameter learning.
+	// TA notation: ITL_obs — the (k*, ITL_obs) pair drives OLS calibration of ITL(k) = A·k + B.
 	// Zero when metrics are unavailable.
 	AvgITL float64
+
+	// --- Fields for Throughput Analyzer ---
+
+	// GenerationTokenRate is the observed decode token generation rate on this replica (tokens/sec).
+	// Derived from rate(vllm:request_generation_tokens_sum[1m]) per pod.
+	// TA notation: μ_dec^obs — directly observable supply proxy; also used as a sanity check
+	// against the demand estimate (μ_dec^obs ≈ λ_dec at steady state with no queueing).
+	// Zero when metrics are unavailable.
+	GenerationTokenRate float64
+
+	// KvUsageInstant is the instantaneous KV cache utilization fraction on this replica (0.0–1.0).
+	// Derived from vllm:kv_cache_usage_perc (no max_over_time window).
+	// TA notation: k* — the current operating point in the ITL model ITL(k) = A·k + B.
+	// Differs from KvCacheUsage which uses max_over_time[1m] for the saturation analyzer.
+	// Zero when metrics are unavailable.
+	KvUsageInstant float64
+
+	// VLLMRequestRate is the vLLM-side request completion rate on this replica (req/s).
+	// Derived from rate(vllm:request_generation_tokens_count[1m]) per pod.
+	// TA notation: fallback λ_req — used when ArrivalRate == 0 (EPP not deployed).
+	// λ_dec_fallback = sum(VLLMRequestRate) × avg(AvgOutputTokens).
+	// Measures completed requests only; undercounts when requests queue in the scheduler.
+	// Zero when metrics are unavailable.
+	VLLMRequestRate float64
 }
 
 // ReplicaMetricsMetadata contains freshness information for replica metrics

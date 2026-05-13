@@ -2,18 +2,16 @@
 #
 # Multi-Model Deployment Orchestrator
 #
-# Thin wrapper around deploy/install.sh that deploys N models into the
-# same cluster, each with its own EPP and InferencePool, then creates a
-# shared HTTPRoute with URLRewrite rules so all models are reachable
-# through a single Gateway.
+# Orchestrates deploy/install.sh (WVA + monitoring + scaler) and deploy/install-llmd-infra.sh
+# per model into the same cluster, then creates a shared HTTPRoute with URLRewrite rules.
 #
 # Usage:
 #   MODELS="Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B" ./deploy/install-multi-model.sh
 #
 # Architecture:
-#   install.sh  (call 1) → full stack: control plane, WVA, monitoring, Model 1
-#   install.sh  (call N) → model-only: skip WVA/monitoring/gateway, deploy Model N
-#   This script          → multi-model-specific: InferencePools, HTTPRoute, verification
+#   install.sh + install-llmd-infra.sh (call 1) → WVA, monitoring, scaler, Model 1 + gateway
+#   install-llmd-infra.sh (call N) → additional Model N (no WVA / no monitoring)
+#   This script → multi-model HTTPRoute and verification
 #
 
 set -e
@@ -42,12 +40,14 @@ model_to_slug() {
 # ── Configuration ────────────────────────────────────────────────────
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
 DEPLOY_SCRIPT="$WVA_PROJECT/deploy/install.sh"
+LLMD_DEPLOY_SCRIPT="$WVA_PROJECT/deploy/install-llmd-infra.sh"
 LLMD_NS=${LLMD_NS:-"llm-d-inference-scheduler"}
 ENVIRONMENT=${ENVIRONMENT:-"kind-emulator"}
 DECODE_REPLICAS=${DECODE_REPLICAS:-1}
+LLM_D_RELEASE=${LLM_D_RELEASE:-v0.6.0}
 MODELS=${MODELS:-"Qwen/Qwen3-0.6B,unsloth/Meta-Llama-3.1-8B"}
 
-chmod +x "$DEPLOY_SCRIPT"
+chmod +x "$DEPLOY_SCRIPT" "$LLMD_DEPLOY_SCRIPT"
 
 # ── Parse model list ─────────────────────────────────────────────────
 IFS=',' read -ra MODEL_LIST <<< "$MODELS"
@@ -107,13 +107,12 @@ if [ "$UNDEPLOY" = true ]; then
 
     # 4. Call install.sh --undeploy for the full stack (WVA, monitoring, scaler backend, namespaces).
     #    Only need to call once for the first model since it deployed the control plane.
-    log_info "Undeploying control plane (WVA, monitoring, scaler backend)..."
+    log_info "Undeploying llm-d (gateway) then WVA/monitoring/scaler..."
     ENVIRONMENT="$ENVIRONMENT" \
-    RELEASE_NAME_POSTFIX="${SLUG_LIST[0]}" \
     INSTALL_GATEWAY_CTRLPLANE=true \
-    DEPLOY_WVA=true \
-    DEPLOY_PROMETHEUS=true \
-    DEPLOY_LLM_D=false \
+    DELETE_NAMESPACES="${DELETE_NAMESPACES:-false}" \
+    "$LLMD_DEPLOY_SCRIPT" --undeploy -e "$ENVIRONMENT" || true
+    ENVIRONMENT="$ENVIRONMENT" \
     DELETE_NAMESPACES="${DELETE_NAMESPACES:-false}" \
     "$DEPLOY_SCRIPT" --undeploy
 
@@ -138,18 +137,18 @@ for i in "${!MODEL_LIST[@]}"; do
         log_info "Step ${step}/${TOTAL_STEPS}: Full stack + ${slug}"
         log_info "═══════════════════════════════════════════════════════════"
 
-        # First model: deploy the full control plane, WVA, monitoring, and model
+        # First model: WVA + monitoring + scaler, then llm-d for this model
+        ENVIRONMENT="$ENVIRONMENT" \
+        DEPLOY_WVA=true \
+        DEPLOY_PROMETHEUS=true \
+        "$DEPLOY_SCRIPT"
         ENVIRONMENT="$ENVIRONMENT" \
         MODEL_ID="$model" \
         RELEASE_NAME_POSTFIX="$slug" \
-        INFRA_ONLY=false \
         INSTALL_GATEWAY_CTRLPLANE=true \
-        DEPLOY_WVA=true \
-        DEPLOY_PROMETHEUS=true \
-        DEPLOY_LLM_D=true \
+        LLM_D_RELEASE="$LLM_D_RELEASE" \
         DECODE_REPLICAS="$DECODE_REPLICAS" \
-        E2E_TESTS_ENABLED=false \
-        "$DEPLOY_SCRIPT"
+        "$LLMD_DEPLOY_SCRIPT" -e "$ENVIRONMENT"
 
         # Replace the model-specific Gateway with a shared, model-agnostic one.
         # install.sh created infra-<slug>-inference-gateway; we replace it with
@@ -185,13 +184,8 @@ GWEOF
         log_info "Step ${step}/${TOTAL_STEPS}: Model-only ${slug}"
         log_info "═══════════════════════════════════════════════════════════"
 
-        # Subsequent models: reuse existing control plane, deploy model only.
-        # Inherits WVA_NS, NAMESPACE_SCOPED, LLM_D_RELEASE, WVA_IMAGE_*
-        # from the process environment (set by Makefile or caller).
-        #
-        # E2E_TESTS_ENABLED=true suppresses the interactive Gateway prompt
-        # (safe here because INFRA_ONLY=false, so the modelservice-skip
-        # side effect does not activate).
+        # Subsequent models: reuse existing control plane; install-llmd-infra only.
+        # Inherits WVA_NS, NAMESPACE_SCOPED, LLM_D_RELEASE from the environment (Makefile or caller).
 
         # The gaie-* (inference-scheduler) chart creates a shared Secret with a
         # fixed name that causes Helm ownership conflicts across releases.
@@ -203,16 +197,11 @@ GWEOF
         ENVIRONMENT="$ENVIRONMENT" \
         MODEL_ID="$model" \
         RELEASE_NAME_POSTFIX="$slug" \
-        INFRA_ONLY=false \
         INSTALL_GATEWAY_CTRLPLANE=false \
         DEPLOY_WVA=false \
-        DEPLOY_PROMETHEUS=false \
-        DEPLOY_PROMETHEUS_ADAPTER=false \
-        SCALER_BACKEND=none \
-        DEPLOY_LLM_D=true \
+        LLM_D_RELEASE="$LLM_D_RELEASE" \
         DECODE_REPLICAS="$DECODE_REPLICAS" \
-        E2E_TESTS_ENABLED=true \
-        "$DEPLOY_SCRIPT"
+        "$LLMD_DEPLOY_SCRIPT" -e "$ENVIRONMENT"
 
         # The helmfile creates an infra-<slug> release per model which includes
         # a redundant Gateway resource. Delete only the Gateway resource (not the

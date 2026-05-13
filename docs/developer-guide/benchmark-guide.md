@@ -151,12 +151,24 @@ The single-model benchmark tests WVA scaling behavior with one model under diffe
 make benchmark-standup BENCHMARK_NAMESPACE=<your-namespace>
 ```
 
+To deploy a specific model (defaults to `unsloth/Meta-Llama-3.1-8B`):
+
+```bash
+make benchmark-standup BENCHMARK_NAMESPACE=<your-namespace> MODEL_ID=Qwen/Qwen3-0.6B
+```
+
 Wait until you see `✅ All smoketest steps complete.`
 
 **2. Run a scenario:**
 
 ```bash
 make benchmark-run BENCHMARK_NAMESPACE=<your-namespace> BENCHMARK_WORKLOAD=prefill_heavy.yaml
+```
+
+If you stood up with a non-default model, pass the same `MODEL_ID`:
+
+```bash
+make benchmark-run BENCHMARK_NAMESPACE=<your-namespace> BENCHMARK_WORKLOAD=prefill_heavy.yaml MODEL_ID=Qwen/Qwen3-0.6B
 ```
 
 Repeat with `decode_heavy.yaml` or `symmetrical.yaml` for the other scenarios.

@@ -23,7 +23,9 @@ import (
 	"github.com/prometheus/common/model"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // PodScrapingSource implements MetricsSource for direct pod scraping.
@@ -231,8 +233,10 @@ func (p *PodScrapingSource) scrapeAllPods(ctx context.Context, pods []*corev1.Po
 
 			result, err := p.scrapePodMetrics(ctx, pod)
 			if err != nil {
-				logger.V(logging.VERBOSE).Error(err, "Failed to scrape pod",
+				errorType := "Failed to scrape pod"
+				logger.V(logging.VERBOSE).Error(err, errorType,
 					"pod", pod.Name)
+				metrics.RecordError(constants.ComponentCollector, errorType)
 				return
 			}
 

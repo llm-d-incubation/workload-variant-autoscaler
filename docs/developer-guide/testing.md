@@ -160,29 +160,21 @@ go test ./test/e2e/... -run TestDoesNotExist
 
 ### Infra-Only Setup (Required Before Running Tests)
 
-Tests expect **only** the WVA controller and llm-d infrastructure to be deployed; they create VariantAutoscaling resources, HPAs, and model services themselves. Use the install script in **infra-only** mode:
-
-```bash
-# From repository root: deploy only WVA + llm-d infrastructure (no VA/HPA/model services)
-cd deploy
-export ENVIRONMENT="kind-emulator"   # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
-# Or: ./install.sh --infra-only
-```
+Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; they create VariantAutoscaling resources, HPAs, and model workloads themselves. Use **`make deploy-e2e-infra`** (runs `deploy/install.sh` then `deploy/install-llmd-infra.sh`) or invoke those scripts with the same environment variables the Makefile sets.
 
 This deploys:
 - WVA controller
-- llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
+- llm-d gateway/EPP (and related infra); `make deploy-e2e-infra` skips the default chart ModelService release (`LLMD_SKIP_DEFAULT_MODELSERVICE=true`)
 - Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
-- **No** VariantAutoscaling, HPA, or model services (tests create these)
+- **No** chart VariantAutoscaling or HPA (tests create these)
+- On **emulated** clusters, **`deploy/lib/infra_llmd.sh`** applies ModelService post-deploy cleanup (drop prefill; drop decode when **`LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`**, the default) after helmfile deploy — not from **`deploy/kind-emulator/install.sh`**.
 
-When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script enables **GIE queuing** by adding the `flowControl` feature gate to the EPP ConfigMap and updating the EPP image to a version that supports flow control. For **e2e**, the **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by `install.sh`. For non-e2e scale-to-zero (`ENABLE_SCALE_TO_ZERO=true` without e2e), `install.sh` still applies `deploy/inference-objective-e2e.yaml`. Queuing helps populate `inference_extension_flow_control_queue_size` when requests hit the gateway.
+When `LLMD_PATCH_EPP_FLOW_CONTROL=true` (set by `make deploy-e2e-infra`) or `ENABLE_SCALE_TO_ZERO=true`, **`install-llmd-infra.sh`** enables **GIE queuing** on the EPP (flowControl feature gate + image). For **e2e**, the **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts. For non-e2e scale-to-zero (`ENABLE_SCALE_TO_ZERO=true` without `LLMD_SKIP_INFERENCE_OBJECTIVE`), `install-llmd-infra.sh` can still apply `deploy/inference-objective-e2e.yaml`. Queuing helps populate `inference_extension_flow_control_queue_size` when requests hit the gateway.
 
 **Install script tuning (optional, same variables as `deploy/install.sh`):**
 
 - **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.
-- **`E2E_DEPLOY_WAIT_TIMEOUT`**: For infra-only e2e deploys (`INFRA_ONLY=true` with `E2E_TESTS_ENABLED=true`), caps the `kubectl wait` for the EPP and inference-gateway deployments (default **`120s`**). Raise it if image pulls rollouts routinely exceed that window.
+- **`E2E_DEPLOY_WAIT_TIMEOUT`**: When `LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true` (as in `make deploy-e2e-infra`), caps the `kubectl wait` for the EPP and inference-gateway deployments (default **`120s`**). Raise it if image pulls rollouts routinely exceed that window.
 
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
@@ -235,7 +227,7 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
 | `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
 
-Deploy-time knobs (passed through when you run `./deploy/install.sh` or `make deploy-e2e-infra`): `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT` — see **Install script tuning** above.
+Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile applies a follow-up `helm upgrade` when set) — see **Install script tuning** above.
 
 For running multiple test runs in parallel, use [multi-controller isolation](../user-guide/multi-controller-isolation.md) (`CONTROLLER_INSTANCE`).
 

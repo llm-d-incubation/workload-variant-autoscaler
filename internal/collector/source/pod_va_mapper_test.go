@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -15,7 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
@@ -23,11 +26,16 @@ var _ = Describe("PodVAMapper", func() {
 	var (
 		ctx         context.Context
 		deployments map[string]scaletarget.ScaleTargetAccessor
+		registry    *prometheus.Registry
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		deployments = make(map[string]scaletarget.ScaleTargetAccessor)
+
+		// Initialize metrics for error recording
+		registry = prometheus.NewRegistry()
+		Expect(metrics.InitMetrics(registry)).To(Succeed())
 	})
 
 	// Helper function to create a scheme with all required types
@@ -370,6 +378,178 @@ var _ = Describe("PodVAMapper", func() {
 			// Pod in namespace-b should find va-b
 			resultB := mapper.FindVAForPod(ctx, "shared-deploy-pod-b", "namespace-b", deployments)
 			Expect(resultB).To(Equal("va-b"))
+		})
+	})
+
+	Describe("Metrics Recording", func() {
+		It("should record error when pod is not found", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Attempting to find VA for a non-existent pod")
+			scheme := createScheme()
+			fakeClient := createFakeClientWithIndex(scheme)
+			mapper := NewPodVAMapper(fakeClient)
+
+			result := mapper.FindVAForPod(ctx, "non-existent-pod", "default", deployments)
+			Expect(result).To(BeEmpty())
+
+			By("Verifying error metric was recorded")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			var found bool
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					for _, metric := range mf.GetMetric() {
+						var component, errorType string
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelComponent {
+								component = label.GetValue()
+							}
+							if label.GetName() == constants.LabelErrorType {
+								errorType = label.GetValue()
+							}
+						}
+						if component == constants.ComponentCollector && errorType == "failed to get pod" {
+							found = true
+							Expect(metric.GetCounter().GetValue()).To(BeNumerically(">=", 1.0))
+							break
+						}
+					}
+				}
+			}
+			Expect(found).To(BeTrue(), "Error metric for 'failed to get pod' should be recorded")
+		})
+
+		It("should record error when ReplicaSet is not found", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a pod with a ReplicaSet owner that doesn't exist")
+			pod := createPod("orphan-pod", "default", "non-existent-rs", nil)
+			scheme := createScheme()
+			fakeClient := createFakeClientWithIndex(scheme, pod)
+			mapper := NewPodVAMapper(fakeClient)
+
+			result := mapper.FindVAForPod(ctx, "orphan-pod", "default", deployments)
+			Expect(result).To(BeEmpty())
+
+			By("Verifying error metric was recorded")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			var found bool
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					for _, metric := range mf.GetMetric() {
+						var component, errorType string
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelComponent {
+								component = label.GetValue()
+							}
+							if label.GetName() == constants.LabelErrorType {
+								errorType = label.GetValue()
+							}
+						}
+						if component == constants.ComponentCollector && errorType == errorTypeFailedToGetScaleTarget {
+							found = true
+							Expect(metric.GetCounter().GetValue()).To(BeNumerically(">=", 1.0))
+							break
+						}
+					}
+				}
+			}
+			Expect(found).To(BeTrue(), "Error metric for 'failed to get scale target' should be recorded")
+		})
+
+		It("should record different error types separately", func() {
+			const errorTypeVANotFound = "failed to find VariantAutoscaling for scale target"
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Recording different error types")
+			metrics.RecordError(constants.ComponentCollector, errorTypeVANotFound)
+			metrics.RecordError(constants.ComponentCollector, "failed to get pod")
+			metrics.RecordError(constants.ComponentCollector, "failed to get ReplicaSet")
+
+			By("Verifying all errors were recorded separately")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			var errorMetricCount int
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					errorMetricCount = len(mf.GetMetric())
+					break
+				}
+			}
+			// Should have 3 separate error counters
+			Expect(errorMetricCount).To(Equal(3), "Should have 3 separate error metrics")
+		})
+
+		It("should record error when finding VA for deployment fails", func() {
+			const errorTypeVANotFound = "failed to find VariantAutoscaling for scale target"
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Setting up a deployment and pod but no VA index")
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-deploy",
+					Namespace: "default",
+				},
+			}
+			deployments["default/test-deploy"] = scaletarget.NewDeploymentAccessor(deployment)
+
+			rs := createReplicaSet("test-deploy-rs", "default", "test-deploy")
+			pod := createPod("test-deploy-pod", "default", "test-deploy-rs", nil)
+
+			scheme := createScheme()
+			// Create client WITHOUT index to trigger error in FindVAForDeployment
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pod, rs).
+				Build()
+
+			mapper := NewPodVAMapper(fakeClient)
+			result := mapper.FindVAForPod(ctx, "test-deploy-pod", "default", deployments)
+			Expect(result).To(BeEmpty())
+
+			By("Verifying error metric was recorded")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			var found bool
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					for _, metric := range mf.GetMetric() {
+						var component, errorType string
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelComponent {
+								component = label.GetValue()
+							}
+							if label.GetName() == constants.LabelErrorType {
+								errorType = label.GetValue()
+							}
+						}
+						if component == constants.ComponentCollector && errorType == errorTypeVANotFound {
+							found = true
+							Expect(metric.GetCounter().GetValue()).To(BeNumerically(">=", 1.0))
+							break
+						}
+					}
+				}
+			}
+			Expect(found).To(BeTrue(), "Error metric for 'failed to find VariantAutoscaling for scale target' should be recorded")
 		})
 	})
 })

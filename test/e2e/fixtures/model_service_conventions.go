@@ -21,8 +21,10 @@ const (
 	defaultModelServiceContainerPort  = 8000
 	defaultHFTokenSecretName          = "llm-d-hf-token"
 	defaultHFTokenSecretKey           = "HF_TOKEN"
-	defaultModelServiceLabelValue     = "ms-sim-llm-d-modelservice"
+	defaultModelServiceLabelValue     = "random" // Changed to match InferencePool selector expectations
 	defaultLabelValueTrue             = "true"
-	defaultGuideLabelValue            = "workload-autoscaling"
+	defaultGuideLabelValue            = "simulated-accelerators" // Changed to match InferencePool selector
 	defaultTestResourceLabelValue     = defaultLabelValueTrue
+	// InferencePool selector label for accelerator variant
+	defaultAcceleratorVariantValue = "cpu"
 )

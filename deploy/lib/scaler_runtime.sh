@@ -2,7 +2,7 @@
 #
 # Scaler backend deployment/runtime helpers for deploy/install.sh.
 # Requires vars: MONITORING_NAMESPACE, KEDA_NAMESPACE, KEDA_CHART_VERSION,
-# PROM_CA_CERT_PATH, PROMETHEUS_BASE_URL, PROMETHEUS_PORT, E2E_TESTS_ENABLED.
+# PROM_CA_CERT_PATH, PROMETHEUS_BASE_URL, PROMETHEUS_PORT.
 # Requires funcs: log_info/log_warning/log_success/log_error,
 # should_skip_helm_repo_update(), retry_until_success().
 #
@@ -67,6 +67,7 @@ stop_apiservice_guard() {
 
 deploy_keda() {
     log_info "Deploying KEDA (scaler backend)..."
+    # Deploy flow is non-interactive: missing/failed scaler backend is a hard failure.
 
     # OpenShift: KEDA is cluster-managed (OLM/operator); never Helm-install — avoids
     # ClusterRole/release conflicts with an existing platform KEDA.
@@ -75,11 +76,7 @@ deploy_keda() {
         if kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
             log_success "KEDA ScaledObject CRD is available on the cluster"
         else
-            if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-                log_error "OpenShift: scaledobjects.keda.sh CRD not found — install cluster KEDA before E2E (SCALER_BACKEND=keda)"
-                exit 1
-            fi
-            log_warning "KEDA ScaledObject CRD not found — ScaledObject-based scaling will not work"
+            log_error "OpenShift: scaledobjects.keda.sh CRD not found — install cluster KEDA before E2E (SCALER_BACKEND=keda)"
         fi
         return
     fi
@@ -90,11 +87,7 @@ deploy_keda() {
         if kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
             log_success "KEDA ScaledObject CRD is available on the cluster"
         else
-            if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-                log_error "Kubernetes: scaledobjects.keda.sh CRD not found — install KEDA on the cluster or set KEDA_HELM_INSTALL=true"
-                exit 1
-            fi
-            log_warning "KEDA ScaledObject CRD not found — ScaledObject-based scaling will not work"
+            log_error "Kubernetes: scaledobjects.keda.sh CRD not found — install KEDA on the cluster or set KEDA_HELM_INSTALL=true"
         fi
         return
     fi
@@ -138,11 +131,7 @@ deploy_keda() {
         --set prometheus.operator.enabled=true \
         --wait \
         --timeout=5m; then
-        if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-            log_error "KEDA Helm installation failed - required for E2E tests with SCALER_BACKEND=keda"
-        else
-            log_warning "KEDA Helm installation failed, but continuing..."
-        fi
+        log_error "KEDA Helm installation failed (SCALER_BACKEND=keda)"
     else
         log_success "KEDA deployed in $KEDA_NAMESPACE"
     fi
@@ -150,6 +139,7 @@ deploy_keda() {
 
 deploy_prometheus_adapter() {
     log_info "Deploying Prometheus Adapter..."
+    # Deploy flow is non-interactive: adapter install/readiness failures are hard failures.
 
     # Add Prometheus community helm repo
     log_info "Adding Prometheus community helm repo"
@@ -211,14 +201,7 @@ deploy_prometheus_adapter() {
         --set prometheus.port="$PROMETHEUS_PORT" \
         --timeout=3m \
         $wait_flag; then
-        if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-            log_error "Prometheus Adapter Helm installation failed - required for E2E tests"
-        else
-            log_warning "Prometheus Adapter Helm installation failed, but continuing..."
-            log_warning "HPA may not work until adapter is healthy"
-            log_info "Check adapter status: kubectl get pods -n \"$MONITORING_NAMESPACE\" | grep prometheus-adapter"
-            log_info "Check adapter logs: kubectl logs -n \"$MONITORING_NAMESPACE\" deployment/prometheus-adapter"
-        fi
+        log_error "Prometheus Adapter Helm installation failed"
     fi
 
     # If we skipped --wait (e.g., in CI), verify Prometheus Adapter is actually running
@@ -234,12 +217,7 @@ deploy_prometheus_adapter() {
         if [ "$adapter_ready" = "true" ]; then
             log_success "Prometheus Adapter is running"
         else
-            if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-                log_error "Prometheus Adapter failed to become ready after ${max_attempts} attempts - required for E2E tests"
-            else
-                log_warning "Prometheus Adapter may still be starting (not ready after ${max_attempts} attempts)"
-                log_info "Check adapter status: kubectl get pods -n \"$MONITORING_NAMESPACE\" | grep prometheus-adapter"
-            fi
+            log_error "Prometheus Adapter failed to become ready after ${max_attempts} attempts"
         fi
     else
         log_success "Prometheus Adapter deployment completed"

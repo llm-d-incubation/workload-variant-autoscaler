@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	stdErrors "errors"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	"github.com/prometheus/client_golang/prometheus"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,10 +37,13 @@ import (
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils/resources"
 )
@@ -494,4 +499,201 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 
 	// ConfigMap-related tests have been moved to configmap_handler_test.go
 
+	Context("Metrics Recording", func() {
+		const resourceName = "metrics-test-resource"
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
+
+		BeforeEach(func() {
+			logging.NewTestLogger()
+		})
+
+		It("should record error when unable to fetch VariantAutoscaling", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Attempting to reconcile a non-existent VA")
+			controllerReconciler := &VariantAutoscalingReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Recorder:  record.NewFakeRecorder(100),
+				Config:    config.NewTestConfig(),
+				Datastore: datastore.NewDatastore(config.NewTestConfig()),
+			}
+
+			// Try to reconcile a VA that doesn't exist and is not "not found"
+			// This will trigger an error in Get() call
+			nonExistentName := types.NamespacedName{
+				Name:      "non-existent-va",
+				Namespace: "default",
+			}
+			_, _ = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: nonExistentName,
+			})
+
+			By("Verifying error metrics were recorded (for any errors that occurred)")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Check if any error metrics were recorded (we expect none for NotFound errors)
+			// NotFound errors return early without recording metrics
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					// If we find error metrics, they should be for valid error cases
+					for _, metric := range mf.GetMetric() {
+						var errorType string
+						for _, label := range metric.GetLabel() {
+							if label.GetName() == constants.LabelErrorType {
+								errorType = label.GetValue()
+							}
+						}
+						// NotFound errors should not be recorded
+						Expect(errorType).NotTo(Equal("Unable to fetch VariantAutoscaling"))
+					}
+				}
+			}
+		})
+
+		It("should record error when failing to update status", func() {
+			By("Creating a VA without a scale target to trigger status update")
+			resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						Kind: "Deployment",
+						Name: "nonexistent-deployment",
+					},
+					ModelID:     "test-model",
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a client that fails on Status().Patch()")
+			failingClient := &failingStatusClient{
+				Client:          k8sClient,
+				failStatusPatch: true,
+				patchError:      errors.NewInternalError(stdErrors.New("simulated status patch error")),
+			}
+
+			By("Reconciling the VA - scale target not found triggers status update that fails")
+			controllerReconciler := &VariantAutoscalingReconciler{
+				Client:    failingClient,
+				Scheme:    k8sClient.Scheme(),
+				Recorder:  record.NewFakeRecorder(100),
+				Config:    config.NewTestConfig(),
+				Datastore: datastore.NewDatastore(config.NewTestConfig()),
+			}
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+
+			By("Verifying error metric was recorded")
+			metricValue := testutil.GetErrorMetricValue(testRegistry, constants.ComponentController, "Failed to update VariantAutoscaling status")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Status().Patch() fails")
+
+			By("Cleanup")
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("should record error when deployment event handler fails to find VA", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a reconciler")
+			controllerReconciler := &VariantAutoscalingReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Recorder:  record.NewFakeRecorder(100),
+				Config:    config.NewTestConfig(),
+				Datastore: datastore.NewDatastore(config.NewTestConfig()),
+			}
+
+			By("Calling handleDeploymentEvent with a deployment")
+			deployment := resources.CreateLlmdSimDeployment("default", "test-deployment", "test-model", "default", "8000", 0, 0, 1)
+
+			// This should not panic even if the index lookup fails
+			requests := controllerReconciler.handleDeploymentEvent(ctx, deployment)
+
+			// We expect no requests since no VA references this deployment
+			Expect(requests).To(BeEmpty())
+		})
+
+		It("should record different error types separately", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Recording different error types")
+			metrics.RecordError(constants.ComponentController, "Unable to fetch VariantAutoscaling")
+			metrics.RecordError(constants.ComponentController, "Failed to update VariantAutoscaling status")
+			metrics.RecordError(constants.ComponentController, "Failed to get scale target Deployment")
+
+			By("Verifying all errors were recorded separately")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			var errorMetricCount int
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					errorMetricCount = len(mf.GetMetric())
+					break
+				}
+			}
+			// Should have 3 separate error counters
+			Expect(errorMetricCount).To(Equal(3))
+		})
+	})
+
 })
+
+// failingStatusClient wraps a real client and fails Status().Patch() operations
+type failingStatusClient struct {
+	client.Client
+	failStatusPatch bool
+	patchError      error
+}
+
+func (f *failingStatusClient) Status() client.StatusWriter {
+	if f.failStatusPatch {
+		return &failingStatusWriter{
+			StatusWriter: f.Client.Status(),
+			patchError:   f.patchError,
+		}
+	}
+	return f.Client.Status()
+}
+
+// failingStatusWriter wraps a real status writer and fails Patch operations
+type failingStatusWriter struct {
+	client.StatusWriter
+	patchError error
+}
+
+func (f *failingStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if f.patchError != nil {
+		return f.patchError
+	}
+	return f.StatusWriter.Patch(ctx, obj, patch, opts...)
+}

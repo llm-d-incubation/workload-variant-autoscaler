@@ -1,6 +1,7 @@
 # InferenceObjective for GIE queuing (scale-from-zero flow control).
-# install.sh applies this when ENABLE_SCALE_TO_ZERO=true and not E2E (e2e applies e2e-default from Go).
-# poolRef.name is templated by install.sh to match the deployed InferencePool.
+# install-llmd-infra.sh applies this when ENABLE_SCALE_TO_ZERO=true and LLMD_SKIP_INFERENCE_OBJECTIVE is not true
+# (e2e applies e2e-default from Go when LLMD_SKIP_INFERENCE_OBJECTIVE=true).
+# poolRef.name is templated to match the deployed InferencePool.
 apiVersion: inference.networking.x-k8s.io/v1alpha2
 kind: InferenceObjective
 metadata:

@@ -131,6 +131,9 @@ const (
 	// WVAOptimizerActive is a gauge that is 0 when an optimizer is inactive, and 1 when it's active.
 	// Labels: optimizer_name
 	WVAOptimizerActive = "wva_optimizer_active"
+	// WVAErrorsTotal is a counter that tracks the total number of errors by component.
+	// Labels: component, error_type
+	WVAErrorsTotal = "wva_errors_total"
 	// WVAConfigInfo is an info-style gauge that exposes WVA configuration as labels.
 	// Labels: analyzer_name, limiter_enabled, scale_to_zero_enabled
 	WVAConfigInfo = "wva_config_info"
@@ -189,6 +192,7 @@ const (
 const (
 	LabelModelName          = "model_name"
 	LabelNamespace          = "namespace"
+	LabelComponent          = "component"
 	LabelVariantName        = "variant_name"
 	LabelDirection          = "direction"
 	LabelReason             = "reason"
@@ -200,6 +204,7 @@ const (
 	LabelLimiterName        = "limiter_name"
 	LabelPolicyType         = "policy_type"
 	LabelOptimizerName      = "optimizer_name"
+	LabelErrorType          = "error_type"
 	LabelAnalyzerName       = "analyzer_name"
 	LabelLimiterEnabled     = "limiter_enabled"
 	LabelScaleToZeroEnabled = "scale_to_zero_enabled"

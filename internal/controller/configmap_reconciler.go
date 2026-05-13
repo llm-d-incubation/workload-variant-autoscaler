@@ -28,7 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // ConfigMapReconciler reconciles ConfigMaps to update the unified configuration.
@@ -58,7 +60,9 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			r.handleConfigMapDeletion(ctx, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Failed to get ConfigMap", "name", req.Name, "namespace", req.Namespace)
+		errorType := "Failed to get ConfigMap"
+		logger.Error(err, errorType, "name", req.Name, "namespace", req.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 

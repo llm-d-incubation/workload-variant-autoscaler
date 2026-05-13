@@ -13,6 +13,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 // boolPtr is a helper to create a pointer to a bool value
@@ -79,7 +80,11 @@ var _ = Describe("Enforcer", func() {
 			})
 
 			Context("and request count query fails", func() {
-				It("should keep decisions unchanged", func() {
+				It("should keep decisions unchanged and record error metric", func() {
+					// Create fresh registry for this test
+					registry := prometheus.NewRegistry()
+					Expect(metrics.InitMetrics(registry)).To(Succeed())
+
 					enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 						return 0, errors.New("prometheus unavailable")
 					})
@@ -94,6 +99,10 @@ var _ = Describe("Enforcer", func() {
 
 					Expect(applied).To(BeFalse())
 					Expect(decisions[0].TargetReplicas).To(Equal(2))
+
+					// Verify error metric was recorded
+					count := testutil.GetErrorMetricValue(registry, constants.ComponentEnforcer, "Failed to get request count, keeping current decisions")
+					Expect(count).To(BeNumerically(">", 0))
 				})
 			})
 		})

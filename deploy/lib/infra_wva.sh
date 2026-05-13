@@ -68,6 +68,11 @@ deploy_wva_controller() {
     # But allow override via env var (e.g. for E2E tests)
     NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-true}
 
+    # Chart baseName is the controller's logical pool name (InferencePool prefix), not necessarily the llm-d guide folder.
+    WVA_BASE_NAME="${WVA_BASE_NAME:-inference-scheduling}"
+
+    # VA / HPA / capacity thresholds are chart defaults unless changed via helm --set separately (see deploy README).
+    # llmd.modelName / llmd.modelID are optional Helm overrides here when the vars are exported (often unset for infra-only installs).
     helm upgrade -i "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
         -n "$WVA_NS" \
         --values $VALUES_FILE \
@@ -75,17 +80,9 @@ deploy_wva_controller() {
         --set wva.image.repository="$WVA_IMAGE_REPO" \
         --set wva.image.tag="$WVA_IMAGE_TAG" \
         --set wva.imagePullPolicy="$WVA_IMAGE_PULL_POLICY" \
-        --set wva.baseName="$WELL_LIT_PATH_NAME" \
-        --set llmd.modelName="$LLM_D_MODELSERVICE_NAME" \
-        --set va.enabled="$DEPLOY_VA" \
-        --set va.accelerator="$ACCELERATOR_TYPE" \
-        --set llmd.modelID="$MODEL_ID" \
-        --set va.sloTpot="$SLO_TPOT" \
-        --set va.sloTtft="$SLO_TTFT" \
-        --set hpa.enabled="$DEPLOY_HPA" \
-        --set hpa.minReplicas="$HPA_MIN_REPLICAS" \
-        --set hpa.behavior.scaleUp.stabilizationWindowSeconds="$HPA_STABILIZATION_SECONDS" \
-        --set hpa.behavior.scaleDown.stabilizationWindowSeconds="$HPA_STABILIZATION_SECONDS" \
+        --set wva.baseName="$WVA_BASE_NAME" \
+        ${LLM_D_MODELSERVICE_NAME:+--set llmd.modelName="$LLM_D_MODELSERVICE_NAME"} \
+        ${MODEL_ID:+--set llmd.modelID="$MODEL_ID"} \
         --set llmd.namespace="$LLMD_NS" \
         --set wva.prometheus.baseURL="$PROMETHEUS_URL" \
         --set wva.prometheus.monitoringNamespace="$MONITORING_NAMESPACE" \
@@ -99,11 +96,7 @@ deploy_wva_controller() {
         --set wva.metrics.secure="$WVA_METRICS_SECURE" \
         --set wva.scaleToZero="$ENABLE_SCALE_TO_ZERO" \
         ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
-        ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP} \
-        ${KV_CACHE_THRESHOLD:+--set wva.capacityScaling.default.kvCacheThreshold=$KV_CACHE_THRESHOLD} \
-        ${QUEUE_LENGTH_THRESHOLD:+--set wva.capacityScaling.default.queueLengthThreshold=$QUEUE_LENGTH_THRESHOLD} \
-        ${KV_SPARE_TRIGGER:+--set wva.capacityScaling.default.kvSpareTrigger=$KV_SPARE_TRIGGER} \
-        ${QUEUE_SPARE_TRIGGER:+--set wva.capacityScaling.default.queueSpareTrigger=$QUEUE_SPARE_TRIGGER}
+        ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP}
 
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
@@ -155,7 +148,7 @@ delete_namespaces_kube_like() {
 
     for ns in $LLMD_NS $WVA_NS $MONITORING_NAMESPACE; do
         if kubectl get namespace $ns &> /dev/null; then
-            if [[ "$ns" == "$LLMD_NS" && "$DEPLOY_LLM_D" == "false" ]] || [[ "$ns" == "$WVA_NS" && "$DEPLOY_WVA" == "false" ]] || [[ "$ns" == "$MONITORING_NAMESPACE" && "$DEPLOY_PROMETHEUS" == "false" ]]; then
+            if [[ "$ns" == "$WVA_NS" && "$DEPLOY_WVA" == "false" ]] || [[ "$ns" == "$MONITORING_NAMESPACE" && "$DEPLOY_PROMETHEUS" == "false" ]]; then
                 log_info "Skipping deletion of namespace $ns as it was not deployed"
             else
                 log_info "Deleting namespace $ns..."

@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +34,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
 var _ = Describe("ConfigMapReconciler", func() {
@@ -480,5 +484,74 @@ var _ = Describe("ConfigMapReconciler", func() {
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
 
+	})
+
+	Context("Metrics Recording", func() {
+		It("should record error metric when Get fails during reconciliation", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating a failing client that errors on Get")
+			failingClient := &failingK8sClient{
+				Reader:   k8sClient,
+				failGet:  true,
+				getError: errors.New("simulated get error"),
+			}
+
+			testReconciler := &ConfigMapReconciler{
+				Reader:    failingClient,
+				Scheme:    reconciler.Scheme,
+				Config:    cfg,
+				Datastore: ds,
+				Recorder:  reconciler.Recorder,
+			}
+
+			By("Attempting to reconcile a ConfigMap")
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      config.SaturationConfigMapName(),
+					Namespace: systemNamespace,
+				},
+			}
+			_, err = testReconciler.Reconcile(ctx, req)
+
+			By("Verifying error was returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("simulated get error"))
+
+			By("Verifying error metric was incremented")
+			metricValue := testutil.GetErrorMetricValue(testRegistry, constants.ComponentController, "Failed to get ConfigMap")
+			Expect(metricValue).To(BeNumerically(">=", 1.0),
+				"Error metric should be incremented when Get fails")
+		})
+
+		It("should record different error types separately", func() {
+			By("Initializing metrics with a test registry")
+			testRegistry := prometheus.NewRegistry()
+			err := metrics.InitMetrics(testRegistry)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Recording different error types")
+			metrics.RecordError(constants.ComponentController, "Failed to get ConfigMap")
+			metrics.RecordError(constants.ComponentController, "Failed to update ConfigMap")
+			metrics.RecordError(constants.ComponentCollector, "Failed to collect metrics")
+
+			By("Verifying all errors were recorded")
+			metricFamilies, err := testRegistry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Count the number of error metrics
+			var errorMetricCount int
+			for _, mf := range metricFamilies {
+				if mf.GetName() == constants.WVAErrorsTotal {
+					errorMetricCount = len(mf.GetMetric())
+					break
+				}
+			}
+			// Should have 3 separate error counters (one for each unique component+error_type combination)
+			Expect(errorMetricCount).To(Equal(3), "Should have 3 separate error metrics")
+		})
 	})
 })

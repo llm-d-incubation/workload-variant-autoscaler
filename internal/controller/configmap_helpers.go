@@ -27,6 +27,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // parseSaturationConfig parses saturation scaling configuration from ConfigMap data.
@@ -37,13 +38,17 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 	for key, yamlStr := range cmData {
 		var satConfig config.SaturationScalingConfig
 		if err := yaml.Unmarshal([]byte(yamlStr), &satConfig); err != nil {
-			logger.Error(err, "Failed to parse saturation scaling config entry", "key", key)
+			errorType := "Failed to parse saturation scaling config entry"
+			logger.Error(err, errorType, "key", key)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		// Apply defaults before validation (handles omitempty zero-values like scaleUpThreshold)
 		satConfig.ApplyDefaults()
 		if err := satConfig.Validate(); err != nil {
-			logger.Error(err, "Invalid saturation scaling config entry", "key", key)
+			errorType := "Invalid saturation scaling config entry"
+			logger.Error(err, errorType, "key", key)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		configs[key] = satConfig
@@ -61,11 +66,15 @@ func parseQMAnalyzerConfig(cmData map[string]string, logger logr.Logger) (config
 	for key, yamlStr := range cmData {
 		var qmConfig interfaces.QueueingModelScalingConfig
 		if err := yaml.Unmarshal([]byte(yamlStr), &qmConfig); err != nil {
-			logger.Error(err, "Failed to parse queueing model config entry", "key", key)
+			errorType := "Failed to parse queueing model config entry"
+			logger.Error(err, errorType, "key", key)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		if err := qmConfig.Validate(); err != nil {
-			logger.Error(err, "Invalid queueing model config entry", "key", key)
+			errorType := "Invalid queueing model config entry"
+			logger.Error(err, errorType, "key", key)
+			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
 		configs[key] = qmConfig

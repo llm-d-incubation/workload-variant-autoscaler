@@ -31,7 +31,7 @@ type SharedConfig struct {
 	EPPMode          string            // "poolName" or "endpointSelector"
 	PoolName         string            // InferencePool name (if using poolName mode)
 	EndpointSelector map[string]string // Pod selector (if using endpointSelector)
-	EPPServiceName   string            // EPP service name (e.g., "gaie-inference-scheduling-epp")
+	EPPServiceName   string            // EPP service name (e.g. gaie-<guide>-epp; guide basename matches llm-d guides/)
 
 	// Model configuration
 	ModelID         string // e.g., "unsloth/Meta-Llama-3.1-8B"

@@ -431,9 +431,21 @@ jobs:
           which go
           go version
           go env GOTOOLCHAIN
-      - name: Install tools (kubectl, oc, helm, make)
+      - name: Install tools (kubectl, oc, helm, make, jq, yq)
         run: |
-          sudo apt-get update && sudo apt-get install -y make
+          sudo apt-get update && sudo apt-get install -y make jq
+          # mikefarah/yq — required by deploy/install-llmd-infra.sh (REQUIRED_TOOLS) and deploy/lib/infra_llmd.sh
+          YQ_VERSION="v4.45.1"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)  YQ_ARCH="amd64" ;;
+            aarch64) YQ_ARCH="arm64" ;;
+            *) echo "::error::Unsupported arch for yq: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
+          chmod +x yq
+          sudo mv yq /usr/local/bin/
+          yq --version
           # Install kubectl - use pinned version for reproducible CI builds
           # Pinned 2025-12: v1.31.0 tested compatible with OpenShift 4.16+
           # Update this version when upgrading target cluster or during regular dependency reviews
@@ -690,32 +702,25 @@ jobs:
         env:
           # HF_TOKEN is inherited from GITHUB_ENV (set in 'Get HF token from cluster secret' step)
           ENVIRONMENT: openshift
+          # Platform already provides a gateway — install-llmd-infra skips control-plane helmfile.
           INSTALL_GATEWAY_CTRLPLANE: "false"
-          E2E_TESTS_ENABLED: "true"
-          # OpenShift typically lacks HPAScaleToZero; e2e forces SCALE_TO_ZERO_ENABLED off for openshift
-          # (see test/e2e/config.go). KEDA ScaledObjects support minReplicas=0 for scale-from-zero tests.
+          # OpenShift usually lacks HPAScaleToZero (see test/e2e/config.go — e2e disables native scale-to-zero there).
+          # KEDA ScaledObjects support minReplicas=0 for scale-from-zero specs.
           SCALER_BACKEND: keda
           NAMESPACE_SCOPED: "false"
-          # Pass PR-specific namespaces to install script
+          # Isolate this PR's workloads from other runs.
           LLMD_NS: ${{ env.LLMD_NAMESPACE }}
           WVA_NS: ${{ env.WVA_NAMESPACE }}
-          # Controller instance label for multi-controller isolation in parallel e2e tests
+          # Labels metrics / selectors so multiple controllers can coexist in parallel jobs.
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
-          # Skip infra VA/HPA — the smoke test creates its own VA+HPA targeting
-          # its own deployment. The infra VA adds a second idle pod to the
-          # saturation analysis group, diluting KV cache metrics and preventing
-          # scale-up from triggering.
-          DEPLOY_VA: "false"
-          DEPLOY_HPA: "false"
-          # vLLM max-num-seqs for e2e testing (lower = easier to saturate)
+          # Chart-managed VA/HPA are not enabled via install scripts — tests create their own VA+HPA.
+          # A second idle infra VA would dilute KV/queue metrics and block saturation scale-up.
           VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
-          # Decode replicas for e2e testing (start with 1 replica, let HPA scale)
+          # Start with one decode replica; specs scale via HPA / KEDA from there.
           DECODE_REPLICAS: "1"
-          # OpenShift uses built-in user-workload monitoring, not a separate namespace
+          # OpenShift user-workload Prometheus (not kube-prometheus-stack in a custom namespace).
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
-          # Disable bearer token auth on WVA /metrics endpoint — OpenShift's
-          # user-workload-monitoring cannot authenticate with the controller-manager
-          # SA token. The endpoint is still only accessible within the cluster network.
+          # User-workload Prometheus cannot use the controller-manager SA token for /metrics bearer auth.
           WVA_METRICS_SECURE: "false"
           # Lower saturation thresholds for simulator mode — the simulator's
           # KV-cache and queue metrics are modest, so default thresholds
@@ -724,9 +729,17 @@ jobs:
           # queueLength > 0.5, which the simulator produces under load.
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
-          # inference-scheduling guide has routing proxy disabled, so vLLM
-          # serves directly on port 8000 (not 8200 behind proxy)
+          # inference-scheduling guide runs vLLM directly on 8000 (no 8200 routing proxy).
           VLLM_SVC_PORT: "8000"
+          MODEL_ID: ${{ env.MODEL_ID }}
+          ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
+          LLMD_PATCH_EPP_FLOW_CONTROL: "true"
+          LLMD_SKIP_INFERENCE_OBJECTIVE: "true"
+          # Ensure helmfile installs default ModelService (decode workload); e2e waits on this Deployment below.
+          LLMD_SKIP_DEFAULT_MODELSERVICE: "false"
+          # Avoid kubectl wait --all during install (decode/prefill are slow); workflow waits on decode explicitly.
+          LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
+          E2E_DEPLOY_WAIT_TIMEOUT: "300s"
         run: |
           echo "Deploying WVA and llm-d infrastructure..."
           echo "  MODEL_ID: $MODEL_ID"
@@ -741,7 +754,14 @@ jobs:
           echo "  KV_SPARE_TRIGGER: ${KV_SPARE_TRIGGER:-<default>}"
           echo "  QUEUE_SPARE_TRIGGER: ${QUEUE_SPARE_TRIGGER:-<default>}"
           echo "  HF token configuration: ✓"
-          ./deploy/install.sh --model "$MODEL_ID" --accelerator "$ACCELERATOR_TYPE" --release-name "$WVA_RELEASE_NAME" --environment openshift
+          # Base monitoring + WVA + scaler (install.sh does not deploy llm-d).
+          ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
+          # Gateway/EPP/ModelService + WVA poolGroup alignment (see deploy/install-llmd-infra.sh).
+          ./deploy/install-llmd-infra.sh -e openshift
+          # Capacity thresholds are not passed from install.sh — tune after install for CI simulators.
+          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
+            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
+            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
 
       - name: Create secondary namespace for Model B
         run: |
@@ -763,17 +783,42 @@ jobs:
           kubectl rollout status deployment -l app.kubernetes.io/name=workload-variant-autoscaler -n "$WVA_NAMESPACE" --timeout=300s || true
           kubectl get pods -n "$WVA_NAMESPACE"
 
+          # Wait for ModelService decode Deployment to exist (helmfile can lag; names can vary slightly by llm-d release).
+          CANONICAL_DECODE="ms-inference-scheduling-llm-d-modelservice-decode"
+          DECODE_DEPLOY=""
+          for i in $(seq 1 90); do
+            if kubectl get deployment "$CANONICAL_DECODE" -n "$LLMD_NAMESPACE" &>/dev/null; then
+              DECODE_DEPLOY="$CANONICAL_DECODE"
+              break
+            fi
+            DECODE_DEPLOY=$(kubectl get deploy -n "$LLMD_NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E -- '-decode$' | grep -i modelservice | head -1 || true)
+            if [ -n "$DECODE_DEPLOY" ]; then
+              break
+            fi
+            echo "Waiting for ModelService decode Deployment in $LLMD_NAMESPACE ($i/90)..."
+            sleep 10
+          done
+          if [ -z "$DECODE_DEPLOY" ]; then
+            echo "::error::No decode Deployment found in $LLMD_NAMESPACE (check llm-d helmfile)"
+            kubectl get deploy -n "$LLMD_NAMESPACE" -o wide || true
+            exit 1
+          fi
+          echo "Using Model A1 decode Deployment: $DECODE_DEPLOY"
+
           # Ensure the vLLM deployment has the correct replica count.
           # A previous failed run's "Scale down GPU workloads" step may have set replicas=0
           # and helmfile doesn't override manually-changed replicas on re-deploy.
           # kubectl rollout status returns instantly on 0-replica deployments, so we must
           # ensure replicas > 0 before waiting.
           DESIRED_REPLICAS="${DECODE_REPLICAS:-1}"
-          CURRENT_REPLICAS=$(kubectl get deployment ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
-          if [ "$CURRENT_REPLICAS" -eq 0 ]; then
+          CURRENT_REPLICAS=$(kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+          if ! [[ "${CURRENT_REPLICAS:-}" =~ ^[0-9]+$ ]]; then
+            CURRENT_REPLICAS=0
+          fi
+          if [ "${CURRENT_REPLICAS}" -eq 0 ]; then
             echo "WARNING: Model A1 deployment has 0 replicas (likely from previous failed run cleanup)"
             echo "Scaling to $DESIRED_REPLICAS replica(s)..."
-            kubectl scale deployment/ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE" --replicas="$DESIRED_REPLICAS" || {
+            kubectl scale "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" --replicas="$DESIRED_REPLICAS" || {
               echo "ERROR: Failed to scale Model A1 deployment"
               exit 1
             }
@@ -783,12 +828,12 @@ jobs:
           # kubectl rollout status waits for all replicas to be Ready, unlike
           # --for=condition=available which is satisfied even at 0 ready replicas.
           # vLLM model loading takes 15-20 minutes, so we use a 25-minute timeout.
-          kubectl rollout status deployment/ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE" --timeout=1500s || {
+          kubectl rollout status "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" --timeout=1500s || {
             echo "WARNING: Model A1 deployment not ready after 25 minutes"
             echo "=== Pod status ==="
             kubectl get pods -n "$LLMD_NAMESPACE"
             echo "=== Deployment conditions ==="
-            kubectl get deployment ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE" -o jsonpath='{.status.conditions}' | jq . || true
+            kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" -o jsonpath='{.status.conditions}' | jq . || true
             echo "=== Recent events ==="
             kubectl get events -n "$LLMD_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
           }
@@ -796,30 +841,27 @@ jobs:
 
       - name: Deploy Model B infrastructure in secondary namespace
         env:
-          # HF_TOKEN is inherited from GITHUB_ENV
+          # HF_TOKEN is inherited from GITHUB_ENV (same as Model A1).
           ENVIRONMENT: openshift
           INSTALL_GATEWAY_CTRLPLANE: "false"
-          E2E_TESTS_ENABLED: "true"
           SCALER_BACKEND: keda
           NAMESPACE_SCOPED: "false"
-          # Override namespaces for Model B stack
+          # Second llm-d stack — same WVA controller monitors both LLMD_NAMESPACE and LLMD_NAMESPACE_B.
           LLMD_NS: ${{ env.LLMD_NAMESPACE_B }}
           WVA_NS: ${{ env.WVA_NAMESPACE }}
-          # Skip WVA controller and prometheus (use existing)
+          # install-llmd-infra-only: reuse existing WVA + monitoring from Model A1 (no second controller).
           DEPLOY_WVA: "false"
-          DEPLOY_PROMETHEUS: "false"
-          DEPLOY_PROMETHEUS_ADAPTER: "false"
-          DEPLOY_VA: "false"
-          DEPLOY_HPA: "false"
-          # vLLM max-num-seqs for e2e testing (lower = easier to saturate)
+          MODEL_ID: ${{ env.MODEL_ID }}
+          ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
           VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
-          # Decode replicas for e2e testing (start with 1 replica, let HPA scale)
           DECODE_REPLICAS: "1"
-          # OpenShift monitoring settings (same as Model A1 deploy)
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           WVA_METRICS_SECURE: "false"
-          # Same port as Model A1 (inference-scheduling guide, proxy disabled)
+          # Match Model A1 (inference-scheduling guide, proxy disabled).
           VLLM_SVC_PORT: "8000"
+          LLMD_SKIP_DEFAULT_MODELSERVICE: "false"
+          LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
+          E2E_DEPLOY_WAIT_TIMEOUT: "300s"
         run: |
           echo "Deploying Model B infrastructure in $LLMD_NAMESPACE_B..."
           echo "  MODEL_ID: $MODEL_ID"
@@ -827,8 +869,8 @@ jobs:
           echo "  VLLM_MAX_NUM_SEQS: $VLLM_MAX_NUM_SEQS"
           echo "  DECODE_REPLICAS: $DECODE_REPLICAS"
 
-          # Deploy llm-d infrastructure only (no WVA controller, no VA/HPA)
-          ./deploy/install.sh --model "$MODEL_ID" --accelerator "$ACCELERATOR_TYPE" --environment openshift
+          # llm-d only — no install.sh (would duplicate monitoring/scaler).
+          ./deploy/install-llmd-infra.sh -e openshift
 
           echo "Waiting for Model B deployment to start (initial rollout)..."
           # Wait briefly for deployments to be created by helm before checking rollout status
@@ -873,13 +915,37 @@ jobs:
 
       - name: Wait for Model B to be ready
         run: |
+          CANONICAL_DECODE="ms-inference-scheduling-llm-d-modelservice-decode"
+          DECODE_DEPLOY=""
+          for i in $(seq 1 90); do
+            if kubectl get deployment "$CANONICAL_DECODE" -n "$LLMD_NAMESPACE_B" &>/dev/null; then
+              DECODE_DEPLOY="$CANONICAL_DECODE"
+              break
+            fi
+            DECODE_DEPLOY=$(kubectl get deploy -n "$LLMD_NAMESPACE_B" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E -- '-decode$' | grep -i modelservice | head -1 || true)
+            if [ -n "$DECODE_DEPLOY" ]; then
+              break
+            fi
+            echo "Waiting for Model B decode Deployment in $LLMD_NAMESPACE_B ($i/90)..."
+            sleep 10
+          done
+          if [ -z "$DECODE_DEPLOY" ]; then
+            echo "::error::No decode Deployment found in $LLMD_NAMESPACE_B"
+            kubectl get deploy -n "$LLMD_NAMESPACE_B" -o wide || true
+            exit 1
+          fi
+          echo "Using Model B decode Deployment: $DECODE_DEPLOY"
+
           # Same fix as Model A1: ensure replicas > 0 before waiting for rollout
           DESIRED_REPLICAS="${DECODE_REPLICAS:-1}"
-          CURRENT_REPLICAS=$(kubectl get deployment ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE_B" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
-          if [ "$CURRENT_REPLICAS" -eq 0 ]; then
+          CURRENT_REPLICAS=$(kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE_B" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+          if ! [[ "${CURRENT_REPLICAS:-}" =~ ^[0-9]+$ ]]; then
+            CURRENT_REPLICAS=0
+          fi
+          if [ "${CURRENT_REPLICAS}" -eq 0 ]; then
             echo "WARNING: Model B deployment has 0 replicas (likely from previous failed run cleanup)"
             echo "Scaling to $DESIRED_REPLICAS replica(s)..."
-            kubectl scale deployment/ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE_B" --replicas="$DESIRED_REPLICAS" || {
+            kubectl scale "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE_B" --replicas="$DESIRED_REPLICAS" || {
               echo "ERROR: Failed to scale Model B deployment"
               exit 1
             }
@@ -887,12 +953,12 @@ jobs:
 
           echo "Waiting for Model B vLLM deployment to be ready (up to 25 minutes for model loading)..."
           # Same as Model A1: use rollout status to wait for actual pod readiness.
-          kubectl rollout status deployment/ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE_B" --timeout=1500s || {
+          kubectl rollout status "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE_B" --timeout=1500s || {
             echo "WARNING: Model B deployment not ready after 25 minutes"
             echo "=== Pod status ==="
             kubectl get pods -n "$LLMD_NAMESPACE_B"
             echo "=== Deployment conditions ==="
-            kubectl get deployment ms-inference-scheduling-llm-d-modelservice-decode -n "$LLMD_NAMESPACE_B" -o jsonpath='{.status.conditions}' | jq . || true
+            kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE_B" -o jsonpath='{.status.conditions}' | jq . || true
             echo "=== Recent events ==="
             kubectl get events -n "$LLMD_NAMESPACE_B" --sort-by='.lastTimestamp' | tail -20
           }
@@ -1035,6 +1101,7 @@ jobs:
         env:
           # Consolidated e2e test environment variables
           ENVIRONMENT: openshift
+          # Temporary/ To do: real vLLM decode scheduling was flaky on shared GPU runners; tests use llm-d-inference-sim.
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
           WVA_NAMESPACE: ${{ env.WVA_NAMESPACE }}

@@ -10,9 +10,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+)
+
+const (
+	errorTypeFailedToGetScaleTarget = "failed to get scale target"
 )
 
 // PodVAMapper maps pod names to their corresponding VariantAutoscaling objects.
@@ -47,17 +53,20 @@ func (m *PodVAMapper) FindVAForPod(
 	// Use indexed lookup for VariantAutoscaling targeting this Deployment/LWS
 	var va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 	var err error
+	const errorType = "failed to find VariantAutoscaling for scale target"
 	switch scaleTargetKind {
 	case "Deployment":
 		va, err = indexers.FindVAForDeployment(ctx, m.k8sClient, scaleTargetName, namespace)
 		if err != nil {
-			logger.V(logging.DEBUG).Error(err, "failed to find VariantAutoscaling for scale target", "scaleTarget", scaleTargetName, "namespace", namespace)
+			logger.V(logging.DEBUG).Error(err, errorType, "scaleTarget", scaleTargetName, "namespace", namespace)
+			metrics.RecordError(constants.ComponentCollector, errorType)
 			return ""
 		}
 	case "LeaderWorkerSet":
 		va, err = indexers.FindVAForLeaderWorkerSet(ctx, m.k8sClient, scaleTargetName, namespace)
 		if err != nil {
-			logger.V(logging.DEBUG).Error(err, "failed to find VariantAutoscaling for scale target", "scaleTarget", scaleTargetName, "namespace", namespace)
+			logger.V(logging.DEBUG).Error(err, errorType, "scaleTarget", scaleTargetName, "namespace", namespace)
+			metrics.RecordError(constants.ComponentCollector, errorType)
 			return ""
 		}
 	}
@@ -81,7 +90,9 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 
 	pod := &corev1.Pod{}
 	if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
-		logger.V(logging.DEBUG).Error(err, "failed to get pod", "pod", podName, "namespace", namespace)
+		errorType := "failed to get pod"
+		logger.V(logging.DEBUG).Error(err, errorType, "pod", podName, "namespace", namespace)
+		metrics.RecordError(constants.ComponentCollector, errorType)
 		return "", ""
 	}
 
@@ -96,14 +107,16 @@ func (m *PodVAMapper) findScaleTargetNameForPod(
 	case "ReplicaSet":
 		rs := &appsv1.ReplicaSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
-			logger.V(logging.DEBUG).Error(err, "failed to get ReplicaSet", "replicaset", owner.Name, "namespace", namespace)
+			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "replicaset", owner.Name, "namespace", namespace)
+			metrics.RecordError(constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs
 	case "StatefulSet":
 		rs := &appsv1.StatefulSet{}
 		if err := m.k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: owner.Name}, rs); err != nil {
-			logger.V(logging.DEBUG).Error(err, "failed to get StatefulSet", "statefulset", owner.Name, "namespace", namespace)
+			logger.V(logging.DEBUG).Error(err, errorTypeFailedToGetScaleTarget, "statefulset", owner.Name, "namespace", namespace)
+			metrics.RecordError(constants.ComponentCollector, errorTypeFailedToGetScaleTarget)
 			return "", ""
 		}
 		controllee = rs

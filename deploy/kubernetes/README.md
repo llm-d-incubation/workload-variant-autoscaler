@@ -61,8 +61,8 @@ This script automates the complete deployment process on kubernetes cluster incl
 # Required: Set your HuggingFace token
 export HF_TOKEN="your-hf-token-here"
 
-# Optional: Customize deployment
-export WELL_LIT_PATH_NAME="inference-scheduler"                           # Default
+# Optional: Customize deployment (basename under llm-d guides/; llm-d main uses optimized-baseline)
+export GUIDE_NAME="inference-scheduling"                                  # Default for pinned LLM_D_RELEASE (e.g. v0.6.0)
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"                               # Default
 export WVA_IMAGE_REPO="ghcr.io/llm-d/llm-d-workload-variant-autoscaler"         # Default
 export WVA_IMAGE_TAG="latest"                                             # Default
@@ -100,26 +100,20 @@ export HF_TOKEN="hf_xxxxx"                  # Required: HuggingFace token
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B" # Model to deploy
 export ACCELERATOR_TYPE="H100"              # GPU type
 export WVA_IMAGE_TAG="latest"               # WVA version
-export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
+# HPA stabilization: set on Helm chart (`hpa.behavior.*`), not install.sh
 
-# Performance tuning (optional)
+# Performance tuning (optional; passed to install-llmd-infra / ModelService)
 export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
-```
-
-For a complete list of all configuration options, see the [Configuration Reference](../README.md#configuration-reference) in the main deployment guide.
 export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
-export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway
+export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway (for install-llmd-infra.sh)
 ```
 
-**Deployment flags** - Control which components to deploy:
+**Deployment flags** (`deploy/install.sh`) — use Helm for chart VA/HPA; llm-d is **`deploy/install-llmd-infra.sh`**:
 
 ```bash
 export DEPLOY_PROMETHEUS=true         # Deploy kube-prometheus-stack
 export DEPLOY_WVA=true                # Deploy WVA controller
-export DEPLOY_LLM_D=true              # Deploy llm-d infrastructure
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-export DEPLOY_VA=true                 # Opt in: chart VariantAutoscaling (install.sh default: false)
-export DEPLOY_HPA=true                # Opt in: chart HPA (install.sh default: false)
 ```
 
 ## Usage Examples
@@ -144,27 +138,20 @@ export DEPLOY_HPA=true
 make deploy-wva-on-k8s
 ```
 
-### Example 3: E2E Testing Configuration
+### Example 3: CI-style stack (WVA + llm-d)
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-export E2E_TESTS_ENABLED=true
-export INFRA_ONLY=true
-export HPA_STABILIZATION_SECONDS=30  # Only if chart HPA enabled
-export VLLM_MAX_NUM_SEQS=8          # Low batch size for easy saturation
-make deploy-wva-on-k8s
+make deploy-wva-on-k8s   # install.sh + install-llmd-infra.sh
 ```
 
-### Example 4: Deploy Only WVA (llm-d Already Deployed)
+### Example 4: Deploy only WVA + Prometheus (llm-d already deployed)
 
 ```bash
 export DEPLOY_WVA=true
-export DEPLOY_LLM_D=false
-export DEPLOY_PROMETHEUS=true # Prometheus is needed for WVA to scrape metrics
+export DEPLOY_PROMETHEUS=true
 export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
-export DEPLOY_VA=true
-export DEPLOY_HPA=false
 make deploy-wva-on-k8s
 ```
 
@@ -663,10 +650,9 @@ kubectl set env deployment/workload-variant-autoscaler-controller-manager \
 ### Update WVA Image
 
 ```bash
-export WVA_IMAGE="ghcr.io/yourorg/llm-d-workload-variant-autoscaler:custom-tag"
-export DEPLOY_LLM_D=false  # Don't redeploy llm-d
-export DEPLOY_PROMETHEUS=false  # Don't redeploy Prometheus
-make deploy-wva-on-k8s
+export IMG="ghcr.io/yourorg/llm-d-workload-variant-autoscaler:custom-tag"
+export DEPLOY_PROMETHEUS=false
+make deploy-wva-on-k8s   # base infra only; skip install-llmd-infra if you manage llm-d separately
 ```
 
 ## Performance Tuning

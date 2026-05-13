@@ -97,3 +97,26 @@ func newTestConfigWithPrometheus(prometheusURL string) (*config.Config, error) {
 	}
 	return cfg, nil
 }
+
+// failingK8sClient wraps a real client but fails on specific operations
+type failingK8sClient struct {
+	client.Reader
+	failGet   bool
+	failList  bool
+	getError  error
+	listError error
+}
+
+func (f *failingK8sClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if f.failGet && f.getError != nil {
+		return f.getError
+	}
+	return f.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (f *failingK8sClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if f.failList && f.listError != nil {
+		return f.listError
+	}
+	return f.Reader.List(ctx, list, opts...)
+}
