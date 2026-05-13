@@ -1,6 +1,6 @@
 # Prometheus Integration
 
-WVA integrates with Prometheus to collect metrics from vLLM inference servers and expose custom autoscaling metrics. In addition, WVA also emits internal metrics for observability (See [Internal Metrics](#internal-metrics)). This guide covers Prometheus configuration, metric collection, and security best practices.
+WVA integrates with Prometheus to collect metrics from different sources such as vLLM inference servers, and expose internal as well as custom autoscaling metrics. This guide covers Prometheus configuration, metric collection, and security best practices.
 
 ## Configuration
 
@@ -80,11 +80,37 @@ data:
   PROMETHEUS_SERVER_NAME: "prometheus-k8s.monitoring.svc.cluster.local"
   PROMETHEUS_BEARER_TOKEN: "your-bearer-token"  # Not recommended - use Secret instead
 ```
-
 **Configuration Priority:**
 1. Environment variables (checked first)
 2. ConfigMap values (fallback)
 3. Error if neither provides `PROMETHEUS_BASE_URL`
+   
+### Metrics Endpoint
+The metrics are exposed at the `/metrics` endpoint on port 8080 (HTTP).
+
+### ServiceMonitor Configuration
+
+WVA metrics are exposed on port 8080 (HTTP):
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: workload-variant-autoscaler
+  namespace: workload-variant-autoscaler-system
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  endpoints:
+  - port: http
+    scheme: http
+    interval: 30s
+    path: /metrics
+```
+
+
 
 ## Security Considerations
 
@@ -137,19 +163,27 @@ query := fmt.Sprintf(`vllm_kv_cache_usage{namespace="%s"}`, escapedNamespace)
 - Blocks label injection attacks that could manipulate query results
 - Ensures multi-tenant deployments remain isolated
 
-## Custom Metrics Documentation
 
-## WVA Custom Metrics
 
-WVA exposes custom metrics that provide insights into autoscaling behavior and optimization performance. These metrics are exposed via Prometheus at the `/metrics` endpoint.
+## WVA Metrics
 
-### Metrics Overview
-
-All custom metrics are prefixed with `inferno_` and include labels for `variant_name`, `namespace`, and other relevant dimensions.
+WVA exposes metrics providing insights into autoscaling behavior and optimization performance. These metrics are exposed via Prometheus at the `/metrics` endpoint.
 
 ### Optimization Metrics
 
-*No optimization metrics are currently exposed. Optimization timing is logged at DEBUG level.*
+### `wva_optimization_duration_seconds`
+- **Type**: Histogram
+- **Description**: Duration of optimization loop cycles in seconds
+- **Labels**:
+  - `status`: Status of the optimization cycle (`success`, `error`)
+- **Buckets**: 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+- **Use Case**: Monitor optimization loop performance and identify slow optimization cycles
+
+### `wva_models_processed`
+- **Type**: Gauge
+- **Description**: Number of models processed in the last optimization cycle
+- **Labels**: None (global metric)
+- **Use Case**: Track how many models are being processed per optimization cycle to understand workload
 
 ### Replica Management Metrics
 
@@ -190,32 +224,119 @@ All custom metrics are prefixed with `inferno_` and include labels for `variant_
   - `reason`: Reason for scaling
 - **Use Case**: Track scaling frequency and reasons
 
-## Configuration
+### Saturation and Capacity Metrics
 
-### Metrics Endpoint
-The metrics are exposed at the `/metrics` endpoint on port 8080 (HTTP).
+### `wva_saturation_utilization`
+- **Type**: Gauge
+- **Description**: Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `accelerator_type`: Type of accelerator being used
+- **Use Case**: Monitor KV cache utilization to understand saturation levels and trigger scaling decisions
 
-### ServiceMonitor Configuration
+### `wva_spare_capacity`
+- **Type**: Gauge
+- **Description**: Per-variant spare KV-cache capacity (0.0-1.0) from saturation analysis. V1 path: threshold-relative spare (kvCacheThreshold - avg KV usage). V2 path: 1.0 - utilization.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `accelerator_type`: Type of accelerator being used
+- **Use Case**: Track available capacity headroom to prevent saturation and optimize resource allocation
 
-WVA metrics are exposed on port 8080 (HTTP):
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: workload-variant-autoscaler
-  namespace: workload-variant-autoscaler-system
-  labels:
-    release: kube-prometheus-stack
-spec:
-  selector:
-    matchLabels:
-      control-plane: controller-manager
-  endpoints:
-  - port: http
-    scheme: http
-    interval: 30s
-    path: /metrics
-```
+### `wva_required_capacity`
+- **Type**: Gauge
+- **Description**: Model-level required capacity; >0 indicates scale-up needed. Use the `unit` label to interpret the value: `binary` → 0/1 scale-up signal (V1), `continuous` → token demand (V2).
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `unit`: Interpretation of the value (`binary` or `continuous`)
+- **Use Case**: Identify when additional capacity is needed and understand the magnitude of demand
+
+### `wva_kv_cache_tokens_used`
+- **Type**: Gauge
+- **Description**: Total KV cache tokens currently in use across all replicas of a variant (sum of vLLM TokensInUse).
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+- **Use Case**: Monitor absolute KV cache token usage across variant replicas
+
+### `wva_kv_cache_tokens_total`
+- **Type**: Gauge
+- **Description**: Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+- **Use Case**: Track total available KV cache capacity to calculate utilization ratios
+
+### Metrics Collection Observability
+
+### `wva_metrics_collection_duration_seconds`
+- **Type**: Histogram
+- **Description**: Duration of metrics collection operations in seconds
+- **Labels**:
+  - `query_type`: Type of metrics query being executed
+- **Buckets**: 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5
+- **Use Case**: Monitor metrics collection performance and identify slow queries
+
+### `wva_metrics_collection_errors_total`
+- **Type**: Counter
+- **Description**: Total number of metrics collection errors
+- **Labels**:
+  - `query_type`: Type of metrics query that failed
+  - `reason`: Reason for the error
+- **Use Case**: Track metrics collection failures and identify problematic queries
+
+### `wva_metrics_pods_discovered`
+- **Type**: Gauge
+- **Description**: Number of pods discovered for a namespace
+- **Labels**:
+  - `namespace`: Kubernetes namespace
+- **Use Case**: Monitor pod discovery to ensure all replicas are being tracked
+
+### `wva_metrics_freshness_status`
+- **Type**: Gauge
+- **Description**: Freshness status of metrics for each variant
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `status`: Status of metrics freshness (`fresh`, `stale`, `missing`, `unavailable`)
+- **Use Case**: Track metric staleness to ensure autoscaling decisions are based on current data
+
+### Configuration Metrics
+
+### `wva_config_info`
+- **Type**: Gauge
+- **Description**: WVA configuration information (value is always 1)
+- **Labels**:
+  - `analyzer_name`: Name of the saturation analyzer in use
+  - `limiter_enabled`: Whether the limiter is enabled (`true`, `false`)
+  - `scale_to_zero_enabled`: Whether scale-to-zero is enabled (`true`, `false`)
+- **Use Case**: Info-style metric to expose WVA configuration via labels for monitoring and debugging
+
+### `wva_config_kv_spare_threshold`
+- **Type**: Gauge
+- **Description**: KV cache spare threshold configuration value
+- **Labels**: None (global configuration)
+- **Use Case**: Monitor the configured KV cache spare threshold used in scaling decisions
+
+### `wva_config_queue_spare_threshold`
+- **Type**: Gauge
+- **Description**: Queue spare threshold configuration value
+- **Labels**: None (global configuration)
+- **Use Case**: Monitor the configured queue spare threshold used in scaling decisions
+
+### `wva_config_optimization_interval_seconds`
+- **Type**: Gauge
+- **Description**: Optimization interval in seconds
+- **Labels**: None (global configuration)
+- **Use Case**: Track how frequently the optimization loop runs
+
+
 
 ## Example Queries
 
@@ -241,13 +362,52 @@ abs(wva_desired_replicas - wva_current_replicas)
 
 # Scaling frequency by reason
 rate(wva_replica_scaling_total[5m]) by (reason)
-```
 
-## Internal Metrics
-### `wva_errors_total`
-- **Type**: Counter
-- **Description**: Total number of errors by WVA components
-- **Labels**:
-  - `component`: Name of the component. The components are `collector`, `analyzer`, `optimizer`, `limiter`, `enforcer`, and `controller`. Currently, this metric is available for `collector`, `enforcer`, `controller`. It will be available for other components as these components handle errors
-  - `error_type`: Short description of the error
-- **Use Case**: Track errors in WVA by components
+# Optimization duration 95th percentile
+histogram_quantile(0.95, rate(wva_optimization_duration_seconds_bucket[5m]))
+
+# Saturation utilization by variant
+wva_saturation_utilization
+
+# KV cache utilization percentage
+(wva_kv_cache_tokens_used / wva_kv_cache_tokens_total) * 100
+
+# Variants requiring scale-up (V1 binary signal)
+wva_required_capacity{unit="binary"} > 0
+
+# Spare capacity below threshold (potential scale-up needed)
+wva_spare_capacity < 0.2
+
+# Models processed over time
+wva_models_processed
+
+# Metrics collection duration 99th percentile by query type
+histogram_quantile(0.99, rate(wva_metrics_collection_duration_seconds_bucket[5m])) by (query_type)
+
+# Metrics collection error rate
+rate(wva_metrics_collection_errors_total[5m])
+
+# Pods discovered per namespace
+wva_metrics_pods_discovered
+
+# Stale metrics by variant
+wva_metrics_freshness_status{status="stale"}
+
+# Fresh metrics ratio
+sum(wva_metrics_freshness_status{status="fresh"}) / sum(wva_metrics_freshness_status)
+
+# WVA configuration info
+wva_config_info
+
+# Check if limiter is enabled
+wva_config_info{limiter_enabled="true"}
+
+# Current KV cache spare threshold
+wva_config_kv_spare_threshold
+
+# Current queue spare threshold
+wva_config_queue_spare_threshold
+
+# Optimization loop interval
+wva_config_optimization_interval_seconds
+```
