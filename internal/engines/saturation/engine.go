@@ -222,19 +222,12 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
-	e.setActiveOptimizer(e.optimizer)
+	e.recordActiveOptimizer() // record active optimizer
 	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)
 }
 
-func (e *Engine) setActiveOptimizer(optimizer pipeline.ScalingOptimizer) {
-	if e.optimizer == optimizer {
-		return // nothing to do
-	}
-
-	// Update the engine's optimizer
-	e.optimizer = optimizer
-
+func (e *Engine) recordActiveOptimizer() {
 	// Record metrics for which optimizer is active
 	optimizerNames := []string{
 		pipeline.GreedyByScoreOptimizerName,
@@ -242,7 +235,7 @@ func (e *Engine) setActiveOptimizer(optimizer pipeline.ScalingOptimizer) {
 	}
 	for _, name := range optimizerNames {
 		isActive := false // default is false
-		if name == optimizer.Name() {
+		if name == e.optimizer.Name() {
 			isActive = true // only one active at a time
 		}
 		e.metricsEmitter.RecordOptimizerActiveMetric(name, isActive)
@@ -348,14 +341,16 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
 	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
-		var optimizer pipeline.ScalingOptimizer
+		savedOptimizer := e.optimizer
 		if enableLimiter {
-			optimizer = pipeline.NewGreedyByScoreOptimizer()
+			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
 		} else {
-			optimizer = pipeline.NewCostAwareOptimizer()
+			e.optimizer = pipeline.NewCostAwareOptimizer()
 		}
-		e.setActiveOptimizer(optimizer)
-		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", optimizer.Name(), "enableLimiter", enableLimiter)
+		if savedOptimizer != e.optimizer {
+			e.recordActiveOptimizer() // optimizer has changed, record active optimizer
+		}
+		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
 	var allDecisions []interfaces.VariantDecision
