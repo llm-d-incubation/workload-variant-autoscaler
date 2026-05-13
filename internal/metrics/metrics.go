@@ -502,7 +502,21 @@ func (m *MetricsEmitter) RecordOptimizerActiveMetric(optimizerName string, isAct
 	}
 	labels := prometheus.Labels{
 		constants.LabelOptimizerName: optimizerName,
-// RecordError records an error metric for the specified component and error type
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	v := float64(0)
+	if isActive {
+		v = 1
+	}
+	optimizerActive.With(labels).Set(v)
+}
+
+// RecordError records an error metric for the specified component and error type.
 // Callers MUST invoke InitMetrics before this method (the package-level
 // metric vars are nil otherwise, and the Set calls below would panic).
 // InitMetricsAndEmitter is the recommended construction path because it
@@ -521,11 +535,7 @@ func RecordError(component, errorType string) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 
-	v := float64(0)
-	if isActive {
-		v = 1
-	}
-	optimizerActive.With(labels).Set(v)
+	errorsTotal.With(labels).Inc()
 }
 
 // RecordEnforcerMetric records a decision modification made by the enforcer.
@@ -585,7 +595,6 @@ func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespac
 	}
 
 	decisionsLimitedTotal.With(labels).Inc()
-	errorsTotal.With(labels).Inc()
 }
 
 // SetConfigInfo sets the config info metric with the given analyzer name and feature flags.
