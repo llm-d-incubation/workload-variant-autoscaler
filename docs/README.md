@@ -13,7 +13,6 @@ Getting started and using WVA:
 - **[CRD Reference](user-guide/crd-reference.md)** - Complete API reference for VariantAutoscaling
 - **[Multi-Controller Isolation](user-guide/multi-controller-isolation.md)** - Running multiple WVA controller instances
 - **[LeaderWorkerSet Support](user-guide/LeaderWorkerSet-support.md)** - Supporting LeaderWorkerSets as scale targets
-- **[Monitoring with Grafana](user-guide/operational-dashboard.md)** - Operational dashboard
 
 ### Integrations
 
