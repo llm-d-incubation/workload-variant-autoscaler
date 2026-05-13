@@ -169,6 +169,27 @@ query := fmt.Sprintf(`vllm_kv_cache_usage{namespace="%s"}`, escapedNamespace)
 
 WVA exposes metrics providing insights into autoscaling behavior and optimization performance. These metrics are exposed via Prometheus at the `/metrics` endpoint.
 
+### Notes on **name_space**s in metrics
+With WVA metrics, the value for the label `namespace` is the WVA controller namespace, not the VA's namespace. The VA namespace has the label `exported_namespace`. Here's an example:
+```
+{
+  "metric": "wva_desired_replicas",
+  "labels": {
+    "accelerator_type": "A100",
+    "container": "manager",
+    "endpoint": "https",
+    "exported_namespace": "llm-d-sim",    <==== VA namespace
+    "instance": "10.244.0.73:8443",
+    "job": "workload-variant-autoscaler-metrics",
+    "namespace": "workload-variant-autoscaler-system",  <=== WVA controller namespace
+    "pod": "workload-variant-autoscaler-controller-manager-75b45dd7c-89g5s",
+    "service": "workload-variant-autoscaler-metrics",
+    "variant_name": "workload-variant-autoscaler-va"
+  },
+  "value": "2"
+}
+```
+
 ### Optimization Metrics
 
 ### `wva_optimization_duration_seconds`
