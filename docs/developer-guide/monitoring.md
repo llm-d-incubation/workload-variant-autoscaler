@@ -35,3 +35,8 @@ The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA 
 - Copy and paste the content of `deploy/grafana/operational-dashboard.json`.
 - Name the new dashboard such as `My WVA Operational Dashboard`.
 - Your new dashboard now is the same as `WVA Operational Dashboard` except that you can edit and save.
+
+
+## Troubleshooting
+### No Data
+  - Check the datasource by browse to "Connections/Data sources", you should see a Prometheus data source `https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090`. Click on `Test` button to test the data source.
