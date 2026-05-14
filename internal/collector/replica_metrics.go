@@ -45,8 +45,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
