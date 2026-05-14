@@ -27,235 +27,6 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Configuration flags from wva_config_info labels",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "text": "false"
-                },
-                "1": {
-                  "text": "true"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 10,
-        "x": 0,
-        "y": 0
-      },
-      "id": 48,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "name"
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "topk(1, max by (analyzer_name) (wva_config_info{analyzer_name!=\"\"}) or label_replace(max without(instance, pod, container, endpoint, service, namespace, job, limiter_enabled, scale_to_zero_enabled) (wva_config_info), \"analyzer_name\", \"V1 percentage-based saturation\", \"\", \"\"))",
-          "hide": false,
-          "instant": true,
-          "legendFormat": "analyzer: {{analyzer_name}}",
-          "range": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "topk(1, max by (limiter_enabled) (wva_config_info))",
-          "instant": true,
-          "legendFormat": "limiter_enabled: {{limiter_enabled}}",
-          "range": false,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "topk(1, max by (scale_to_zero_enabled) (wva_config_info))",
-          "instant": true,
-          "legendFormat": "scale_to_zero_enabled: {{scale_to_zero_enabled}}",
-          "range": false,
-          "refId": "C"
-        }
-      ],
-      "title": "Configs",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Default KV cache spare threshold configuration value",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 10,
-        "y": 0
-      },
-      "id": 45,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(wva_config_kv_spare_threshold)",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "KV Spare Threshold",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Default queue spare threshold configuration value",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 15,
-        "y": 0
-      },
-      "id": 46,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(wva_config_queue_spare_threshold)",
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Queue Spare Threshold",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
       "description": "Optimization interval",
       "fieldConfig": {
         "defaults": {
@@ -279,8 +50,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 19,
+        "w": 4,
+        "x": 0,
         "y": 0
       },
       "id": 47,
@@ -346,9 +117,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 0,
-        "y": 4
+        "w": 4,
+        "x": 4,
+        "y": 0
       },
       "id": 10,
       "options": {
@@ -402,6 +173,148 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Total number of errors by component",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 49,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"collector\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "collector",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"analyzer\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "analyzer",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"optimizer\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "optimizer",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"limiter\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "limiter",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"enforcer\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "enforcer",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(wva_errors_total{component=\"controller\"}[5m])) or vector(0)",
+          "instant": false,
+          "legendFormat": "controller",
+          "range": true,
+          "refId": "F"
+        }
+      ],
+      "title": "WVA Errors",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Number of pods with metrics discovered for a namespace",
       "fieldConfig": {
         "defaults": {
@@ -428,9 +341,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 5,
-        "y": 4
+        "w": 4,
+        "x": 16,
+        "y": 0
       },
       "id": 24,
       "options": {
@@ -554,9 +467,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 10,
-        "y": 4
+        "w": 4,
+        "x": 20,
+        "y": 0
       },
       "id": 25,
       "options": {
@@ -622,8 +535,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 9,
-        "x": 15,
+        "w": 24,
+        "x": 0,
         "y": 4
       },
       "id": 26,
@@ -663,7 +576,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[5m]) or vector(0)",
+          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[5m])) or vector(0)",
           "instant": false,
           "legendFormat": "kv_cache",
           "range": true,
@@ -675,7 +588,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[5m]) or vector(0)",
+          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[5m])) or vector(0)",
           "instant": false,
           "legendFormat": "queue_length",
           "range": true,
@@ -687,7 +600,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"request_count\"}[5m]) or vector(0)",
+          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"request_count\"}[5m])) or vector(0)",
           "instant": false,
           "legendFormat": "request_count",
           "range": true,
@@ -699,7 +612,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "increase(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[5m]) or vector(0)",
+          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[5m])) or vector(0)",
           "instant": false,
           "legendFormat": "cache_config",
           "range": true,
@@ -1179,7 +1092,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_current_replicas",
+          "expr": "max by (variant_name) (wva_current_replicas)",
           "instant": false,
           "legendFormat": "{{variant_name}} - current",
           "range": true,
@@ -1191,7 +1104,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_desired_replicas",
+          "expr": "max by (variant_name) (wva_desired_replicas)",
           "instant": false,
           "legendFormat": "{{variant_name}} - desired",
           "range": true,
