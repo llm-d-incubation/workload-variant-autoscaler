@@ -88,10 +88,11 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_info",
-          "instant": false,
+          "expr": "topk(1, max by (analyzer_name) (wva_config_info{analyzer_name!=\"\"}) or label_replace(max without(instance, pod, container, endpoint, service, namespace, job, limiter_enabled, scale_to_zero_enabled) (wva_config_info), \"analyzer_name\", \"V1 percentage-based saturation\", \"\", \"\"))",
+          "hide": false,
+          "instant": true,
           "legendFormat": "analyzer: {{analyzer_name}}",
-          "range": true,
+          "range": false,
           "refId": "A"
         },
         {
@@ -100,10 +101,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_info",
-          "instant": false,
+          "expr": "topk(1, max by (limiter_enabled) (wva_config_info))",
+          "instant": true,
           "legendFormat": "limiter_enabled: {{limiter_enabled}}",
-          "range": true,
+          "range": false,
           "refId": "B"
         },
         {
@@ -112,10 +113,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_info",
-          "instant": false,
+          "expr": "topk(1, max by (scale_to_zero_enabled) (wva_config_info))",
+          "instant": true,
           "legendFormat": "scale_to_zero_enabled: {{scale_to_zero_enabled}}",
-          "range": true,
+          "range": false,
           "refId": "C"
         }
       ],
@@ -127,7 +128,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "KV cache spare threshold configuration value",
+      "description": "Default KV cache spare threshold configuration value",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -176,7 +177,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_kv_spare_threshold",
+          "expr": "max(wva_config_kv_spare_threshold)",
           "instant": false,
           "legendFormat": "__auto",
           "range": true,
@@ -191,7 +192,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Queue spare threshold configuration value",
+      "description": "Default queue spare threshold configuration value",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -240,7 +241,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_queue_spare_threshold",
+          "expr": "max(wva_config_queue_spare_threshold)",
           "instant": false,
           "legendFormat": "__auto",
           "range": true,
@@ -255,12 +256,13 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Optimization interval in seconds",
+      "description": "Optimization interval",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -271,7 +273,7 @@
               }
             ]
           },
-          "unit": "s"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -304,14 +306,14 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_config_optimization_interval_seconds",
+          "expr": "max(wva_config_optimization_interval_seconds)",
           "instant": false,
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Optimization Interval",
+      "title": "Optimization Interval (Secs)",
       "type": "stat"
     },
     {
@@ -385,7 +387,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_models_processed",
+          "expr": "max(wva_models_processed)",
           "instant": false,
           "legendFormat": "__auto",
           "range": true,
