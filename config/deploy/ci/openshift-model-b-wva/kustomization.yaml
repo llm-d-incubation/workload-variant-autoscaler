@@ -10,7 +10,6 @@ labels:
   - pairs:
       app.kubernetes.io/name: workload-variant-autoscaler
       app.kubernetes.io/instance: __MODEL_B_RELEASE__
-      app.kubernetes.io/version: v0.5.1
       app.kubernetes.io/managed-by: kustomize
 
 resources:
