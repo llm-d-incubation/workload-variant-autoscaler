@@ -133,6 +133,11 @@ func TestOptimizationMetrics_NilSafety(t *testing.T) {
 	SetModelsProcessed(5)
 }
 
+// Shared test constants
+const (
+	testControllerInstance = "controller-1"
+)
+
 // getLabelValue returns the value of a label by name from a metric.
 func getLabelValue(m *dto.Metric, name string) string {
 	for _, l := range m.GetLabel() {

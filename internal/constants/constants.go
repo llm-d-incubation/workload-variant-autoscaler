@@ -69,6 +69,8 @@ const (
 	K8SEventMetricsUnavailable  = "MetricsUnavailable"
 	K8SEventScaledToZero        = "ScaledToZero"
 	K8SEventOptimizationFailed  = "OptimizationFailed"
+	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
+	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
 )
 
 // Component names identify WVA components for observability (metrics, logging, tracing).

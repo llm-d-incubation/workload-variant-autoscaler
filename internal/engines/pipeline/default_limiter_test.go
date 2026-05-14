@@ -5,9 +5,19 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
+
+func init() {
+	// Initialize metrics for all limiter tests
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		panic("failed to initialize metrics: " + err.Error())
+	}
+}
 
 // mockInventory implements Inventory for testing
 type mockInventory struct {

@@ -12,6 +12,11 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+const (
+	// CostAwareOptimizerName is the identifier for the cost-aware optimizer
+	CostAwareOptimizerName = "cost-aware"
+)
+
 // CostAwareOptimizer is a per-model optimizer that minimizes total cost while
 // meeting capacity requirements. It processes each model independently:
 //
@@ -31,7 +36,7 @@ func NewCostAwareOptimizer() *CostAwareOptimizer {
 
 // Name returns the optimizer identifier.
 func (o *CostAwareOptimizer) Name() string {
-	return "cost-aware"
+	return CostAwareOptimizerName
 }
 
 // Optimize produces VariantDecisions for all models.
@@ -59,7 +64,7 @@ func (o *CostAwareOptimizer) Optimize(
 			costAwareScaleDown(ctx, req.Result, targets, stateMap)
 		}
 
-		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "cost-aware")
+		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, CostAwareOptimizerName)
 		logger.V(logging.DEBUG).Info("Cost-aware optimizer decisions",
 			"modelID", req.ModelID,
 			"decisions", len(decisions))

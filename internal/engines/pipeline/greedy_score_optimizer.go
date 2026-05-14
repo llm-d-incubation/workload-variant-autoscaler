@@ -11,6 +11,11 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+const (
+	// GreedyByScoreOptimizerName is the identifier for the greedy-by-score optimizer
+	GreedyByScoreOptimizerName = "greedy-by-score"
+)
+
 // GreedyByScoreOptimizer is a multi-model optimizer for GPU-constrained
 // environments. It uses iterative mean-based fair-sharing to distribute scarce
 // GPUs across competing models, ordered by composite score
@@ -30,7 +35,7 @@ func NewGreedyByScoreOptimizer() *GreedyByScoreOptimizer {
 
 // Name returns the optimizer identifier.
 func (o *GreedyByScoreOptimizer) Name() string {
-	return "greedy-by-score"
+	return GreedyByScoreOptimizerName
 }
 
 // modelWork tracks per-model allocation state during fair-share iteration.
@@ -79,7 +84,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)
 		vcMap := buildCapacityMap(w.req.Result.VariantCapacities)
-		decisions := buildDecisionsWithOptimizer(w.req, stateMap, vcMap, w.targets, "greedy-by-score")
+		decisions := buildDecisionsWithOptimizer(w.req, stateMap, vcMap, w.targets, GreedyByScoreOptimizerName)
 		logger.V(logging.DEBUG).Info("Greedy-by-score optimizer decisions (scale-up)",
 			"modelID", w.req.ModelID,
 			"decisions", len(decisions))
@@ -95,7 +100,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 			costAwareScaleDown(ctx, req.Result, targets, stateMap)
 		}
 
-		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "greedy-by-score")
+		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, GreedyByScoreOptimizerName)
 		logger.V(logging.DEBUG).Info("Greedy-by-score optimizer decisions (other)",
 			"modelID", req.ModelID,
 			"decisions", len(decisions))
