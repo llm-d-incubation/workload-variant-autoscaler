@@ -10,6 +10,9 @@ data:
   # TLS configuration for OpenShift
   PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "false"
 
+  # Trust path for Thanos / in-cluster Prometheus (OpenShift injects service CA here).
+  PROMETHEUS_CA_CERT_PATH: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
   # Optimization configuration
   GLOBAL_OPT_INTERVAL: "60s"
 

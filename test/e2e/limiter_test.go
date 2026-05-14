@@ -134,9 +134,11 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaB, modelServiceB+"-decode", vaB, 1, 10, cfg.MonitoringNS)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject B")
 		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA A")
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaB, modelServiceB+"-decode", vaB, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaB, modelServiceB+"-decode", vaB, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA B")
 		}
 

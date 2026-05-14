@@ -1,0 +1,39 @@
+# Rendered by deploy/lib/wva_kustomize.sh when VLLM_SVC_ENABLED=true (placeholders: __WVA_SVC_PREFIX__, __LLMD_NS__, __MODEL_NAME__, __PORT__).
+apiVersion: v1
+kind: Service
+metadata:
+  name: __WVA_SVC_PREFIX__-vllm
+  namespace: __LLMD_NS__
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    llm-d.ai/model: __MODEL_NAME__
+spec:
+  selector:
+    llm-d.ai/model: __MODEL_NAME__
+  ports:
+    - name: vllm
+      port: __PORT__
+      protocol: TCP
+      targetPort: __PORT__
+  type: NodePort
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: __WVA_SVC_PREFIX__-vllm-mon
+  namespace: __LLMD_NS__
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    llm-d.ai/model: __MODEL_NAME__
+    openshift.io/user-monitoring: "true"
+spec:
+  selector:
+    matchLabels:
+      llm-d.ai/model: __MODEL_NAME__
+  endpoints:
+    - port: vllm
+      path: /metrics
+      interval: 30s
+      scheme: http
+  namespaceSelector:
+    any: true

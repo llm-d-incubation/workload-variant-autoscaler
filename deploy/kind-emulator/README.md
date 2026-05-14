@@ -23,6 +23,7 @@ Quick start guide for local development using Kind (Kubernetes in Docker) with e
 - Kind
 - kubectl
 - Helm
+- **jq** (for `deploy/install.sh` / WVA Kustomize JSON patches)
 
 ## Quick Start
 

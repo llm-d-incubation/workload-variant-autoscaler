@@ -2,7 +2,7 @@
 
 Complete guide for deploying the Workload-Variant-Autoscaler (WVA) on Kubernetes, OpenShift, and Kind clusters.
 
-> **Central Documentation Hub**: This is the main deployment guide containing comprehensive information about deployment methods, Helm chart configuration, and complete configuration reference. Platform-specific guides ([Kubernetes](kubernetes/README.md), [OpenShift](openshift/README.md), [Kind](kind-emulator/README.md)) provide additional platform-specific details and examples.
+> **Central Documentation Hub**: This is the main deployment guide. **The WVA controller is installed only with Kustomize** in every supported `deploy/install.sh` flow (`config/deploy/wva-controller` / `wva-controller-openshift`, via `deploy/lib/wva_kustomize.sh`). The Helm chart is **not** used to install the manager in this repo’s scripts or CI controller steps; it remains published for OCI consumers, optional client-only manifests (VA/HPA), and tests—see [Method 2: Helm Chart (deprecated)](#method-2-helm-chart-deprecated). Platform-specific guides ([Kubernetes](kubernetes/README.md), [OpenShift](openshift/README.md), [Kind](kind-emulator/README.md)) provide additional details.
 
 ## Table of Contents
 
@@ -10,7 +10,7 @@ Complete guide for deploying the Workload-Variant-Autoscaler (WVA) on Kubernetes
 - [Prerequisites](#prerequisites)
 - [Deployment Methods](#deployment-methods)
   - [Method 1: Automated Deployment Script](#method-1-automated-deployment-script-recommended)
-  - [Method 2: Helm Chart](#method-2-helm-chart)
+  - [Method 2: Helm Chart (deprecated)](#method-2-helm-chart-deprecated)
 - [Platform-Specific Guides](#platform-specific-guides)
 - [Configuration Reference](#configuration-reference)
 - [Post-Deployment](#post-deployment)
@@ -18,10 +18,10 @@ Complete guide for deploying the Workload-Variant-Autoscaler (WVA) on Kubernetes
 
 ## Overview
 
-This guide covers two deployment procedures:
+This guide covers:
 
-1. **Automated Script**: Complete end-to-end and customizable deployment including WVA, llm-d infrastructure, Prometheus, and HPA
-2. **Helm Chart**: Deploy the WVA controller into an existing cluster
+1. **Automated script**: `deploy/install.sh` deploys monitoring, scaler backends, and the **WVA controller exclusively via Kustomize** (`kubectl apply -k` with `config/deploy/...` bundles; never Helm for the manager). Optional llm-d stack is `deploy/install-llmd-infra.sh`.
+2. **Legacy Helm chart**: Deprecated for the controller; retained for OCI consumers and workflows that still template chart-only resources (for example optional VA/HPA installs in CI).
 
 ## Prerequisites
 
@@ -32,6 +32,7 @@ All deployment methods require:
 - **kubectl** (v1.24+) - Kubernetes CLI
 - **helm** (v3.8+) - Package manager for Kubernetes
 - **git** - Git CLI
+- **jq** (1.6+) - JSON processor (`deploy/install.sh` uses it for WVA Kustomize patches and namespace finalize helpers)
 
 Optional but recommended:
 
@@ -160,7 +161,7 @@ export INSTALL_GATEWAY_CTRLPLANE=true
 
 #### Script deployment examples
 
-Chart-managed **VariantAutoscaling** and **HPA** are no longer toggled from `install.sh`; use `helm upgrade` with `--set va.enabled=true` / `hpa.enabled=true` on the WVA chart, or let tests/operators create CRs.
+Chart-managed **VariantAutoscaling** and **HPA** are no longer toggled from `install.sh`; use the deprecated Helm chart with `--set va.enabled=true` / `hpa.enabled=true`, patch manifests, or let tests/operators create CRs.
 
 ##### Example 1: Base infra then llm-d
 
@@ -194,7 +195,11 @@ export DEPLOY_LWS=false
 ./deploy/install.sh -e kubernetes
 ```
 
-### Method 2: Helm Chart
+### Method 2: Helm Chart (deprecated)
+
+> **Deprecation:** Installing the **controller** with this chart is deprecated. Prefer **`deploy/install.sh`** (Kustomize) or `kubectl apply -k config/deploy/<platform>` / `make deploy` as described in the [Kubebuilder book](https://book.kubebuilder.io/quick-start.html) flow. The chart may still be used for **non-controller** manifests (for example VA/HPA-only releases) and remains published as an OCI artifact for transition periods.
+
+The following sections document the legacy Helm workflow.
 
 The WVA can be deployed as a standalone using Helm, assuming you have:
 
@@ -585,14 +590,15 @@ VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not cont
 |----------|-------------|---------|
 | `SKIP_TLS_VERIFY` | Skip TLS verification | Auto-detected |
 | `WVA_LOG_LEVEL` | WVA logging level | `info` |
+| `WVA_SATURATION_OVERLAY` | Checked-in saturation profile (`e2e-simulator`, `benchmark`, or `default`/unset for base bundle only) | unset (`deploy-e2e-infra` / `test-e2e-*` Make targets default to `e2e-simulator`) |
 | `VLLM_SVC_ENABLED` | Enable vLLM Service in chart | `true` |
 | `VLLM_SVC_NODEPORT` | vLLM NodePort | `30000` |
 | `LWS_NAMESPACE` | Namespace for LeaderWorkerSet installation | `lws-system` |
 | `LWS_CHART_VERSION` | LeaderWorkerSet Helm chart version | `0.8.0` |
 
-#### Optional: capacity thresholds after `make deploy-e2e-infra`
+#### Saturation overlays (Kustomize)
 
-If `KV_SPARE_TRIGGER` and/or `QUEUE_SPARE_TRIGGER` are set in the environment, the Makefile runs a follow-up `helm upgrade --reuse-values` on the WVA release.
+Set **`WVA_SATURATION_OVERLAY`** to a profile directory under **`config/deploy/overlays/`** (each profile ships **`kubernetes/`** and **`openshift/`** with **`patch-saturation-defaults.yaml`**). **`e2e-simulator`** matches former CI simulator tuning; **`benchmark`** matches the OpenShift benchmark job. **`default`** or an unset variable selects the base **`wva-controller`** / **`wva-controller-openshift`** bundle with no saturation patch.
 
 ### Helm Values Reference
 

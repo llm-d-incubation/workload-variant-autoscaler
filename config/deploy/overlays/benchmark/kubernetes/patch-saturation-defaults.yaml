@@ -1,0 +1,13 @@
+# Saturation defaults for benchmark-style capacity scaling (matches former ci-benchmark deploy env).
+# Kept identical to ../openshift/patch-saturation-defaults.yaml (Kustomize patch paths must stay under this dir).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unused
+data:
+  default: |
+    kvCacheThreshold: 0.90
+    queueLengthThreshold: 10
+    kvSpareTrigger: 0.05
+    queueSpareTrigger: 2
+    enableLimiter: false

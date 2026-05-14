@@ -293,7 +293,7 @@ jobs:
           done
 
       - name: Apply latest CRDs
-        run: kubectl apply -f charts/workload-variant-autoscaler/crds/
+        run: kubectl apply -k config/crd
 
       - name: Deploy WVA and llm-d infrastructure
         env:
@@ -309,11 +309,8 @@ jobs:
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           # See OpenShift e2e: user-workload Prometheus cannot bearer-auth to WVA /metrics.
           WVA_METRICS_SECURE: "false"
-          # Full capacity-scaling chart values (install.sh no longer passes these).
-          KV_CACHE_THRESHOLD: "0.90"
-          QUEUE_LENGTH_THRESHOLD: "10"
-          KV_SPARE_TRIGGER: "0.05"
-          QUEUE_SPARE_TRIGGER: "2"
+          # Saturation tuning: checked-in overlay (config/deploy/overlays/benchmark/openshift).
+          WVA_SATURATION_OVERLAY: benchmark
           VLLM_SVC_PORT: "8000"
           VLLM_MAX_NUM_SEQS: "1024"
           VLLM_GPU_MEM_UTIL: "0.95"
@@ -329,14 +326,8 @@ jobs:
           LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
           E2E_DEPLOY_WAIT_TIMEOUT: "300s"
         run: |
-          # Split deploy: WVA base (install.sh) → llm-d (install-llmd-infra.sh) → chart capacity tuning (helm upgrade).
           ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
           ./deploy/install-llmd-infra.sh -e openshift
-          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
-            --set wva.capacityScaling.default.kvCacheThreshold="${KV_CACHE_THRESHOLD}" \
-            --set wva.capacityScaling.default.queueLengthThreshold="${QUEUE_LENGTH_THRESHOLD}" \
-            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
-            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
 
       - name: Label namespaces for OpenShift monitoring
         run: |
@@ -957,6 +948,13 @@ jobs:
         if: always()
         run: |
           helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          export WVA_PROJECT="${GITHUB_WORKSPACE}"
+          export WVA_NS="${WVA_NAMESPACE}"
+          export ENVIRONMENT=openshift
+          export LLMD_NS="${LLMD_NAMESPACE}"
+          export VLLM_SVC_ENABLED=false
+          export LLM_D_MODELSERVICE_NAME=""
+          bash -c 'source deploy/lib/wva_kustomize.sh && wva_kustomize_delete' || true
           for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do
             helm uninstall "$release" -n "$LLMD_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
           done

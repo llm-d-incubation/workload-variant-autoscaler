@@ -90,12 +90,11 @@ For e2e-style deploys, **`install-llmd-infra.sh`** enables EPP flow control when
               value: "50"  # Increase for larger clusters
    ```
 
-   Or via Helm:
+   Or patch the controller Deployment (Kustomize installs):
 
    ```bash
-   helm upgrade -i workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-   --namespace workload-variant-autoscaler-system \
-   --set controller.env.SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY=50
+   kubectl -n workload-variant-autoscaler-system set env deployment/workload-variant-autoscaler-controller-manager \
+     SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY=50
    ```
 
 2. **Inference gateway not receiving requests**:

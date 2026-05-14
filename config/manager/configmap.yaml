@@ -55,3 +55,6 @@ data:
   # EPP_METRICS_CACHE_CLEANUP_INTERVAL: "30s"
   WVA_LIMITED_MODE: "false"
   WVA_NODE_SELECTOR: ""
+
+  # Optional: filesystem path to Prometheus CA (e.g. /etc/prometheus-certs/ca.crt when mounted).
+  PROMETHEUS_CA_CERT_PATH: ""

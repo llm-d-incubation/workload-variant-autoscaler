@@ -1,0 +1,40 @@
+# Mirrors charts/workload-variant-autoscaler/templates/hpa.yaml (defaults + stabilization from CI env).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: __WVA_FULLNAME__-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ms-inference-scheduling-llm-d-modelservice-decode
+  minReplicas: 1
+  maxReplicas: 2
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: __HPA_STABILIZATION_SECONDS__
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: 10
+          periodSeconds: 150
+    scaleDown:
+      stabilizationWindowSeconds: __HPA_STABILIZATION_SECONDS__
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: 10
+          periodSeconds: 150
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: wva_desired_replicas
+          selector:
+            matchLabels:
+              variant_name: __WVA_FULLNAME__-va
+              exported_namespace: __LLMD_NAMESPACE_B__
+              controller_instance: "__CONTROLLER_INSTANCE__"
+        target:
+          type: AverageValue
+          averageValue: "1"

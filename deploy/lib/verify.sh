@@ -75,7 +75,7 @@ print_summary() {
         echo "✓ kube-prometheus-stack (Prometheus + Grafana)"
     fi
     if [ "$DEPLOY_WVA" = "true" ]; then
-        echo "✓ WVA Controller (via Helm chart)"
+        echo "✓ WVA Controller (Kustomize via deploy/install.sh)"
     fi
     if [ "$SCALER_BACKEND" = "keda" ]; then
         echo "✓ KEDA (scaler backend, external metrics API)"
@@ -91,7 +91,7 @@ print_summary() {
     echo "1. Deploy llm-d (EPP, gateway, ModelService) when needed:"
     echo "     ./deploy/install-llmd-infra.sh -e $ENVIRONMENT"
     echo ""
-    echo "2. Create VariantAutoscaling / HPA via tests, operators, or helm with chart toggles."
+    echo "2. Create VariantAutoscaling / HPA via tests, operators, manifests, or the deprecated Helm chart (VA/HPA-only)."
     echo ""
     echo "3. View WVA logs:"
     echo "   kubectl logs -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler -f"

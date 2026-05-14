@@ -100,11 +100,6 @@ func NewVariantAutoscalingReconciler(
 // +kubebuilder:rbac:groups=inference.networking.x-k8s.io;inference.networking.k8s.io,resources=inferencepools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update
 
-const (
-	// ServiceMonitor constants for watching controller's own metrics ServiceMonitor
-	defaultServiceMonitorName = "workload-variant-autoscaler-controller-manager-metrics-monitor"
-)
-
 var (
 	// ServiceMonitor GVK for watching controller's own metrics ServiceMonitor
 	serviceMonitorGVK = schema.GroupVersionKind{

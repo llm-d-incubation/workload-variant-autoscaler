@@ -9,7 +9,7 @@ This guide describes how to cut a release of the Workload Variant Autoscaler (WV
 | 1. Pre-release | This repo | Changelog, optional version bumps (see below) |
 | 2. Tag & release | GitHub | Create tag `vX.Y.Z`, push; create GitHub Release (publish) |
 | 3. Automation | GitHub Actions | Image build + push; Helm chart version bump + publish to GHCR; chart files committed back |
-| 4. Post-release | llm-d repo | **Required:** Update [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide (version callout, CRD/sample URLs, helmfile/values) |
+| 4. Post-release | llm-d repo | **Required:** Update [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide (version callout, CRD/sample URLs, Kustomize overlays / values) |
 
 ---
 
@@ -122,7 +122,7 @@ The [llm-d](https://github.com/llm-d/llm-d) repo hosts a **workload-autoscaling 
    - If the new release has breaking changes, add or update the "Breaking Changes" / "Upgrading" content and migration steps in the README.
 
 4. **Helmfile / values**  
-   - If the guide's `helmfile.yaml.gotmpl` or `workload-autoscaling/values.yaml` (or equivalent) pin the WVA image or chart version, update those to the new version.
+   - If the guide's Kustomize overlays, `helmfile.yaml.gotmpl`, or `workload-autoscaling/values.yaml` (or equivalent) pin the WVA image or chart version, update those to the new version.
 
 **Guide location:** [guides/workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) (main branch). After editing, open a PR in the [llm-d/llm-d](https://github.com/llm-d/llm-d) repo so the guide stays in sync with the WVA release.
 
@@ -154,7 +154,7 @@ To allow other team members to perform releases:
 |------|--------|
 | **WVA release** | Tag `vX.Y.Z` → push → create and publish GitHub Release. CI builds image and (on publish) runs Helm release. |
 | **Helm** | Workflow updates chart version and default image tag, publishes to GHCR, and commits chart files back to the default branch. |
-| **Guide / llm-d repo** | **Required:** After release, update the [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide (version callout, CRD/sample URLs, helmfile/values) and open a PR in llm-d/llm-d. |
+| **Guide / llm-d repo** | **Required:** After release, update the [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide (version callout, CRD/sample URLs, Kustomize overlays / helmfile / values) and open a PR in llm-d/llm-d. |
 | **Team** | Use this doc plus repo permissions and GHCR secrets so others can run the same process safely.
 
 For workflow details, see [`.github/workflows/ci-release.yaml`](../../.github/workflows/ci-release.yaml) and [`.github/workflows/helm-release.yaml`](../../.github/workflows/helm-release.yaml).

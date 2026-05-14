@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,13 +24,27 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
+// legacyChartPathEnv is deprecated: prefer WVA_E2E_REPO_ROOT (repository root for deploy/lib/e2e_secondary_wva.sh).
+const legacyChartPathEnv = "WVA_E2E_CHART_PATH"
+
+func e2eRepoRoot() string {
+	if r := os.Getenv("WVA_E2E_REPO_ROOT"); r != "" {
+		return filepath.Clean(r)
+	}
+	if chart := os.Getenv(legacyChartPathEnv); chart != "" {
+		return filepath.Clean(filepath.Join(chart, "..", ".."))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Clean(wd)
+	}
+	return ""
+}
+
 type externalMetricValueList struct {
 	Items []struct {
 		MetricLabels map[string]string `json:"metricLabels"`
 	} `json:"items"`
 }
-
-const secondaryControllerChartPathEnv = "WVA_E2E_CHART_PATH"
 
 func splitImage(image string) (string, string) {
 	lastColon := strings.LastIndex(image, ":")
@@ -169,7 +185,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 		When("using Prometheus Adapter as scaler backend", func() {
 			It("should have external metrics API available", func() {
-				if cfg.ScalerBackend != "prometheus-adapter" {
+				if cfg.ScalerBackend != scalerBackendPrometheusAdapter {
 					Skip("External metrics API check only applies to Prometheus Adapter backend")
 				}
 				By("Checking for external.metrics.k8s.io API group")
@@ -268,9 +284,11 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary VariantAutoscaling")
 
 			By("Creating HPAs in both namespaces for the shared VA name")
-			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, primaryHPAName, primaryModelName+"-decode", sharedVAName, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, primaryHPAName, primaryModelName+"-decode", sharedVAName, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary HPA")
-			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, secondaryHPAName, secondaryModelName+"-decode", sharedVAName, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, secondaryHPAName, secondaryModelName+"-decode", sharedVAName, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary HPA")
 		})
 
@@ -392,40 +410,67 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				Expect(err).NotTo(HaveOccurred(), "Failed to create secondary workload namespace")
 			}
 
-			By("Installing secondary namespace-scoped controller via Helm")
+			By("Installing secondary controller via Kustomize (cluster-wide watch; controller-instance isolation)")
 			primaryController, err := k8sClient.AppsV1().Deployments(cfg.WVANamespace).Get(ctx, "workload-variant-autoscaler-controller-manager", metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred(), "Failed to read primary controller deployment image")
 			Expect(primaryController.Spec.Template.Spec.Containers).NotTo(BeEmpty(), "Primary controller deployment should contain containers")
 			imageRepo, imageTag := splitImage(primaryController.Spec.Template.Spec.Containers[0].Image)
-			chartPath := os.Getenv(secondaryControllerChartPathEnv)
-			Expect(chartPath).NotTo(BeEmpty(),
-				"Missing %s; set it to the workload-variant-autoscaler chart directory (use an absolute path; go test cwd is the test package dir)", secondaryControllerChartPathEnv)
-			_, statErr := os.Stat(chartPath)
-			Expect(statErr).NotTo(HaveOccurred(), "Invalid %s path: %s", secondaryControllerChartPathEnv, chartPath)
+			repoRoot := e2eRepoRoot()
+			Expect(repoRoot).NotTo(BeEmpty(),
+				"set WVA_E2E_REPO_ROOT to the repository root, or deprecated %s to a path under the repo, or run go test from the repo root (see e2eRepoRoot())", legacyChartPathEnv)
+			secondaryScript := filepath.Join(repoRoot, "deploy/lib/e2e_secondary_wva.sh")
+			_, statErr := os.Stat(secondaryScript)
+			Expect(statErr).NotTo(HaveOccurred(), "invalid repo root %q: %v", repoRoot, statErr)
 
-			helmArgs := []string{
-				"upgrade", "-i", secondaryReleaseName, chartPath,
-				"-n", secondaryController, "--create-namespace",
-				"--set", "controller.enabled=true",
-				"--set", "va.enabled=false",
-				"--set", "hpa.enabled=false",
-				"--set", "vllmService.enabled=false",
-				"--set", "wva.namespaceScoped=true",
-				"--set", "wva.controllerInstance=" + controllerInstance,
-				"--set", "llmd.namespace=" + secondaryNamespace,
-				"--set", "wva.image.repository=" + imageRepo,
-				"--set", "wva.image.tag=" + imageTag,
-				"--set", "wva.imagePullPolicy=IfNotPresent",
-				"--set", "wva.prometheus.baseURL=https://kube-prometheus-stack-prometheus." + cfg.MonitoringNS + ".svc.cluster.local:9090",
-				"--set", "wva.prometheus.tls.insecureSkipVerify=true",
+			promURL := "https://kube-prometheus-stack-prometheus." + cfg.MonitoringNS + ".svc.cluster.local:9090"
+			poolGroup := os.Getenv("POOL_GROUP")
+			applyCmd := exec.Command("bash", secondaryScript, "apply")
+			applyCmd.Dir = repoRoot
+			secondaryEnv := append(os.Environ(),
+				"WVA_PROJECT="+repoRoot,
+				"WVA_NS="+secondaryController,
+				"ENVIRONMENT="+cfg.Environment,
+				"LLMD_NS="+secondaryNamespace,
+				"MONITORING_NAMESPACE="+cfg.MonitoringNS,
+				"WVA_IMAGE_REPO="+imageRepo,
+				"WVA_IMAGE_TAG="+imageTag,
+				"WVA_IMAGE_PULL_POLICY=IfNotPresent",
+				"NAMESPACE_SCOPED=false",
+				"PROMETHEUS_URL="+promURL,
+				"SKIP_TLS_VERIFY=true",
+				"ENABLE_SCALE_TO_ZERO="+strconv.FormatBool(cfg.ScaleToZeroEnabled),
+				"WVA_LOG_LEVEL=debug",
+				"CONTROLLER_INSTANCE="+controllerInstance,
+				"POOL_GROUP="+poolGroup,
+				"VLLM_SVC_ENABLED=false",
+				"WVA_METRICS_SECURE=false",
+				"WVA_RELEASE_NAME="+secondaryReleaseName,
+				"PROM_CA_CERT_PATH=",
+			)
+			if sat := os.Getenv("WVA_SATURATION_OVERLAY"); sat != "" {
+				secondaryEnv = append(secondaryEnv, "WVA_SATURATION_OVERLAY="+sat)
+			} else if cfg.Environment == envKindEmulator {
+				// Match deploy-e2e-infra default (config/deploy/overlays/e2e-simulator).
+				secondaryEnv = append(secondaryEnv, "WVA_SATURATION_OVERLAY=e2e-simulator")
 			}
-			cmd := exec.Command("helm", helmArgs...)
-			out, err := cmd.CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), "Secondary controller helm install failed: %s", string(out))
+			applyCmd.Env = secondaryEnv
+			out, err := applyCmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "secondary WVA kustomize apply failed: %s", string(out))
 
 			DeferCleanup(func() {
-				uninstall := exec.Command("helm", "uninstall", secondaryReleaseName, "-n", secondaryController)
-				_, _ = uninstall.CombinedOutput()
+				del := exec.Command("bash", secondaryScript, "delete")
+				del.Dir = repoRoot
+				del.Env = append(os.Environ(),
+					"WVA_PROJECT="+repoRoot,
+					"WVA_NS="+secondaryController,
+					"ENVIRONMENT="+cfg.Environment,
+					"LLMD_NS="+secondaryNamespace,
+					"VLLM_SVC_ENABLED=false",
+					"LLM_D_MODELSERVICE_NAME=",
+					"WVA_RELEASE_NAME="+secondaryReleaseName,
+					"CONTROLLER_INSTANCE="+controllerInstance,
+				)
+				_, _ = del.CombinedOutput()
 			})
 
 			By("Waiting for secondary controller to be ready")
@@ -472,9 +517,11 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary VA")
 
 			By("Creating HPAs in both namespaces for the shared VA name")
-			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, primaryHPAName, primaryModelName+"-decode", sharedVAName, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, primaryHPAName, primaryModelName+"-decode", sharedVAName, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary HPA")
-			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, secondaryHPAName, secondaryModelName+"-decode", sharedVAName, 1, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, secondaryHPAName, secondaryModelName+"-decode", sharedVAName, 1, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary HPA")
 		})
 
@@ -674,7 +721,8 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10, cfg.MonitoringNS)
 				Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject")
 			} else {
-				err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10)
+				err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10,
+					fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 				Expect(err).NotTo(HaveOccurred(), "Failed to create HPA")
 			}
 		})

@@ -74,15 +74,23 @@ func ConfigMapPredicate(ds datastore.Datastore, cfg *config.Config) predicate.Pr
 	})
 }
 
-// ServiceMonitorPredicate returns a predicate that filters ServiceMonitor events to only the target ServiceMonitor.
-// It checks that the ServiceMonitor name matches serviceMonitorName and namespace matches the configured namespace.
-// This predicate is used to filter only the target ServiceMonitor.
+// ServiceMonitorPredicate returns a predicate that filters ServiceMonitor events to only the controller's ServiceMonitor.
+// It matches namespace (system/controller namespace) and stable labels (control-plane, app.kubernetes.io/name),
+// not metadata.name, so Kustomize nameSuffix and multi-instance installs still enqueue the right object.
 // The ServiceMonitor is watched to enable detection when it is deleted, which would prevent
 // Prometheus from scraping controller metrics (including optimized replicas).
 func ServiceMonitorPredicate() predicate.Predicate {
-	const defaultServiceMonitorName = "workload-variant-autoscaler-controller-manager-metrics-monitor"
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		return obj.GetName() == defaultServiceMonitorName && obj.GetNamespace() == config.SystemNamespace()
+		if obj.GetNamespace() != config.SystemNamespace() {
+			return false
+		}
+		labels := obj.GetLabels()
+		if labels == nil {
+			return false
+		}
+		// Match by labels so Kustomize nameSuffix / multi-instance installs still watch the right ServiceMonitor.
+		return labels["control-plane"] == "controller-manager" &&
+			labels["app.kubernetes.io/name"] == "workload-variant-autoscaler"
 	})
 }
 

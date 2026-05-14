@@ -7,6 +7,10 @@
 # undeploy_prometheus_stack(), delete_namespaces(), log_*().
 #
 
+_wva_cleanup_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/wva_kustomize.sh
+source "${_wva_cleanup_lib}/wva_kustomize.sh"
+
 undeploy_keda() {
     if [ "$ENVIRONMENT" = "openshift" ]; then
         log_info "OpenShift: skipping KEDA uninstall (platform-managed)"
@@ -20,6 +24,7 @@ undeploy_keda() {
     helm uninstall "$KEDA_RELEASE_NAME" -n "$KEDA_NAMESPACE" 2>/dev/null || \
         log_warning "KEDA not found or already uninstalled"
     kubectl delete namespace "$KEDA_NAMESPACE" --ignore-not-found --timeout=120s 2>/dev/null || true
+    
     log_success "KEDA uninstalled"
 }
 
@@ -92,8 +97,10 @@ undeploy_llm_d_infrastructure() {
 undeploy_wva_controller() {
     log_info "Uninstalling Workload-Variant-Autoscaler (release: $WVA_RELEASE_NAME)..."
 
-    helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NS" 2>/dev/null || \
-        log_warning "Workload-Variant-Autoscaler not found or already uninstalled"
+    # Legacy Helm release (migration): remove first so Kustomize-owned objects are not blocked.
+    helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NS" 2>/dev/null || true
+
+    wva_kustomize_delete
 
     rm -f "$PROM_CA_CERT_PATH"
 

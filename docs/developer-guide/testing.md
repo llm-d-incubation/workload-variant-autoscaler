@@ -175,6 +175,7 @@ When `LLMD_PATCH_EPP_FLOW_CONTROL=true` (set by `make deploy-e2e-infra`) or `ENA
 
 - **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.
 - **`E2E_DEPLOY_WAIT_TIMEOUT`**: When `LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true` (as in `make deploy-e2e-infra`), caps the `kubectl wait` for the EPP and inference-gateway deployments (default **`120s`**). Raise it if image pulls rollouts routinely exceed that window.
+- **`WVA_SATURATION_OVERLAY`**: Selects a checked-in overlay under `config/deploy/overlays/<name>/{kubernetes,openshift}/` (e.g. **`e2e-simulator`**, **`benchmark`**) that patches the saturation ConfigMap. **`default`** selects the base controller bundle only. `make deploy-e2e-infra` passes **`e2e-simulator`** when this variable is unset; use **`WVA_SATURATION_OVERLAY=default`** if you want upstream `config/manager` saturation defaults on that path.
 
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
@@ -188,6 +189,8 @@ make test-e2e-full
 ```
 
 See the [E2E Test Suite README](../../test/e2e/README.md) for full configuration options and examples.
+
+**Kustomize-first pitfalls (local / CI):** Ensure **`IMG`** (or `WVA_IMAGE_REPO` / `WVA_IMAGE_TAG`) matches the image you built — the running controller `Deployment` must not silently stay on an older tag. Do not export **`PROM_CA_CERT_PATH`** to a non-file (e.g. `/dev/null`); that can abort `deploy/install.sh` before llm-d installs. Dual-controller specs need **`WVA_E2E_REPO_ROOT`** pointing at the repository root; **`make test-e2e-*`** exports **`WVA_E2E_REPO_ROOT=$(CURDIR)`** by default. Deprecated fallback: **`WVA_E2E_CHART_PATH`**, then **`os.Getwd()`** if you run **`go test`** from the repo root without env. See the [Kustomize / Helm migration plan](kustomize-helm-migration-plan.md) for the full checklist and CI parity notes.
 
 ### Quick Start
 
@@ -223,11 +226,12 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `USE_SIMULATOR` | `true` | Emulated GPUs (true) or real vLLM (false) |
 | `SCALE_TO_ZERO_ENABLED` | `false` | Enable scale-to-zero tests (Kind supports both enabled and disabled) |
 | `SCALER_BACKEND` | `prometheus-adapter` | `prometheus-adapter` or `keda` (KEDA only for kind-emulator) |
+| `WVA_SATURATION_OVERLAY` | _(see install tuning)_ | `e2e-simulator`, `benchmark`, or `default`/unset — see **Install script tuning** |
 | `POD_READY_TIMEOUT` / `SCALE_UP_TIMEOUT` | `300` / `600` | Model ready vs longest scale/job waits (seconds) |
 | `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
 | `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
 
-Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile applies a follow-up `helm upgrade` when set) — see **Install script tuning** above.
+Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT`, and **`WVA_SATURATION_OVERLAY`** (see **Install script tuning** above). `make deploy-e2e-infra` / `make test-e2e-*` default **`WVA_SATURATION_OVERLAY`** to **`e2e-simulator`** so Kind/OpenShift simulator runs match CI without extra env.
 
 For running multiple test runs in parallel, use [multi-controller isolation](../user-guide/multi-controller-isolation.md) (`CONTROLLER_INSTANCE`).
 
@@ -266,6 +270,8 @@ E2E workflows run the **consolidated suite** (`test/e2e/`):
 - **Full** (`make test-e2e-full`): Full suite; typically run with infra deployed via `deploy-e2e-infra` or equivalent
 
 Infrastructure is deployed in **infra-only** mode (WVA + llm-d only); tests create VA, HPA, and model services dynamically.
+
+PR checks align Kind e2e with Kustomize-first learnings: **`WVA_E2E_REPO_ROOT`** on smoke and full jobs, **`unset PROM_CA_CERT_PATH`** before `make`, full OpenShift deploy passes **`IMG=ghcr.io/<repo>:<tag>`** into `install.sh` — see [Kustomize / Helm migration plan](kustomize-helm-migration-plan.md).
 
 #### OpenShift E2E Tests Workflow
 

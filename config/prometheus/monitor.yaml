@@ -2,7 +2,8 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: controller-manager-metrics-monitor
+  # Paired with metrics_service.yaml (same base name cm-mon); keep short for multi-instance nameSuffix (DNS-63).
+  name: cm-mon
   namespace: workload-variant-autoscaler-system
   labels:
     control-plane: controller-manager

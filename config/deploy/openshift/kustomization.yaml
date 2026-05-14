@@ -1,0 +1,7 @@
+# Kustomize entrypoint for OpenShift installs (used by deploy/install.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../crd
+  - ../wva-controller-openshift

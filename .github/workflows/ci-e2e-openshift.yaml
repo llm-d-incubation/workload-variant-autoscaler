@@ -694,9 +694,7 @@ jobs:
       - name: Apply latest CRDs
         run: |
           echo "Applying latest VariantAutoscaling CRD..."
-          # Helm doesn't auto-update CRDs, so we need to apply them manually
-          # to ensure the cluster has the latest schema (including scaleTargetRef)
-          kubectl apply -f charts/workload-variant-autoscaler/crds/
+          kubectl apply -k config/crd
 
       - name: Deploy WVA and llm-d infrastructure
         env:
@@ -722,13 +720,8 @@ jobs:
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           # User-workload Prometheus cannot use the controller-manager SA token for /metrics bearer auth.
           WVA_METRICS_SECURE: "false"
-          # Lower saturation thresholds for simulator mode — the simulator's
-          # KV-cache and queue metrics are modest, so default thresholds
-          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
-          # scale-up reliably. These values trigger when kvUsage > 0.30 or
-          # queueLength > 0.5, which the simulator produces under load.
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
+          # Saturation tuning: checked-in overlay (config/deploy/overlays/e2e-simulator/openshift).
+          WVA_SATURATION_OVERLAY: e2e-simulator
           # inference-scheduling guide runs vLLM directly on 8000 (no 8200 routing proxy).
           VLLM_SVC_PORT: "8000"
           MODEL_ID: ${{ env.MODEL_ID }}
@@ -740,28 +733,27 @@ jobs:
           # Avoid kubectl wait --all during install (decode/prefill are slow); workflow waits on decode explicitly.
           LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
           E2E_DEPLOY_WAIT_TIMEOUT: "300s"
+          # Must match image built/pushed in build-image (ghcr.io/<repository>:<tag>); install.sh defaults WVA_IMAGE_REPO to upstream org only.
+          IMG: ghcr.io/${{ github.repository }}:${{ needs.build-image.outputs.image_tag }}
         run: |
           echo "Deploying WVA and llm-d infrastructure..."
+          unset PROM_CA_CERT_PATH || true
           echo "  MODEL_ID: $MODEL_ID"
           echo "  ACCELERATOR_TYPE: $ACCELERATOR_TYPE"
           echo "  LLMD_NS: $LLMD_NS"
           echo "  WVA_NS: $WVA_NS"
           echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
+          echo "  IMG: $IMG"
           echo "  WVA_IMAGE_TAG: $WVA_IMAGE_TAG"
           echo "  CONTROLLER_INSTANCE: $CONTROLLER_INSTANCE"
           echo "  VLLM_MAX_NUM_SEQS: $VLLM_MAX_NUM_SEQS"
           echo "  DECODE_REPLICAS: $DECODE_REPLICAS"
-          echo "  KV_SPARE_TRIGGER: ${KV_SPARE_TRIGGER:-<default>}"
-          echo "  QUEUE_SPARE_TRIGGER: ${QUEUE_SPARE_TRIGGER:-<default>}"
+          echo "  WVA_SATURATION_OVERLAY: ${WVA_SATURATION_OVERLAY:-<unset>}"
           echo "  HF token configuration: ✓"
           # Base monitoring + WVA + scaler (install.sh does not deploy llm-d).
           ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
           # Gateway/EPP/ModelService + WVA poolGroup alignment (see deploy/install-llmd-infra.sh).
           ./deploy/install-llmd-infra.sh -e openshift
-          # Capacity thresholds are not passed from install.sh — tune after install for CI simulators.
-          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
-            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
-            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
 
       - name: Create secondary namespace for Model B
         run: |
@@ -883,31 +875,20 @@ jobs:
           WVA_NS: ${{ env.WVA_NAMESPACE }}
           # Use same controller instance as Model A for HPA selector matching
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
+          LLMD_NAMESPACE_B: ${{ env.LLMD_NAMESPACE_B }}
+          MODEL_B_RELEASE: ${{ env.MODEL_B_RELEASE }}
+          MODEL_ID: ${{ env.MODEL_ID }}
+          ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
+          HPA_STABILIZATION_SECONDS: ${{ env.HPA_STABILIZATION_SECONDS }}
+          WVA_PROJECT: ${{ github.workspace }}
         run: |
-          echo "Deploying Model B WVA resources..."
-          echo "  Release name: $MODEL_B_RELEASE"
+          echo "Deploying Model B WVA resources (Kustomize client bundle)..."
+          echo "  MODEL_B_RELEASE: $MODEL_B_RELEASE"
+          echo "  LLMD_NAMESPACE_B: $LLMD_NAMESPACE_B"
           echo "  CONTROLLER_INSTANCE: $CONTROLLER_INSTANCE"
 
-          # Deploy WVA resources (VA, HPA, ServiceMonitor) for Model B
-          # controller.enabled=false since we're using the existing WVA controller
-          # Note: llmd.modelName should be base name without -decode suffix (template appends it)
-          helm upgrade -i "$MODEL_B_RELEASE" ./charts/workload-variant-autoscaler \
-            -n "$WVA_NAMESPACE" \
-            --set controller.enabled=false \
-            --set va.enabled=true \
-            --set hpa.enabled=true \
-            --set hpa.behavior.scaleUp.stabilizationWindowSeconds="$HPA_STABILIZATION_SECONDS" \
-            --set hpa.behavior.scaleDown.stabilizationWindowSeconds="$HPA_STABILIZATION_SECONDS" \
-            --set llmd.namespace="$LLMD_NAMESPACE_B" \
-            --set llmd.modelName="ms-inference-scheduling-llm-d-modelservice" \
-            --set llmd.modelID="$MODEL_ID" \
-            --set va.accelerator="$ACCELERATOR_TYPE" \
-            --set wva.baseName="inference-scheduling" \
-            --set wva.prometheus.monitoringNamespace=openshift-user-workload-monitoring \
-            --set wva.metrics.secure=false \
-            --set vllmService.port=8000 \
-            --set vllmService.targetPort=8000 \
-            --set wva.controllerInstance="$CONTROLLER_INSTANCE"
+          # VA + HPA + vLLM metrics Service/ServiceMonitor (replaces charts/workload-variant-autoscaler client-only Helm install).
+          bash deploy/lib/ci_model_b_wva_kustomize.sh apply
 
           echo "Model B WVA resources deployed"
           kubectl get hpa -n "$LLMD_NAMESPACE_B" -l app.kubernetes.io/instance="$MODEL_B_RELEASE" || true
@@ -1120,6 +1101,7 @@ jobs:
           MODEL_ID: ${{ env.MODEL_ID }}
           REQUEST_RATE: ${{ env.REQUEST_RATE }}
           NUM_PROMPTS: ${{ env.NUM_PROMPTS }}
+          WVA_SATURATION_OVERLAY: e2e-simulator
         run: |
           echo "Running consolidated E2E tests on OpenShift with configuration:"
           echo "  ENVIRONMENT: $ENVIRONMENT"
@@ -1135,6 +1117,44 @@ jobs:
           echo "  REQUEST_RATE: $REQUEST_RATE"
           echo "  NUM_PROMPTS: $NUM_PROMPTS"
           echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
+
+          # Deploy uses SCALER_BACKEND=keda, so install.sh never runs deploy_prometheus_adapter (see
+          # deploy/lib/install_core.sh). KEDA's operator often owns v1beta1.external.metrics.k8s.io;
+          # HPAs in e2e need prometheus-adapter for wva_desired_replicas (default SCALER_BACKEND).
+          # Mirror ci-benchmark.yaml: patch APIService + background guard (see deploy/lib/scaler_runtime.sh).
+          MONITORING_NS="${MONITORING_NAMESPACE:-openshift-user-workload-monitoring}"
+          patch_external_metrics_apiservice() {
+            kubectl patch apiservice v1beta1.external.metrics.k8s.io --type=merge -p "{
+              \"spec\": {
+                \"caBundle\": null,
+                \"insecureSkipTLSVerify\": true,
+                \"service\": {
+                  \"name\": \"prometheus-adapter\",
+                  \"namespace\": \"${MONITORING_NS}\"
+                }
+              }
+            }" 2>&1 || true
+          }
+          patch_external_metrics_apiservice
+          (
+            while true; do
+              sleep 10
+              if ! kubectl cluster-info &>/dev/null; then
+                exit 0
+              fi
+              current_svc=$(kubectl get apiservice v1beta1.external.metrics.k8s.io -o jsonpath='{.spec.service.name}' 2>/dev/null || echo "")
+              current_ns=$(kubectl get apiservice v1beta1.external.metrics.k8s.io -o jsonpath='{.spec.service.namespace}' 2>/dev/null || echo "")
+              if [ "$current_svc" != "prometheus-adapter" ] || [ "$current_ns" != "$MONITORING_NS" ]; then
+                echo "[apiservice-guard] external.metrics APIService is ${current_svc}/${current_ns}; re-patching to prometheus-adapter/${MONITORING_NS}"
+                patch_external_metrics_apiservice
+              fi
+            done
+          ) &
+          GUARD_PID=$!
+          trap 'kill "$GUARD_PID" 2>/dev/null || true' EXIT
+          echo "APIService guard started (PID=$GUARD_PID) for prometheus-adapter in $MONITORING_NS"
+          sleep 12
+
           make test-e2e-full
 
       - name: Cleanup infrastructure
@@ -1149,11 +1169,20 @@ jobs:
           echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
           echo "  MODEL_B_RELEASE: $MODEL_B_RELEASE"
 
-          # Uninstall all WVA helm releases before deleting namespaces
-          # This ensures proper cleanup of resources and removes helm tracking
-          echo "Uninstalling WVA helm releases..."
+          echo "Uninstalling primary WVA (Helm migration + Kustomize)..."
           helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
-          helm uninstall "$MODEL_B_RELEASE" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          export WVA_PROJECT="${GITHUB_WORKSPACE}"
+          export WVA_NS="${WVA_NAMESPACE}"
+          export ENVIRONMENT=openshift
+          export LLMD_NS="${LLMD_NAMESPACE}"
+          export VLLM_SVC_ENABLED=false
+          export LLM_D_MODELSERVICE_NAME=""
+          export WVA_RELEASE_NAME="${WVA_RELEASE_NAME}"
+          bash -c 'source deploy/lib/wva_kustomize.sh && wva_kustomize_delete' || true
+
+          echo "Deleting Model B Kustomize client bundle (VA/HPA/Service/ServiceMonitor)..."
+          export LLMD_NAMESPACE_B MODEL_B_RELEASE
+          bash deploy/lib/ci_model_b_wva_kustomize.sh delete || true
 
           echo "Uninstalling llm-d helm releases in primary namespace..."
           for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do

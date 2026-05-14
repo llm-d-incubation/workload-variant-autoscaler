@@ -1,0 +1,20 @@
+# OpenShift CI: Model B client-only bundle (VA + HPA + vLLM metrics Service/ServiceMonitor).
+# Placeholders __...__ are substituted by deploy/lib/ci_model_b_wva_kustomize.sh before kubectl apply -k.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: __LLMD_NAMESPACE_B__
+
+# Kustomize v5+: prefer labels over deprecated commonLabels.
+labels:
+  - pairs:
+      app.kubernetes.io/name: workload-variant-autoscaler
+      app.kubernetes.io/instance: __MODEL_B_RELEASE__
+      app.kubernetes.io/version: v0.5.1
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - va.yaml
+  - hpa.yaml
+  - service.yaml
+  - servicemonitor.yaml

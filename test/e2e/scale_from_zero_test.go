@@ -280,7 +280,8 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10, cfg.MonitoringNS)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject with scale-to-zero")
 		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10)
+			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10,
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 		}
 
@@ -789,7 +790,8 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject with scale-to-zero")
 		} else {
 			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, 0, 10,
-				fixtures.WithScaleTargetRefKind("LeaderWorkerSet"))
+				fixtures.WithScaleTargetRefKind("LeaderWorkerSet"),
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 		}
 
@@ -1210,7 +1212,8 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject with scale-to-zero")
 		} else {
 			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, lwsName, vaName, 0, 10,
-				fixtures.WithScaleTargetRefKind("LeaderWorkerSet"))
+				fixtures.WithScaleTargetRefKind("LeaderWorkerSet"),
+				fixtures.WithExternalMetricControllerInstance(cfg.ControllerInstance))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 		}
 

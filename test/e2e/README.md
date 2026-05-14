@@ -121,7 +121,9 @@ export E2E_PROM_ADAPTER_PROBE_SEC=90
 
 ### Optional: faster `deploy/install.sh` for e2e
 
-`deploy/install.sh` runs **`helm repo update`** by default. To skip (faster but requires existing repo indexes), set **`SKIP_HELM_REPO_UPDATE=true`**.
+`deploy/install.sh` runs **`helm repo update`** by default (for components such as LWS and Prometheus Adapter). To skip (faster but requires existing repo indexes), set **`SKIP_HELM_REPO_UPDATE=true`**.
+
+Dual-controller smoke tests locate **`deploy/lib/e2e_secondary_wva.sh`** via **`e2eRepoRoot()`**: set **`WVA_E2E_REPO_ROOT`** to the repository root (required for a reliable path). **`make test-e2e-smoke`** / **`make test-e2e-full`** export **`WVA_E2E_REPO_ROOT=$(CURDIR)`** by default; CI sets **`WVA_E2E_REPO_ROOT`** to the checkout directory. If unset, the suite falls back to deprecated **`WVA_E2E_CHART_PATH`** (grandparent of that path) or **`os.Getwd()`** when you run **`go test`** from the repo root.
 
 When using **`LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true`** (as in `make deploy-e2e-infra`), **`E2E_DEPLOY_WAIT_TIMEOUT`** (default **`120s`**) bounds how long `install-llmd-infra.sh` waits for the EPP and inference-gateway deployments to become Available. Increase if your cluster is slow to pull images.
 

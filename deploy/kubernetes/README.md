@@ -546,9 +546,9 @@ helm uninstall prometheus-adapter -n workload-variant-autoscaler-monitoring
 # Delete kube-prometheus-stack
 helm uninstall kube-prometheus-stack -n workload-variant-autoscaler-monitoring
 
-# Delete WVA
+# Delete WVA (controller manifests, then CRDs — matches Makefile undeploy)
 cd /path/to/workload-variant-autoscaler
-kubectl delete -k config/default
+make undeploy ignore-not-found=true
 
 # Delete namespaces
 kubectl delete namespace llm-d-inference-scheduling

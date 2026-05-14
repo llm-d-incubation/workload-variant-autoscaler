@@ -7,8 +7,7 @@
 # guides) once your environment can consume it directly. Track removal in a follow-up issue.
 #
 # Ordering: run deploy/install.sh first (WVA + monitoring + scaler backend), then this script
-# when you need llm-d. The poolGroup helm upgrade on WVA requires InferencePool objects created
-# by this deploy.
+# when you need llm-d. Pool group alignment on WVA uses `kubectl set env` / rollout after InferencePools exist.
 #
 # Usage:
 #   ./deploy/install-llmd-infra.sh [-e kubernetes|openshift|kind-emulator] [--undeploy]

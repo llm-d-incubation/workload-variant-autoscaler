@@ -1,0 +1,19 @@
+# Mirrors charts/workload-variant-autoscaler/templates/vllm-servicemonitor.yaml (http scheme; UWM scrape).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: __WVA_FULLNAME__-vllm-mon
+  labels:
+    llm-d.ai/model: ms-inference-scheduling-llm-d-modelservice
+    openshift.io/user-monitoring: "true"
+spec:
+  selector:
+    matchLabels:
+      llm-d.ai/model: ms-inference-scheduling-llm-d-modelservice
+  endpoints:
+    - port: vllm
+      path: /metrics
+      interval: 15s
+      scheme: http
+  namespaceSelector:
+    any: true

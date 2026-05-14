@@ -17,6 +17,7 @@ metadata:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
 spec:
+  replicas: 2
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -62,7 +63,6 @@ spec:
         args:
           - --leader-elect=true
           - --health-probe-bind-address=:8081
-          - --watch-namespace=$(POD_NAMESPACE)
           # Leader election timeout configuration (optional - defaults shown below)
           # Uncomment and adjust these values if you need to tune for your environment:
           # - --leader-election-lease-duration=60s
@@ -72,6 +72,14 @@ spec:
         image: controller:latest
         imagePullPolicy: IfNotPresent
         env:
+          # Empty = cluster-wide watch
+          # Deploy scripts / overlays may set this to the pod namespace or a specific workload namespace.
+          - name: WATCH_NAMESPACE
+            value: ""
+          - name: POOL_GROUP
+            value: ""
+          - name: CONTROLLER_INSTANCE
+            value: ""
           - name: LOG_LEVEL
             value: "debug"  # or "info", "warn", "error"
           - name: CONFIG_MAP_NAME
@@ -86,6 +94,11 @@ spec:
               configMapKeyRef:
                 name: workload-variant-autoscaler-wva-variantautoscaling-config
                 key: PROMETHEUS_TLS_INSECURE_SKIP_VERIFY
+          - name: PROMETHEUS_CA_CERT_PATH
+            valueFrom:
+              configMapKeyRef:
+                name: workload-variant-autoscaler-wva-variantautoscaling-config
+                key: PROMETHEUS_CA_CERT_PATH
           - name: PROMETHEUS_TOKEN_PATH
             value: "/var/run/secrets/kubernetes.io/serviceaccount/token"
           - name: WVA_SCALE_TO_ZERO

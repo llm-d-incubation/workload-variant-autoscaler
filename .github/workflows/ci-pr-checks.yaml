@@ -326,20 +326,15 @@ jobs:
           # Emulated Kind: chart decode may be removed post-deploy (LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS, default true).
           # Pin llm-d release for deterministic CI behavior
           LLM_D_RELEASE: "v0.6.0"
-          # Dual-controller smoke installs a second Helm release; chart path must be explicit in CI.
-          WVA_E2E_CHART_PATH: ${{ github.workspace }}/charts/workload-variant-autoscaler
+          # Dual-controller: repository root for deploy/lib/e2e_secondary_wva.sh (Kustomize secondary install).
+          WVA_E2E_REPO_ROOT: ${{ github.workspace }}
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: "true"
-          # Lower saturation thresholds for simulator mode — the simulator's
-          # KV-cache and queue metrics are modest, so default thresholds
-          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
-          # scale-up reliably. These values trigger when kvUsage > 0.30 or
-          # queueLength > 0.5, which the simulator produces under load.
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
         run: |
+          # Avoid inherited PROM_CA_CERT_PATH=/dev/null (or other garbage) breaking Prometheus Adapter CA extraction.
+          unset PROM_CA_CERT_PATH || true
           make test-e2e-smoke-with-setup
 
   # Full Kind E2E - runs only when triggered (/ok-to-test or workflow_dispatch with run_full_tests).
@@ -438,14 +433,14 @@ jobs:
           CREATE_CLUSTER: "true"
           INSTALL_GATEWAY_CTRLPLANE: "true"
           LLM_D_RELEASE: "v0.6.0"
+          # Dual-controller: repository root for deploy/lib/e2e_secondary_wva.sh.
+          WVA_E2E_REPO_ROOT: ${{ github.workspace }}
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: "false"
-          # Same simulator saturation tuning as smoke — defaults are too high for reliable scale-up signals.
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
         run: |
+          unset PROM_CA_CERT_PATH || true
           make test-e2e-full-with-setup
 
   # Report status back to PR for issue_comment triggered runs

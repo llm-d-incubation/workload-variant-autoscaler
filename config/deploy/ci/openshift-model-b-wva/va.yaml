@@ -1,0 +1,16 @@
+# Mirrors charts/workload-variant-autoscaler/templates/variantautoscaling.yaml (va.enabled, controller disabled).
+apiVersion: llmd.ai/v1alpha1
+kind: VariantAutoscaling
+metadata:
+  name: __WVA_FULLNAME__-va
+  labels:
+    inference.optimization/acceleratorName: "__ACCELERATOR_TYPE__"
+    wva.llmd.ai/controller-instance: "__CONTROLLER_INSTANCE__"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    # inference-scheduling guide ModelService decode name (see deploy/lib/infra_llmd.sh / CI workflows).
+    name: ms-inference-scheduling-llm-d-modelservice-decode
+  modelID: "__MODEL_ID__"
+  variantCost: "10.0"

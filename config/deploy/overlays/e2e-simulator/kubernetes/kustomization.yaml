@@ -1,0 +1,12 @@
+# E2E simulator saturation tuning on the stock Kubernetes controller bundle (Kind / kube).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../../wva-controller
+
+patches:
+  - path: patch-saturation-defaults.yaml
+    target:
+      kind: ConfigMap
+      labelSelector: app.kubernetes.io/component=saturation-scaling

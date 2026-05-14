@@ -1,0 +1,7 @@
+# Controller RBAC + manager + metrics (no CRDs). CRDs are applied separately so
+# uninstall and multi-instance installs do not delete or duplicate API definitions.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../default

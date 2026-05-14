@@ -13,6 +13,8 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
+    # Used by deploy/lib/wva_kustomize.sh to merge CI/runtime threshold overrides without duplicating namePrefix/nameSuffix.
+    app.kubernetes.io/component: saturation-scaling
 data:
   # Global defaults applied to all variants unless overridden
   default: |

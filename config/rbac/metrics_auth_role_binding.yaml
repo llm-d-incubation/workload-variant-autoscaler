@@ -7,6 +7,9 @@ roleRef:
   kind: ClusterRole
   name: metrics-auth-role
 subjects:
+# Use the same name/namespace placeholders as manager-rolebinding so Kustomize
+# namePrefix, nameSuffix, and namespace transformers rewrite the subject correctly
+# for multi-instance installs
 - kind: ServiceAccount
-  name: workload-variant-autoscaler-controller-manager
-  namespace: workload-variant-autoscaler-system
+  name: controller-manager
+  namespace: system

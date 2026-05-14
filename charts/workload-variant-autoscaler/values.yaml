@@ -1,6 +1,7 @@
-# Controller deployment settings
-# Set controller.enabled=false to deploy only VA/HPA/ServiceMonitor resources
-# without deploying another controller instance (use existing cluster-wide controller)
+# Controller deployment settings (Helm template gate only).
+# The supported install path for the manager is Kustomize: config/deploy/wva-controller*
+# via deploy/install.sh → deploy_wva_controller → wva_kustomize_apply. Do not use this chart
+# to install the controller in automation; keep controller.enabled=false for client-only bundles.
 controller:
   enabled: true
 

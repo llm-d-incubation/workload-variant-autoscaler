@@ -62,6 +62,12 @@ func LoadConfigFromEnv() E2EConfig {
 	if cfg.Environment == "openshift" && cfg.ScaleToZeroEnabled {
 		cfg.ScaleToZeroEnabled = false
 	}
+	// Default Kind images (e.g. kindest/node) often reject HPA minReplicas=0 the same way unless the
+	// apiserver enables HPAScaleToZero. Our kind-emulator CI/scripts do not turn that gate on, so
+	// prometheus-adapter e2e must not submit minReplicas=0 HPAs when only SCALE_TO_ZERO_ENABLED=true.
+	if cfg.Environment == "kind-emulator" && cfg.ScalerBackend == scalerBackendPrometheusAdapter && cfg.ScaleToZeroEnabled {
+		cfg.ScaleToZeroEnabled = false
+	}
 
 	return cfg
 }

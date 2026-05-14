@@ -48,6 +48,16 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils/resources"
 )
 
+// kustomizeControllerServiceMonitorName matches config/prometheus/monitor.yaml + config/default namePrefix.
+const kustomizeControllerServiceMonitorName = "workload-variant-autoscaler-cm-mon"
+
+func controllerMetricsServiceMonitorLabels() map[string]string {
+	return map[string]string{
+		"control-plane":          "controller-manager",
+		"app.kubernetes.io/name": "workload-variant-autoscaler",
+	}
+}
+
 var _ = Describe("VariantAutoscalings Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
@@ -235,8 +245,9 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 				now := metav1.Now()
 				serviceMonitor := &promoperator.ServiceMonitor{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:              defaultServiceMonitorName,
+						Name:              kustomizeControllerServiceMonitorName,
 						Namespace:         config.SystemNamespace(),
+						Labels:            controllerMetricsServiceMonitorLabels(),
 						DeletionTimestamp: &now,
 					},
 				}
@@ -251,7 +262,7 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 				select {
 				case event := <-fakeRecorder.Events:
 					Expect(event).To(ContainSubstring("ServiceMonitorDeleted"))
-					Expect(event).To(ContainSubstring(defaultServiceMonitorName))
+					Expect(event).To(ContainSubstring(kustomizeControllerServiceMonitorName))
 				case <-time.After(2 * time.Second):
 					Fail("Expected event to be emitted but none was received")
 				}
@@ -261,8 +272,9 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 				By("Creating a ServiceMonitor without deletion timestamp")
 				serviceMonitor := &promoperator.ServiceMonitor{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      defaultServiceMonitorName,
+						Name:      kustomizeControllerServiceMonitorName,
 						Namespace: config.SystemNamespace(),
+						Labels:    controllerMetricsServiceMonitorLabels(),
 					},
 				}
 

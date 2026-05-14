@@ -15,7 +15,6 @@ namePrefix: workload-variant-autoscaler-
 #    someName: someValue
 
 resources:
-- ../crd
 - ../rbac
 - ../manager
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
@@ -46,6 +45,18 @@ patches:
 # update when an overlay changes the namespace (e.g. deploying into 'opendatahub'
 # or `redhat-ods-operator`).
 replacements:
+# Keep legacy SA token Secret in sync with namePrefix: the annotation must match the
+# rendered ServiceAccount name or the token controller will not populate / may GC the Secret.
+- source:
+    kind: ServiceAccount
+    name: epp-metrics-reader
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: Secret
+      name: epp-metrics-token
+    fieldPaths:
+    - metadata.annotations.[kubernetes.io/service-account.name]
 - source:
     kind: Deployment
     name: controller-manager
@@ -55,7 +66,7 @@ replacements:
       kind: ServiceMonitor
       group: monitoring.coreos.com
       version: v1
-      name: controller-manager-metrics-monitor
+      name: cm-mon
     fieldPaths:
     - spec.namespaceSelector.matchNames.0
 

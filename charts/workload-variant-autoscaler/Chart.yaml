@@ -1,6 +1,7 @@
 apiVersion: v2
 name: workload-variant-autoscaler
-description: Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads
+description: "[deprecated for controller] Helm chart for Workload-Variant-Autoscaler (WVA) — use Kustomize (config/deploy/*) or deploy/install.sh for the controller"
 type: application
 version: 0.5.1
 appVersion: "v0.5.1"
+deprecated: true

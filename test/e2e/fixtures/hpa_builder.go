@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
 
 const (
@@ -23,6 +25,28 @@ const (
 
 // HPAOption is a functional option for configuring HPA resources.
 type HPAOption func(*autoscalingv2.HorizontalPodAutoscaler)
+
+// WithExternalMetricControllerInstance adds controller_instance to the wva_desired_replicas
+// external metric selector when non-empty. It must match the VA label and WVA metrics when
+// CONTROLLER_INSTANCE is set (e.g. OpenShift CI); omit for empty instance (default Kind runs).
+func WithExternalMetricControllerInstance(instance string) HPAOption {
+	return func(hpa *autoscalingv2.HorizontalPodAutoscaler) {
+		if instance == "" {
+			return
+		}
+		if len(hpa.Spec.Metrics) == 0 || hpa.Spec.Metrics[0].External == nil {
+			return
+		}
+		ext := hpa.Spec.Metrics[0].External
+		if ext.Metric.Selector == nil {
+			ext.Metric.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{}}
+		}
+		if ext.Metric.Selector.MatchLabels == nil {
+			ext.Metric.Selector.MatchLabels = map[string]string{}
+		}
+		ext.Metric.Selector.MatchLabels[constants.LabelControllerInstance] = instance
+	}
+}
 
 // WithScaleTargetRefKind sets the Kind and APIVersion on the HPA's ScaleTargetRef.
 func WithScaleTargetRefKind(kind string) HPAOption {

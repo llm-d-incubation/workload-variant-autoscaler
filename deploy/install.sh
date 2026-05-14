@@ -3,11 +3,15 @@
 # Workload-Variant-Autoscaler infrastructure bootstrap: optional WVA controller,
 # Prometheus monitoring stack, and scaler backend (KEDA or Prometheus Adapter).
 #
+# WVA controller install policy: ONLY Kustomize (deploy/lib/wva_kustomize.sh). This script
+# never installs the controller via Helm; charts/workload-variant-autoscaler is for legacy
+# OCI packaging and optional client-only manifests (VA/HPA), not for the manager Deployment.
+#
 # For llm-d (gateway, EPP, ModelService, HF secret, WVA poolGroup alignment), run
 # deploy/install-llmd-infra.sh after this script when you need that stack.
 #
 # Prerequisites:
-# - kubectl and helm installed
+# - kubectl, helm, git, and jq installed (jq: WVA Kustomize JSON patches + namespace finalize helpers)
 # - Cluster credentials configured
 #
 
@@ -40,7 +44,6 @@ VLLM_SVC_PORT=${VLLM_SVC_PORT:-8200}
 VLLM_SVC_NODEPORT=${VLLM_SVC_NODEPORT:-30000}
 SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-"false"}
 WVA_LOG_LEVEL=${WVA_LOG_LEVEL:-"info"}
-VALUES_FILE=${VALUES_FILE:-"$WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml"}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
 WVA_BASE_NAME=${WVA_BASE_NAME:-"inference-scheduling"}
@@ -80,7 +83,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENVIRONMENT=${ENVIRONMENT:-"kubernetes"}
 COMPATIBLE_ENV_LIST=("kubernetes" "openshift" "kind-emulator")
 NON_EMULATED_ENV_LIST=("kubernetes" "openshift")
-REQUIRED_TOOLS=("kubectl" "helm" "git")
+REQUIRED_TOOLS=("kubectl" "helm" "git" "jq")
 DEPLOY_LIB_DIR="$SCRIPT_DIR/lib"
 
 PRODUCTION_ENV_LIST=("openshift")

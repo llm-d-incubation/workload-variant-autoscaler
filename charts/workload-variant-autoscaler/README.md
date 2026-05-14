@@ -2,7 +2,9 @@
 
 ![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
 
-Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads
+Helm chart for Workload-Variant-Autoscaler (WVA) — **deprecated for installing the controller**. Prefer **Kustomize** (`kubectl apply -k config/deploy/kubernetes` or `config/deploy/openshift`, or `deploy/install.sh`). This chart remains useful for **OCI distribution**, migration, and **VA/HPA-only** installs (`controller.enabled=false`).
+
+**Deprecated:** `helm install` / `helm upgrade` for the controller Deployment is superseded by the in-repo Kustomize bundles; see the root [deploy/README.md](../../deploy/README.md).
 
 ### Chart registry (OCI)
 
@@ -11,8 +13,11 @@ The chart is published to GitHub Container Registry under the **llm-d** org (not
 - **OCI URL:** `oci://ghcr.io/llm-d/workload-variant-autoscaler`
 - **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.5.1`
 
-## Installation (OpenShift)
-Helm is the recommended installation method. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler` and `prometheus-adapter`. To list all helm charts installed in the cluster run `helm ls -A`.
+## Installation (OpenShift) — legacy Helm
+
+> Prefer **Kustomize** for new installs (`deploy/install.sh` or `kubectl apply -k config/deploy/openshift`). The steps below remain for operators still on Helm during migration.
+
+Before running, remove prior Helm releases for `workload-variant-autoscaler` and `prometheus-adapter` if you are switching install paths. To list charts: `helm ls -A`.
 
 ### Step 1: Setup Variables, Secret, Helm repo
 ```

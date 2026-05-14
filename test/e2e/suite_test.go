@@ -36,10 +36,11 @@ import (
 )
 
 const (
-	scalerBackendKeda = "keda"
-	envKindEmulator   = "kind-emulator"
-	envKind           = "kind"
-	boolTrue          = "true"
+	scalerBackendKeda              = "keda"
+	scalerBackendPrometheusAdapter = "prometheus-adapter"
+	envKindEmulator                = "kind-emulator"
+	envKind                        = "kind"
+	boolTrue                       = "true"
 )
 
 var (
@@ -197,7 +198,7 @@ var _ = BeforeSuite(func() {
 	}).Should(Succeed(), "Prometheus should be running")
 
 	// RESTART_PROMETHEUS_ADAPTER: false (never), true (always delete pods), auto (default: probe then restart only if needed).
-	if cfg.ScalerBackend == "prometheus-adapter" && cfg.Environment == envKindEmulator {
+	if cfg.ScalerBackend == scalerBackendPrometheusAdapter && cfg.Environment == envKindEmulator {
 		mode := strings.ToLower(strings.TrimSpace(os.Getenv("RESTART_PROMETHEUS_ADAPTER")))
 		if mode == "" {
 			mode = "auto"

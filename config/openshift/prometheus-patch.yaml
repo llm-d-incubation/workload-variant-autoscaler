@@ -11,8 +11,6 @@ spec:
         env:
         - name: PROMETHEUS_TOKEN_PATH
           value: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        - name: PROMETHEUS_CA_CERT_PATH
-          value: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
         - name: PROMETHEUS_CLIENT_CERT_PATH
           value: ""
         - name: PROMETHEUS_CLIENT_KEY_PATH

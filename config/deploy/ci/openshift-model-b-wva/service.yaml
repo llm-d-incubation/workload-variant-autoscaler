@@ -1,0 +1,16 @@
+# Mirrors charts/workload-variant-autoscaler/templates/vllm-service.yaml (OpenShift CI uses direct vLLM :8000).
+apiVersion: v1
+kind: Service
+metadata:
+  name: __WVA_FULLNAME__-vllm
+  labels:
+    llm-d.ai/model: ms-inference-scheduling-llm-d-modelservice
+spec:
+  selector:
+    llm-d.ai/model: ms-inference-scheduling-llm-d-modelservice
+  ports:
+    - name: vllm
+      port: 8000
+      protocol: TCP
+      targetPort: 8000
+  type: NodePort

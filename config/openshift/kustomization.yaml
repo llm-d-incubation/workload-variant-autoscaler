@@ -14,10 +14,6 @@ patches:
   target:
     kind: Deployment
     name: controller-manager
-- path: epp-metrics-token-patch.yaml
-  target:
-    kind: Secret
-    name: epp-metrics-token
 - path: epp-metrics-volume-patch.yaml
   target:
     kind: Deployment

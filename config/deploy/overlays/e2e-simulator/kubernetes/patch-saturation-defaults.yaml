@@ -1,0 +1,14 @@
+# Saturation defaults for Kind/OpenShift e2e with the inference simulator (modest KV/queue signals).
+# Values match former CI env: KV_SPARE_TRIGGER=0.5, QUEUE_SPARE_TRIGGER=4.5 (see docs/developer-guide/testing.md).
+# Kept identical to ../openshift/patch-saturation-defaults.yaml (Kustomize patch paths must stay under this dir).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unused
+data:
+  default: |
+    kvCacheThreshold: 0.80
+    queueLengthThreshold: 5
+    kvSpareTrigger: 0.5
+    queueSpareTrigger: 4.5
+    enableLimiter: false

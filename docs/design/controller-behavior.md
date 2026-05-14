@@ -154,7 +154,7 @@ func ConfigMapPredicate(namespaceChecker func(string) bool) predicate.Predicate 
 - **Generic**: ❌ Blocked
 
 **Purpose:**
-The controller watches its own ServiceMonitor (`workload-variant-autoscaler-controller-manager-metrics-monitor`) for observability purposes. When the ServiceMonitor is deleted:
+The controller watches its own ServiceMonitor (label `control-plane=controller-manager` in the controller namespace; default Kustomize name `workload-variant-autoscaler-cm-mon`) for observability purposes. When the ServiceMonitor is deleted:
 
 1. Prometheus stops scraping controller metrics
 2. External autoscalers (HPA/KEDA) can't access optimized replica metrics
@@ -165,11 +165,17 @@ The controller watches its own ServiceMonitor (`workload-variant-autoscaler-cont
 **Predicate:**
 
 ```go
-// ServiceMonitorPredicate returns a predicate that filters ServiceMonitor events to only the target ServiceMonitor.
 func ServiceMonitorPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		return obj.GetName() == defaultServiceMonitorName && 
-		       obj.GetNamespace() == configMapNamespace
+		if obj.GetNamespace() != config.SystemNamespace() {
+			return false
+		}
+		labels := obj.GetLabels()
+		if labels == nil {
+			return false
+		}
+		return labels["control-plane"] == "controller-manager" &&
+			labels["app.kubernetes.io/name"] == "workload-variant-autoscaler"
 	})
 }
 ```
@@ -286,7 +292,7 @@ kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-a
 **Diagnosis**:
 ```bash
 # Check if ServiceMonitor exists
-kubectl get servicemonitor -n workload-variant-autoscaler-system workload-variant-autoscaler-controller-manager-metrics-monitor
+kubectl get servicemonitor -n workload-variant-autoscaler-system -l control-plane=controller-manager
 
 # Check controller events
 kubectl get events -n workload-variant-autoscaler-system --field-selector involvedObject.kind=ServiceMonitor
