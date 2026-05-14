@@ -556,6 +556,15 @@ func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
 	enforcerModificationsTotal.With(labels).Inc()
 }
 
+// ResetAvailableGPUsMetric clears all previously recorded GPU metrics.
+// This should be called once before recording a new set of GPU discoveries to remove stale data.
+func (m *MetricsEmitter) ResetAvailableGPUsMetric() {
+	if availableGpus == nil {
+		return
+	}
+	availableGpus.Reset()
+}
+
 // RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type. acceleratorModel is
 // accelerator full name, acceleratorType is short name.
 // This metric is updated during GPU discovery and reflects cluster GPU capacity.

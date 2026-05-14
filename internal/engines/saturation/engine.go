@@ -257,6 +257,11 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	logger := ctrl.LoggerFrom(ctx)
 
+	// For each optimize cycle, reset available GPUs metrics. If controller doesn't do GPUs discovery
+	// in this cycle, then the metrics will not be available as intended. If controller does GPUs discovery,
+	// the number of available GPUs is fresh every cycle.
+	e.metricsEmitter.ResetAvailableGPUsMetric()
+
 	// Get optimization interval from Config (already a time.Duration)
 	interval := e.Config.OptimizationInterval()
 
