@@ -92,7 +92,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of available GPUs by accelerator type",
+      "description": "Number of available GPUs by accelerator type. WVA only discovers GPUs when a configuration such as \"enableLimiter\" is \"true\". Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG",
       "fieldConfig": {
         "defaults": {
           "color": {
