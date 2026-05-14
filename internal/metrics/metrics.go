@@ -25,6 +25,11 @@ var (
 	optimizationDuration *prometheus.HistogramVec
 	modelsProcessedGauge *prometheus.GaugeVec
 
+	// pipeline stage visibility metrics
+	decisionsLimitedTotal               *prometheus.CounterVec
+	availableGpus                       *prometheus.GaugeVec
+	enforcerModificationsTotal          *prometheus.CounterVec
+	optimizerActive                     *prometheus.GaugeVec
 	configInfoGauge                     *prometheus.GaugeVec
 	configKvSpareThresholdGauge         *prometheus.GaugeVec
 	configQueueSpareThresholdGauge      *prometheus.GaugeVec
@@ -179,6 +184,54 @@ func InitMetrics(registry prometheus.Registerer) error {
 		modelsProcessedLabels,
 	)
 
+	decisionsLimitedLabels := []string{constants.LabelVariantName, constants.LabelNamespace, constants.LabelLimiterName}
+	if controllerInstance != "" {
+		decisionsLimitedLabels = append(decisionsLimitedLabels, constants.LabelControllerInstance)
+	}
+	decisionsLimitedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVADecisionsLimitedTotal,
+			Help: "Total number of decisions limited by the limiter",
+		},
+		decisionsLimitedLabels,
+	)
+
+	availableGpusLabels := []string{constants.LabelAcceleratorVendor, constants.LabelAcceleratorModel, constants.LabelAcceleratorType}
+	if controllerInstance != "" {
+		availableGpusLabels = append(availableGpusLabels, constants.LabelControllerInstance)
+	}
+	availableGpus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAAvailableGpus,
+			Help: "Number of GPUs currently available",
+		},
+		availableGpusLabels,
+	)
+
+	enforcerModificationsLabels := []string{constants.LabelPolicyType}
+	if controllerInstance != "" {
+		enforcerModificationsLabels = append(enforcerModificationsLabels, constants.LabelControllerInstance)
+	}
+	enforcerModificationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVAEnforcerModificationsTotal,
+			Help: "Total number of decision modifications made by the enforcer",
+		},
+		enforcerModificationsLabels,
+	)
+
+	optimizerActiveLabels := []string{constants.LabelOptimizerName}
+	if controllerInstance != "" {
+		optimizerActiveLabels = append(optimizerActiveLabels, constants.LabelControllerInstance)
+	}
+	optimizerActive = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAOptimizerActive,
+			Help: "1 for active optimizer, 0 for inactive",
+		},
+		optimizerActiveLabels,
+	)
+
 	// Config info metric with labels
 	configInfoLabels := []string{constants.LabelAnalyzerName, constants.LabelLimiterEnabled, constants.LabelScaleToZeroEnabled}
 	if controllerInstance != "" {
@@ -289,6 +342,18 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(modelsProcessedGauge); err != nil {
 		return fmt.Errorf("failed to register modelsProcessedGauge metric: %w", err)
+	}
+	if err := registry.Register(decisionsLimitedTotal); err != nil {
+		return fmt.Errorf("failed to register decisionsLimitedTotal metric: %w", err)
+	}
+	if err := registry.Register(availableGpus); err != nil {
+		return fmt.Errorf("failed to register availableGpus metric: %w", err)
+	}
+	if err := registry.Register(enforcerModificationsTotal); err != nil {
+		return fmt.Errorf("failed to register enforcerModificationsTotal metric: %w", err)
+	}
+	if err := registry.Register(optimizerActive); err != nil {
+		return fmt.Errorf("failed to register optimizerActive metric: %w", err)
 	}
 	if err := registry.Register(configInfoGauge); err != nil {
 		return fmt.Errorf("failed to register configInfoGauge metric: %w", err)
@@ -429,7 +494,29 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	return nil
 }
 
-// RecordError records an error metric for the specified component and error type
+// RecordOptimizerActiveMetric records which optimizer is currently active.
+// Only one optimizer should be active at a time (isActive=true), while others are inactive (isActive=false).
+func (m *MetricsEmitter) RecordOptimizerActiveMetric(optimizerName string, isActive bool) {
+	if optimizerActive == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelOptimizerName: optimizerName,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	v := float64(0)
+	if isActive {
+		v = 1
+	}
+	optimizerActive.With(labels).Set(v)
+}
+
+// RecordError records an error metric for the specified component and error type.
 // Callers MUST invoke InitMetrics before this method (the package-level
 // metric vars are nil otherwise, and the Set calls below would panic).
 // InitMetricsAndEmitter is the recommended construction path because it
@@ -447,7 +534,67 @@ func RecordError(component, errorType string) {
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
+
 	errorsTotal.With(labels).Inc()
+}
+
+// RecordEnforcerMetric records a decision modification made by the enforcer.
+// The policyType identifies which enforcement policy (e.g., "scale_to_zero", "minimum_replicas") was applied.
+func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
+	if enforcerModificationsTotal == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelPolicyType: policyType,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	enforcerModificationsTotal.With(labels).Inc()
+}
+
+// RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type. acceleratorModel is
+// accelerator full name, acceleratorType is short name.
+// This metric is updated during GPU discovery and reflects cluster GPU capacity.
+func (m *MetricsEmitter) RecordAvailableGPUsMetric(vendor, acceleratorModel, acceleratorType string, count int32) {
+	if availableGpus == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelAcceleratorVendor: vendor,
+		constants.LabelAcceleratorModel:  acceleratorModel,
+		constants.LabelAcceleratorType:   acceleratorType,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	availableGpus.With(labels).Set(float64(count))
+}
+
+// RecordDecisionsLimitedTotalMetric records when a scaling decision was constrained by a limiter.
+// This tracks how often the limiter prevents scaling actions due to resource constraints.
+func (m *MetricsEmitter) RecordDecisionsLimitedTotalMetric(variantName, namespace, limiterName string) {
+	if decisionsLimitedTotal == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelNamespace:   namespace,
+		constants.LabelLimiterName: limiterName,
+	}
+
+	// Add controller_instance label if configured
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	decisionsLimitedTotal.With(labels).Inc()
 }
 
 // SetConfigInfo sets the config info metric with the given analyzer name and feature flags.

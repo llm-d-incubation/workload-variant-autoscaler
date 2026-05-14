@@ -141,6 +141,7 @@ type Engine struct {
 	// CostAwareOptimizer (unlimited) or GreedyByScoreOptimizer (limited).
 	optimizer pipeline.ScalingOptimizer
 
+	metricsEmitter *metrics.MetricsEmitter
 	// v1AnalyzerFactory produces a fresh V1 saturation analyzer for each
 	// role group in optimizeV1. NewEngine sets defaultV1AnalyzerFactory;
 	// tests can replace this per-instance to inject stubs or spies.
@@ -187,6 +188,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
+		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
 	}
 
@@ -220,8 +222,24 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	e.recordActiveOptimizer() // record active optimizer
 	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)
+}
+
+func (e *Engine) recordActiveOptimizer() {
+	// Record metrics for which optimizer is active
+	optimizerNames := []string{
+		pipeline.GreedyByScoreOptimizerName,
+		pipeline.CostAwareOptimizerName,
+	}
+	for _, name := range optimizerNames {
+		isActive := false // default is false
+		if name == e.optimizer.Name() {
+			isActive = true // only one active at a time
+		}
+		e.metricsEmitter.RecordOptimizerActiveMetric(name, isActive)
+	}
 }
 
 // optimize performs the optimization logic.
@@ -323,10 +341,14 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
 	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
+		savedOptimizer := e.optimizer
 		if enableLimiter {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
 		} else {
 			e.optimizer = pipeline.NewCostAwareOptimizer()
+		}
+		if savedOptimizer != e.optimizer {
+			e.recordActiveOptimizer() // optimizer has changed, record active optimizer
 		}
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}

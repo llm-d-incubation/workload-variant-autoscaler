@@ -34,6 +34,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -473,6 +474,137 @@ var _ = Describe("Saturation Engine", func() {
 			Expect(testVAs).To(Equal(totalVAs), "Expected all test VAs to be present")
 		})
 
+	})
+
+	Context("Optimizer selection based on EnableLimiter", func() {
+		const testName = "optimizer-toggle-test"
+		const modelID = "test-model"
+
+		BeforeEach(func() {
+			logging.NewTestLogger()
+
+			By("Creating test deployment and VA")
+			d := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: utils.Ptr(int32(1)),
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": testName},
+					},
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{"app": testName},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:  "test-container",
+									Image: "registry.k8s.io/pause:3.9",
+								},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, d)).To(Succeed())
+
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+					Labels: map[string]string{
+						utils.AcceleratorNameLabel: "A100",
+					},
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						Kind: "Deployment",
+						Name: testName,
+					},
+					ModelID:     modelID,
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(ctx, va)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			By("Cleaning up test resources")
+			d := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+			}
+			err := k8sClient.Delete(ctx, d)
+			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
+
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+			}
+			err = k8sClient.Delete(ctx, va)
+			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
+		})
+
+		It("should update e.optimizer when EnableLimiter toggles", func() {
+			By("Creating engine with EnableLimiter=false")
+			mockPromAPI := &testutils.MockPromAPI{
+				QueryResults: map[string]model.Value{},
+				QueryErrors:  map[string]error{},
+			}
+			sourceRegistry := source.NewSourceRegistry()
+			promSource := prometheus.NewPrometheusSource(ctx, mockPromAPI, prometheus.DefaultPrometheusSourceConfig())
+			sourceRegistry.Register("prometheus", promSource) // nolint:errcheck
+
+			testConfig := config.NewTestConfig()
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: false,
+				},
+			})
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+
+			By("Running optimize() with EnableLimiter=false")
+			err := engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal(pipeline.CostAwareOptimizerName),
+				"Expected CostAwareOptimizer when EnableLimiter=false")
+
+			By("Updating config to EnableLimiter=true")
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: true,
+				},
+			})
+
+			By("Running optimize() with EnableLimiter=true")
+			err = engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal(pipeline.GreedyByScoreOptimizerName),
+				"Expected GreedyByScoreOptimizer when EnableLimiter=true")
+
+			By("Updating config back to EnableLimiter=false")
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: false,
+				},
+			})
+
+			By("Running optimize() with EnableLimiter=false again")
+			err = engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal(pipeline.CostAwareOptimizerName),
+				"Expected CostAwareOptimizer when EnableLimiter=false (second toggle)")
+		})
 	})
 
 })

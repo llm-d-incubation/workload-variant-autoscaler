@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // DefaultLimiter combines an Inventory with an AllocationAlgorithm to constrain
@@ -17,18 +18,20 @@ import (
 //  4. Run allocation algorithm to distribute resources
 //  5. Update decision metadata (WasLimited, LimitedBy, DecisionSteps)
 type DefaultLimiter struct {
-	name      string
-	inventory Inventory
-	algorithm AllocationAlgorithm
+	name           string
+	inventory      Inventory
+	algorithm      AllocationAlgorithm
+	metricsEmitter *metrics.MetricsEmitter
 }
 
 // NewDefaultLimiter creates a limiter that combines inventory tracking with
 // an allocation algorithm.
 func NewDefaultLimiter(name string, inventory Inventory, algorithm AllocationAlgorithm) *DefaultLimiter {
 	return &DefaultLimiter{
-		name:      name,
-		inventory: inventory,
-		algorithm: algorithm,
+		name:           name,
+		inventory:      inventory,
+		algorithm:      algorithm,
+		metricsEmitter: metrics.NewMetricsEmitter(),
 	}
 }
 
@@ -87,6 +90,7 @@ func (l *DefaultLimiter) updateDecisionMetadata(decisions []*interfaces.VariantD
 		// If the algorithm marked the decision as limited, set LimitedBy
 		if d.WasLimited {
 			d.LimitedBy = l.name
+			l.metricsEmitter.RecordDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
 		}
 
 		// Add decision step for observability

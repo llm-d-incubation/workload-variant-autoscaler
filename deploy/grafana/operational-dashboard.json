@@ -92,6 +92,83 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Number of available GPUs by accelerator type",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "id": 50,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "wva_available_gpus",
+          "instant": false,
+          "legendFormat": "{{accelerator_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Available GPUs",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Number of models processed in the last optimization cycle",
       "fieldConfig": {
         "defaults": {
@@ -118,7 +195,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 4,
+        "x": 8,
         "y": 0
       },
       "id": 10,
@@ -199,8 +276,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 12,
         "y": 0
       },
       "id": 49,
@@ -341,8 +418,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 16,
+        "w": 3,
+        "x": 18,
         "y": 0
       },
       "id": 24,
@@ -467,8 +544,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 21,
         "y": 0
       },
       "id": 25,
