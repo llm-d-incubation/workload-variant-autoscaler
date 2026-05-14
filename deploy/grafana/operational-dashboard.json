@@ -154,7 +154,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_available_gpus",
+          "expr": "max by (accelerator_type) (wva_available_gpus)",
           "instant": false,
           "legendFormat": "{{accelerator_type}}",
           "range": true,
