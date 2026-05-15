@@ -686,9 +686,8 @@ jobs:
       - name: Apply latest CRDs
         run: |
           echo "Applying latest VariantAutoscaling CRD..."
-          # Helm doesn't auto-update CRDs, so we need to apply them manually
-          # to ensure the cluster has the latest schema (including scaleTargetRef)
-          kubectl apply -f charts/workload-variant-autoscaler/crds/
+          # Apply CRDs from the Kustomize source of truth (config/crd/bases/)
+          kubectl apply -f config/crd/bases/
 
       - name: Deploy WVA and llm-d infrastructure
         env:
@@ -747,13 +746,14 @@ jobs:
           echo "  QUEUE_SPARE_TRIGGER: ${QUEUE_SPARE_TRIGGER:-<default>}"
           echo "  HF token configuration: ✓"
           # Base monitoring + WVA + scaler (install.sh does not deploy llm-d).
-          ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
+          ./deploy/install.sh --environment openshift
           # Gateway/EPP/ModelService + WVA poolGroup alignment (see deploy/install-llmd-infra.sh).
           ./deploy/install-llmd-infra.sh -e openshift
-          # Capacity thresholds are not passed from install.sh — tune after install for CI simulators.
-          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
-            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
-            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
+          # Capacity thresholds are tuned after install via ConfigMap patch for CI simulators.
+          kubectl patch configmap workload-variant-autoscaler-saturation-scaling-config \
+            -n "$WVA_NAMESPACE" --type=merge \
+            -p "$(printf '{"data":{"default":"kvSpareTrigger: %s\\nqueueSpareTrigger: %s\\n"}}' \
+              "${KV_SPARE_TRIGGER}" "${QUEUE_SPARE_TRIGGER}")"
 
       - name: Label namespaces for OpenShift monitoring
         run: |
@@ -998,11 +998,9 @@ jobs:
           echo "Cleaning up ALL test infrastructure..."
           echo "  LLMD_NAMESPACE: $LLMD_NAMESPACE"
           echo "  WVA_NAMESPACE: $WVA_NAMESPACE"
-          echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
 
-          # Uninstall WVA helm release before deleting namespace
-          echo "Uninstalling WVA helm release..."
-          helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          echo "Removing cluster-scoped WVA resources..."
+          kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
 
           echo "Uninstalling llm-d helm releases..."
           for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do
@@ -1015,24 +1013,6 @@ jobs:
 
           echo "Deleting WVA namespace $WVA_NAMESPACE..."
           kubectl delete namespace "$WVA_NAMESPACE" --ignore-not-found --timeout=120s || true
-
-          # Clean up cluster-scoped WVA resources for THIS release only
-          # Use both name and instance labels to avoid deleting resources from other PRs
-          echo "Removing cluster-scoped WVA resources for release $WVA_RELEASE_NAME..."
-          kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=workload-variant-autoscaler,app.kubernetes.io/instance="$WVA_RELEASE_NAME" --ignore-not-found || true
-
-          # Also clean up cluster-scoped resources owned by this PR's namespaces
-          # (covers helmfile-created resources whose instance label differs from WVA_RELEASE_NAME)
-          for kind in clusterrole clusterrolebinding; do
-            kubectl get "$kind" -o json 2>/dev/null | \
-              jq -r '.items[] | select(.metadata.name | contains("workload-variant-autoscaler")) | "\(.metadata.name)\t\(.metadata.annotations["meta.helm.sh/release-namespace"] // "")"' 2>/dev/null | \
-              while IFS=$'\t' read -r name ns; do
-                if [ "$ns" = "$LLMD_NAMESPACE" ] || [ "$ns" = "$WVA_NAMESPACE" ]; then
-                  echo "  Deleting $kind/$name (owned by PR namespace '$ns')"
-                  kubectl delete "$kind" "$name" --ignore-not-found || true
-                fi
-              done
-          done
 
           echo "Cleanup complete"
 

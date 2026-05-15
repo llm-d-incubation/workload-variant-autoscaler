@@ -293,7 +293,7 @@ jobs:
           done
 
       - name: Apply latest CRDs
-        run: kubectl apply -f charts/workload-variant-autoscaler/crds/
+        run: kubectl apply -f config/crd/bases/
 
       - name: Deploy WVA and llm-d infrastructure
         env:
@@ -329,14 +329,13 @@ jobs:
           LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY: "true"
           E2E_DEPLOY_WAIT_TIMEOUT: "300s"
         run: |
-          # Split deploy: WVA base (install.sh) → llm-d (install-llmd-infra.sh) → chart capacity tuning (helm upgrade).
-          ./deploy/install.sh --release-name "$WVA_RELEASE_NAME" --environment openshift
+          # Split deploy: WVA base (install.sh) → llm-d (install-llmd-infra.sh) → capacity tuning via ConfigMap patch.
+          ./deploy/install.sh --environment openshift
           ./deploy/install-llmd-infra.sh -e openshift
-          helm upgrade "$WVA_RELEASE_NAME" ./charts/workload-variant-autoscaler -n "$WVA_NS" --reuse-values \
-            --set wva.capacityScaling.default.kvCacheThreshold="${KV_CACHE_THRESHOLD}" \
-            --set wva.capacityScaling.default.queueLengthThreshold="${QUEUE_LENGTH_THRESHOLD}" \
-            --set wva.capacityScaling.default.kvSpareTrigger="${KV_SPARE_TRIGGER}" \
-            --set wva.capacityScaling.default.queueSpareTrigger="${QUEUE_SPARE_TRIGGER}"
+          kubectl patch configmap workload-variant-autoscaler-saturation-scaling-config \
+            -n "$WVA_NAMESPACE" --type=merge \
+            -p "$(printf '{"data":{"default":"kvCacheThreshold: %s\\nqueueLengthThreshold: %s\\nkvSpareTrigger: %s\\nqueueSpareTrigger: %s\\n"}}' \
+              "${KV_CACHE_THRESHOLD}" "${QUEUE_LENGTH_THRESHOLD}" "${KV_SPARE_TRIGGER}" "${QUEUE_SPARE_TRIGGER}")"
 
       - name: Label namespaces for OpenShift monitoring
         run: |
@@ -956,7 +955,7 @@ jobs:
       - name: Cleanup infrastructure
         if: always()
         run: |
-          helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
           for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do
             helm uninstall "$release" -n "$LLMD_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
           done

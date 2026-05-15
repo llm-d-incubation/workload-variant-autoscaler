@@ -49,12 +49,10 @@ if [[ "$PLATFORM" == openshift ]]; then
 	export WVA_METRICS_SECURE="${WVA_METRICS_SECURE:-false}"
 	export ENVIRONMENT=openshift
 	./deploy/install.sh \
-		--release-name "${WVA_RELEASE_NAME:-workload-variant-autoscaler}" \
 		--environment openshift
 	./deploy/install-llmd-infra.sh -e openshift
 else
 	export ENVIRONMENT=kubernetes
-	./deploy/install.sh \
-		--release-name "${WVA_RELEASE_NAME:-workload-variant-autoscaler}"
+	./deploy/install.sh
 	./deploy/install-llmd-infra.sh -e kubernetes
 fi

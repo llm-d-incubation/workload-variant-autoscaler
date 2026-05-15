@@ -34,17 +34,11 @@ PROMETHEUS_SECRET_NS=${PROMETHEUS_SECRET_NS:-$MONITORING_NAMESPACE}
 WVA_IMAGE_REPO=${WVA_IMAGE_REPO:-"ghcr.io/llm-d/llm-d-workload-variant-autoscaler"}
 WVA_IMAGE_TAG=${WVA_IMAGE_TAG:-"latest"}
 WVA_IMAGE_PULL_POLICY=${WVA_IMAGE_PULL_POLICY:-"Always"}
-WVA_RELEASE_NAME=${WVA_RELEASE_NAME:-"workload-variant-autoscaler"}
-VLLM_SVC_ENABLED=${VLLM_SVC_ENABLED:-true}
-VLLM_SVC_PORT=${VLLM_SVC_PORT:-8200}
-VLLM_SVC_NODEPORT=${VLLM_SVC_NODEPORT:-30000}
 SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-"false"}
 WVA_LOG_LEVEL=${WVA_LOG_LEVEL:-"info"}
-VALUES_FILE=${VALUES_FILE:-"$WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml"}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
-WVA_BASE_NAME=${WVA_BASE_NAME:-"inference-scheduling"}
-NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-true}
+NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-false}
 
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 

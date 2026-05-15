@@ -90,10 +90,27 @@ undeploy_llm_d_infrastructure() {
 }
 
 undeploy_wva_controller() {
-    log_info "Uninstalling Workload-Variant-Autoscaler (release: $WVA_RELEASE_NAME)..."
+    log_info "Uninstalling Workload-Variant-Autoscaler..."
 
-    helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NS" 2>/dev/null || \
-        log_warning "Workload-Variant-Autoscaler not found or already uninstalled"
+    local kustomize_overlay
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/openshift" && pwd)"
+    else
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/default" && pwd)"
+    fi
+
+    local tmp_overlay
+    tmp_overlay=$(mktemp -d)
+    ln -s "$kustomize_overlay" "$tmp_overlay/base"
+    cat > "$tmp_overlay/kustomization.yaml" <<EOF
+namespace: $WVA_NS
+resources:
+- ./base
+EOF
+
+    kubectl delete -k "$tmp_overlay" --ignore-not-found 2>/dev/null || \
+        log_warning "Workload-Variant-Autoscaler resources not found or already removed"
+    rm -rf "$tmp_overlay"
 
     rm -f "$PROM_CA_CERT_PATH"
 

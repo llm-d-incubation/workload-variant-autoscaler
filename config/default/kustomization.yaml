@@ -41,6 +41,20 @@ patches:
   target:
     kind: Deployment
 
+# epp-metrics-token Secret annotation so Kubernetes populates the SA token.
+# Kustomize renames the ServiceAccount to workload-variant-autoscaler-epp-metrics-reader
+# via namePrefix, but does not update annotation values — so we patch it explicitly.
+- patch: |-
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: epp-metrics-token
+      annotations:
+        kubernetes.io/service-account.name: workload-variant-autoscaler-epp-metrics-reader
+  target:
+    kind: Secret
+    name: epp-metrics-token
+
 # [NAMESPACE-SELECTOR] Ensure the ServiceMonitor namespaceSelector matches the
 # deployment namespace. Without this, the hardcoded value in monitor.yaml won't
 # update when an overlay changes the namespace (e.g. deploying into 'opendatahub'

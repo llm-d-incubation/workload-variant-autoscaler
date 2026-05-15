@@ -59,44 +59,55 @@ set_wva_logging_level() {
 deploy_wva_controller() {
     log_info "Deploying Workload-Variant-Autoscaler..."
     log_info "Using image: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
-    log_info "Using release name: $WVA_RELEASE_NAME"
 
-    # Deploy WVA using Helm chart
-    log_info "Installing Workload-Variant-Autoscaler via Helm chart"
+    NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-false}
 
-    # Default namespaceScoped to true if not set (matches chart default)
-    # But allow override via env var (e.g. for E2E tests)
-    NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-true}
+    # Select the Kustomize overlay for this environment
+    local kustomize_overlay
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/openshift" && pwd)"
+    else
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/default" && pwd)"
+    fi
 
-    # Chart baseName is the controller's logical pool name (InferencePool prefix), not necessarily the llm-d guide folder.
-    WVA_BASE_NAME="${WVA_BASE_NAME:-inference-scheduling}"
+    # Build a throw-away overlay that pins the image without modifying tracked files.
+    # Symlink the base overlay so kustomization.yaml can reference it with a relative
+    # path — Kustomize rejects absolute paths in resources.
+    local tmp_overlay
+    tmp_overlay=$(mktemp -d)
+    ln -s "$kustomize_overlay" "$tmp_overlay/base"
 
-    # VA / HPA / capacity thresholds are chart defaults unless changed via helm --set separately (see deploy README).
-    # llmd.modelName / llmd.modelID are optional Helm overrides here when the vars are exported (often unset for infra-only installs).
-    helm upgrade -i "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
-        -n "$WVA_NS" \
-        --values $VALUES_FILE \
-        --set-file wva.prometheus.caCert="$PROM_CA_CERT_PATH" \
-        --set wva.image.repository="$WVA_IMAGE_REPO" \
-        --set wva.image.tag="$WVA_IMAGE_TAG" \
-        --set wva.imagePullPolicy="$WVA_IMAGE_PULL_POLICY" \
-        --set wva.baseName="$WVA_BASE_NAME" \
-        ${LLM_D_MODELSERVICE_NAME:+--set llmd.modelName="$LLM_D_MODELSERVICE_NAME"} \
-        ${MODEL_ID:+--set llmd.modelID="$MODEL_ID"} \
-        --set llmd.namespace="$LLMD_NS" \
-        --set wva.prometheus.baseURL="$PROMETHEUS_URL" \
-        --set wva.prometheus.monitoringNamespace="$MONITORING_NAMESPACE" \
-        --set vllmService.enabled="$VLLM_SVC_ENABLED" \
-        --set vllmService.port="$VLLM_SVC_PORT" \
-        --set vllmService.targetPort="$VLLM_SVC_PORT" \
-        --set vllmService.nodePort="$VLLM_SVC_NODEPORT" \
-        --set wva.logging.level="$WVA_LOG_LEVEL" \
-        --set wva.prometheus.tls.insecureSkipVerify="$SKIP_TLS_VERIFY" \
-        --set wva.namespaceScoped="$NAMESPACE_SCOPED" \
-        --set wva.metrics.secure="$WVA_METRICS_SECURE" \
-        --set wva.scaleToZero="$ENABLE_SCALE_TO_ZERO" \
-        ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
-        ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP}
+    # config/manager/kustomization.yaml transforms the base image from "controller:latest"
+    # to the published release image. The overlay must match the POST-transform name.
+    local base_image
+    base_image=$(grep 'newName:' "$WVA_PROJECT/config/manager/kustomization.yaml" | awk '{print $2}' | head -1)
+    cat > "$tmp_overlay/kustomization.yaml" <<EOF
+namespace: $WVA_NS
+resources:
+- ./base
+images:
+- name: $base_image
+  newName: $WVA_IMAGE_REPO
+  newTag: "$WVA_IMAGE_TAG"
+EOF
+
+    # When namespace-scoped, restrict the controller to its own namespace only.
+    # The patch itself lives in a tracked file; symlink it into the temp overlay
+    # so the kustomization.yaml can reference it with a relative path.
+    if [ "$NAMESPACE_SCOPED" = "true" ]; then
+        ln -s "$WVA_PROJECT/config/manager/namespace-scoped-patch.yaml" "$tmp_overlay/namespace-scoped-patch.yaml"
+        cat >> "$tmp_overlay/kustomization.yaml" <<'PATCH'
+patches:
+- target:
+    kind: Deployment
+    name: controller-manager
+  path: ./namespace-scoped-patch.yaml
+PATCH
+    fi
+
+    log_info "Applying Kustomize overlay: $kustomize_overlay (namespace-scoped=$NAMESPACE_SCOPED)"
+    kubectl apply -k "$tmp_overlay"
+    rm -rf "$tmp_overlay"
 
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
@@ -167,24 +178,9 @@ delete_namespaces_kube_like() {
 deploy_wva_prerequisites_kube_like() {
     log_info "Deploying Workload-Variant-Autoscaler prerequisites for Kubernetes..."
 
-    # Extract Prometheus CA certificate
+    # Extract Prometheus CA certificate (used by the Prometheus Adapter scaler backend).
     log_info "Extracting Prometheus TLS certificate"
     kubectl get secret "$PROMETHEUS_SECRET_NAME" -n "$MONITORING_NAMESPACE" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$PROM_CA_CERT_PATH"
-
-    local use_values_dev=false
-    if [ "$SKIP_TLS_VERIFY" = "true" ]; then
-        use_values_dev=true
-    elif [ "${KUBE_LIKE_VALUES_DEV_IF_PRESENT:-false}" = "true" ] && [ -f "$WVA_PROJECT/charts/workload-variant-autoscaler/values-dev.yaml" ]; then
-        use_values_dev=true
-    fi
-
-    if [ "$use_values_dev" = "true" ]; then
-        log_warning "TLS verification NOT enabled: using values-dev.yaml for dev deployments - NOT FOR PRODUCTION USE"
-        VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values-dev.yaml"
-    else
-        log_info "TLS verification enabled: using values.yaml for production deployments"
-        VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values.yaml"
-    fi
 
     # LeaderWorkerSet (WVA dependency; see upstream chart / #910).
     if [ "${DEPLOY_LWS:-true}" = "true" ]; then

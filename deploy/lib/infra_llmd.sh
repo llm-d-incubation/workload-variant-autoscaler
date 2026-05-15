@@ -197,47 +197,9 @@ deploy_llm_d_infrastructure() {
       yq eval ".decode.replicas = $DECODE_REPLICAS" -i "$LLM_D_MODELSERVICE_VALUES"
     fi
 
-    # Check if the guide's llm-d.ai/model label differs from what WVA's vllm-service expects.
-    # If so, we'll patch pod labels post-deploy (not pre-deploy) to avoid violating the
-    # llm-d-modelservice chart schema which disallows extra properties under modelArtifacts.
-    CURRENT_MODEL_LABEL=$(yq eval '.modelArtifacts.labels."llm-d.ai/model"' "$LLM_D_MODELSERVICE_VALUES" 2>/dev/null || echo "")
-    NEEDS_LABEL_ALIGNMENT=false
-    if [ -n "$CURRENT_MODEL_LABEL" ] && [ "$CURRENT_MODEL_LABEL" != "null" ] && [ "$CURRENT_MODEL_LABEL" != "$LLM_D_MODELSERVICE_NAME" ]; then
-      log_info "Will align llm-d.ai/model label post-deploy: '$CURRENT_MODEL_LABEL' -> '$LLM_D_MODELSERVICE_NAME'"
-      NEEDS_LABEL_ALIGNMENT=true
-    fi
-
-    # Auto-detect vLLM port from guide configuration and update WVA vllm-service.
-    # When routing proxy is disabled, vLLM serves directly on containerPort (typically 8000).
-    # When proxy is enabled, vLLM serves on proxy.targetPort (typically 8200).
-    PROXY_ENABLED=$(yq eval '.routing.proxy.enabled // true' "$LLM_D_MODELSERVICE_VALUES" 2>/dev/null || echo "true")
-    if [ "$PROXY_ENABLED" == "false" ]; then
-      DETECTED_PORT=$(yq eval '.decode.containers[0].ports[0].containerPort // 8000' "$LLM_D_MODELSERVICE_VALUES" 2>/dev/null || echo "8000")
-      if [ "$VLLM_SVC_PORT" != "$DETECTED_PORT" ]; then
-        log_info "Routing proxy disabled - updating vLLM service port: $VLLM_SVC_PORT -> $DETECTED_PORT"
-        VLLM_SVC_PORT=$DETECTED_PORT
-        # Update the WVA vllm-service port (WVA was deployed before llm-d infra)
-        if [ "$DEPLOY_WVA" == "true" ] && [ "$VLLM_SVC_ENABLED" == "true" ]; then
-          helm upgrade "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
-            -n "$WVA_NS" --reuse-values \
-            --set wva.namespaceScoped="${NAMESPACE_SCOPED:-true}" \
-            --set vllmService.port="$VLLM_SVC_PORT" \
-            --set vllmService.targetPort="$VLLM_SVC_PORT"
-        fi
-      fi
-    fi
-
     # Deploy llm-d core components
     log_info "Deploying llm-d core components"
-    # When DEPLOY_WVA is true, skip WVA in helmfile — install.sh deploys it
-    # separately using the local chart (supports dev/test of chart changes).
-    # The helmfile's WVA release uses the published OCI chart which may not
-    # have the latest fixes and uses KIND-specific defaults (e.g. monitoringNamespace).
     local -a helmfile_selector_exprs=()
-    if [ "$DEPLOY_WVA" == "true" ]; then
-      helmfile_selector_exprs+=("kind!=autoscaling")
-      log_info "Skipping WVA in helmfile (will be deployed separately from local chart)"
-    fi
     if [ "${LLMD_SKIP_DEFAULT_MODELSERVICE:-false}" = "true" ]; then
       # E2E and similar flows create scenario-specific ModelService workloads;
       # skip the default llm-d-modelservice release so baseline infra is clean.
@@ -268,39 +230,6 @@ deploy_llm_d_infrastructure() {
       if helm list -n "$LLMD_NS" --short 2>/dev/null | grep -q '^ms-'; then
         log_warning "Modelservice release still present in $LLMD_NS despite selector; tests may need extra cleanup"
       fi
-    fi
-
-    # Post-deploy: align the WVA vllm-service selector and ServiceMonitor to match
-    # the actual pod labels. The llm-d-modelservice chart sets pod labels from
-    # modelArtifacts.labels (e.g. "Qwen3-32B"), but the WVA chart's Service selector
-    # uses llmd.modelName (e.g. "ms-<GUIDE_NAME>-llm-d-modelservice" from the active llm-d guide).
-    # We patch the Service/ServiceMonitor selectors (which ARE mutable) rather than
-    # the deployment labels (which have immutable selectors).
-    if [ "$NEEDS_LABEL_ALIGNMENT" == "true" ]; then
-      # Compute the chart fullname (mirrors _helpers.tpl logic)
-      local chart_name="workload-variant-autoscaler"
-      local wva_fullname
-      if echo "$WVA_RELEASE_NAME" | grep -q "$chart_name"; then
-        wva_fullname="$WVA_RELEASE_NAME"
-      else
-        wva_fullname="${WVA_RELEASE_NAME}-${chart_name}"
-      fi
-      wva_fullname=$(echo "$wva_fullname" | cut -c1-63 | sed 's/-$//')
-      local svc_name="${wva_fullname}-vllm"
-      local svcmon_name="${wva_fullname}-vllm-mon"
-      log_info "Aligning WVA Service/ServiceMonitor selectors: llm-d.ai/model=$CURRENT_MODEL_LABEL"
-      # Build merge patches with jq so label values cannot break JSON (e.g. quotes, backslashes).
-      local svc_patch svcmon_patch svc_label_patch
-      svc_patch=$(jq -n --arg label "$CURRENT_MODEL_LABEL" '{"spec":{"selector":{"llm-d.ai/model":$label}}}')
-      kubectl patch service "$svc_name" -n "$LLMD_NS" --type=merge -p "$svc_patch" && log_success "Patched Service $svc_name selector" \
-         || log_warning "Failed to patch Service $svc_name selector"
-      svcmon_patch=$(jq -n --arg label "$CURRENT_MODEL_LABEL" '{"spec":{"selector":{"matchLabels":{"llm-d.ai/model":$label}}}}')
-      kubectl patch servicemonitor "$svcmon_name" -n "$LLMD_NS" --type=merge -p "$svcmon_patch" && log_success "Patched ServiceMonitor $svcmon_name selector" \
-         || log_warning "Failed to patch ServiceMonitor $svcmon_name selector"
-      svc_label_patch=$(jq -n --arg label "$CURRENT_MODEL_LABEL" '{"metadata":{"labels":{"llm-d.ai/model":$label}}}')
-      kubectl patch service "$svc_name" -n "$LLMD_NS" --type=merge -p "$svc_label_patch" \
-        && log_success "Patched Service $svc_name label" \
-        || log_warning "Failed to patch Service $svc_name label"
     fi
 
     # Apply HTTPRoute with correct resource name references.
@@ -482,13 +411,17 @@ deploy_llm_d_infrastructure() {
         detect_inference_pool_api_group
         if [ -n "$DETECTED_POOL_GROUP" ]; then
             log_info "Detected InferencePool API group: $DETECTED_POOL_GROUP; upgrading WVA to watch it (scale-from-zero)"
-            if helm upgrade "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
-                -n "$WVA_NS" --reuse-values \
-                --set wva.namespaceScoped="${NAMESPACE_SCOPED:-true}" \
-                --set wva.poolGroup="$DETECTED_POOL_GROUP" --wait --timeout=60s; then
-                log_success "WVA upgraded with wva.poolGroup=$DETECTED_POOL_GROUP"
+            if kubectl patch deployment workload-variant-autoscaler-controller-manager \
+                -n "$WVA_NS" --type=json \
+                -p="[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"POOL_GROUP\",\"value\":\"${DETECTED_POOL_GROUP}\"}}]"; then
+                log_success "WVA patched with POOL_GROUP=$DETECTED_POOL_GROUP"
+                # Wait for the rolling restart to complete so the datastore is populated
+                kubectl rollout status deployment/workload-variant-autoscaler-controller-manager \
+                    -n "$WVA_NS" --timeout=120s \
+                    && log_success "WVA rollout complete" \
+                    || log_warning "WVA rollout status timed out - datastore may not be ready"
             else
-                log_warning "WVA upgrade with poolGroup failed - scale-from-zero may not see the InferencePool"
+                log_warning "WVA pool-group patch failed - scale-from-zero may not see the InferencePool"
             fi
         else
             log_warning "Could not detect InferencePool API group - WVA may have empty datastore for scale-from-zero"

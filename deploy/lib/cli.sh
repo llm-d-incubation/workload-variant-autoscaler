@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # CLI help and argument parsing for deploy/install.sh.
-# Requires vars: WVA_IMAGE_REPO, WVA_IMAGE_TAG, WVA_RELEASE_NAME, COMPATIBLE_ENV_LIST.
+# Requires vars: WVA_IMAGE_REPO, WVA_IMAGE_TAG, COMPATIBLE_ENV_LIST.
 # Requires funcs: log_info/log_warning/log_error, containsElement().
 #
 
@@ -14,18 +14,17 @@ For llm-d (gateway, EPP, ModelService), run deploy/install-llmd-infra.sh after t
 
 Options:
   -i, --wva-image IMAGE        Container image for WVA (default: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG)
-  -r, --release-name NAME      Helm release name for WVA (default: $WVA_RELEASE_NAME)
   -u, --undeploy               Undeploy WVA, monitoring, and scaler backend (not llm-d; use install-llmd-infra.sh --undeploy)
   -e, --environment            kubernetes | openshift | kind-emulator (default: kubernetes)
   -h, --help                   Show this help and exit
 
-Deprecated (ignored by install.sh for chart deploy; passed through for CI/scripts calling install-llmd-infra next):
+Deprecated (ignored by install.sh; Helm chart removed, llm-d overrides use install-llmd-infra.sh):
+  --release-name NAME          Helm release name (no-op; WVA now installed via Kustomize)
   --model MODEL_ID             Same as MODEL_ID env (llm-d / chart overrides use install-llmd-infra.sh)
   --accelerator TYPE           Same as ACCELERATOR_TYPE env
 
 Environment Variables:
   IMG                          WVA image as repo:tag (alternative to -i)
-  WVA_RELEASE_NAME             Helm release name (alternative to -r)
   SKIP_CHECKS                  Skip kubectl/helm/git prerequisite check (default: false). Install scripts are non-interactive and fail fast on errors.
   DEPLOY_PROMETHEUS            Deploy Prometheus stack (default: true)
   DEPLOY_WVA                   Deploy WVA controller (default: true)
@@ -44,7 +43,7 @@ Examples:
 
   IMG=registry.example.com/wva:dev $(basename "$0") -e kind-emulator
 
-  $(basename "$0") -r my-wva-release -e openshift
+  $(basename "$0") -e openshift
 EOF
 }
 
@@ -68,7 +67,6 @@ parse_args() {
         fi
         shift 2
         ;;
-      -r|--release-name)      WVA_RELEASE_NAME="$2"; shift 2 ;;
       -u|--undeploy)          UNDEPLOY=true; shift ;;
       -e|--environment)
         ENVIRONMENT="$2" ; shift 2
@@ -83,6 +81,10 @@ parse_args() {
         ;;
       --accelerator)
         export ACCELERATOR_TYPE="$2"
+        shift 2
+        ;;
+      --release-name)
+        # Legacy CI/Helm — install.sh no longer installs via Helm; value is ignored.
         shift 2
         ;;
       -h|--help)              print_help; exit 0 ;;

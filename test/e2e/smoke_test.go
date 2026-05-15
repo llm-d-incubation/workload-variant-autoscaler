@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ type externalMetricValueList struct {
 	} `json:"items"`
 }
 
-const secondaryControllerChartPathEnv = "WVA_E2E_CHART_PATH"
+const secondaryControllerOverlayPathEnv = "WVA_E2E_SECONDARY_OVERLAY_PATH"
 
 func splitImage(image string) (string, string) {
 	lastColon := strings.LastIndex(image, ":")
@@ -363,17 +364,16 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 	Context("Dual namespace-scoped controllers isolation", Serial, Ordered, func() {
 		var (
-			primaryNamespace     = "llm-d-sim"
-			secondaryNamespace   = "llm-d-sim-dual"
-			secondaryController  = "workload-variant-autoscaler-system-dual"
-			secondaryReleaseName = "wva-dual-secondary"
-			primaryHPAName       = "smoke-test-dual-primary-hpa"
-			secondaryHPAName     = "smoke-test-dual-secondary-hpa"
-			primaryModelName     = "smoke-test-dual-primary-ms"
-			secondaryModelName   = "smoke-test-dual-secondary-ms"
-			poolName             = "smoke-test-dual-pool"
-			sharedVAName         = "smoke-test-dual-shared-va"
-			controllerInstance   = "dual-secondary"
+			primaryNamespace    = "llm-d-sim"
+			secondaryNamespace  = "llm-d-sim-dual"
+			secondaryController = "workload-variant-autoscaler-system-dual"
+			primaryHPAName      = "smoke-test-dual-primary-hpa"
+			secondaryHPAName    = "smoke-test-dual-secondary-hpa"
+			primaryModelName    = "smoke-test-dual-primary-ms"
+			secondaryModelName  = "smoke-test-dual-secondary-ms"
+			poolName            = "smoke-test-dual-pool"
+			sharedVAName        = "smoke-test-dual-shared-va"
+			controllerInstance  = "dual-secondary"
 		)
 
 		BeforeAll(func() {
@@ -392,40 +392,108 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				Expect(err).NotTo(HaveOccurred(), "Failed to create secondary workload namespace")
 			}
 
-			By("Installing secondary namespace-scoped controller via Helm")
+			By("Installing secondary namespace-scoped controller via Kustomize")
 			primaryController, err := k8sClient.AppsV1().Deployments(cfg.WVANamespace).Get(ctx, "workload-variant-autoscaler-controller-manager", metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred(), "Failed to read primary controller deployment image")
 			Expect(primaryController.Spec.Template.Spec.Containers).NotTo(BeEmpty(), "Primary controller deployment should contain containers")
 			imageRepo, imageTag := splitImage(primaryController.Spec.Template.Spec.Containers[0].Image)
-			chartPath := os.Getenv(secondaryControllerChartPathEnv)
-			Expect(chartPath).NotTo(BeEmpty(),
-				"Missing %s; set it to the workload-variant-autoscaler chart directory (use an absolute path; go test cwd is the test package dir)", secondaryControllerChartPathEnv)
-			_, statErr := os.Stat(chartPath)
-			Expect(statErr).NotTo(HaveOccurred(), "Invalid %s path: %s", secondaryControllerChartPathEnv, chartPath)
+			overlayPath := os.Getenv(secondaryControllerOverlayPathEnv)
+			Expect(overlayPath).NotTo(BeEmpty(),
+				"Missing %s; set it to the config/e2e/secondary-controller overlay directory (use an absolute path; go test cwd is the test package dir)", secondaryControllerOverlayPathEnv)
+			_, statErr := os.Stat(overlayPath)
+			Expect(statErr).NotTo(HaveOccurred(), "Invalid %s path: %s", secondaryControllerOverlayPathEnv, overlayPath)
 
-			helmArgs := []string{
-				"upgrade", "-i", secondaryReleaseName, chartPath,
-				"-n", secondaryController, "--create-namespace",
-				"--set", "controller.enabled=true",
-				"--set", "va.enabled=false",
-				"--set", "hpa.enabled=false",
-				"--set", "vllmService.enabled=false",
-				"--set", "wva.namespaceScoped=true",
-				"--set", "wva.controllerInstance=" + controllerInstance,
-				"--set", "llmd.namespace=" + secondaryNamespace,
-				"--set", "wva.image.repository=" + imageRepo,
-				"--set", "wva.image.tag=" + imageTag,
-				"--set", "wva.imagePullPolicy=IfNotPresent",
-				"--set", "wva.prometheus.baseURL=https://kube-prometheus-stack-prometheus." + cfg.MonitoringNS + ".svc.cluster.local:9090",
-				"--set", "wva.prometheus.tls.insecureSkipVerify=true",
+			// Read the post-transform base image name from config/manager/kustomization.yaml.
+			// The base overlay transforms "controller" → the published image name; our temp
+			// overlay must match that post-transform name to override it with the local image.
+			managerKustomizationPath := filepath.Join(overlayPath, "../../../../config/manager/kustomization.yaml")
+			managerContent, managerReadErr := os.ReadFile(managerKustomizationPath)
+			Expect(managerReadErr).NotTo(HaveOccurred(), "Failed to read config/manager/kustomization.yaml")
+			var baseImageName string
+			for _, line := range strings.Split(string(managerContent), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "newName:") {
+					baseImageName = strings.TrimSpace(strings.TrimPrefix(trimmed, "newName:"))
+					break
+				}
 			}
-			cmd := exec.Command("helm", helmArgs...)
+			Expect(baseImageName).NotTo(BeEmpty(), "Failed to extract base image name from config/manager/kustomization.yaml")
+
+			tmpOverlay, tmpErr := os.MkdirTemp("", "wva-secondary-overlay-*")
+			Expect(tmpErr).NotTo(HaveOccurred(), "Failed to create temp overlay dir")
+			// Symlink the base overlay so resources can use a relative path —
+			// Kustomize rejects absolute paths in resources.
+			Expect(os.Symlink(overlayPath, tmpOverlay+"/base")).To(Succeed())
+
+			kustomizationContent := strings.Join([]string{
+				"apiVersion: kustomize.config.k8s.io/v1beta1",
+				"kind: Kustomization",
+				"namespace: " + secondaryController,
+				"resources:",
+				"- ./base",
+				"images:",
+				"- name: " + baseImageName,
+				"  newName: " + imageRepo,
+				`  newTag: "` + imageTag + `"`,
+				"patches:",
+				"- target:",
+				"    kind: Deployment",
+				"    name: controller-manager",
+				"  patch: |",
+				`    - op: add`,
+				`      path: /spec/template/spec/containers/0/env/-`,
+				`      value: {"name": "CONTROLLER_INSTANCE", "value": "` + controllerInstance + `"}`,
+			}, "\n")
+			Expect(os.WriteFile(tmpOverlay+"/kustomization.yaml", []byte(kustomizationContent), 0600)).To(Succeed())
+
+			cmd := exec.Command("kubectl", "apply", "-k", tmpOverlay, "--server-side", "--force-conflicts")
 			out, err := cmd.CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), "Secondary controller helm install failed: %s", string(out))
+			Expect(err).NotTo(HaveOccurred(), "Secondary controller kustomize install failed: %s", string(out))
+
+			// The secondary overlay shares the same kustomize namePrefix as the primary, so
+			// kubectl apply overwrites the shared ClusterRoleBinding to point at the secondary
+			// namespace.
+			//   1. Restoring the primary's ClusterRoleBinding subject namespace.
+			//   2. Creating a dedicated binding for the secondary SA.
+			const crbName = "workload-variant-autoscaler-manager-rolebinding"
+			const crbNameSecondary = crbName + "-secondary"
+			restoreOut, restoreErr := exec.Command("kubectl", "patch", "clusterrolebinding", crbName,
+				"--type=json",
+				"-p", `[{"op":"replace","path":"/subjects/0/namespace","value":"`+cfg.WVANamespace+`"}]`,
+			).CombinedOutput()
+			Expect(restoreErr).NotTo(HaveOccurred(), "Failed to restore primary ClusterRoleBinding: %s", string(restoreOut))
+
+			createOut, createErr := exec.Command("kubectl", "create", "clusterrolebinding", crbNameSecondary,
+				"--clusterrole=workload-variant-autoscaler-manager-role",
+				"--serviceaccount="+secondaryController+":workload-variant-autoscaler-controller-manager",
+			).CombinedOutput()
+			Expect(createErr).NotTo(HaveOccurred(), "Failed to create secondary ClusterRoleBinding: %s", string(createOut))
+
+			// The epp-metrics-reader ClusterRoleBinding is also cluster-scoped and gets overwritten
+			// by the secondary overlay — restore the primary subject and create a secondary binding.
+			const eppCRBName = "workload-variant-autoscaler-epp-metrics-reader-role-binding"
+			const eppCRBNameSecondary = eppCRBName + "-secondary"
+			eppRestoreOut, eppRestoreErr := exec.Command("kubectl", "patch", "clusterrolebinding", eppCRBName,
+				"--type=json",
+				"-p", `[{"op":"replace","path":"/subjects/0/namespace","value":"`+cfg.WVANamespace+`"}]`,
+			).CombinedOutput()
+			Expect(eppRestoreErr).NotTo(HaveOccurred(), "Failed to restore primary epp-metrics ClusterRoleBinding: %s", string(eppRestoreOut))
+
+			eppCreateOut, eppCreateErr := exec.Command("kubectl", "create", "clusterrolebinding", eppCRBNameSecondary,
+				"--clusterrole=workload-variant-autoscaler-epp-metrics-reader-role",
+				"--serviceaccount="+secondaryController+":workload-variant-autoscaler-epp-metrics-reader",
+			).CombinedOutput()
+			Expect(eppCreateErr).NotTo(HaveOccurred(), "Failed to create secondary epp-metrics ClusterRoleBinding: %s", string(eppCreateOut))
 
 			DeferCleanup(func() {
-				uninstall := exec.Command("helm", "uninstall", secondaryReleaseName, "-n", secondaryController)
-				_, _ = uninstall.CombinedOutput()
+				_ = exec.Command("kubectl", "delete", "clusterrolebinding", crbNameSecondary, "--ignore-not-found=true").Run()
+				_ = exec.Command("kubectl", "delete", "clusterrolebinding", eppCRBNameSecondary, "--ignore-not-found=true").Run()
+				// Delete the secondary controller namespace (cascades to all namespace-scoped
+				// resources). Do NOT use kubectl delete -k here — it would delete the shared
+				// ClusterRoles/ClusterRoleBindings that the primary controller depends on.
+				_ = exec.Command("kubectl", "delete", "namespace", secondaryController, "--ignore-not-found=true").Run()
+				_ = exec.Command("kubectl", "delete", "namespace", secondaryNamespace, "--ignore-not-found=true").Run()
+				_ = os.RemoveAll(tmpOverlay)
 			})
 
 			By("Waiting for secondary controller to be ready")

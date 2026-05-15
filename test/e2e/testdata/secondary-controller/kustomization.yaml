@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base overlay for a secondary namespace-scoped WVA controller used in dual-controller e2e tests.
+# A caller (test or script) wraps this in a throw-away temp overlay to set:
+#   - namespace (e.g. workload-variant-autoscaler-system-dual)
+#   - images: (controller image repo + tag)
+#   - optional --controller-instance arg patch
+
+resources:
+- ../../../../config/default
+
+patches:
+- target:
+    kind: Deployment
+    name: controller-manager
+  patch: |
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: "--watch-namespace=$(POD_NAMESPACE)"

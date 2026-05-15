@@ -28,7 +28,7 @@ KV_SPARE_TRIGGER           ?=
 QUEUE_SPARE_TRIGGER         ?=
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
-E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
+E2E_WVA_SECONDARY_OVERLAY_PATH ?= $(CURDIR)/test/e2e/testdata/secondary-controller
 # llm-d-benchmark CLI configuration
 BENCHMARK_REPO_URL   ?= https://github.com/llm-d/llm-d-benchmark.git
 BENCHMARK_REPO_DIR   ?= $(CURDIR)/llm-d-benchmark
@@ -260,12 +260,12 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + llm-d; no chart VA/HP
 		LLMD_SKIP_INFERENCE_OBJECTIVE=true \
 		./deploy/install-llmd-infra.sh -e "$(ENVIRONMENT)"; \
 	fi; \
-	REL=$${WVA_RELEASE_NAME:-workload-variant-autoscaler}; NS=$${WVA_NS:-workload-variant-autoscaler-system}; \
+	NS=$${WVA_NS:-workload-variant-autoscaler-system}; \
 	if [ -n "$(KV_SPARE_TRIGGER)" ] || [ -n "$(QUEUE_SPARE_TRIGGER)" ]; then \
 		echo "Applying optional WVA capacity threshold overrides (KV_SPARE_TRIGGER / QUEUE_SPARE_TRIGGER)..."; \
-		helm upgrade "$$REL" "$(CURDIR)/charts/workload-variant-autoscaler" -n "$$NS" --reuse-values \
-			$(if $(KV_SPARE_TRIGGER),--set wva.capacityScaling.default.kvSpareTrigger=$(KV_SPARE_TRIGGER)) \
-			$(if $(QUEUE_SPARE_TRIGGER),--set wva.capacityScaling.default.queueSpareTrigger=$(QUEUE_SPARE_TRIGGER)); \
+		$(KUBECTL) patch configmap workload-variant-autoscaler-saturation-scaling-config \
+			-n "$$NS" --type=merge \
+			-p "{\"data\":{\"default\":\"kvSpareTrigger: $(KV_SPARE_TRIGGER)\\nqueueSpareTrigger: $(QUEUE_SPARE_TRIGGER)\\n\"}}"; \
 	fi
 
 ## DEPRECATED: prefer ./deploy/install-llmd-infra.sh or upstream llm-d install tooling; kept for Makefile discoverability.
@@ -288,7 +288,7 @@ test-e2e-smoke: ## Run smoke e2e tests
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
 	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
 	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
-	WVA_E2E_CHART_PATH=$${WVA_E2E_CHART_PATH:-$(E2E_WVA_CHART_PATH)} \
+	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
@@ -311,7 +311,7 @@ test-e2e-full: ## Run full e2e test suite
 	KUBECONFIG=$(KUBECONFIG) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	WVA_E2E_CHART_PATH=$${WVA_E2E_CHART_PATH:-$(E2E_WVA_CHART_PATH)} \
+	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \

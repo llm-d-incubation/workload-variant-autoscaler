@@ -28,7 +28,6 @@ REQUIRED_TOOLS=("oc")
 
 # TLS verification enabled by default on OpenShift
 SKIP_TLS_VERIFY=false
-VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values.yaml"
 
 #### REQUIRED FUNCTION used by deploy/install.sh ####
 check_specific_prerequisites() {
