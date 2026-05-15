@@ -812,16 +812,6 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   }
   ```
 
-### `wva_replica_scaling_total`
-- **Type**: Counter
-- **Description**: Total number of replica scaling operations
-- **Labels**:
-  - `variant_name`: Name of the variant
-  - `namespace`: Kubernetes namespace
-  - `direction`: Direction of scaling (up, down)
-  - `reason`: Reason for scaling
-- **Use Case**: Track scaling frequency and reasons
-
 ### Error Tracking
 
 ### `wva_errors_total`
