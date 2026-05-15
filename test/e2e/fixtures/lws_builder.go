@@ -107,7 +107,7 @@ func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulato
 	if !useSimulator {
 		image = defaultModelServiceRuntimeImage
 	}
-	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
+	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs, nil)
 	labels := map[string]string{
 		"app":                          appLabel,
 		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,

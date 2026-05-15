@@ -1000,37 +1000,6 @@ func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return a.rt.RoundTrip(req)
 }
 
-// creates a new Prometheus client for e2e tests
-func NewPrometheusClient(baseURL string, insecureSkipVerify bool) (*PrometheusClient, error) {
-	config := promAPI.Config{
-		Address: baseURL,
-	}
-
-	roundTripper := promAPI.DefaultRoundTripper
-	if rt, ok := roundTripper.(*http.Transport); ok {
-		if insecureSkipVerify {
-			rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		}
-	}
-
-	if token := os.Getenv("PROMETHEUS_TOKEN"); token != "" {
-		roundTripper = &authRoundTripper{
-			token: token,
-			rt:    roundTripper,
-		}
-	}
-	config.RoundTripper = roundTripper
-
-	client, err := promAPI.NewClient(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create prometheus client: %w", err)
-	}
-
-	return &PrometheusClient{
-		client: promv1.NewAPI(client),
-	}, nil
-}
-
 // GetPrometheusServiceInfoFromConfigMap reads the Prometheus service info from the WVA controller configmap.
 // It reads the workload-variant-autoscaler-variantautoscaling-config configmap and extracts
 // the service name, namespace, and port from PROMETHEUS_BASE_URL.
@@ -1071,6 +1040,37 @@ func GetPrometheusServiceInfoFromConfigMap(ctx context.Context, k8sClient *kuber
 		Namespace:   matches[3],
 		Port:        port,
 		Scheme:      scheme,
+	}, nil
+}
+
+// NewPrometheusClient creates a new Prometheus client for e2e tests
+func NewPrometheusClient(baseURL string, insecureSkipVerify bool) (*PrometheusClient, error) {
+	config := promAPI.Config{
+		Address: baseURL,
+	}
+
+	roundTripper := promAPI.DefaultRoundTripper
+	if rt, ok := roundTripper.(*http.Transport); ok {
+		if insecureSkipVerify {
+			rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+	}
+
+	if token := os.Getenv("PROMETHEUS_TOKEN"); token != "" {
+		roundTripper = &authRoundTripper{
+			token: token,
+			rt:    roundTripper,
+		}
+	}
+	config.RoundTripper = roundTripper
+
+	client, err := promAPI.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create prometheus client: %w", err)
+	}
+
+	return &PrometheusClient{
+		client: promv1.NewAPI(client),
 	}, nil
 }
 

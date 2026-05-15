@@ -206,6 +206,16 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 - **Labels**: None (global metric)
 - **Use Case**: Track how many models are being processed per optimization cycle to understand workload
 
+### Operational Metrics
+### `wva_available_gpus`
+- **Type**: Gauge
+- **Description**: Number of currently available GPUs group by accelerator type (e.g. "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`.
+- **Labels**:
+  - `accelerator_vendor`: Name of the GPU vendor
+  - `accelerator_model`: Full name of the accelerator
+  - `accelerator_type`: Type of accelerator (short name of the accelerator)
+- **Use Case**: Show number of GPUs discovered by WVA
+
 ### Replica Management Metrics
 
 ### `wva_current_replicas`

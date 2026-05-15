@@ -32,6 +32,8 @@ E2E_WVA_CHART_PATH          ?= $(CURDIR)/charts/workload-variant-autoscaler
 # llm-d-benchmark CLI configuration
 BENCHMARK_REPO_URL   ?= https://github.com/llm-d/llm-d-benchmark.git
 BENCHMARK_REPO_DIR   ?= $(CURDIR)/llm-d-benchmark
+# Pin to v0.6.0: v0.6.2 has a broken guidellm harness (missing --target flag, see llm-d/llm-d-benchmark#1231)
+BENCHMARK_REPO_REF   ?= v0.6.0
 BENCHMARK_SPEC       ?= guides/inference-scheduling-wva
 BENCHMARK_NAMESPACE  ?= # set via BENCHMARK_NAMESPACE=<namespace>
 BENCHMARK_WORKSPACE  ?= $(CURDIR)
@@ -403,12 +405,13 @@ LLMDBENCHMARK        = $(BENCHMARK_VENV)/bin/llmdbenchmark
 BENCHMARK_CLI_FLAGS = --spec $(BENCHMARK_SPEC) --workspace $(BENCHMARK_WORKSPACE) --base-dir $(BENCHMARK_REPO_DIR)
 
 .PHONY: benchmark-install
-benchmark-install: ## Clone llm-d-benchmark and install the llmdbenchmark CLI
+benchmark-install: ## Clone llm-d-benchmark at BENCHMARK_REPO_REF (default v0.6.0) and install the llmdbenchmark CLI
 	@if [ ! -d "$(BENCHMARK_REPO_DIR)" ]; then \
-		echo "Cloning llm-d-benchmark..."; \
-		git clone $(BENCHMARK_REPO_URL) $(BENCHMARK_REPO_DIR); \
+		echo "Cloning llm-d-benchmark @ $(BENCHMARK_REPO_REF)..."; \
+		git clone --branch $(BENCHMARK_REPO_REF) $(BENCHMARK_REPO_URL) $(BENCHMARK_REPO_DIR); \
 	else \
-		echo "llm-d-benchmark already cloned at $(BENCHMARK_REPO_DIR)"; \
+		echo "llm-d-benchmark already cloned at $(BENCHMARK_REPO_DIR); checking out $(BENCHMARK_REPO_REF)..."; \
+		cd $(BENCHMARK_REPO_DIR) && git fetch --tags && git checkout $(BENCHMARK_REPO_REF); \
 	fi
 	@cd $(BENCHMARK_REPO_DIR) && ./install.sh $(if $(filter true,$(BENCHMARK_UV)),--uv,--no-uv)
 

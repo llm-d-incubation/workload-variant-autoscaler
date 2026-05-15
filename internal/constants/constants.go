@@ -61,6 +61,9 @@ const (
 	DeploymentAPIVersion      = "apps/v1"
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
+
+	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
+	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
 )
 
 // Component names identify WVA components for observability (metrics, logging, tracing).

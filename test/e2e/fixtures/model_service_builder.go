@@ -20,7 +20,21 @@ import (
 // It does not create a Kubernetes Service; callers must use CreateService or EnsureService
 // (typically naming the Service name + "-service") to expose the deployment.
 func CreateModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
-	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
+	return CreateModelServiceWithExtraArgs(ctx, k8sClient, namespace, name, poolName, modelID, useSimulator, maxNumSeqs, nil)
+}
+
+// CreateModelServiceWithExtraArgs is like CreateModelService but appends additional
+// CLI args to the model-server (simulator or vLLM) container. Used by tests that
+// need to inject engine-specific configuration such as --fake-metrics.
+//
+// The caller is responsible for ensuring extraArgs are valid for the chosen
+// runtime — this function performs no flag validation. Engine-specific flags
+// (e.g., --fake-metrics, which exists only on llm-d-inference-sim) will cause
+// the container to crash-loop if passed to the wrong runtime. Tests that use
+// simulator-only flags should gate their suite on `cfg.UseSimulator` and Skip
+// otherwise.
+func CreateModelServiceWithExtraArgs(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, extraArgs []string) error {
+	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, extraArgs)
 	_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	return err
 }
@@ -40,7 +54,7 @@ func DeleteModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
 	appLabel := name + decodeNameSuffix
 	deploymentName := appLabel
-	desiredDeployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
+	desiredDeployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, nil)
 
 	existingDeployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
@@ -83,13 +97,13 @@ func modelServiceDeploymentMatchesDesired(existing, desired appsv1.Deployment) b
 		apiequality.Semantic.DeepEqual(existing.Spec.Template.Spec, desired.Spec.Template.Spec)
 }
 
-func buildModelServiceDeployment(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) *appsv1.Deployment {
+func buildModelServiceDeployment(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, extraArgs []string) *appsv1.Deployment {
 	appLabel := name + decodeNameSuffix
 	image := defaultModelServiceSimulatorImage
 	if !useSimulator {
 		image = defaultModelServiceRuntimeImage
 	}
-	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
+	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs, extraArgs)
 	labels := map[string]string{
 		"app":                          appLabel,
 		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
@@ -204,7 +218,11 @@ func buildModelServiceResources(useSimulator bool) corev1.ResourceRequirements {
 	}
 }
 
-func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int) []string {
+func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int, extraArgs []string) []string {
+	return append(buildModelServerBaseArgs(modelID, useSimulator, maxNumSeqs), extraArgs...)
+}
+
+func buildModelServerBaseArgs(modelID string, useSimulator bool, maxNumSeqs int) []string {
 	if useSimulator {
 		// Simulator is configured to be deliberately slow so that Prometheus
 		// can observe non-zero KV-cache and queue metrics between scrapes (every 15s).
