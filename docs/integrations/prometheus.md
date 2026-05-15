@@ -334,6 +334,27 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   - `query_type`: Type of metrics query that failed
   - `reason`: Reason for the error
 - **Use Case**: Track metrics collection failures and identify problematic queries
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_metrics_collection_errors_total",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.59:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-f9fdb95df-wvd9p",
+      "query_type": "kv_cache",
+      "reason": "bad_data",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778854211.669,
+      "3"
+    ]
+  }
+  ```
 
 ### `wva_metrics_pods_discovered`
 - **Type**: Gauge
@@ -588,6 +609,28 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   - `namespace`: Kubernetes namespace
   - `limiter_name`: Name of the limiter that constrained the decision
 - **Use Case**: Monitor how frequently resource limiters are constraining scaling decisions to understand capacity bottlenecks
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_decisions_limited_total",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.60:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "limiter_name": "gpu-limiter",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-659d5c9dcf-w6cw7",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778855539.730,
+      "1"
+    ]
+  }
+  ```
 
 ### `wva_available_gpus`
 - **Type**: Gauge
@@ -626,10 +669,30 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 - **Labels**:
   - `policy_type`: Type of enforcement policy applied
 - **Use Case**: Monitor how often the enforcer modifies scaling decisions to enforce policies and understand policy impact
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_enforcer_modifications_total",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.62:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-c8b9c74b5-82t2c",
+      "policy_type": "scale_to_zero",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778859222.859,
+      "1"
+    ]
+  }
+  ```
 
 ### `wva_optimizer_active`
 - **Type**: Gauge
-- **Description**: Indicates which optimizer is currently active. Value is 1 for the active optimizer and 0 for inactive optimizers. Only one optimizer should be active at a time.
+- **Description**: Indicates which optimizer is currently active. Value is 1 for the active optimizer and 0 for inactive optimizers. Only one optimizer should be active at a time. If the label `optimizer_name` is not in the metric, this means V1 saturation optimizer is currently active.
 - **Labels**:
   - `optimizer_name`: Name of the optimizer
 - **Use Case**: Track which optimization strategy is currently in use for scaling decisions
@@ -759,7 +822,6 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   - `reason`: Reason for scaling
 - **Use Case**: Track scaling frequency and reasons
 
-
 ### Error Tracking
 
 ### `wva_errors_total`
@@ -769,6 +831,27 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   - `component`: Component where the error occurred
   - `error_type`: Type or category of the error
 - **Use Case**: Track error rates across different components to identify problematic areas and monitor system health
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_errors_total",
+      "component": "controller",
+      "container": "manager",
+      "endpoint": "https",
+      "error_type": "Failed to parse saturation scaling config entry",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778850096.639,
+      "1"
+    ]
+  }
+  ```
 
 ## Example Queries
 
