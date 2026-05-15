@@ -250,7 +250,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Total number of errors by component",
+      "description": "Number of new errors by component in the last hour. Shows how many errors occurred in the past 60 minutes. Resets to 0 once errors age beyond the 1-hour window.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -317,7 +317,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"collector\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"collector\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "collector",
           "range": true,
@@ -329,7 +329,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"analyzer\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"analyzer\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "analyzer",
           "range": true,
@@ -341,7 +341,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"optimizer\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"optimizer\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "optimizer",
           "range": true,
@@ -353,7 +353,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"limiter\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"limiter\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "limiter",
           "range": true,
@@ -365,7 +365,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"enforcer\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"enforcer\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "enforcer",
           "range": true,
@@ -377,7 +377,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_errors_total{component=\"controller\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_errors_total{component=\"controller\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "controller",
           "range": true,
@@ -586,7 +586,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Total number of metrics collection errors",
+      "description": "Number of metrics collection errors during the last hour",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -653,7 +653,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "kv_cache",
           "range": true,
@@ -665,7 +665,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "queue_length",
           "range": true,
@@ -677,7 +677,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"request_count\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"request_count\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "request_count",
           "range": true,
@@ -689,7 +689,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[5m])) or vector(0)",
+          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[1h])) or vector(0))",
           "instant": false,
           "legendFormat": "cache_config",
           "range": true,
@@ -771,7 +771,7 @@
             "max"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -908,7 +908,7 @@
         "legend": {
           "calcs": [],
           "displayMode": "list",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -1024,7 +1024,7 @@
             "last"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -1153,7 +1153,7 @@
             "last"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -1196,7 +1196,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Rate of scaling decisions limited by GPU constraints. Shows how often the limiter prevents scale-up due to insufficient GPU capacity.",
+      "description": "Average number of scaling decisions limited by constraints per optimization cycle (30 seconds, averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, if there were 36 limited decisions total in the last hour, and there are 120 optimization cycles per hour (3600 seconds ÷ 30 seconds), then the average is 36 ÷ 120 = 0.3 decisions per cycle.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1245,7 +1245,7 @@
               }
             ]
           },
-          "unit": "reqps"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -1263,7 +1263,7 @@
             "max"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -1279,7 +1279,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_decisions_limited_total[5m])) by (variant_name, limiter_name)",
+          "expr": "sum(rate(wva_decisions_limited_total[1h])) by (variant_name, limiter_name) * 30",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{limiter_name}}",
           "range": true,
@@ -1432,7 +1432,7 @@
             "max"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
