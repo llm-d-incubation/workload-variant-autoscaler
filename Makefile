@@ -46,9 +46,10 @@ BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
 BENCHMARK_MODEL_ID   ?= $(MODEL_ID)
 
 # Flags for deploy/install.sh + install-llmd-infra.sh (e2e / CI-style cluster infra; no chart VA/HPA).
-CREATE_CLUSTER ?= false
-DELETE_CLUSTER ?= false
+CREATE_CLUSTER    ?= false
+DELETE_CLUSTER    ?= false
 DELETE_NAMESPACES ?= false
+NAMESPACE_SCOPED  ?= false
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
