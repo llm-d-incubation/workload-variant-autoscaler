@@ -853,7 +853,7 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -924,9 +924,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_saturation_utilization",
+          "expr": "max by (namespace, variant_name, accelerator_type) (wva_saturation_utilization)",
           "instant": false,
-          "legendFormat": "{{variant_name}}",
+          "legendFormat": "{{variant_name}} - {{accelerator_type}}",
           "range": true,
           "refId": "A"
         }
@@ -954,7 +954,7 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -1040,7 +1040,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_kv_cache_tokens_used",
+          "expr": "max by (namespace, variant_name) (wva_kv_cache_tokens_used)",
           "instant": false,
           "legendFormat": "{{variant_name}} - used",
           "range": true,
@@ -1052,7 +1052,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "wva_kv_cache_tokens_capacity",
+          "expr": "max by (namespace, variant_name) (wva_kv_cache_tokens_capacity)",
           "instant": false,
           "legendFormat": "{{variant_name}} - capacity",
           "range": true,
@@ -1169,7 +1169,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (variant_name) (wva_current_replicas)",
+          "expr": "max by (namespace, variant_name) (wva_current_replicas)",
           "instant": false,
           "legendFormat": "{{variant_name}} - current",
           "range": true,
@@ -1181,7 +1181,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (variant_name) (wva_desired_replicas)",
+          "expr": "max by (namespace, variant_name) (wva_desired_replicas)",
           "instant": false,
           "legendFormat": "{{variant_name}} - desired",
           "range": true,
@@ -1279,7 +1279,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_decisions_limited_total[1h])) by (variant_name, limiter_name) * 30",
+          "expr": "sum(rate(wva_decisions_limited_total[1h])) by (namespace, variant_name, limiter_name) * 30",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{limiter_name}}",
           "range": true,
