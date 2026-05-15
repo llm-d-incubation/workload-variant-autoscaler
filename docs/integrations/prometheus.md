@@ -206,16 +206,6 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 - **Labels**: None (global metric)
 - **Use Case**: Track how many models are being processed per optimization cycle to understand workload
 
-### Operational Metrics
-### `wva_available_gpus`
-- **Type**: Gauge
-- **Description**: Number of currently available GPUs group by accelerator type (e.g. "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`.
-- **Labels**:
-  - `accelerator_vendor`: Name of the GPU vendor
-  - `accelerator_model`: Full name of the accelerator
-  - `accelerator_type`: Type of accelerator (short name of the accelerator)
-- **Use Case**: Show number of GPUs discovered by WVA
-
 ### Replica Management Metrics
 
 ### `wva_current_replicas`
@@ -377,6 +367,40 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   - `error_type`: Type or category of the error
 - **Use Case**: Track error rates across different components to identify problematic areas and monitor system health
 
+### Pipeline Stage Visibility Metrics
+
+### `wva_decisions_limited_total`
+- **Type**: Counter
+- **Description**: Total number of scaling decisions constrained by the limiter. This tracks how often the limiter prevents scaling actions due to resource constraints.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `limiter_name`: Name of the limiter that constrained the decision
+- **Use Case**: Monitor how frequently resource limiters are constraining scaling decisions to understand capacity bottlenecks
+
+### `wva_available_gpus`
+- **Type**: Gauge
+- **Description**: Number of currently available GPUs grouped by accelerator type (e.g., "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG.
+- **Labels**:
+  - `accelerator_vendor`: Name of the GPU vendor
+  - `accelerator_model`: Full name of the accelerator
+  - `accelerator_type`: Type of accelerator (short name of the accelerator)
+- **Use Case**: Track the number of GPUs discovered by WVA and available for allocation
+
+### `wva_enforcer_modifications_total`
+- **Type**: Counter
+- **Description**: Total number of decision modifications made by the enforcer. The enforcer applies policy constraints (e.g., "scale_to_zero", "minimum_replicas") to scaling decisions.
+- **Labels**:
+  - `policy_type`: Type of enforcement policy applied
+- **Use Case**: Monitor how often the enforcer modifies scaling decisions to enforce policies and understand policy impact
+
+### `wva_optimizer_active`
+- **Type**: Gauge
+- **Description**: Indicates which optimizer is currently active. Value is 1 for the active optimizer and 0 for inactive optimizers. Only one optimizer should be active at a time.
+- **Labels**:
+  - `optimizer_name`: Name of the optimizer
+- **Use Case**: Track which optimization strategy is currently in use for scaling decisions
+
 
 
 ## Example Queries
@@ -463,4 +487,37 @@ rate(wva_errors_total[5m]) by (component)
 
 # Error rate by error type
 rate(wva_errors_total[5m]) by (error_type)
+
+# Decisions limited by limiter
+wva_decisions_limited_total
+
+# Decisions limited rate over time
+rate(wva_decisions_limited_total[5m])
+
+# Decisions limited by variant
+rate(wva_decisions_limited_total[5m]) by (variant_name)
+
+# Decisions limited by limiter type
+rate(wva_decisions_limited_total[5m]) by (limiter_name)
+
+# Available GPUs by accelerator type
+wva_available_gpus
+
+# Total available GPUs across all types
+sum(wva_available_gpus)
+
+# Enforcer modifications total
+wva_enforcer_modifications_total
+
+# Enforcer modification rate over time
+rate(wva_enforcer_modifications_total[5m])
+
+# Enforcer modifications by policy type
+rate(wva_enforcer_modifications_total[5m]) by (policy_type)
+
+# Active optimizer
+wva_optimizer_active
+
+# Currently active optimizer (filter for value = 1)
+wva_optimizer_active == 1
 ```
