@@ -49,18 +49,19 @@ undeploy_llm_d_infrastructure() {
         RELEASE="$WELL_LIT_PATH_NAME"
     fi
 
-    # Helm uninstall only needs the release name and namespace — it does not
-    # require the local llm-d clone directory. Always attempt to remove the
-    # releases so cluster resources are cleaned up even when the local repo
-    # has already been deleted or was never cloned.
+    # v0.7.0+: single GAIE standalone chart release ($GUIDE_NAME) replaces the
+    # three-release pattern (infra-*, gaie-*, ms-*). Model server is Kustomize-managed.
     log_info "Removing llm-d core components..."
 
-    helm uninstall "infra-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d infra components not found or already uninstalled"
-    helm uninstall "gaie-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d inference-scheduler components not found or already uninstalled"
-    helm uninstall "ms-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d ModelService components not found or already uninstalled"
+    helm uninstall "$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
+        log_warning "llm-d GAIE release '$RELEASE' not found or already uninstalled"
+
+    # Remove model server Kustomize resources if the example dir is present.
+    if [ -d "$EXAMPLE_DIR/modelserver" ]; then
+        kubectl delete -k "$EXAMPLE_DIR/modelserver/${INFRA_PROVIDER:-base}" \
+            -n "${LLMD_NS}" --ignore-not-found 2>/dev/null || \
+            log_warning "Model server Kustomize resources not found or already removed"
+    fi
 
     if [ ! -d "$EXAMPLE_DIR" ]; then
         log_warning "llm-d example directory not found, skipping local cleanup"

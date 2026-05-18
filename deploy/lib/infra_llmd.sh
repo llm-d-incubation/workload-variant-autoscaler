@@ -104,8 +104,7 @@ deploy_llm_d_infrastructure() {
         -f "$recipe_scheduler_values" \
         -f "$guide_scheduler_values" \
         -n "$LLMD_NS" \
-        --version "$GAIE_VERSION" \
-        --wait --timeout 3m
+        --version "$GAIE_VERSION"
 
     # Post-deploy workaround: patch Role for inferencemodelrewrites if missing.
     log_info "Patching Role $LLM_D_EPP_NAME to include inferencemodelrewrites"

@@ -37,6 +37,8 @@ BENCHMARK_REPO_REF   ?= v0.6.0
 # TODO: verify benchmark repo guide path for v0.7.0 (was guides/inference-scheduling-wva)
 BENCHMARK_SPEC       ?= guides/inference-scheduling-wva
 BENCHMARK_NAMESPACE  ?= # set via BENCHMARK_NAMESPACE=<namespace>
+# TODO: update gateway name pattern after verifying v0.7.0 benchmark guide naming (was infra-<release>-inference-gateway-istio)
+BENCHMARK_GATEWAY_URL ?= http://$(BENCHMARK_NAMESPACE)-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80
 BENCHMARK_WORKSPACE  ?= $(CURDIR)
 BENCHMARK_HARNESS    ?= guidellm
 BENCHMARK_WORKLOAD   ?= prefill_heavy.yaml
@@ -403,7 +405,7 @@ benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi
 		-p $(BENCHMARK_NAMESPACE) \
 		-l inference-perf \
 		-w $(BURSTY_WORKLOAD) \
-		-U http://infra-llmdbench-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80 \
+		-U $(BENCHMARK_GATEWAY_URL) \
 		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
 

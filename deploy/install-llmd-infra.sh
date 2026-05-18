@@ -45,7 +45,7 @@ LLM_D_RELEASE=${LLM_D_RELEASE:-"v0.7.0"}
 LLM_D_MODELSERVICE_NAME=${LLM_D_MODELSERVICE_NAME:-"$GUIDE_NAME-nvidia-gpu-vllm-decode"}
 # v0.7.0+: EPP Helm release is $GUIDE_NAME (single release via GAIE standalone chart).
 LLM_D_EPP_NAME=${LLM_D_EPP_NAME:-"$GUIDE_NAME-epp"}
-# GAIE chart version; must match the CRD revision installed by install-deps.sh or the OpenShift override.
+# GAIE chart version; must match the CRD revision installed for the cluster (OpenShift override via GATEWAY_API_INFERENCE_EXTENSION_CRD_REVISION).
 GAIE_VERSION=${GAIE_VERSION:-"v1.5.0"}
 # Kustomize overlay under guides/$GUIDE_NAME/modelserver/ (base or gke).
 INFRA_PROVIDER=${INFRA_PROVIDER:-"base"}

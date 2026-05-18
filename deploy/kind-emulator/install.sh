@@ -42,7 +42,7 @@ SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
 POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
 
-# llm-d naming (used by WVA ServiceMonitor / install-llmd-infra; kind uses guides/simulated-accelerators, not optimized-baseline)
+# llm-d naming (used by WVA ServiceMonitor / install-llmd-infra; kind uses optimized-baseline guide via GAIE standalone chart)
 LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
 LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
 
