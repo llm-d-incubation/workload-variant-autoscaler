@@ -66,14 +66,6 @@ deploy_llm_d_infrastructure() {
         --namespace "${LLMD_NS}" \
         --dry-run=client -o yaml | kubectl apply -f -
 
-    # Install dependencies
-    log_info "Installing llm-d dependencies"
-    if [ ! -f "$CLIENT_PREREQ_DIR/install-deps.sh" ]; then
-        log_error "Missing llm-d dependency installer at $CLIENT_PREREQ_DIR/install-deps.sh"
-        exit 1
-    fi
-    bash "$CLIENT_PREREQ_DIR/install-deps.sh"
-
     # On OpenShift, skip base Gateway API CRDs (managed by Ingress Operator via
     # ValidatingAdmissionPolicy "openshift-ingress-operator-gatewayapi-crd-admission").
     # Only install Gateway API Inference Extension (GAIE) CRDs directly.
