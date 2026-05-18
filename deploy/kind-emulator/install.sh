@@ -23,9 +23,13 @@ NC='\033[0m' # No Color
 # Configuration (Kind emulator). llm-d deploy is via deploy/install-llmd-infra.sh — set MODEL_ID / gateway vars there or in Makefile.
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
 LLM_D_PROJECT=${LLM_D_PROJECT:-llm-d}
-WELL_LIT_PATH_NAME="simulated-accelerators"
+# v0.7.0+: guides/simulated-accelerators was removed; kind uses optimized-baseline guide.
+WELL_LIT_PATH_NAME="optimized-baseline"
 NAMESPACE_SUFFIX="sim"
 EXAMPLE_DIR="$WVA_PROJECT/$LLM_D_PROJECT/guides/$WELL_LIT_PATH_NAME"
+
+# GAIE standalone chart embeds its own routing — no external Istio/kgateway needed.
+INSTALL_GATEWAY_CTRLPLANE=false
 
 # Namespaces
 LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
@@ -42,9 +46,8 @@ POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
 LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
 LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
 
-LLM_D_MODELSERVICE_NAME="ms-$NAMESPACE_SUFFIX-llm-d-modelservice"
-LLM_D_MODELSERVICE_VALUES="ms-$NAMESPACE_SUFFIX/values.yaml"
-LLM_D_EPP_NAME="gaie-$NAMESPACE_SUFFIX-epp"
+LLM_D_MODELSERVICE_NAME="$WELL_LIT_PATH_NAME-nvidia-gpu-vllm-decode"
+LLM_D_EPP_NAME="$WELL_LIT_PATH_NAME-epp"
 
 # Prometheus Configuration
 PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
