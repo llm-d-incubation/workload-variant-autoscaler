@@ -407,6 +407,12 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 					break
 				}
 			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
+			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 
 			By("Creating a job to send requests while deployment is at zero")
@@ -921,6 +927,12 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 					break
 				}
 			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
+			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 
 			By("Creating a job to send requests while LWS is at zero")
@@ -1341,6 +1353,12 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 					GinkgoWriter.Printf("Found inference gateway service: %s\n", gatewayServiceName)
 					break
 				}
+			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
 			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 

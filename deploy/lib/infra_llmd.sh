@@ -43,9 +43,12 @@ deploy_llm_d_infrastructure() {
             exit 1
         fi
         git -C "$llm_d_clone_dir" fetch --all --tags --prune &>/dev/null || true
-        if ! git -C "$llm_d_clone_dir" checkout "$LLM_D_RELEASE" &>/dev/null; then
-            log_error "Failed to align $llm_d_clone_dir to ref '$LLM_D_RELEASE'"
-            exit 1
+        # Use -f to discard any local modifications in the script-managed clone dir.
+        if ! git -C "$llm_d_clone_dir" checkout -f "$LLM_D_RELEASE" &>/dev/null; then
+            log_warning "Failed to align $llm_d_clone_dir to ref '$LLM_D_RELEASE' — recloning fresh"
+            rm -rf "$llm_d_clone_dir"
+            log_info "Cloning $llm_d_repo_url (release: $LLM_D_RELEASE) into $llm_d_clone_dir"
+            git clone -b "$LLM_D_RELEASE" -- "$llm_d_repo_url" "$llm_d_clone_dir" &> /dev/null
         fi
     fi
 
@@ -115,6 +118,43 @@ deploy_llm_d_infrastructure() {
     else
         log_warning "Role $LLM_D_EPP_NAME not found, skipping RBAC patch"
     fi
+
+    # Post-deploy workaround: grant EPP SA permission to create tokenreviews so its metrics endpoint
+    # can authenticate incoming requests (controller-runtime RBAC auth filter requirement).
+    local epp_sa_name="$LLM_D_EPP_NAME"
+    log_info "Ensuring $epp_sa_name SA can create tokenreviews (required for metrics endpoint auth)"
+    kubectl apply -f - <<RBAC_EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${epp_sa_name}-tokenreview-creator
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${epp_sa_name}-tokenreview-creator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${epp_sa_name}-tokenreview-creator
+subjects:
+- kind: ServiceAccount
+  name: $epp_sa_name
+  namespace: $LLMD_NS
+RBAC_EOF
 
     # v0.7.0+: Deploy model server via Kustomize overlay (replaces llm-d-modelservice Helm chart).
     if [ "${LLMD_SKIP_DEFAULT_MODELSERVICE:-false}" = "true" ]; then
@@ -186,35 +226,53 @@ deploy_llm_d_infrastructure() {
         fi
     fi
 
+    # Patch EPP CPU requests before any rollout restart so the first scheduled pod already uses the reduced value.
+    # The GAIE standalone chart embeds EPP + Envoy in the same pod; patch all containers without --containers.
+    log_info "Patching EPP CPU requests for resource-constrained environments (standalone chart: EPP + Envoy in one pod)..."
+    if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &>/dev/null; then
+        local current_epp_cpu=$(kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo "unknown")
+        log_info "Current EPP CPU request (container 0): $current_epp_cpu"
+        kubectl set resources deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" \
+            --requests='cpu=500m,memory=256Mi' 2>/dev/null \
+            && log_success "EPP all-container resources patched to cpu=500m,memory=256Mi" \
+            || log_warning "Failed to patch EPP resources"
+    else
+        log_warning "EPP deployment not found: $LLM_D_EPP_NAME"
+    fi
+
     # EPP (inference scheduler) image comes from the llm-d guide helmfile at LLM_D_RELEASE — not overridden here.
     # Enable flowControl in the EPP ConfigMap when scale-to-zero or e2e tests require it (queue metrics path).
     if [ "$ENABLE_SCALE_TO_ZERO" == "true" ] || [ "${LLMD_PATCH_EPP_FLOW_CONTROL:-false}" == "true" ]; then
         if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
         
-            # Enable flowControl feature gate in the EPP ConfigMap
+            # Enable flowControl feature gate in the EPP ConfigMap.
+            # The GAIE standalone chart names the active config key after the release:
+            # e.g. LLM_D_EPP_NAME=optimized-baseline-epp → key=optimized-baseline-plugins.yaml
+            # Strip the "-epp" suffix to derive the config key used by --config-file in the EPP container.
+            local EPP_PLUGINS_KEY="${LLM_D_EPP_NAME%-epp}-plugins.yaml"
             if kubectl get configmap "$LLM_D_EPP_NAME" -n "$LLMD_NS" &> /dev/null; then
-                # Check if flowControl is already enabled
-                local CURRENT_CONFIG=$(kubectl get configmap "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o jsonpath='{.data.default-plugins\.yaml}')
-                
+                # Read the config key the EPP actually loads (derived from release name, not "default-plugins.yaml")
+                local CURRENT_CONFIG=$(kubectl get configmap "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o json | yq eval ".data[\"${EPP_PLUGINS_KEY}\"]" -)
+
                 if echo "$CURRENT_CONFIG" | yq eval '.featureGates // [] | contains(["flowControl"])' - | grep -q 'true'; then
-                    log_info "flowControl feature gate already enabled in EPP ConfigMap"
+                    log_info "flowControl feature gate already enabled in EPP ConfigMap ($EPP_PLUGINS_KEY)"
                 else
-                    log_info "Enabling flowControl feature gate in EPP ConfigMap $LLM_D_EPP_NAME"
-                    
+                    log_info "Enabling flowControl feature gate in EPP ConfigMap $LLM_D_EPP_NAME ($EPP_PLUGINS_KEY)"
+
                     # Use yq to properly add flowControl to featureGates array (creates array if missing, appends if exists)
                     local UPDATED_CONFIG=$(echo "$CURRENT_CONFIG" | yq eval '.featureGates += ["flowControl"] | .featureGates |= unique' -)
-                    
+
                     # Validate that flowControl was successfully added
                     if echo "$UPDATED_CONFIG" | yq eval '.featureGates // [] | contains(["flowControl"])' - | grep -q 'true'; then
-                        # Apply the updated config
+                        # Apply the updated config — JSON Pointer path: dots in key name need no escaping (only ~ and /)
                         kubectl patch configmap "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[
                             {
                                 "op": "replace",
-                                "path": "/data/default-plugins.yaml",
+                                "path": "/data/'"$EPP_PLUGINS_KEY"'",
                                 "value": "'"$(echo "$UPDATED_CONFIG" | sed 's/"/\\"/g' | tr '\n' '\r' | sed 's/\r/\\n/g')"'"
                             }
                         ]'
-                        
+
                         # Restart deployment to pick up the config change
                         log_info "Restarting $LLM_D_EPP_NAME deployment to apply flowControl feature gate"
                         kubectl rollout restart deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS"
@@ -254,31 +312,6 @@ deploy_llm_d_infrastructure() {
         fi
     fi
 
-    # Patch EPP and Gateway CPU requests for resource-constrained environments (e.g., KIND)
-    # This reduces CPU requests from 4 cores to 500m (0.5 cores) each to allow scheduling on smaller clusters
-    log_info "Patching EPP and Gateway CPU requests for resource-constrained environments..."
-    
-    if kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" &>/dev/null; then
-        local current_epp_cpu=$(kubectl get deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo "unknown")
-        log_info "Current EPP CPU request: $current_epp_cpu"
-        
-        if [ "$current_epp_cpu" != "500m" ]; then
-            log_info "Patching EPP deployment to request 500m CPUs instead of $current_epp_cpu"
-            kubectl patch deployment "$LLM_D_EPP_NAME" -n "$LLMD_NS" --type='json' -p='[
-                {
-                    "op": "replace",
-                    "path": "/spec/template/spec/containers/0/resources/requests/cpu",
-                    "value": "500m"
-                }
-            ]' && log_success "EPP CPU request patched to 500m" || log_warning "Failed to patch EPP CPU request"
-        else
-            log_info "EPP already requesting 500m CPUs, skipping patch"
-        fi
-    else
-        log_warning "EPP deployment not found: $LLM_D_EPP_NAME"
-    fi
-    
-
     # For deterministic e2e infra-only runs, avoid waiting on all llm-d deployments.
     # The full wait often blocks on modelservice decode/prefill readiness, which is
     # unnecessary for the e2e suite because tests create/manage their own workloads.
@@ -304,13 +337,10 @@ deploy_llm_d_infrastructure() {
             
             if [ "$current_gw_cpu" != "500m" ] && [ "$current_gw_cpu" != "unknown" ]; then
                 log_info "Patching Gateway deployment to request 500m CPUs instead of $current_gw_cpu"
-                kubectl patch deployment "$gateway_name" -n "$LLMD_NS" --type='json' -p='[
-                    {
-                        "op": "replace",
-                        "path": "/spec/template/spec/containers/0/resources/requests/cpu",
-                        "value": "500m"
-                    }
-                ]' && log_success "Gateway CPU request patched to 500m" || log_warning "Failed to patch Gateway CPU request"
+                kubectl set resources deployment "$gateway_name" -n "$LLMD_NS" \
+                    --requests='cpu=500m,memory=256Mi' 2>/dev/null \
+                    && log_success "Gateway resources patched to cpu=500m,memory=256Mi" \
+                    || log_warning "Failed to patch Gateway resources"
             else
                 log_info "Gateway already requesting 500m CPUs or resources not set, skipping patch"
             fi

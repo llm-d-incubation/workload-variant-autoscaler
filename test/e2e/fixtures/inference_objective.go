@@ -21,7 +21,7 @@ const defaultInferenceObjectiveName = "e2e-default"
 
 // EnsureInferenceObjective creates the default InferenceObjective for GIE flow-control
 // queuing when the CRD exists. poolName must match the InferencePool metadata.name (typically the
-// EPP Service name with an "-epp" suffix removed, e.g. gaie-sim-epp → gaie-sim).
+// EPP Service name with an "-epp" suffix removed, e.g. optimized-baseline-epp → optimized-baseline).
 //
 // Returns applied=true if the object exists or was created. If the InferenceObjective API is not
 // available on the cluster, returns (false, nil).
