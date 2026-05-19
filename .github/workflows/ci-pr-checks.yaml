@@ -488,18 +488,25 @@ jobs:
   e2e-full-status:
     runs-on: ubuntu-latest
     needs: [check-code-changes, check-full-tests, e2e-tests-full]
-    if: always()
+    # Run only when there is a real outcome: e2e succeeded, e2e failed, or doc-only PR (skipped).
+    # When a code PR has not yet had /ok-to-test triggered, e2e is skipped but has_code_changes=true,
+    # so this job does NOT run, branch protection shows it as "Required" (pending), not a red error.
+    if: >-
+      always() && (
+        needs.e2e-tests-full.result == 'success' ||
+        needs.e2e-tests-full.result == 'failure' ||
+        (needs.e2e-tests-full.result == 'skipped' && needs.check-code-changes.outputs.has_code_changes != 'true')
+      )
     steps:
       - name: Check e2e full result
         run: |
           result="${{ needs.e2e-tests-full.result }}"
-          has_code_changes="${{ needs.check-code-changes.outputs.has_code_changes }}"
           if [[ "$result" == "success" ]]; then
             echo "Full e2e passed"
-          elif [[ "$result" == "skipped" && "$has_code_changes" != "true" ]]; then
+          elif [[ "$result" == "skipped" ]]; then
             echo "Full e2e skipped (doc-only PR)"
           else
-            echo "Full e2e not yet run or failed: $result"
+            echo "Full e2e failed: $result"
             exit 1
           fi
 
