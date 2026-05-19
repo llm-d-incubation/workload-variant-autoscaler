@@ -960,6 +960,7 @@ jobs:
           # Temporary/ To do: real vLLM decode scheduling was flaky on shared GPU runners; tests use llm-d-inference-sim.
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
+          DEPLOY_LWS: "true"
           WVA_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           LLMD_NAMESPACE: ${{ env.LLMD_NAMESPACE }}
@@ -1016,31 +1017,25 @@ jobs:
 
           echo "Cleanup complete"
 
-      - name: Dump cluster state
+      - name: Collect cluster diagnostics
         if: always()
         run: |
-          echo "=== Dumping cluster state for diagnostics ==="
-          echo ""
-          echo "=== VAs ==="
-          kubectl get va -n "$LLMD_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== HPAs ==="
-          kubectl get hpa -n "$LLMD_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== Controller pods ==="
-          kubectl get pods -n "$WVA_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== All resources ==="
+          mkdir -p /tmp/cluster-diagnostics
           for ns in "$WVA_NAMESPACE" "$LLMD_NAMESPACE"; do
             if kubectl get namespace "$ns" &>/dev/null; then
-              echo "--- Namespace: $ns ---"
-              kubectl get all -n "$ns" 2>/dev/null || true
-              echo ""
-              echo "--- Events in $ns ---"
-              kubectl get events -n "$ns" --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
-              echo ""
+              kubectl get va,hpa,all -n "$ns" 2>/dev/null > /tmp/cluster-diagnostics/${ns}-resources.txt || true
+              kubectl get events -n "$ns" --sort-by='.lastTimestamp' 2>/dev/null > /tmp/cluster-diagnostics/${ns}-events.txt || true
+              kubectl logs -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --tail=500 2>/dev/null > /tmp/cluster-diagnostics/${ns}-wva-logs.txt || true
             fi
           done
+
+      - name: Upload cluster diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-diagnostics-${{ github.run_id }}
+          path: /tmp/cluster-diagnostics/
+          retention-days: 7
 
       - name: Scale down GPU workloads on failure
         # On failure, scale down decode deployments to free GPUs while preserving

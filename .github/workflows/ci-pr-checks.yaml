@@ -338,7 +338,6 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "false"
           CREATE_CLUSTER: "true"
-          INSTALL_GATEWAY_CTRLPLANE: "true"
           # Emulated Kind: chart decode may be removed post-deploy (LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS, default true).
           # Pin llm-d release for deterministic CI behavior
           LLM_D_RELEASE: "v0.7.0"
@@ -452,8 +451,8 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
           CREATE_CLUSTER: "true"
-          INSTALL_GATEWAY_CTRLPLANE: "true"
           LLM_D_RELEASE: "v0.7.0"
+          DEPLOY_LWS: "true"
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"

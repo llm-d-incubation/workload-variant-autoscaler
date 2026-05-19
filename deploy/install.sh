@@ -64,8 +64,8 @@ KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
 # On kubernetes: default false (cluster-managed KEDA); kind-emulator flows often set true or use cluster path.
 KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
 
-# LeaderWorkerSet (WVA dependency). Set false when LWS is pre-installed or not needed (e.g. some benchmarks).
-DEPLOY_LWS=${DEPLOY_LWS:-true}
+# LeaderWorkerSet. Set true when LWS tests run (e.g. full e2e suite). Defaults false so smoke and benchmarks skip it.
+DEPLOY_LWS=${DEPLOY_LWS:-false}
 LWS_NAMESPACE=${LWS_NAMESPACE:-"lws-system"}
 LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.8.0"}
 

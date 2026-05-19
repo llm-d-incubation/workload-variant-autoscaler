@@ -56,8 +56,10 @@ TTFT_AVERAGE_LATENCY_MS=${TTFT_AVERAGE_LATENCY_MS:-200}
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 
 GATEWAY_PROVIDER=${GATEWAY_PROVIDER:-"istio"}
-# Install Gateway control plane via helmfile when true (default). Set false if your cluster already has one.
-INSTALL_GATEWAY_CTRLPLANE="${INSTALL_GATEWAY_CTRLPLANE:-true}"
+# Install Gateway control plane (Istio/kgateway) via helmfile. Only needed for Gateway Mode deployments
+# (inferencepool chart with an external Kubernetes Gateway controller). Standalone Mode (default) bundles
+# its own Envoy proxy and does not require an external gateway controller.
+INSTALL_GATEWAY_CTRLPLANE="${INSTALL_GATEWAY_CTRLPLANE:-false}"
 
 # Model identity and vLLM / ModelService chart tuning (wired into llm-d values or overrides).
 DEFAULT_MODEL_ID=${DEFAULT_MODEL_ID:-"Qwen/Qwen3-0.6B"}

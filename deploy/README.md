@@ -145,12 +145,12 @@ export WVA_IMAGE_TAG="latest"
 # Optional
 export DEPLOY_WVA=false            # Monitoring + scaler only
 export DEPLOY_PROMETHEUS=false
-export DEPLOY_LWS=false           # Skip LeaderWorkerSet if already on cluster
+# export DEPLOY_LWS=true           # Install LeaderWorkerSet (needed for full e2e suite; default false)
 
 # llm-d (install-llmd-infra.sh) — examples
 export HF_TOKEN="hf_xxx"
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
-export INSTALL_GATEWAY_CTRLPLANE=true
+# export INSTALL_GATEWAY_CTRLPLANE=true  # Only needed for Gateway Mode (external Istio/kgateway). Default false (Standalone Mode).
 # Guide basename under llm-d guides/ (llm-d README: GUIDE_NAME). Default optimized-baseline matches v0.7.0+.
 # https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline
 # export GUIDE_NAME=optimized-baseline   # default; change only if using a custom guide path
@@ -158,7 +158,7 @@ export INSTALL_GATEWAY_CTRLPLANE=true
 
 #### Gateway control plane (`install-llmd-infra.sh`)
 
-`INSTALL_GATEWAY_CTRLPLANE` defaults to **true** (install the gateway control plane via helmfile). Set **`INSTALL_GATEWAY_CTRLPLANE=false`** if your cluster already has a suitable gateway.
+`INSTALL_GATEWAY_CTRLPLANE` defaults to **false** (Standalone Mode bundles Envoy inside the EPP pod — no external gateway controller needed). Set to **`true`** only if you are using Gateway Mode with an external Kubernetes Gateway controller (Istio or kgateway).
 
 #### Script deployment examples
 
@@ -189,10 +189,10 @@ export DEPLOY_PROMETHEUS_ADAPTER=true
 ./deploy/install.sh -e kubernetes
 ```
 
-##### Example 4: Skip LeaderWorkerSet (already on cluster)
+##### Example 4: Install with LeaderWorkerSet (for full e2e suite)
 
 ```bash
-export DEPLOY_LWS=false
+export DEPLOY_LWS=true
 ./deploy/install.sh -e kubernetes
 ```
 
@@ -598,7 +598,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GATEWAY_PROVIDER` | Gateway implementation | `istio` |
-| `INSTALL_GATEWAY_CTRLPLANE` | Install gateway control plane via helmfile | `true` |
+| `INSTALL_GATEWAY_CTRLPLANE` | Install gateway control plane via helmfile (Gateway Mode only) | `false` |
 | `LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS` | On emulated clusters, delete chart decode Deployment after deploy (e2e applies its own) | `true` |
 
 #### Deployment Flags (`install.sh`)
@@ -608,7 +608,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_PROMETHEUS` | Deploy Prometheus stack | `true` |
 | `DEPLOY_WVA` | Deploy WVA controller | `true` |
 | `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter (when `SCALER_BACKEND=prometheus-adapter`) | `true` |
-| `DEPLOY_LWS` | Deploy LeaderWorkerSet (skip if already installed or not needed) | `true` |
+| `DEPLOY_LWS` | Deploy LeaderWorkerSet (needed only for full e2e suite; skip for smoke, benchmarks, or pre-installed clusters) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
 | `SCALER_BACKEND` | `prometheus-adapter`, `keda`, or `none` | `prometheus-adapter` |
 

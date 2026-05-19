@@ -141,7 +141,6 @@ deploy-wva-emulated-on-kind: ## Deploy WVA + llm-d on Kind (Prometheus Adapter a
 		LLM_D_RELEASE=$(LLM_D_RELEASE) DECODE_REPLICAS=$(DECODE_REPLICAS) \
 		LLMD_PATCH_EPP_FLOW_CONTROL=true LLMD_SKIP_INFERENCE_OBJECTIVE=true \
 		LLMD_SKIP_DEFAULT_MODELSERVICE=true LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true \
-		INSTALL_GATEWAY_CTRLPLANE=true \
 		./deploy/install-llmd-infra.sh -e kind-emulator
 
 ## Undeploy WVA from the emulated environment on Kind.
@@ -238,7 +237,6 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + llm-d; no chart VA/HP
 		WVA_IMAGE_PULL_POLICY=IfNotPresent \
 		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		DECODE_REPLICAS=$(DECODE_REPLICAS) \
-		INSTALL_GATEWAY_CTRLPLANE=true \
 		LLMD_SKIP_DEFAULT_MODELSERVICE=true \
 		LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true \
 		LLMD_PATCH_EPP_FLOW_CONTROL=true \
@@ -256,7 +254,6 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + llm-d; no chart VA/HP
 		CREATE_CLUSTER=false \
 		LLM_D_RELEASE=$(LLM_D_RELEASE) \
 		DECODE_REPLICAS=$(DECODE_REPLICAS) \
-		INSTALL_GATEWAY_CTRLPLANE=true \
 		LLMD_SKIP_DEFAULT_MODELSERVICE=true \
 		LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true \
 		LLMD_PATCH_EPP_FLOW_CONTROL=true \
@@ -337,8 +334,11 @@ test-e2e-smoke-with-setup: deploy-e2e-infra test-e2e-smoke
 
 # Convenience target that deploys infra + runs full test suite.
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
+# LWS is installed because the full suite includes LeaderWorkerSet scale-from-zero tests.
 .PHONY: test-e2e-full-with-setup
-test-e2e-full-with-setup: deploy-e2e-infra test-e2e-full
+test-e2e-full-with-setup:
+	DEPLOY_LWS=true $(MAKE) deploy-e2e-infra
+	$(MAKE) test-e2e-full
 
 
 ##@ llm-d-benchmark CLI (standup / run / teardown)
