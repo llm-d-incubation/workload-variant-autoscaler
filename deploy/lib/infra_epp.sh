@@ -3,7 +3,7 @@
 # EPP and InferencePool setup for all environments (kind-emulator, kubernetes, openshift).
 # Installs Gateway API CRDs, GAIE CRDs, and the GAIE standalone chart (EPP + InferencePool).
 #
-# Required vars: LLM_D_RELEASE, GAIE_VERSION, LLMD_NS, WVA_PROJECT
+# Required vars: LLM_D_RELEASE, GAIE_VERSION, LLMD_NS
 # Required funcs: log_info, log_success, log_warning
 #
 
@@ -12,15 +12,18 @@ GATEWAY_API_VERSION=${GATEWAY_API_VERSION:-"v1.2.0"}
 deploy_epp() {
     log_info "Deploying EPP infrastructure (GAIE standalone chart v${GAIE_VERSION})..."
 
-    local llm_d_dir="$WVA_PROJECT/llm-d"
+    local _lib_dir
+    _lib_dir="$(dirname "${BASH_SOURCE[0]}")"
 
-    # Clone llm-d/llm-d at pinned release for guide values files.
-    if [ ! -d "$llm_d_dir/.git" ]; then
-        log_info "Cloning llm-d/llm-d at $LLM_D_RELEASE into $llm_d_dir..."
-        git clone -b "$LLM_D_RELEASE" -- https://github.com/llm-d/llm-d.git "$llm_d_dir"
-    else
-        log_info "Using existing llm-d checkout at $llm_d_dir"
-    fi
+    # Download guide values files pinned to LLM_D_RELEASE — version-coupled to EPP image tag.
+    local _llmd_raw="https://raw.githubusercontent.com/llm-d/llm-d/${LLM_D_RELEASE}"
+    local _tmpdir
+    _tmpdir="$(mktemp -d)"
+    log_info "Fetching llm-d guide values (ref=${LLM_D_RELEASE})..."
+    curl -fsSL "$_llmd_raw/guides/recipes/scheduler/base.values.yaml" \
+        -o "$_tmpdir/epp-base.values.yaml"
+    curl -fsSL "$_llmd_raw/guides/optimized-baseline/scheduler/optimized-baseline.values.yaml" \
+        -o "$_tmpdir/epp-optimized-baseline.values.yaml"
 
     # Gateway API CRDs (required for InferencePool).
     log_info "Installing Gateway API CRDs (${GATEWAY_API_VERSION})..."
@@ -55,13 +58,13 @@ deploy_epp() {
     local extra_helm_args=()
     if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
         log_info "ENABLE_SCALE_TO_ZERO=true: enabling EPP flowControl feature gate..."
-        extra_helm_args=(-f "$(dirname "${BASH_SOURCE[0]}")/epp-flow-control.values.yaml")
+        extra_helm_args=(-f "$_lib_dir/epp-flow-control.values.yaml")
     fi
 
     helm upgrade --install optimized-baseline \
         oci://registry.k8s.io/gateway-api-inference-extension/charts/standalone \
-        -f "$llm_d_dir/guides/recipes/scheduler/base.values.yaml" \
-        -f "$llm_d_dir/guides/optimized-baseline/scheduler/optimized-baseline.values.yaml" \
+        -f "$_tmpdir/epp-base.values.yaml" \
+        -f "$_tmpdir/epp-optimized-baseline.values.yaml" \
         "${extra_helm_args[@]}" \
         --set inferenceExtension.resources.requests.cpu=100m \
         --set inferenceExtension.resources.requests.memory=256Mi \
@@ -76,7 +79,7 @@ deploy_epp() {
     # Grant EPP SA permission to create tokenreviews/subjectaccessreviews so its
     # metrics endpoint authentication works (otherwise /metrics returns 500).
     log_info "Applying EPP tokenreview RBAC..."
-    kubectl apply -f "$(dirname "${BASH_SOURCE[0]}")/epp-tokenreview-rbac.yaml"
+    kubectl apply -f "$_lib_dir/epp-tokenreview-rbac.yaml"
     kubectl create clusterrolebinding optimized-baseline-epp-tokenreview \
         --clusterrole=optimized-baseline-epp-tokenreview \
         --serviceaccount="$LLMD_NS:optimized-baseline-epp" \

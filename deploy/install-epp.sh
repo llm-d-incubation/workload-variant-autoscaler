@@ -5,14 +5,14 @@
 # For llm-d model serving, see the llm-d project guides at https://github.com/llm-d/llm-d.
 #
 # Usage:
-#   LLM_D_RELEASE=v0.7.0 GAIE_VERSION=v1.5.0 LLMD_NS=llm-d-sim ./deploy/install-epp.sh
+#   LLM_D_RELEASE=v0.8.0 GAIE_VERSION=v1.5.0 LLMD_NS=llm-d-sim ./deploy/install-epp.sh
 #
 
 set -e
 set -o pipefail
 
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
-LLM_D_RELEASE=${LLM_D_RELEASE:-v0.7.0}
+LLM_D_RELEASE=${LLM_D_RELEASE:-v0.8.0}
 GAIE_VERSION=${GAIE_VERSION:-v1.5.0}
 LLMD_NS=${LLMD_NS:-llm-d-sim}
 ENVIRONMENT=${ENVIRONMENT:-kind-emulator}
