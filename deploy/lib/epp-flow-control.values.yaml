@@ -2,6 +2,13 @@
 # Applied on top of the optimized-baseline guide values when ENABLE_SCALE_TO_ZERO=true.
 # The flowControl gate exposes inference_extension_flow_control_queue_size, which the
 # WVA scale-from-zero engine reads to detect pending requests.
+#
+# The plugins and schedulingProfiles below are NOT new — they are copied verbatim from
+# llm-d/guides/optimized-baseline/scheduler/optimized-baseline.values.yaml (fetched at
+# install time). They must be repeated here because pluginsCustomConfig is a string value
+# in the Helm chart; Helm's last-(-f)-wins semantics replace the entire string, so the
+# overlay must carry the full config. The only addition over the guide values is the
+# featureGates entry.
 inferenceExtension:
   pluginsCustomConfig:
     optimized-baseline-plugins.yaml: |
