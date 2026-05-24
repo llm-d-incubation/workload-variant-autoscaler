@@ -307,21 +307,27 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		}
 	})
 
-	t.Run("trackedNamespaces scopes the list — objects in other namespaces are excluded", func(t *testing.T) {
+	t.Run("hpaScopedNamespaces scopes HPA discovery; SO list stays cluster-wide", func(t *testing.T) {
+		// HPA scoping must exclude managed HPAs outside the tracked set, while
+		// ScaledObject discovery still finds managed SOs everywhere because
+		// SO listing is unconditionally cluster-wide (preserves correctness
+		// for KEDA installed after WVA startup).
 		s := variantTestScheme(t)
-		var listCalls []string
+		var hpaListNamespaces, soListNamespaces []string
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
-			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"), // outside the tracked set
-			managedSO("ns1", "so-c", "Deployment", "deploy-c", "model-x"),
-			managedSO("ns3", "so-d", "Deployment", "deploy-d", "model-x"), // outside the tracked set
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"), // outside HPA scope
+			managedSO("ns3", "so-c", "Deployment", "deploy-c", "model-x"),
 		).WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-				// Record the namespace selector so we can assert per-namespace
-				// scoping was used rather than a cluster-wide list.
 				var listOpts client.ListOptions
 				listOpts.ApplyOptions(opts)
-				listCalls = append(listCalls, listOpts.Namespace)
+				switch list.(type) {
+				case *autoscalingv2.HorizontalPodAutoscalerList:
+					hpaListNamespaces = append(hpaListNamespaces, listOpts.Namespace)
+				case *kedav1alpha1.ScaledObjectList:
+					soListNamespaces = append(soListNamespaces, listOpts.Namespace)
+				}
 				return c.List(ctx, list, opts...)
 			},
 		}).Build()
@@ -330,66 +336,109 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 2 {
-			t.Errorf("want 2 VAs (both from ns1), got %d", len(result))
-		}
+
+		// Expect ns1's HPA (scoped in) and ns3's SO (cluster-wide). ns2's HPA must be excluded.
+		gotByNamespace := map[string]bool{}
 		for _, va := range result {
-			if va.Namespace != "ns1" {
-				t.Errorf("want VA from ns1, got namespace %q for %q", va.Namespace, va.Name)
+			gotByNamespace[va.Namespace] = true
+		}
+		if !gotByNamespace["ns1"] || !gotByNamespace["ns3"] {
+			t.Errorf("want ns1's HPA and ns3's SO to be present, got %v", gotByNamespace)
+		}
+		if gotByNamespace["ns2"] {
+			t.Errorf("ns2's HPA is outside hpaScopedNamespaces but was returned")
+		}
+		// HPA list must be scoped to ns1.
+		for _, ns := range hpaListNamespaces {
+			if ns != "ns1" {
+				t.Errorf("want HPA list scoped to ns1, got namespace %q (full: %v)", ns, hpaListNamespaces)
 			}
 		}
-		// Each kind (HPA + ScaledObject) should be listed once with InNamespace("ns1").
-		// The interceptor records the namespace argument on every List call.
-		for _, ns := range listCalls {
-			if ns != "ns1" {
-				t.Errorf("want every List scoped to ns1, got namespace %q (full call list: %v)", ns, listCalls)
-			}
+		// SO list must be cluster-wide (Namespace == "" on ListOptions).
+		if len(soListNamespaces) != 1 || soListNamespaces[0] != "" {
+			t.Errorf("want one cluster-wide SO list, got %v", soListNamespaces)
 		}
 	})
 
-	t.Run("trackedNamespaces with multiple entries unions results", func(t *testing.T) {
+	t.Run("hpaScopedNamespaces with multiple entries unions HPA results; SOs still cluster-wide", func(t *testing.T) {
 		s := variantTestScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
-			managedSO("ns2", "so-b", "Deployment", "deploy-b", "model-x"),
-			managedHPA("ns3", "hpa-c", "deploy-c", "model-x"), // not tracked
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"),
+			managedHPA("ns3", "hpa-c", "deploy-c", "model-x"), // not in HPA scope
+			managedSO("ns3", "so-d", "Deployment", "deploy-d", "model-x"),
 		).Build()
 
 		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1", "ns2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 2 {
-			t.Errorf("want 2 VAs (union of ns1 + ns2), got %d", len(result))
-		}
-		namespaces := map[string]bool{}
+		gotByNamespace := map[string]bool{}
+		gotByModelTarget := map[string]bool{}
 		for _, va := range result {
-			namespaces[va.Namespace] = true
+			gotByNamespace[va.Namespace] = true
+			gotByModelTarget[va.Namespace+"/"+va.Spec.ScaleTargetRef.Name] = true
 		}
-		if !namespaces["ns1"] || !namespaces["ns2"] {
-			t.Errorf("want VAs from both ns1 and ns2, got namespaces %v", namespaces)
+		// HPAs from ns1 and ns2 are present; ns3's HPA is filtered out.
+		if !gotByModelTarget["ns1/deploy-a"] || !gotByModelTarget["ns2/deploy-b"] {
+			t.Errorf("want HPAs from ns1 and ns2, got %v", gotByModelTarget)
 		}
-		if namespaces["ns3"] {
-			t.Errorf("ns3 is not in trackedNamespaces but was returned")
+		if gotByModelTarget["ns3/deploy-c"] {
+			t.Errorf("ns3's HPA is outside hpaScopedNamespaces but was returned")
+		}
+		// ns3's SO is present because SO discovery is cluster-wide.
+		if !gotByModelTarget["ns3/deploy-d"] {
+			t.Errorf("want ns3's SO to be present (cluster-wide list), got %v", gotByModelTarget)
 		}
 	})
 
-	t.Run("empty trackedNamespaces falls back to cluster-wide list", func(t *testing.T) {
+	t.Run("nil hpaScopedNamespaces falls back to cluster-wide HPA list", func(t *testing.T) {
+		// nil = sync gate not open yet. HPAs from every namespace must be
+		// returned so the startup window does not silently drop them.
 		s := variantTestScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
 			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"),
 		).Build()
 
-		// Both empty slice and nil should produce identical cluster-wide behaviour.
-		for _, tracked := range [][]string{nil, {}} {
-			result, err := annotationSourcedVariants(ctx, cl, tracked)
-			if err != nil {
-				t.Fatalf("unexpected error for tracked=%v: %v", tracked, err)
-			}
-			if len(result) != 2 {
-				t.Errorf("want 2 VAs (cluster-wide) for tracked=%v, got %d", tracked, len(result))
-			}
+		result, err := annotationSourcedVariants(ctx, cl, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("want 2 VAs (cluster-wide fallback) for nil, got %d", len(result))
+		}
+	})
+
+	t.Run("empty non-nil hpaScopedNamespaces skips HPA list entirely; SOs still discovered", func(t *testing.T) {
+		// []string{} = synced, no managed HPAs anywhere. The HPA list must
+		// be skipped so a CRD-only deployment doesn't keep cluster-wide
+		// scanning forever. ScaledObject discovery is unrelated and still
+		// runs cluster-wide.
+		s := variantTestScheme(t)
+		var hpaListCount int
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"), // exists but must be skipped
+			managedSO("ns1", "so-b", "Deployment", "deploy-b", "model-x"),
+		).WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*autoscalingv2.HorizontalPodAutoscalerList); ok {
+					hpaListCount++
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, []string{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if hpaListCount != 0 {
+			t.Errorf("want zero HPA List calls when hpaScopedNamespaces is empty non-nil, got %d", hpaListCount)
+		}
+		// Only the SO should be returned; the HPA was skipped.
+		if len(result) != 1 || result[0].Spec.ScaleTargetRef.Name != "deploy-b" {
+			t.Errorf("want only the SO-sourced VA, got %v", result)
 		}
 	})
 }

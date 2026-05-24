@@ -19,52 +19,34 @@ package controller
 import (
 	"context"
 
-	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 )
 
-// Kinds tracked under ResourceTypeAnnotatedScaler. The tracker's internal map
-// is keyed by namespace -> resourceType -> resourceName, so without a
-// kind-qualified resourceName a managed HPA and a managed ScaledObject
-// sharing metadata.name in one namespace would collapse into a single
-// entry — and deleting either would untrack the namespace despite the other
-// still existing. Keep these prefixes stable across HPAReconciler,
-// ScaledObjectReconciler, and BootstrapAnnotatedScalerTracking.
-const (
-	annotatedScalerKindHPA          = "HPA"
-	annotatedScalerKindScaledObject = "ScaledObject"
-)
-
-// annotatedScalerKey composes a kind-qualified resourceName for
-// Datastore.NamespaceTrack / NamespaceUntrack under
-// ResourceTypeAnnotatedScaler.
-func annotatedScalerKey(kind, name string) string {
-	return kind + "/" + name
-}
-
-// BootstrapAnnotatedScalerTracking enumerates the existing managed HPAs and
-// (when KEDA is enabled) ScaledObjects from the controller-runtime cache and
-// pre-populates the datastore's AnnotatedScaler namespace tracking. It is
-// meant to run once at startup, after the manager's caches have synced but
-// before MarkAnnotatedScalersSynced is called.
+// BootstrapAnnotatedHPATracking enumerates the existing managed HPAs from the
+// controller-runtime cache and pre-populates the datastore's
+// ResourceTypeAnnotatedHPA namespace tracking. It runs once at startup,
+// between mgr.GetCache().WaitForCacheSync and Datastore.MarkAnnotatedHPAsSynced.
 //
-// The pre-population closes a startup race that WaitForCacheSync alone does
-// not: cache sync guarantees the informer's local state is current, but it
-// does NOT guarantee that HPAReconciler / ScaledObjectReconciler have
-// already drained their workqueues and called NamespaceTrack for every
-// existing object. Without this step the gate would open while the tracking
-// set is still being filled, and the next engine tick could silently drop a
-// managed HPA / ScaledObject in a not-yet-reconciled namespace.
+// Pre-population closes a startup race that WaitForCacheSync alone does not:
+// cache sync only guarantees the informer's local state is current, not that
+// HPAReconciler has already drained its workqueue and called NamespaceTrack
+// for every existing object. Without this step the gate would open while the
+// tracking set is still being filled, and the next engine tick could silently
+// drop a managed HPA in a not-yet-reconciled namespace.
 //
 // NamespaceTrack is idempotent, so the steady-state reconciler events that
-// fire afterwards produce no duplicate state. kedaEnabled mirrors the flag
-// in main that gates ScaledObject controller registration.
-func BootstrapAnnotatedScalerTracking(ctx context.Context, k8sClient client.Client, ds datastore.Datastore, kedaEnabled bool) error {
+// fire afterwards produce no duplicate state.
+//
+// ScaledObject discovery deliberately stays cluster-wide (see
+// utils.annotationSourcedVariants), so this helper does not pre-populate
+// ResourceTypeAnnotatedScaledObject tracking. If a follow-up scopes
+// ScaledObject discovery too, mirror this helper for SOs with its own sync
+// gate; the AnnotatedHPA flag must not be reused.
+func BootstrapAnnotatedHPATracking(ctx context.Context, k8sClient client.Client, ds datastore.Datastore) error {
 	var hpaList autoscalingv2.HorizontalPodAutoscalerList
 	if err := k8sClient.List(ctx, &hpaList); err != nil {
 		return err
@@ -72,30 +54,7 @@ func BootstrapAnnotatedScalerTracking(ctx context.Context, k8sClient client.Clie
 	for i := range hpaList.Items {
 		hpa := &hpaList.Items[i]
 		if annotations.IsManaged(hpa) && hpa.DeletionTimestamp.IsZero() {
-			ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
-				annotatedScalerKey(annotatedScalerKindHPA, hpa.Name), hpa.Namespace)
-		}
-	}
-
-	if !kedaEnabled {
-		return nil
-	}
-
-	var soList kedav1alpha1.ScaledObjectList
-	if err := k8sClient.List(ctx, &soList); err != nil {
-		// KEDA may have been uninstalled between reconciler registration and
-		// the cache-sync runnable firing; treat NoMatchError as benign so the
-		// gate can still open for the HPA-only case.
-		if apimeta.IsNoMatchError(err) {
-			return nil
-		}
-		return err
-	}
-	for i := range soList.Items {
-		so := &soList.Items[i]
-		if annotations.IsManaged(so) && so.DeletionTimestamp.IsZero() {
-			ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
-				annotatedScalerKey(annotatedScalerKindScaledObject, so.Name), so.Namespace)
+			ds.NamespaceTrack(datastore.ResourceTypeAnnotatedHPA, hpa.Name, hpa.Namespace)
 		}
 	}
 	return nil

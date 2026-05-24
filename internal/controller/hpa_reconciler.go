@@ -43,25 +43,22 @@ type HPAReconciler struct {
 // limits event processing to managed objects (see TODO #1134 for scoped List calls).
 
 // Reconcile tracks or untracks the namespace of an HPA bearing llm-d.ai/managed: "true".
-// The resourceName passed to the datastore is kind-qualified so an HPA and a
-// ScaledObject sharing metadata.name in the same namespace don't collide in
-// the tracker (see annotatedScalerKey).
+// Records the track under ResourceTypeAnnotatedHPA so HPA and ScaledObject
+// kinds cannot collide on metadata.name in the same namespace.
 func (r *HPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	key := annotatedScalerKey(annotatedScalerKindHPA, req.Name)
-
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
 	if err := r.Get(ctx, req.NamespacedName, hpa); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+			r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedHPA, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
 	if !hpa.DeletionTimestamp.IsZero() || !annotations.IsManaged(hpa) {
-		r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+		r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedHPA, req.Name, req.Namespace)
 	} else {
-		r.Datastore.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+		r.Datastore.NamespaceTrack(datastore.ResourceTypeAnnotatedHPA, req.Name, req.Namespace)
 	}
 	return ctrl.Result{}, nil
 }

@@ -160,28 +160,25 @@ func TestDatastore(t *testing.T) {
 	}
 }
 
-// TestAnnotatedScalerNamespacesGatedOnSync covers the cache-sync gate that
-// keeps utils.annotationSourcedVariants on its cluster-wide fallback path
-// until the HPA / ScaledObject informer caches have completed their initial
-// sync. Until MarkAnnotatedScalersSynced is called, AnnotatedScalerNamespaces
-// must return nil even when namespaces are tracked, so a partially-populated
-// tracking set during startup does not silently hide managed scalers from
-// discovery.
-func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
+// TestAnnotatedHPANamespacesGatedOnSync covers the cache-sync gate that keeps
+// utils.annotationSourcedVariants on its cluster-wide HPA fallback until
+// MarkAnnotatedHPAsSynced is called. While the gate is closed, the method
+// must return nil regardless of tracked state, so a partially-populated
+// tracking set during startup does not silently hide managed HPAs.
+func TestAnnotatedHPANamespacesGatedOnSync(t *testing.T) {
 	ds := NewDatastore(nil)
 
-	// Simulate partial reconciler progress: ns1 already tracked, ns2 not yet.
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/hpa-a", "ns1")
-
-	if got := ds.AnnotatedScalerNamespaces(); got != nil {
-		t.Errorf("expected nil before MarkAnnotatedScalersSynced (cluster-wide fallback), got %v", got)
+	// Pre-sync tracking is invisible — gate must report nil.
+	ds.NamespaceTrack(ResourceTypeAnnotatedHPA, "hpa-a", "ns1")
+	if got := ds.AnnotatedHPANamespaces(); got != nil {
+		t.Errorf("expected nil before MarkAnnotatedHPAsSynced (cluster-wide fallback), got %v", got)
 	}
 
 	// Once the gate opens, scoped discovery becomes active.
-	ds.MarkAnnotatedScalersSynced()
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/so-b", "ns2")
+	ds.MarkAnnotatedHPAsSynced()
+	ds.NamespaceTrack(ResourceTypeAnnotatedHPA, "hpa-b", "ns2")
 
-	got := ds.AnnotatedScalerNamespaces()
+	got := ds.AnnotatedHPANamespaces()
 	if len(got) != 2 {
 		t.Fatalf("want 2 tracked namespaces after sync, got %d (%v)", len(got), got)
 	}
@@ -193,34 +190,59 @@ func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
 		t.Errorf("want both ns1 and ns2 tracked, got %v", seen)
 	}
 
-	// MarkAnnotatedScalersSynced is idempotent and never flips back to false.
-	ds.MarkAnnotatedScalersSynced()
-	if ds.AnnotatedScalerNamespaces() == nil {
-		t.Errorf("gate should stay open after repeated MarkAnnotatedScalersSynced calls")
+	// MarkAnnotatedHPAsSynced is idempotent and never flips back to false.
+	ds.MarkAnnotatedHPAsSynced()
+	if ds.AnnotatedHPANamespaces() == nil {
+		t.Errorf("gate should stay open after repeated MarkAnnotatedHPAsSynced calls")
 	}
 }
 
-// TestAnnotatedScalerNamespacesFiltersByResourceType is the regression guard
-// for the Codex P1 finding: AnnotatedScalerNamespaces must NOT forward the
-// union of every tracked namespace. Returning namespaces tracked under
-// "VariantAutoscaling" or "InferencePool" would expand annotation discovery
-// from 2 cluster-wide List calls per tick into 2*N namespaced List calls
-// (N = total tracked namespaces), a substantial regression in CRD-heavy
-// clusters with few annotated scalers.
-func TestAnnotatedScalerNamespacesFiltersByResourceType(t *testing.T) {
+// TestAnnotatedHPANamespacesEmptyAfterSync covers the nil-vs-empty distinction
+// that lets the caller skip the HPA list entirely when no managed HPAs exist.
+// Returning nil from the synced state would conflate "sync not done" with
+// "synced, no managed HPAs" and force a cluster-wide fallback that
+// permanently negates the optimization for CRD-only clusters.
+func TestAnnotatedHPANamespacesEmptyAfterSync(t *testing.T) {
 	ds := NewDatastore(nil)
-	ds.MarkAnnotatedScalersSynced()
+	ds.MarkAnnotatedHPAsSynced()
 
-	// VA-only namespaces must not be returned by AnnotatedScalerNamespaces.
+	// No HPAs tracked. Other resource types must not lift the namespace into
+	// the result either (the caller must be able to skip the HPA list).
 	ds.NamespaceTrack("VariantAutoscaling", "va-a", "ns-va")
 	ds.NamespaceTrack("InferencePool", "pool-a", "ns-pool")
-	// A namespace with an annotated scaler must be returned.
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/hpa-a", "ns-annotated")
-	// A namespace with BOTH a VA and an annotated scaler is still relevant.
-	ds.NamespaceTrack("VariantAutoscaling", "va-b", "ns-mixed")
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/so-b", "ns-mixed")
 
-	got := ds.AnnotatedScalerNamespaces()
+	got := ds.AnnotatedHPANamespaces()
+	if got == nil {
+		t.Fatalf("want non-nil empty slice after sync (skip-list signal), got nil (cluster-wide fallback)")
+	}
+	if len(got) != 0 {
+		t.Errorf("want empty slice, got %v", got)
+	}
+}
+
+// TestAnnotatedHPANamespacesFiltersByResourceType guards against a regression
+// where the gate forwarded the union of every tracked namespace (VAs,
+// InferencePools, etc.). In CRD-heavy clusters that would expand annotation
+// discovery from one cluster-wide HPA list into N namespaced lists with
+// nothing to find, worse than the cluster-wide baseline.
+func TestAnnotatedHPANamespacesFiltersByResourceType(t *testing.T) {
+	ds := NewDatastore(nil)
+	ds.MarkAnnotatedHPAsSynced()
+
+	// VA-only and InferencePool-only namespaces must not be returned.
+	ds.NamespaceTrack("VariantAutoscaling", "va-a", "ns-va")
+	ds.NamespaceTrack("InferencePool", "pool-a", "ns-pool")
+	// A namespace with a managed HPA must be returned.
+	ds.NamespaceTrack(ResourceTypeAnnotatedHPA, "hpa-a", "ns-annotated")
+	// A namespace with BOTH a VA and an annotated HPA is still relevant.
+	ds.NamespaceTrack("VariantAutoscaling", "va-b", "ns-mixed")
+	ds.NamespaceTrack(ResourceTypeAnnotatedHPA, "hpa-b", "ns-mixed")
+	// AnnotatedScaledObject-only namespaces must not appear in the HPA query —
+	// the two kinds use distinct resource types so the gates can move
+	// independently when SO scoping is added later.
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaledObject, "so-a", "ns-so")
+
+	got := ds.AnnotatedHPANamespaces()
 	seen := map[string]bool{}
 	for _, ns := range got {
 		seen[ns] = true
@@ -228,39 +250,35 @@ func TestAnnotatedScalerNamespacesFiltersByResourceType(t *testing.T) {
 	if !seen["ns-annotated"] || !seen["ns-mixed"] {
 		t.Errorf("want ns-annotated and ns-mixed in result, got %v", got)
 	}
-	if seen["ns-va"] || seen["ns-pool"] {
-		t.Errorf("VA-only and InferencePool-only namespaces must not appear, got %v", got)
+	if seen["ns-va"] || seen["ns-pool"] || seen["ns-so"] {
+		t.Errorf("non-HPA-tracked namespaces must not appear, got %v", got)
 	}
 	if len(got) != 2 {
-		t.Errorf("want exactly 2 annotated-scaler namespaces, got %d (%v)", len(got), got)
+		t.Errorf("want exactly 2 annotated-HPA namespaces, got %d (%v)", len(got), got)
 	}
 }
 
-// TestAnnotatedScalerNamespacesKindCollisionResilience is the regression guard
-// for the Codex P2 finding: when a managed HPA and a managed ScaledObject
-// share metadata.name in one namespace, the tracker must keep the namespace
-// returned by AnnotatedScalerNamespaces even after one of them is untracked.
-// This requires kind-qualified resourceName arguments from callers, which the
-// HPA and ScaledObject reconcilers now produce via annotatedScalerKey.
-func TestAnnotatedScalerNamespacesKindCollisionResilience(t *testing.T) {
+// TestAnnotatedHPANamespacesAndScaledObjectsAreSeparate guards against the
+// kind-collision risk: HPA and ScaledObject with the same metadata.name in
+// the same namespace must be tracked independently. With distinct resource
+// types, untracking one cannot remove the namespace if the other is still
+// tracked under its own type.
+func TestAnnotatedHPANamespacesAndScaledObjectsAreSeparate(t *testing.T) {
 	ds := NewDatastore(nil)
-	ds.MarkAnnotatedScalersSynced()
+	ds.MarkAnnotatedHPAsSynced()
 
-	// Same metadata.name "foo", same namespace, different kinds.
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/foo", "ns1")
-	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/foo", "ns1")
+	ds.NamespaceTrack(ResourceTypeAnnotatedHPA, "foo", "ns1")
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaledObject, "foo", "ns1")
 
-	// Delete the HPA. The ScaledObject must still keep ns1 tracked.
-	ds.NamespaceUntrack(ResourceTypeAnnotatedScaler, "HPA/foo", "ns1")
+	// Untrack the HPA. The HPA-scoped query should now exclude ns1 because
+	// no annotated HPA remains there, even though the same-named
+	// ScaledObject still exists under its own resource type.
+	ds.NamespaceUntrack(ResourceTypeAnnotatedHPA, "foo", "ns1")
 
-	got := ds.AnnotatedScalerNamespaces()
-	if len(got) != 1 || got[0] != "ns1" {
-		t.Fatalf("want ns1 still tracked after HPA untrack (ScaledObject remains), got %v", got)
+	if got := ds.AnnotatedHPANamespaces(); len(got) != 0 {
+		t.Errorf("want HPA query to exclude ns1 after HPA untrack, got %v", got)
 	}
-
-	// Now delete the ScaledObject too; ns1 should drop out.
-	ds.NamespaceUntrack(ResourceTypeAnnotatedScaler, "ScaledObject/foo", "ns1")
-	if got := ds.AnnotatedScalerNamespaces(); len(got) != 0 {
-		t.Errorf("want ns1 untracked after both kinds are removed, got %v", got)
+	if !ds.IsNamespaceTracked("ns1") {
+		t.Errorf("want ns1 still tracked overall (ScaledObject entry remains)")
 	}
 }

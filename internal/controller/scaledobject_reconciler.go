@@ -44,25 +44,24 @@ type ScaledObjectReconciler struct {
 // limits event processing to managed objects (see TODO #1134 for scoped List calls).
 
 // Reconcile tracks or untracks the namespace of a ScaledObject bearing llm-d.ai/managed: "true".
-// The resourceName passed to the datastore is kind-qualified so an HPA and a
-// ScaledObject sharing metadata.name in the same namespace don't collide in
-// the tracker (see annotatedScalerKey).
+// Records the track under ResourceTypeAnnotatedScaledObject. This tracking is
+// not yet consumed by discovery (the ScaledObject list stays cluster-wide so
+// late-installed KEDA still works); it's recorded for forward compatibility
+// when a follow-up adds a separate sync gate for ScaledObject scoping.
 func (r *ScaledObjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	key := annotatedScalerKey(annotatedScalerKindScaledObject, req.Name)
-
 	so := &kedav1alpha1.ScaledObject{}
 	if err := r.Get(ctx, req.NamespacedName, so); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+			r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaledObject, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
 	if !so.DeletionTimestamp.IsZero() || !annotations.IsManaged(so) {
-		r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+		r.Datastore.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaledObject, req.Name, req.Namespace)
 	} else {
-		r.Datastore.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler, key, req.Namespace)
+		r.Datastore.NamespaceTrack(datastore.ResourceTypeAnnotatedScaledObject, req.Name, req.Namespace)
 	}
 	return ctrl.Result{}, nil
 }

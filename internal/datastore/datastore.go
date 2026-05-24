@@ -40,11 +40,17 @@ var (
 	errPoolIsNull    = errors.New("EndpointPool object is nil, does not exist")
 )
 
-// ResourceTypeAnnotatedScaler is the namespace-tracking resource type used by
-// the HPA / ScaledObject reconcilers and queried by AnnotatedScalerNamespaces.
-// Exposed so callers register tracks under the same label that the gated
-// discovery helper filters on.
-const ResourceTypeAnnotatedScaler = "AnnotatedScaler"
+// Resource-type labels for the namespace tracker. HPAs and ScaledObjects use
+// distinct types so they cannot collide on metadata.name in the same namespace.
+//
+// Only AnnotatedHPA is queried by the gated discovery helper today —
+// AnnotatedScaledObject tracking is recorded for forward compatibility, since
+// utils.annotationSourcedVariants keeps the ScaledObject list cluster-wide for
+// now to preserve correctness when KEDA is installed after WVA startup.
+const (
+	ResourceTypeAnnotatedHPA          = "AnnotatedHPA"
+	ResourceTypeAnnotatedScaledObject = "AnnotatedScaledObject"
+)
 
 // getEPPMetricsToken reads the EPP metrics token from the hardcoded path.
 // This token is used for authenticating with EPP pods when scraping metrics.
@@ -101,16 +107,19 @@ type Datastore interface {
 	// ListTrackedNamespaces returns all namespaces that have tracked resources.
 	ListTrackedNamespaces() []string
 
-	// MarkAnnotatedScalersSynced records that the HPA / ScaledObject informer
-	// caches feeding the AnnotatedScaler reconcilers have completed their initial
-	// sync. Once set, the flag never flips back to false.
-	MarkAnnotatedScalersSynced()
-	// AnnotatedScalerNamespaces returns the namespaces tracked for annotated-scaler
-	// discovery, but only after MarkAnnotatedScalersSynced has been called.
-	// It returns nil until then, so callers fall back to a cluster-wide list and
-	// don't silently miss managed HPAs / ScaledObjects in namespaces whose
-	// reconcilers haven't yet fired.
-	AnnotatedScalerNamespaces() []string
+	// MarkAnnotatedHPAsSynced records that the HPA informer cache feeding the
+	// HPAReconciler has completed its initial sync. Once set, the flag never
+	// flips back to false.
+	MarkAnnotatedHPAsSynced()
+	// AnnotatedHPANamespaces returns the namespaces tracked under
+	// ResourceTypeAnnotatedHPA, gated on MarkAnnotatedHPAsSynced having been
+	// called. Three return states encode the discovery policy:
+	//   - nil           = sync not yet complete; caller falls back to a
+	//                     cluster-wide HPA list.
+	//   - []string{}    = synced, but no managed HPAs exist anywhere; caller
+	//                     skips the HPA list entirely.
+	//   - non-empty []  = synced, scope HPA discovery to these namespaces.
+	AnnotatedHPANamespaces() []string
 }
 
 func NewDatastore(cfg *config.Config) Datastore {
@@ -129,10 +138,11 @@ type datastore struct {
 	config     *config.Config // Unified configuration (injected from main.go)
 	namespaces *sync.Map      // namespace -> map[resourceType]map[resourceName]bool
 
-	// annotatedScalersSynced flips to true after the HPA and ScaledObject informer
-	// caches have completed their initial sync. AnnotatedScalerNamespaces returns
-	// nil until then so callers fall back to cluster-wide discovery.
-	annotatedScalersSynced atomic.Bool
+	// annotatedHPAsSynced flips to true after the HPA informer cache has
+	// completed its initial sync and the existing managed HPAs have been
+	// pre-populated into the tracker. AnnotatedHPANamespaces returns nil
+	// until then so callers fall back to cluster-wide discovery.
+	annotatedHPAsSynced atomic.Bool
 }
 
 // Datastore operations
@@ -323,38 +333,44 @@ func (ds *datastore) ListTrackedNamespaces() []string {
 	return namespaces
 }
 
-// MarkAnnotatedScalersSynced records that the HPA / ScaledObject informer caches
-// have completed their initial sync. Idempotent; subsequent calls are no-ops.
-// Thread-safe.
-func (ds *datastore) MarkAnnotatedScalersSynced() {
-	ds.annotatedScalersSynced.Store(true)
+// MarkAnnotatedHPAsSynced records that the HPA informer cache has completed
+// its initial sync and the pre-population pass has finished. Idempotent;
+// subsequent calls are no-ops. Thread-safe.
+func (ds *datastore) MarkAnnotatedHPAsSynced() {
+	ds.annotatedHPAsSynced.Store(true)
 }
 
-// AnnotatedScalerNamespaces returns the namespaces tracked under
-// ResourceTypeAnnotatedScaler, gated on the HPA / ScaledObject caches being
-// fully synced. While the gate is closed it returns nil, signalling callers
-// (annotation-sourced discovery in utils.variant) to fall back to a
-// cluster-wide list. Without the gate, a partially-populated tracking set
-// during startup would silently drop managed scalers in namespaces whose
-// reconcilers have not yet fired.
+// AnnotatedHPANamespaces returns the namespaces tracked under
+// ResourceTypeAnnotatedHPA, gated on the HPA cache being fully synced.
 //
-// Crucially, this filters by resource type rather than returning every
-// tracked namespace — including VariantAutoscaling- or InferencePool-tracked
-// namespaces here would expand per-tick HPA / ScaledObject list calls into
-// 2 * N namespaced lists (N = total tracked namespaces) in CRD-heavy
-// clusters, which is worse than the cluster-wide baseline the change is
-// trying to improve on. Thread-safe.
-func (ds *datastore) AnnotatedScalerNamespaces() []string {
-	if !ds.annotatedScalersSynced.Load() {
+// Three return states distinguish discovery policies for the caller
+// (utils.annotationSourcedVariants):
+//   - nil           = sync not yet complete; caller falls back to a single
+//     cluster-wide HPA list so the startup window does not
+//     drop managed HPAs in not-yet-reconciled namespaces.
+//   - []string{}    = synced, but no managed HPAs exist; caller skips the
+//     HPA list entirely instead of falling back to a
+//     cluster-wide scan it would already know is empty.
+//   - non-empty []  = scope HPA discovery to these namespaces.
+//
+// Filtering by ResourceTypeAnnotatedHPA matters: returning the union of
+// all tracked namespaces (VariantAutoscaling, InferencePool, ...) would
+// expand per-tick HPA lists into 2 * N namespaced lists in CRD-heavy
+// clusters, which is worse than the cluster-wide baseline this change is
+// trying to improve. Thread-safe.
+func (ds *datastore) AnnotatedHPANamespaces() []string {
+	if !ds.annotatedHPAsSynced.Load() {
 		return nil
 	}
-	var namespaces []string
+	// Synced; return a non-nil slice even when empty so callers distinguish
+	// "no managed HPAs exist" from "sync not done yet".
+	namespaces := []string{}
 	ds.namespaces.Range(func(key, value interface{}) bool {
 		nsMap, ok := value.(*sync.Map)
 		if !ok {
 			return true
 		}
-		if _, hasAnnotated := nsMap.Load(ResourceTypeAnnotatedScaler); hasAnnotated {
+		if _, hasAnnotated := nsMap.Load(ResourceTypeAnnotatedHPA); hasAnnotated {
 			namespaces = append(namespaces, key.(string))
 		}
 		return true

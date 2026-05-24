@@ -24,10 +24,8 @@ import (
 
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -63,20 +61,7 @@ func managedHPAFixture(ns, name string) *autoscalingv2.HorizontalPodAutoscaler {
 	}
 }
 
-func managedSOFixture(ns, name string) *kedav1alpha1.ScaledObject {
-	return &kedav1alpha1.ScaledObject{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   ns,
-			Annotations: map[string]string{annotations.Managed: "true"},
-		},
-		Spec: kedav1alpha1.ScaledObjectSpec{
-			ScaleTargetRef: &kedav1alpha1.ScaleTarget{Kind: "Deployment", Name: name + "-deploy"},
-		},
-	}
-}
-
-func TestBootstrapAnnotatedScalerTracking(t *testing.T) {
+func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("tracks managed HPAs across namespaces", func(t *testing.T) {
@@ -92,86 +77,41 @@ func TestBootstrapAnnotatedScalerTracking(t *testing.T) {
 		).Build()
 		ds := datastore.NewDatastore(nil)
 
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, false); err != nil {
+		if err := BootstrapAnnotatedHPATracking(ctx, cl, ds); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		ds.MarkAnnotatedHPAsSynced()
 
-		// Tracking pre-population must be observable through the gate, so
-		// open it explicitly and read the resulting namespace list.
-		ds.MarkAnnotatedScalersSynced()
-		got := ds.AnnotatedScalerNamespaces()
+		got := ds.AnnotatedHPANamespaces()
 		sort.Strings(got)
 		if len(got) != 2 || got[0] != "ns1" || got[1] != "ns2" {
 			t.Fatalf("want exactly [ns1 ns2], got %v", got)
 		}
 	})
 
-	t.Run("includes ScaledObject namespaces when keda is enabled", func(t *testing.T) {
+	t.Run("does not list ScaledObjects", func(t *testing.T) {
+		// SO scoping is intentionally not part of the gate; the bootstrap
+		// helper must not issue a ScaledObject list so it stays safe when
+		// KEDA is absent or installed after WVA startup.
 		s := bootstrapScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPAFixture("ns1", "hpa-a"),
-			managedSOFixture("ns2", "so-b"),
-		).Build()
-		ds := datastore.NewDatastore(nil)
-
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, true); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		ds.MarkAnnotatedScalersSynced()
-		got := ds.AnnotatedScalerNamespaces()
-		sort.Strings(got)
-		if len(got) != 2 || got[0] != "ns1" || got[1] != "ns2" {
-			t.Fatalf("want [ns1 ns2], got %v", got)
-		}
-	})
-
-	t.Run("kedaEnabled=false skips ScaledObject discovery entirely", func(t *testing.T) {
-		s := bootstrapScheme(t)
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "hpa-a"),
-			managedSOFixture("ns2", "so-b"),
 		).WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*kedav1alpha1.ScaledObjectList); ok {
-					t.Fatalf("ScaledObject list must not be issued when kedaEnabled=false")
+					t.Fatalf("ScaledObject list must not be issued by HPA-only bootstrap")
 				}
 				return c.List(ctx, list, opts...)
 			},
 		}).Build()
 		ds := datastore.NewDatastore(nil)
 
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, false); err != nil {
+		if err := BootstrapAnnotatedHPATracking(ctx, cl, ds); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		ds.MarkAnnotatedScalersSynced()
-		got := ds.AnnotatedScalerNamespaces()
-		if len(got) != 1 || got[0] != "ns1" {
-			t.Fatalf("want only [ns1], got %v", got)
-		}
-	})
-
-	t.Run("NoMatchError on ScaledObject list is benign", func(t *testing.T) {
-		s := bootstrapScheme(t)
-		soGK := schema.GroupKind{Group: "keda.sh", Kind: "ScaledObject"}
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "hpa-a"),
-		).WithInterceptorFuncs(interceptor.Funcs{
-			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-				if _, ok := list.(*kedav1alpha1.ScaledObjectList); ok {
-					return &apimeta.NoKindMatchError{GroupKind: soGK}
-				}
-				return c.List(ctx, list, opts...)
-			},
-		}).Build()
-		ds := datastore.NewDatastore(nil)
-
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, true); err != nil {
-			t.Fatalf("expected NoMatchError to be swallowed, got: %v", err)
-		}
-		ds.MarkAnnotatedScalersSynced()
-		got := ds.AnnotatedScalerNamespaces()
-		if len(got) != 1 || got[0] != "ns1" {
-			t.Fatalf("want [ns1] (HPA-only), got %v", got)
+		ds.MarkAnnotatedHPAsSynced()
+		if got := ds.AnnotatedHPANamespaces(); len(got) != 1 || got[0] != "ns1" {
+			t.Fatalf("want [ns1], got %v", got)
 		}
 	})
 
@@ -187,67 +127,30 @@ func TestBootstrapAnnotatedScalerTracking(t *testing.T) {
 		}).Build()
 		ds := datastore.NewDatastore(nil)
 
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, false); err == nil {
+		if err := BootstrapAnnotatedHPATracking(ctx, cl, ds); err == nil {
 			t.Fatal("want error from HPA list failure, got nil")
 		}
 	})
 
-	t.Run("HPA and ScaledObject sharing metadata.name in same namespace are tracked independently", func(t *testing.T) {
-		// Regression for the kind-collision bug: if the tracker were keyed only
-		// by (namespace, name), the HPA and the ScaledObject would collapse
-		// into a single entry, and untracking either one would also untrack
-		// the namespace despite the other still existing. annotatedScalerKey
-		// guards against that — see Datastore.AnnotatedScalerNamespaces
-		// behaviour in datastore tests.
-		s := bootstrapScheme(t)
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "foo"),
-			managedSOFixture("ns1", "foo"),
-		).Build()
-		ds := datastore.NewDatastore(nil)
-
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, true); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		ds.MarkAnnotatedScalersSynced()
-
-		got := ds.AnnotatedScalerNamespaces()
-		if len(got) != 1 || got[0] != "ns1" {
-			t.Fatalf("want ns1 tracked exactly once via two kind-qualified entries, got %v", got)
-		}
-
-		// Untracking the HPA must leave the namespace tracked via the ScaledObject.
-		ds.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler,
-			annotatedScalerKey(annotatedScalerKindHPA, "foo"), "ns1")
-		got = ds.AnnotatedScalerNamespaces()
-		if len(got) != 1 || got[0] != "ns1" {
-			t.Errorf("want ns1 still tracked after HPA-only untrack (ScaledObject remains), got %v", got)
-		}
-	})
-
-	t.Run("skips HPAs and ScaledObjects being deleted", func(t *testing.T) {
+	t.Run("skips HPAs being deleted", func(t *testing.T) {
 		now := metav1.Now()
 		s := bootstrapScheme(t)
-		deletingHPA := managedHPAFixture("ns-del-hpa", "hpa-deleting")
+		deletingHPA := managedHPAFixture("ns-del", "hpa-deleting")
 		deletingHPA.DeletionTimestamp = &now
 		deletingHPA.Finalizers = []string{"placeholder.example.com/keep-alive"}
-		deletingSO := managedSOFixture("ns-del-so", "so-deleting")
-		deletingSO.DeletionTimestamp = &now
-		deletingSO.Finalizers = []string{"placeholder.example.com/keep-alive"}
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPAFixture("ns1", "hpa-live"),
 			deletingHPA,
-			deletingSO,
 		).Build()
 		ds := datastore.NewDatastore(nil)
 
-		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, true); err != nil {
+		if err := BootstrapAnnotatedHPATracking(ctx, cl, ds); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		ds.MarkAnnotatedScalersSynced()
-		got := ds.AnnotatedScalerNamespaces()
+		ds.MarkAnnotatedHPAsSynced()
+		got := ds.AnnotatedHPANamespaces()
 		if len(got) != 1 || got[0] != "ns1" {
-			t.Fatalf("want only [ns1] (deleting objects skipped), got %v", got)
+			t.Fatalf("want only [ns1] (deleting HPA skipped), got %v", got)
 		}
 	})
 }
