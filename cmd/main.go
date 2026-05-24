@@ -451,6 +451,7 @@ func main() {
 			mgr.GetScheme(),
 			mgr.GetEventRecorderFor("workload-variant-autoscaler-saturation-engine"),
 			sourceRegistry,
+			ds,  // Datastore for namespace tracking (per-tick discovery scoping)
 			cfg, // Pass unified Config to engine
 		)
 		go engine.StartOptimizeLoop(ctx)

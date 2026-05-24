@@ -207,7 +207,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -222,7 +222,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-a", "Deployment", "deploy-a", "model-x"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-b", "Deployment", "deploy-b", "model-x"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -261,7 +261,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		}).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -281,7 +281,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		}).Build()
 
-		_, err := annotationSourcedVariants(ctx, cl)
+		_, err := annotationSourcedVariants(ctx, cl, nil)
 		if err == nil {
 			t.Fatal("want error for non-NoMatch ScaledObject list failure, got nil")
 		}
@@ -295,7 +295,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-a", "Deployment", "deploy-a", "model-so"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -304,6 +304,92 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		}
 		if result[0].Spec.ModelID != "model-so" {
 			t.Errorf("want ScaledObject to win, got modelID %q", result[0].Spec.ModelID)
+		}
+	})
+
+	t.Run("trackedNamespaces scopes the list — objects in other namespaces are excluded", func(t *testing.T) {
+		s := variantTestScheme(t)
+		var listCalls []string
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"), // outside the tracked set
+			managedSO("ns1", "so-c", "Deployment", "deploy-c", "model-x"),
+			managedSO("ns3", "so-d", "Deployment", "deploy-d", "model-x"), // outside the tracked set
+		).WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				// Record the namespace selector so we can assert per-namespace
+				// scoping was used rather than a cluster-wide list.
+				var listOpts client.ListOptions
+				listOpts.ApplyOptions(opts)
+				listCalls = append(listCalls, listOpts.Namespace)
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("want 2 VAs (both from ns1), got %d", len(result))
+		}
+		for _, va := range result {
+			if va.Namespace != "ns1" {
+				t.Errorf("want VA from ns1, got namespace %q for %q", va.Namespace, va.Name)
+			}
+		}
+		// Each kind (HPA + ScaledObject) should be listed once with InNamespace("ns1").
+		// The interceptor records the namespace argument on every List call.
+		for _, ns := range listCalls {
+			if ns != "ns1" {
+				t.Errorf("want every List scoped to ns1, got namespace %q (full call list: %v)", ns, listCalls)
+			}
+		}
+	})
+
+	t.Run("trackedNamespaces with multiple entries unions results", func(t *testing.T) {
+		s := variantTestScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedSO("ns2", "so-b", "Deployment", "deploy-b", "model-x"),
+			managedHPA("ns3", "hpa-c", "deploy-c", "model-x"), // not tracked
+		).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1", "ns2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("want 2 VAs (union of ns1 + ns2), got %d", len(result))
+		}
+		namespaces := map[string]bool{}
+		for _, va := range result {
+			namespaces[va.Namespace] = true
+		}
+		if !namespaces["ns1"] || !namespaces["ns2"] {
+			t.Errorf("want VAs from both ns1 and ns2, got namespaces %v", namespaces)
+		}
+		if namespaces["ns3"] {
+			t.Errorf("ns3 is not in trackedNamespaces but was returned")
+		}
+	})
+
+	t.Run("empty trackedNamespaces falls back to cluster-wide list", func(t *testing.T) {
+		s := variantTestScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"),
+		).Build()
+
+		// Both empty slice and nil should produce identical cluster-wide behaviour.
+		for _, tracked := range [][]string{nil, {}} {
+			result, err := annotationSourcedVariants(ctx, cl, tracked)
+			if err != nil {
+				t.Fatalf("unexpected error for tracked=%v: %v", tracked, err)
+			}
+			if len(result) != 2 {
+				t.Errorf("want 2 VAs (cluster-wide) for tracked=%v, got %d", tracked, len(result))
+			}
 		}
 	})
 }
@@ -328,7 +414,7 @@ func TestReadyVariantAutoscalingsMergePath(t *testing.T) {
 			managedHPA("ns2", "hpa-ann", "deploy-ann", "model-ann"),
 		).Build()
 
-		result, err := readyVariantAutoscalings(ctx, cl)
+		result, err := readyVariantAutoscalings(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -344,7 +430,7 @@ func TestReadyVariantAutoscalingsMergePath(t *testing.T) {
 			managedHPA("ns1", "hpa-ann", "shared-deploy", "model-ann"),
 		).Build()
 
-		result, err := readyVariantAutoscalings(ctx, cl)
+		result, err := readyVariantAutoscalings(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -370,7 +456,7 @@ func TestReadyVariantAutoscalingsMergePath(t *testing.T) {
 			},
 		}).Build()
 
-		result, err := readyVariantAutoscalings(ctx, cl)
+		result, err := readyVariantAutoscalings(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("expected non-fatal path, got error: %v", err)
 		}
@@ -396,7 +482,7 @@ func TestReadyVariantAutoscalingsMergePath(t *testing.T) {
 			},
 		}).Build()
 
-		result, err := readyVariantAutoscalings(ctx, cl)
+		result, err := readyVariantAutoscalings(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("expected non-fatal path, got error: %v", err)
 		}

@@ -245,8 +245,9 @@ func TestMultipleInactiveVariants(t *testing.T) {
 		maxConcurrency: 30,
 	}
 
-	// Get all inactive VAs
-	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, fakeClient)
+	// Get all inactive VAs (nil trackedNamespaces → cluster-wide list, matches
+	// the test's existing fake client topology).
+	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, fakeClient, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, len(inactiveVAs), "Should have 3 inactive VAs")
 

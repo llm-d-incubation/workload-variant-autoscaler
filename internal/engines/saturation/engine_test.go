@@ -34,6 +34,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -215,7 +216,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -277,7 +278,7 @@ var _ = Describe("Saturation Engine", func() {
 			sourceRegistry.Register("prometheus", source.NewNoOpSource()) // nolint:errcheck
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
@@ -453,7 +454,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -569,7 +570,7 @@ var _ = Describe("Saturation Engine", func() {
 					EnableLimiter: false,
 				},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Running optimize() with EnableLimiter=false")
 			err := engine.optimize(ctx)

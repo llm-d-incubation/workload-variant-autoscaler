@@ -37,6 +37,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -110,6 +111,11 @@ type Engine struct {
 	scheme   *runtime.Scheme
 	executor executor.Executor
 
+	// ds exposes the namespace-tracking datastore so the engine can scope
+	// per-tick HPA/ScaledObject discovery to known-relevant namespaces
+	// (see utils.ActiveVariantAutoscaling). Required.
+	ds datastore.Datastore
+
 	Recorder record.EventRecorder
 	Config   *config.Config // Unified configuration (injected from main.go)
 
@@ -150,10 +156,14 @@ type Engine struct {
 
 // NewEngine creates a new instance of the saturation engine.
 // Config must be non-nil (validated in main.go before engine creation).
+// ds is the namespace-tracking datastore used to scope per-tick discovery; required.
 // Panics if cfg is nil to fail fast on programming errors.
-func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, cfg *config.Config) *Engine {
+func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, ds datastore.Datastore, cfg *config.Config) *Engine {
 	if cfg == nil {
 		panic("config is nil in NewEngine - this should not happen (validated in main.go before engine creation)")
+	}
+	if ds == nil {
+		panic("ds is nil in NewEngine - this should not happen (datastore is created before engine in main.go)")
 	}
 	promSource := metricsRegistry.Get("prometheus") // assume prometheus source is registered
 
@@ -178,6 +188,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	engine := Engine{
 		client:                  client,
 		scheme:                  scheme,
+		ds:                      ds,
 		Recorder:                recorder,
 		Config:                  cfg,
 		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client),
@@ -274,7 +285,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.Info("Scaling to zero is enabled")
 	}
 
-	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client)
+	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client, e.ds.ListTrackedNamespaces())
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
 		return err
