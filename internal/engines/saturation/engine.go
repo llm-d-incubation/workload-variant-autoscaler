@@ -285,7 +285,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.Info("Scaling to zero is enabled")
 	}
 
-	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client, e.ds.ListTrackedNamespaces())
+	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client, e.ds.AnnotatedScalerNamespaces())
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
 		return err

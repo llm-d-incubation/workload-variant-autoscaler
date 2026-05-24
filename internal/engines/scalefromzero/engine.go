@@ -123,10 +123,11 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 func (e *Engine) optimize(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
-	// Get all inactive (replicas == 0) VAs. Scope annotation-sourced discovery to
-	// namespaces already known to the datastore so the per-tick HPA/ScaledObject
-	// List doesn't scan the cluster-wide informer cache.
-	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, e.client, e.Datastore.ListTrackedNamespaces())
+	// Get all inactive (replicas == 0) VAs. Scope annotation-sourced discovery
+	// via the datastore's AnnotatedScalerNamespaces helper, which gates the
+	// scoped list on the HPA / ScaledObject informer caches being synced;
+	// callers fall back to a cluster-wide list while the gate is closed.
+	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, e.client, e.Datastore.AnnotatedScalerNamespaces())
 	if err != nil {
 		return err
 	}

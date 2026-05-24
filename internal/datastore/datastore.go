@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/pod"
@@ -93,6 +94,17 @@ type Datastore interface {
 	IsNamespaceTracked(namespace string) bool
 	// ListTrackedNamespaces returns all namespaces that have tracked resources.
 	ListTrackedNamespaces() []string
+
+	// MarkAnnotatedScalersSynced records that the HPA / ScaledObject informer
+	// caches feeding the AnnotatedScaler reconcilers have completed their initial
+	// sync. Once set, the flag never flips back to false.
+	MarkAnnotatedScalersSynced()
+	// AnnotatedScalerNamespaces returns the namespaces tracked for annotated-scaler
+	// discovery, but only after MarkAnnotatedScalersSynced has been called.
+	// It returns nil until then, so callers fall back to a cluster-wide list and
+	// don't silently miss managed HPAs / ScaledObjects in namespaces whose
+	// reconcilers haven't yet fired.
+	AnnotatedScalerNamespaces() []string
 }
 
 func NewDatastore(cfg *config.Config) Datastore {
@@ -110,6 +122,11 @@ type datastore struct {
 	registry   *source.SourceRegistry
 	config     *config.Config // Unified configuration (injected from main.go)
 	namespaces *sync.Map      // namespace -> map[resourceType]map[resourceName]bool
+
+	// annotatedScalersSynced flips to true after the HPA and ScaledObject informer
+	// caches have completed their initial sync. AnnotatedScalerNamespaces returns
+	// nil until then so callers fall back to cluster-wide discovery.
+	annotatedScalersSynced atomic.Bool
 }
 
 // Datastore operations
@@ -298,4 +315,24 @@ func (ds *datastore) ListTrackedNamespaces() []string {
 		return true
 	})
 	return namespaces
+}
+
+// MarkAnnotatedScalersSynced records that the HPA / ScaledObject informer caches
+// have completed their initial sync. Idempotent; subsequent calls are no-ops.
+// Thread-safe.
+func (ds *datastore) MarkAnnotatedScalersSynced() {
+	ds.annotatedScalersSynced.Store(true)
+}
+
+// AnnotatedScalerNamespaces returns the tracked namespaces gated on the HPA /
+// ScaledObject caches being fully synced. While the gate is closed it returns
+// nil, signalling callers (annotation-sourced discovery in utils.variant) to
+// fall back to a cluster-wide list. Without the gate, a partially-populated
+// tracking set during startup would silently drop managed scalers in
+// namespaces whose reconcilers have not yet fired. Thread-safe.
+func (ds *datastore) AnnotatedScalerNamespaces() []string {
+	if !ds.annotatedScalersSynced.Load() {
+		return nil
+	}
+	return ds.ListTrackedNamespaces()
 }

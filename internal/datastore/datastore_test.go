@@ -159,3 +159,43 @@ func TestDatastore(t *testing.T) {
 		})
 	}
 }
+
+// TestAnnotatedScalerNamespacesGatedOnSync covers the cache-sync gate that
+// keeps utils.annotationSourcedVariants on its cluster-wide fallback path
+// until the HPA / ScaledObject informer caches have completed their initial
+// sync. Until MarkAnnotatedScalersSynced is called, AnnotatedScalerNamespaces
+// must return nil even when namespaces are tracked, so a partially-populated
+// tracking set during startup does not silently hide managed scalers from
+// discovery.
+func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
+	ds := NewDatastore(nil)
+
+	// Simulate partial reconciler progress: ns1 already tracked, ns2 not yet.
+	ds.NamespaceTrack("AnnotatedScaler", "hpa-a", "ns1")
+
+	if got := ds.AnnotatedScalerNamespaces(); got != nil {
+		t.Errorf("expected nil before MarkAnnotatedScalersSynced (cluster-wide fallback), got %v", got)
+	}
+
+	// Once the gate opens, scoped discovery becomes active.
+	ds.MarkAnnotatedScalersSynced()
+	ds.NamespaceTrack("AnnotatedScaler", "so-b", "ns2")
+
+	got := ds.AnnotatedScalerNamespaces()
+	if len(got) != 2 {
+		t.Fatalf("want 2 tracked namespaces after sync, got %d (%v)", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, ns := range got {
+		seen[ns] = true
+	}
+	if !seen["ns1"] || !seen["ns2"] {
+		t.Errorf("want both ns1 and ns2 tracked, got %v", seen)
+	}
+
+	// MarkAnnotatedScalersSynced is idempotent and never flips back to false.
+	ds.MarkAnnotatedScalersSynced()
+	if ds.AnnotatedScalerNamespaces() == nil {
+		t.Errorf("gate should stay open after repeated MarkAnnotatedScalersSynced calls")
+	}
+}
