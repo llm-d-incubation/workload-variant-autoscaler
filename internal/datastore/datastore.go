@@ -40,6 +40,12 @@ var (
 	errPoolIsNull    = errors.New("EndpointPool object is nil, does not exist")
 )
 
+// ResourceTypeAnnotatedScaler is the namespace-tracking resource type used by
+// the HPA / ScaledObject reconcilers and queried by AnnotatedScalerNamespaces.
+// Exposed so callers register tracks under the same label that the gated
+// discovery helper filters on.
+const ResourceTypeAnnotatedScaler = "AnnotatedScaler"
+
 // getEPPMetricsToken reads the EPP metrics token from the hardcoded path.
 // This token is used for authenticating with EPP pods when scraping metrics.
 // Returns empty string if the file cannot be read.
@@ -324,15 +330,34 @@ func (ds *datastore) MarkAnnotatedScalersSynced() {
 	ds.annotatedScalersSynced.Store(true)
 }
 
-// AnnotatedScalerNamespaces returns the tracked namespaces gated on the HPA /
-// ScaledObject caches being fully synced. While the gate is closed it returns
-// nil, signalling callers (annotation-sourced discovery in utils.variant) to
-// fall back to a cluster-wide list. Without the gate, a partially-populated
-// tracking set during startup would silently drop managed scalers in
-// namespaces whose reconcilers have not yet fired. Thread-safe.
+// AnnotatedScalerNamespaces returns the namespaces tracked under
+// ResourceTypeAnnotatedScaler, gated on the HPA / ScaledObject caches being
+// fully synced. While the gate is closed it returns nil, signalling callers
+// (annotation-sourced discovery in utils.variant) to fall back to a
+// cluster-wide list. Without the gate, a partially-populated tracking set
+// during startup would silently drop managed scalers in namespaces whose
+// reconcilers have not yet fired.
+//
+// Crucially, this filters by resource type rather than returning every
+// tracked namespace — including VariantAutoscaling- or InferencePool-tracked
+// namespaces here would expand per-tick HPA / ScaledObject list calls into
+// 2 * N namespaced lists (N = total tracked namespaces) in CRD-heavy
+// clusters, which is worse than the cluster-wide baseline the change is
+// trying to improve on. Thread-safe.
 func (ds *datastore) AnnotatedScalerNamespaces() []string {
 	if !ds.annotatedScalersSynced.Load() {
 		return nil
 	}
-	return ds.ListTrackedNamespaces()
+	var namespaces []string
+	ds.namespaces.Range(func(key, value interface{}) bool {
+		nsMap, ok := value.(*sync.Map)
+		if !ok {
+			return true
+		}
+		if _, hasAnnotated := nsMap.Load(ResourceTypeAnnotatedScaler); hasAnnotated {
+			namespaces = append(namespaces, key.(string))
+		}
+		return true
+	})
+	return namespaces
 }

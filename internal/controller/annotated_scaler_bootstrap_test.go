@@ -192,6 +192,39 @@ func TestBootstrapAnnotatedScalerTracking(t *testing.T) {
 		}
 	})
 
+	t.Run("HPA and ScaledObject sharing metadata.name in same namespace are tracked independently", func(t *testing.T) {
+		// Regression for the kind-collision bug: if the tracker were keyed only
+		// by (namespace, name), the HPA and the ScaledObject would collapse
+		// into a single entry, and untracking either one would also untrack
+		// the namespace despite the other still existing. annotatedScalerKey
+		// guards against that — see Datastore.AnnotatedScalerNamespaces
+		// behaviour in datastore tests.
+		s := bootstrapScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPAFixture("ns1", "foo"),
+			managedSOFixture("ns1", "foo"),
+		).Build()
+		ds := datastore.NewDatastore(nil)
+
+		if err := BootstrapAnnotatedScalerTracking(ctx, cl, ds, true); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		ds.MarkAnnotatedScalersSynced()
+
+		got := ds.AnnotatedScalerNamespaces()
+		if len(got) != 1 || got[0] != "ns1" {
+			t.Fatalf("want ns1 tracked exactly once via two kind-qualified entries, got %v", got)
+		}
+
+		// Untracking the HPA must leave the namespace tracked via the ScaledObject.
+		ds.NamespaceUntrack(datastore.ResourceTypeAnnotatedScaler,
+			annotatedScalerKey(annotatedScalerKindHPA, "foo"), "ns1")
+		got = ds.AnnotatedScalerNamespaces()
+		if len(got) != 1 || got[0] != "ns1" {
+			t.Errorf("want ns1 still tracked after HPA-only untrack (ScaledObject remains), got %v", got)
+		}
+	})
+
 	t.Run("skips HPAs and ScaledObjects being deleted", func(t *testing.T) {
 		now := metav1.Now()
 		s := bootstrapScheme(t)

@@ -171,7 +171,7 @@ func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
 	ds := NewDatastore(nil)
 
 	// Simulate partial reconciler progress: ns1 already tracked, ns2 not yet.
-	ds.NamespaceTrack("AnnotatedScaler", "hpa-a", "ns1")
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/hpa-a", "ns1")
 
 	if got := ds.AnnotatedScalerNamespaces(); got != nil {
 		t.Errorf("expected nil before MarkAnnotatedScalersSynced (cluster-wide fallback), got %v", got)
@@ -179,7 +179,7 @@ func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
 
 	// Once the gate opens, scoped discovery becomes active.
 	ds.MarkAnnotatedScalersSynced()
-	ds.NamespaceTrack("AnnotatedScaler", "so-b", "ns2")
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/so-b", "ns2")
 
 	got := ds.AnnotatedScalerNamespaces()
 	if len(got) != 2 {
@@ -197,5 +197,70 @@ func TestAnnotatedScalerNamespacesGatedOnSync(t *testing.T) {
 	ds.MarkAnnotatedScalersSynced()
 	if ds.AnnotatedScalerNamespaces() == nil {
 		t.Errorf("gate should stay open after repeated MarkAnnotatedScalersSynced calls")
+	}
+}
+
+// TestAnnotatedScalerNamespacesFiltersByResourceType is the regression guard
+// for the Codex P1 finding: AnnotatedScalerNamespaces must NOT forward the
+// union of every tracked namespace. Returning namespaces tracked under
+// "VariantAutoscaling" or "InferencePool" would expand annotation discovery
+// from 2 cluster-wide List calls per tick into 2*N namespaced List calls
+// (N = total tracked namespaces), a substantial regression in CRD-heavy
+// clusters with few annotated scalers.
+func TestAnnotatedScalerNamespacesFiltersByResourceType(t *testing.T) {
+	ds := NewDatastore(nil)
+	ds.MarkAnnotatedScalersSynced()
+
+	// VA-only namespaces must not be returned by AnnotatedScalerNamespaces.
+	ds.NamespaceTrack("VariantAutoscaling", "va-a", "ns-va")
+	ds.NamespaceTrack("InferencePool", "pool-a", "ns-pool")
+	// A namespace with an annotated scaler must be returned.
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/hpa-a", "ns-annotated")
+	// A namespace with BOTH a VA and an annotated scaler is still relevant.
+	ds.NamespaceTrack("VariantAutoscaling", "va-b", "ns-mixed")
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/so-b", "ns-mixed")
+
+	got := ds.AnnotatedScalerNamespaces()
+	seen := map[string]bool{}
+	for _, ns := range got {
+		seen[ns] = true
+	}
+	if !seen["ns-annotated"] || !seen["ns-mixed"] {
+		t.Errorf("want ns-annotated and ns-mixed in result, got %v", got)
+	}
+	if seen["ns-va"] || seen["ns-pool"] {
+		t.Errorf("VA-only and InferencePool-only namespaces must not appear, got %v", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("want exactly 2 annotated-scaler namespaces, got %d (%v)", len(got), got)
+	}
+}
+
+// TestAnnotatedScalerNamespacesKindCollisionResilience is the regression guard
+// for the Codex P2 finding: when a managed HPA and a managed ScaledObject
+// share metadata.name in one namespace, the tracker must keep the namespace
+// returned by AnnotatedScalerNamespaces even after one of them is untracked.
+// This requires kind-qualified resourceName arguments from callers, which the
+// HPA and ScaledObject reconcilers now produce via annotatedScalerKey.
+func TestAnnotatedScalerNamespacesKindCollisionResilience(t *testing.T) {
+	ds := NewDatastore(nil)
+	ds.MarkAnnotatedScalersSynced()
+
+	// Same metadata.name "foo", same namespace, different kinds.
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "HPA/foo", "ns1")
+	ds.NamespaceTrack(ResourceTypeAnnotatedScaler, "ScaledObject/foo", "ns1")
+
+	// Delete the HPA. The ScaledObject must still keep ns1 tracked.
+	ds.NamespaceUntrack(ResourceTypeAnnotatedScaler, "HPA/foo", "ns1")
+
+	got := ds.AnnotatedScalerNamespaces()
+	if len(got) != 1 || got[0] != "ns1" {
+		t.Fatalf("want ns1 still tracked after HPA untrack (ScaledObject remains), got %v", got)
+	}
+
+	// Now delete the ScaledObject too; ns1 should drop out.
+	ds.NamespaceUntrack(ResourceTypeAnnotatedScaler, "ScaledObject/foo", "ns1")
+	if got := ds.AnnotatedScalerNamespaces(); len(got) != 0 {
+		t.Errorf("want ns1 untracked after both kinds are removed, got %v", got)
 	}
 }

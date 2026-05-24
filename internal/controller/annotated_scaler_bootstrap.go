@@ -28,6 +28,25 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 )
 
+// Kinds tracked under ResourceTypeAnnotatedScaler. The tracker's internal map
+// is keyed by namespace -> resourceType -> resourceName, so without a
+// kind-qualified resourceName a managed HPA and a managed ScaledObject
+// sharing metadata.name in one namespace would collapse into a single
+// entry — and deleting either would untrack the namespace despite the other
+// still existing. Keep these prefixes stable across HPAReconciler,
+// ScaledObjectReconciler, and BootstrapAnnotatedScalerTracking.
+const (
+	annotatedScalerKindHPA          = "HPA"
+	annotatedScalerKindScaledObject = "ScaledObject"
+)
+
+// annotatedScalerKey composes a kind-qualified resourceName for
+// Datastore.NamespaceTrack / NamespaceUntrack under
+// ResourceTypeAnnotatedScaler.
+func annotatedScalerKey(kind, name string) string {
+	return kind + "/" + name
+}
+
 // BootstrapAnnotatedScalerTracking enumerates the existing managed HPAs and
 // (when KEDA is enabled) ScaledObjects from the controller-runtime cache and
 // pre-populates the datastore's AnnotatedScaler namespace tracking. It is
@@ -53,7 +72,8 @@ func BootstrapAnnotatedScalerTracking(ctx context.Context, k8sClient client.Clie
 	for i := range hpaList.Items {
 		hpa := &hpaList.Items[i]
 		if annotations.IsManaged(hpa) && hpa.DeletionTimestamp.IsZero() {
-			ds.NamespaceTrack("AnnotatedScaler", hpa.Name, hpa.Namespace)
+			ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+				annotatedScalerKey(annotatedScalerKindHPA, hpa.Name), hpa.Namespace)
 		}
 	}
 
@@ -74,7 +94,8 @@ func BootstrapAnnotatedScalerTracking(ctx context.Context, k8sClient client.Clie
 	for i := range soList.Items {
 		so := &soList.Items[i]
 		if annotations.IsManaged(so) && so.DeletionTimestamp.IsZero() {
-			ds.NamespaceTrack("AnnotatedScaler", so.Name, so.Namespace)
+			ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+				annotatedScalerKey(annotatedScalerKindScaledObject, so.Name), so.Namespace)
 		}
 	}
 	return nil

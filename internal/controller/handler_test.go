@@ -76,7 +76,8 @@ func TestHPAReconciler_UntracksOnNotFound(t *testing.T) {
 	s := scalerTestScheme(t)
 	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	ds := datastore.NewDatastore(config.NewTestConfig())
-	ds.NamespaceTrack("AnnotatedScaler", "hpa-a", "ns1")
+	ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+		annotatedScalerKey(annotatedScalerKindHPA, "hpa-a"), "ns1")
 
 	r := &HPAReconciler{Client: cl, Datastore: ds}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "hpa-a", Namespace: "ns1"}})
@@ -103,7 +104,8 @@ func TestHPAReconciler_UntracksOnDeletion(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(hpa).Build()
 	ds := datastore.NewDatastore(config.NewTestConfig())
-	ds.NamespaceTrack("AnnotatedScaler", "hpa-a", "ns1")
+	ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+		annotatedScalerKey(annotatedScalerKindHPA, "hpa-a"), "ns1")
 
 	r := &HPAReconciler{Client: cl, Datastore: ds}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "hpa-a", Namespace: "ns1"}})
@@ -123,7 +125,8 @@ func TestHPAReconciler_UntracksOnAnnotationRemoval(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(hpa).Build()
 	ds := datastore.NewDatastore(config.NewTestConfig())
-	ds.NamespaceTrack("AnnotatedScaler", "hpa-a", "ns1")
+	ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+		annotatedScalerKey(annotatedScalerKindHPA, "hpa-a"), "ns1")
 
 	r := &HPAReconciler{Client: cl, Datastore: ds}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "hpa-a", Namespace: "ns1"}})
@@ -163,7 +166,8 @@ func TestScaledObjectReconciler_UntracksOnNotFound(t *testing.T) {
 	s := scalerTestScheme(t)
 	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	ds := datastore.NewDatastore(config.NewTestConfig())
-	ds.NamespaceTrack("AnnotatedScaler", "so-a", "ns1")
+	ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+		annotatedScalerKey(annotatedScalerKindScaledObject, "so-a"), "ns1")
 
 	r := &ScaledObjectReconciler{Client: cl, Datastore: ds}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "so-a", Namespace: "ns1"}})
@@ -182,7 +186,8 @@ func TestScaledObjectReconciler_UntracksOnAnnotationRemoval(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(so).Build()
 	ds := datastore.NewDatastore(config.NewTestConfig())
-	ds.NamespaceTrack("AnnotatedScaler", "so-a", "ns1")
+	ds.NamespaceTrack(datastore.ResourceTypeAnnotatedScaler,
+		annotatedScalerKey(annotatedScalerKindScaledObject, "so-a"), "ns1")
 
 	r := &ScaledObjectReconciler{Client: cl, Datastore: ds}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "so-a", Namespace: "ns1"}})
