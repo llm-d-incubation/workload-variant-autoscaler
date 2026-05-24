@@ -71,6 +71,7 @@ var (
 	requiredCapacity      *prometheus.GaugeVec
 	kvCacheTokensUsed     *prometheus.GaugeVec
 	kvCacheTokensCapacity *prometheus.GaugeVec
+	saturationMetricsUp   *prometheus.GaugeVec
 
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
@@ -111,6 +112,10 @@ func InitMetrics(registry prometheus.Registerer) error {
 	// requiredCapacityLabels: satModelLabels + "unit" to disambiguate V1 (binary 0/1)
 	// vs V2 (continuous token demand) values of the wva_required_capacity gauge.
 	requiredCapacityLabels := []string{constants.LabelVariantName, constants.LabelNamespace, constants.LabelModelName, constants.LabelUnit}
+	// satFreshnessLabels: smallest cardinality shared across the five
+	// saturation/capacity gauges. Freshness is a per-VA property, so
+	// model_name / accelerator_type / unit don't need to be on this series.
+	satFreshnessLabels := []string{constants.LabelVariantName, constants.LabelNamespace}
 
 	if controllerInstance != "" {
 		baseLabels = append(baseLabels, constants.LabelControllerInstance)
@@ -119,6 +124,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 		satAccelLabels = append(satAccelLabels, constants.LabelControllerInstance)
 		satModelLabels = append(satModelLabels, constants.LabelControllerInstance)
 		requiredCapacityLabels = append(requiredCapacityLabels, constants.LabelControllerInstance)
+		satFreshnessLabels = append(satFreshnessLabels, constants.LabelControllerInstance)
 	}
 
 	replicaScalingTotal = prometheus.NewCounterVec(
@@ -190,6 +196,13 @@ func InitMetrics(registry prometheus.Registerer) error {
 			Help: "Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).",
 		},
 		satModelLabels,
+	)
+	saturationMetricsUp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVASaturationMetricsUp,
+			Help: "Per-VA freshness signal for the saturation/capacity gauges: 1.0 in cycles where the optimizer produced a fresh decision for the variant, 0.0 in cycles where the analyzer was aware of the variant but did not refresh those gauges. Pairs with wva_saturation_utilization, wva_spare_capacity, wva_required_capacity, wva_kv_cache_tokens_used, and wva_kv_cache_tokens_capacity so dashboards can gate alerts on this gauge instead of relying on Prometheus' implicit staleness marker.",
+		},
+		satFreshnessLabels,
 	)
 
 	optimizationDurationLabels := []string{constants.LabelStatus}
@@ -440,6 +453,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(kvCacheTokensCapacity); err != nil {
 		return fmt.Errorf("failed to register kvCacheTokensCapacity metric: %w", err)
+	}
+	if err := registry.Register(saturationMetricsUp); err != nil {
+		return fmt.Errorf("failed to register saturationMetricsUp metric: %w", err)
 	}
 
 	return nil
@@ -852,4 +868,37 @@ func (m *MetricsEmitter) RecordSaturationMetrics(
 	requiredCapacity.With(requiredLabels).Set(required)
 	kvCacheTokensUsed.With(modelLabels).Set(float64(kvTokensUsed))
 	kvCacheTokensCapacity.With(modelLabels).Set(float64(kvTokensCapacity))
+}
+
+// RecordSaturationFreshness publishes the per-VA freshness signal for the
+// five saturation/capacity gauges recorded by RecordSaturationMetrics.
+//
+// fresh=true means the optimizer just produced a fresh decision for the
+// variant this cycle (the other gauges have just been refreshed). fresh=false
+// means the analyzer was aware of the variant but did not refresh those
+// gauges this cycle, so dashboards see an explicit "stale" signal rather
+// than relying on Prometheus' 5-minute implicit staleness marker.
+//
+// Unlike RecordSaturationMetrics, this method runs on every variant every
+// cycle (not gated on hasDecision), so it must tolerate tests that haven't
+// called InitMetrics — nil-guarded the same way as SetMetricsFreshnessStatus.
+// In production InitMetrics runs at startup from main.go and the guard is a
+// no-op fast path.
+func (m *MetricsEmitter) RecordSaturationFreshness(ctx context.Context, variantName, namespace string, fresh bool) {
+	if saturationMetricsUp == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelNamespace:   namespace,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	value := 0.0
+	if fresh {
+		value = 1.0
+	}
+	saturationMetricsUp.With(labels).Set(value)
 }

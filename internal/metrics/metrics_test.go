@@ -161,6 +161,7 @@ func resetMetrics() {
 	requiredCapacity = nil
 	kvCacheTokensUsed = nil
 	kvCacheTokensCapacity = nil
+	saturationMetricsUp = nil
 	controllerInstance = ""
 	replicaSeriesMu.Lock()
 	replicaSeriesAccel = map[string]string{}
@@ -483,4 +484,103 @@ var _ = Describe("EmitReplicaScalingMetrics", func() {
 		Expect(counterValue).To(Equal(1.0), "counter should be incremented to 1")
 	})
 
+})
+
+var _ = Describe("RecordSaturationFreshness", func() {
+	var (
+		registry *prometheus.Registry
+		emitter  *MetricsEmitter
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		resetMetrics()
+		registry = prometheus.NewRegistry()
+		Expect(InitMetrics(registry)).To(Succeed())
+		emitter = NewMetricsEmitter()
+		ctx = context.Background()
+	})
+
+	It("emits 1.0 on a fresh cycle and 0.0 on a stale cycle", func() {
+		emitter.RecordSaturationFreshness(ctx, "variant-fresh", "ns-a", true)
+		emitter.RecordSaturationFreshness(ctx, "variant-stale", "ns-a", false)
+
+		mf := gatherMetric(registry, constants.WVASaturationMetricsUp)
+		Expect(mf).NotTo(BeNil(), "wva_saturation_metrics_up not registered")
+
+		freshLabels := map[string]string{
+			constants.LabelVariantName: "variant-fresh",
+			constants.LabelNamespace:   "ns-a",
+		}
+		val, ok := gaugeValue(mf, freshLabels)
+		Expect(ok).To(BeTrue(), "fresh series not found")
+		Expect(val).To(Equal(1.0))
+
+		staleLabels := map[string]string{
+			constants.LabelVariantName: "variant-stale",
+			constants.LabelNamespace:   "ns-a",
+		}
+		val, ok = gaugeValue(mf, staleLabels)
+		Expect(ok).To(BeTrue(), "stale series not found")
+		Expect(val).To(Equal(0.0))
+	})
+
+	It("flips an existing series between fresh and stale on subsequent cycles", func() {
+		// Cycle 1: fresh.
+		emitter.RecordSaturationFreshness(ctx, "variant-a", "ns-a", true)
+		mf := gatherMetric(registry, constants.WVASaturationMetricsUp)
+		labels := map[string]string{
+			constants.LabelVariantName: "variant-a",
+			constants.LabelNamespace:   "ns-a",
+		}
+		val, _ := gaugeValue(mf, labels)
+		Expect(val).To(Equal(1.0))
+
+		// Cycle 2: same VA, no fresh decision — the gauge must drop to 0,
+		// not retain its previous 1.0 value (that's the whole point of the
+		// freshness signal vs. relying on Prometheus' implicit staleness).
+		emitter.RecordSaturationFreshness(ctx, "variant-a", "ns-a", false)
+		mf = gatherMetric(registry, constants.WVASaturationMetricsUp)
+		val, _ = gaugeValue(mf, labels)
+		Expect(val).To(Equal(0.0))
+	})
+
+	It("uses only {variant_name, namespace} labels — no accelerator_type or model_name", func() {
+		emitter.RecordSaturationFreshness(ctx, "variant-a", "ns-a", true)
+
+		mf := gatherMetric(registry, constants.WVASaturationMetricsUp)
+		Expect(mf).NotTo(BeNil())
+		Expect(mf.GetMetric()).To(HaveLen(1))
+
+		wantLabels := map[string]bool{
+			constants.LabelVariantName: true,
+			constants.LabelNamespace:   true,
+		}
+		for _, lp := range mf.GetMetric()[0].GetLabel() {
+			Expect(wantLabels).To(HaveKey(lp.GetName()),
+				"unexpected label %q on freshness gauge (must be the smallest cardinality shared across the five saturation gauges)", lp.GetName())
+		}
+		Expect(mf.GetMetric()[0].GetLabel()).To(HaveLen(len(wantLabels)))
+	})
+
+	It("adds controller_instance label when CONTROLLER_INSTANCE is set", func() {
+		resetMetrics()
+		t := GinkgoT()
+		t.Setenv(ControllerInstanceEnvVar, "primary")
+		registry := prometheus.NewRegistry()
+		Expect(InitMetrics(registry)).To(Succeed())
+		emitter := NewMetricsEmitter()
+
+		emitter.RecordSaturationFreshness(ctx, "variant-a", "ns-a", true)
+
+		mf := gatherMetric(registry, constants.WVASaturationMetricsUp)
+		Expect(mf).NotTo(BeNil())
+		val, ok := gaugeValue(mf, map[string]string{
+			constants.LabelVariantName:        "variant-a",
+			constants.LabelNamespace:          "ns-a",
+			constants.LabelControllerInstance: "primary",
+		})
+		Expect(ok).To(BeTrue(), "controller_instance label not on series")
+		Expect(val).To(Equal(1.0))
+	})
 })

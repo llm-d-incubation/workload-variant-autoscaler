@@ -186,6 +186,17 @@ const (
 	// Labels: variant_name, namespace, model_name
 	WVAKvCacheTokensCapacity = "wva_kv_cache_tokens_capacity"
 
+	// WVASaturationMetricsUp is a per-VA freshness signal for the five
+	// saturation/capacity gauges above. Set to 1.0 in cycles where the
+	// optimizer produced a fresh decision for the variant (i.e. the other
+	// gauges were just refreshed), and 0.0 in cycles where the analyzer was
+	// aware of the variant but no fresh decision was emitted. Lets
+	// dashboards distinguish "the system says utilization is X" from "the
+	// system has not updated utilization in N minutes and X is the stalest
+	// sample" without relying on Prometheus' 5-minute staleness marker.
+	// Labels: variant_name, namespace
+	WVASaturationMetricsUp = "wva_saturation_metrics_up"
+
 	// WVAPodMappingMissTotal is a counter that tracks pods whose metrics could not be
 	// attributed to a managed scaler (neither the llm-d.ai/variant label nor the
 	// pod locator resolved them). Makes the otherwise-silent skip visible.
