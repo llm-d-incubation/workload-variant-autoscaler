@@ -514,20 +514,31 @@ func main() {
 		}
 	}
 
-	// Wait for the manager's informer caches to sync, then flip the
-	// AnnotatedScaler gate on the datastore so engine-side discovery starts
-	// scoping List calls to tracked namespaces. Until the gate is open,
-	// utils.annotationSourcedVariants falls back to a cluster-wide list so
-	// managed HPAs / ScaledObjects in not-yet-reconciled namespaces aren't
-	// silently dropped on the first couple of optimization ticks.
+	// Wait for the manager's informer caches to sync, pre-populate the
+	// AnnotatedScaler tracking set from the synced cache, then open the
+	// gate so engine-side discovery starts scoping List calls to tracked
+	// namespaces. Until the gate is open, utils.annotationSourcedVariants
+	// falls back to a cluster-wide list so managed HPAs / ScaledObjects in
+	// not-yet-reconciled namespaces aren't silently dropped on the first
+	// optimization ticks.
+	//
+	// The pre-population matters because WaitForCacheSync only guarantees
+	// the informer cache is populated, not that the HPA / ScaledObject
+	// reconcilers have already drained their workqueues and tracked every
+	// object. Listing directly from the synced cache gives a deterministic
+	// snapshot that the gate can rely on.
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		if !mgr.GetCache().WaitForCacheSync(ctx) {
 			// Manager will exit when ctx is cancelled; nothing more we can do here.
 			setupLog.Info("Cache sync did not complete before context cancellation; annotated-scaler namespace scoping stays disabled")
 			return nil
 		}
+		if err := controller.BootstrapAnnotatedScalerTracking(ctx, mgr.GetClient(), ds, kedaEnabled); err != nil {
+			setupLog.Error(err, "Failed to pre-populate annotated-scaler tracking; namespace scoping stays disabled")
+			return nil
+		}
 		ds.MarkAnnotatedScalersSynced()
-		setupLog.Info("Annotated-scaler informer caches synced; per-namespace discovery is now active")
+		setupLog.Info("Annotated-scaler caches synced and tracking pre-populated; per-namespace discovery is now active")
 		return nil
 	})); err != nil {
 		setupLog.Error(err, "unable to register annotated-scaler cache-sync gate")
