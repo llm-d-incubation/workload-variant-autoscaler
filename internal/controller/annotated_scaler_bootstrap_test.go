@@ -35,6 +35,9 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 )
 
+// testNS1 is the most-used namespace literal in this file's table-style assertions.
+const testNS1 = "ns1"
+
 func bootstrapScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -67,7 +70,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 	t.Run("tracks managed HPAs across namespaces", func(t *testing.T) {
 		s := bootstrapScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "hpa-a"),
+			managedHPAFixture(testNS1, "hpa-a"),
 			managedHPAFixture("ns2", "hpa-b"),
 			// Unmanaged HPA — must be skipped.
 			&autoscalingv2.HorizontalPodAutoscaler{
@@ -84,7 +87,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 
 		got := ds.AnnotatedHPANamespaces()
 		sort.Strings(got)
-		if len(got) != 2 || got[0] != "ns1" || got[1] != "ns2" {
+		if len(got) != 2 || got[0] != testNS1 || got[1] != "ns2" {
 			t.Fatalf("want exactly [ns1 ns2], got %v", got)
 		}
 	})
@@ -95,7 +98,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 		// KEDA is absent or installed after WVA startup.
 		s := bootstrapScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "hpa-a"),
+			managedHPAFixture(testNS1, "hpa-a"),
 		).WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*kedav1alpha1.ScaledObjectList); ok {
@@ -110,7 +113,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		ds.MarkAnnotatedHPAsSynced()
-		if got := ds.AnnotatedHPANamespaces(); len(got) != 1 || got[0] != "ns1" {
+		if got := ds.AnnotatedHPANamespaces(); len(got) != 1 || got[0] != testNS1 {
 			t.Fatalf("want [ns1], got %v", got)
 		}
 	})
@@ -139,7 +142,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 		deletingHPA.DeletionTimestamp = &now
 		deletingHPA.Finalizers = []string{"placeholder.example.com/keep-alive"}
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedHPAFixture("ns1", "hpa-live"),
+			managedHPAFixture(testNS1, "hpa-live"),
 			deletingHPA,
 		).Build()
 		ds := datastore.NewDatastore(nil)
@@ -149,7 +152,7 @@ func TestBootstrapAnnotatedHPATracking(t *testing.T) {
 		}
 		ds.MarkAnnotatedHPAsSynced()
 		got := ds.AnnotatedHPANamespaces()
-		if len(got) != 1 || got[0] != "ns1" {
+		if len(got) != 1 || got[0] != testNS1 {
 			t.Fatalf("want only [ns1] (deleting HPA skipped), got %v", got)
 		}
 	})

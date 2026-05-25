@@ -176,7 +176,10 @@ func managedHPA(ns, name, targetName, modelID string) *autoscalingv2.HorizontalP
 	}
 }
 
-func managedSO(ns, name, targetKind, targetName, modelID string) *kedav1alpha1.ScaledObject {
+// managedSO builds a ScaledObject fixture targeting a Deployment. Tests in
+// this package only need the Deployment kind, so it's hardcoded; expand to a
+// parameter if a future test needs a different kind.
+func managedSO(ns, name, targetName, modelID string) *kedav1alpha1.ScaledObject {
 	return &kedav1alpha1.ScaledObject{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -187,7 +190,7 @@ func managedSO(ns, name, targetKind, targetName, modelID string) *kedav1alpha1.S
 			},
 		},
 		Spec: kedav1alpha1.ScaledObjectSpec{
-			ScaleTargetRef: &kedav1alpha1.ScaleTarget{Kind: targetKind, Name: targetName},
+			ScaleTargetRef: &kedav1alpha1.ScaleTarget{Kind: "Deployment", Name: targetName},
 		},
 	}
 }
@@ -219,7 +222,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 	t.Run("ScaledObjects only", func(t *testing.T) {
 		s := variantTestScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
-			managedSO("ns1", "so-a", "Deployment", "deploy-a", "model-x"),
+			managedSO("ns1", "so-a", "deploy-a", "model-x"),
 		).Build()
 
 		result, err := annotationSourcedVariants(ctx, cl, nil)
@@ -235,7 +238,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		s := variantTestScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
-			managedSO("ns1", "so-b", "Deployment", "deploy-b", "model-x"),
+			managedSO("ns1", "so-b", "deploy-b", "model-x"),
 		).Build()
 
 		result, err := annotationSourcedVariants(ctx, cl, nil)
@@ -292,7 +295,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		// Both an HPA and a ScaledObject point at the same Deployment — ScaledObject wins.
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-hpa"),
-			managedSO("ns1", "so-a", "Deployment", "deploy-a", "model-so"),
+			managedSO("ns1", "so-a", "deploy-a", "model-so"),
 		).Build()
 
 		result, err := annotationSourcedVariants(ctx, cl, nil)
@@ -317,7 +320,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
 			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"), // outside HPA scope
-			managedSO("ns3", "so-c", "Deployment", "deploy-c", "model-x"),
+			managedSO("ns3", "so-c", "deploy-c", "model-x"),
 		).WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				var listOpts client.ListOptions
@@ -366,7 +369,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
 			managedHPA("ns2", "hpa-b", "deploy-b", "model-x"),
 			managedHPA("ns3", "hpa-c", "deploy-c", "model-x"), // not in HPA scope
-			managedSO("ns3", "so-d", "Deployment", "deploy-d", "model-x"),
+			managedSO("ns3", "so-d", "deploy-d", "model-x"),
 		).Build()
 
 		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1", "ns2"})
@@ -419,7 +422,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		var hpaListCount int
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
 			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"), // exists but must be skipped
-			managedSO("ns1", "so-b", "Deployment", "deploy-b", "model-x"),
+			managedSO("ns1", "so-b", "deploy-b", "model-x"),
 		).WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*autoscalingv2.HorizontalPodAutoscalerList); ok {
