@@ -369,20 +369,7 @@ jobs:
           IMAGE_NAME: ${{ github.repository }}
           # Use PR head SHA from gate
           GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
-        run: |
-          # Build image with git ref tag for this PR
-          # Use first 8 chars of the git ref (POSIX-compliant)
-          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)"
-          FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-          echo "Building image: $FULL_IMAGE"
-          echo "Git ref: $GIT_REF"
-
-          # Build and push using make targets
-          make docker-build IMG="$FULL_IMAGE"
-          make docker-push IMG="$FULL_IMAGE"
-
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "Image built and pushed: $FULL_IMAGE"
+        run: deploy/ci-e2e-openshift/build-push-image.sh
 
   # Run e2e tests on OpenShift self-hosted runner (vllm-d cluster).
   # pok-prod runners are reserved for nightly E2E only.
@@ -430,133 +417,19 @@ jobs:
           go-version: "1.25.x"
           cache-dependency-path: ./go.sum
       - name: Verify Go toolchain
-        run: |
-          which go
-          go version
-          go env GOTOOLCHAIN
+        run: deploy/ci-e2e-openshift/verify-go-toolchain.sh
       - name: Install tools (kubectl, oc, helm, make, jq, yq)
-        run: |
-          sudo apt-get update && sudo apt-get install -y make jq
-          # mikefarah/yq — required for patching llm-d Kustomize manifests
-          YQ_VERSION="v4.45.1"
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64)  YQ_ARCH="amd64" ;;
-            aarch64) YQ_ARCH="arm64" ;;
-            *) echo "::error::Unsupported arch for yq: $ARCH"; exit 1 ;;
-          esac
-          curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
-          chmod +x yq
-          sudo mv yq /usr/local/bin/
-          yq --version
-          # Install kubectl - use pinned version for reproducible CI builds
-          # Pinned 2025-12: v1.31.0 tested compatible with OpenShift 4.16+
-          # Update this version when upgrading target cluster or during regular dependency reviews
-          KUBECTL_VERSION="v1.31.0"
-          echo "Installing kubectl version: $KUBECTL_VERSION"
-          curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-          curl -fsSL --retry 3 --retry-delay 5 -o kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
-          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
-          rm -f kubectl.sha256
-          # Install oc (OpenShift CLI)
-          curl -fsSL --retry 3 --retry-delay 5 -O "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
-          tar -xzf openshift-client-linux.tar.gz
-          sudo mv oc /usr/local/bin/
-          rm -f openshift-client-linux.tar.gz kubectl README.md
-          # Install helm
-          curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        run: deploy/ci-e2e-openshift/install-tools.sh
 
       - name: Verify cluster access
-        run: |
-          echo "Verifying cluster access..."
-          kubectl cluster-info
-          kubectl get nodes
+        run: deploy/ci-e2e-openshift/verify-cluster-access.sh
 
       - name: Verify correct cluster (vllm-d, not pok-prod)
-        run: |
-          # PR E2E tests must run on the vllm-d cluster, not pok-prod-sa.
-          # pok-prod-sa is reserved for nightly E2E runs only.
-          # Runners with the 'pok-prod' label connect to pok-prod-sa;
-          # runners without it connect to vllm-d.
-          CLUSTER_API=$(kubectl cluster-info 2>/dev/null | head -1 | grep -oE 'https://[^ ]+')
-          echo "Cluster API: $CLUSTER_API"
-          if echo "$CLUSTER_API" | grep -q "pokprod"; then
-            echo "::error::This runner is connected to pok-prod-sa, but PR E2E tests must run on vllm-d."
-            echo "::error::The runner likely has the 'pok-prod' label. PR CI should only use vllm-d runners."
-            exit 1
-          fi
-          echo "Cluster verified: running on vllm-d"
+        run: deploy/ci-e2e-openshift/verify-correct-cluster.sh
 
       - name: Check GPU availability
         id: gpu-check
-        run: |
-          echo "Checking GPU availability for e2e test..."
-
-          # Minimum GPUs needed: 2 models × 2 GPUs each = 4
-          # Recommended with scale-up headroom: 6
-          REQUIRED_GPUS=4
-          RECOMMENDED_GPUS=6
-
-          # Total allocatable GPUs across all nodes
-          TOTAL_GPUS=$(kubectl get nodes -o json | \
-            jq '[.items[].status.allocatable["nvidia.com/gpu"] // "0" | tonumber] | add // 0')
-
-          # Currently requested GPUs by all pods
-          ALLOCATED_GPUS=$(kubectl get pods --all-namespaces -o json | \
-            jq '[.items[] | select(.status.phase == "Running" or .status.phase == "Pending") | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0')
-
-          AVAILABLE_GPUS=$((TOTAL_GPUS - ALLOCATED_GPUS))
-
-          # Total allocatable CPU (cores) and memory (Gi) across all nodes
-          # CPU may be in millicores (e.g. "8000m") or cores (e.g. "8")
-          TOTAL_CPU=$(kubectl get nodes -o json | \
-            jq '[.items[].status.allocatable.cpu // "0" | if endswith("m") then (gsub("m$";"") | tonumber / 1000) else tonumber end] | add | floor')
-          TOTAL_MEM_KI=$(kubectl get nodes -o json | \
-            jq '[.items[].status.allocatable.memory // "0" | gsub("[^0-9]";"") | tonumber] | add')
-          TOTAL_MEM_GI=$((TOTAL_MEM_KI / 1048576))
-
-          NODE_COUNT=$(kubectl get nodes --no-headers | wc -l | tr -d ' ')
-          GPU_NODE_COUNT=$(kubectl get nodes -o json | \
-            jq '[.items[] | select((.status.allocatable["nvidia.com/gpu"] // "0" | tonumber) > 0)] | length')
-
-          # Export all values for the PR comment step
-          echo "total_gpus=$TOTAL_GPUS" >> $GITHUB_OUTPUT
-          echo "allocated_gpus=$ALLOCATED_GPUS" >> $GITHUB_OUTPUT
-          echo "available_gpus=$AVAILABLE_GPUS" >> $GITHUB_OUTPUT
-          echo "total_cpu=$TOTAL_CPU" >> $GITHUB_OUTPUT
-          echo "total_mem_gi=$TOTAL_MEM_GI" >> $GITHUB_OUTPUT
-          echo "node_count=$NODE_COUNT" >> $GITHUB_OUTPUT
-          echo "gpu_node_count=$GPU_NODE_COUNT" >> $GITHUB_OUTPUT
-          echo "required_gpus=$REQUIRED_GPUS" >> $GITHUB_OUTPUT
-          echo "recommended_gpus=$RECOMMENDED_GPUS" >> $GITHUB_OUTPUT
-
-          echo "## GPU Status" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Total cluster GPUs | $TOTAL_GPUS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Currently allocated | $ALLOCATED_GPUS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Available | $AVAILABLE_GPUS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Required (minimum) | $REQUIRED_GPUS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Recommended (with scale-up) | $RECOMMENDED_GPUS |" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$AVAILABLE_GPUS" -lt "$REQUIRED_GPUS" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **Insufficient GPUs** — need $REQUIRED_GPUS but only $AVAILABLE_GPUS available. Re-run when GPUs free up." >> $GITHUB_STEP_SUMMARY
-            echo "::error::Insufficient GPUs: need $REQUIRED_GPUS, have $AVAILABLE_GPUS available. Try again later."
-            echo "gpu_available=false" >> $GITHUB_OUTPUT
-            exit 1
-          elif [ "$AVAILABLE_GPUS" -lt "$RECOMMENDED_GPUS" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Low GPU headroom** — $AVAILABLE_GPUS available (need $RECOMMENDED_GPUS for scale-up tests). Tests may fail during scale-up." >> $GITHUB_STEP_SUMMARY
-            echo "::warning::Low GPU headroom: $AVAILABLE_GPUS available, $RECOMMENDED_GPUS recommended for scale-up tests"
-            echo "gpu_available=true" >> $GITHUB_OUTPUT
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **GPUs available** — $AVAILABLE_GPUS GPUs free ($REQUIRED_GPUS required, $RECOMMENDED_GPUS recommended)" >> $GITHUB_STEP_SUMMARY
-            echo "gpu_available=true" >> $GITHUB_OUTPUT
-          fi
+        run: deploy/ci-e2e-openshift/check-gpu-availability.sh
 
       - name: Post GPU status to PR
         if: always() && needs.gate.outputs.pr_number != ''
@@ -601,78 +474,13 @@ jobs:
 
       - name: Get HF token from cluster secret
         id: hf-token
-        run: |
-          echo "Reading HF token from cluster secret llm-d-hf-token in default namespace..."
-          # The llm-d-hf-token secret exists in the default namespace on the cluster
-          # Check secret existence separately from key retrieval for better error messages
-          if ! kubectl get secret llm-d-hf-token -n default &>/dev/null; then
-            echo "::error::Secret 'llm-d-hf-token' not found in default namespace"
-            echo "::error::Please ensure the HF token secret exists on the cluster"
-            exit 1
-          fi
-          # Read the token and mask it in logs
-          HF_TOKEN=$(kubectl get secret llm-d-hf-token -n default -o jsonpath='{.data.HF_TOKEN}' | base64 -d)
-          if [ -z "$HF_TOKEN" ]; then
-            echo "::error::Secret 'llm-d-hf-token' exists but 'HF_TOKEN' key is empty or missing"
-            exit 1
-          fi
-          # Mask the token in workflow logs
-          echo "::add-mask::$HF_TOKEN"
-          # Export for subsequent steps
-          echo "HF_TOKEN=$HF_TOKEN" >> $GITHUB_ENV
-          echo "HF token retrieved successfully from cluster secret"
+        run: deploy/ci-e2e-openshift/get-hf-token.sh
 
       - name: Clean up resources for this PR
-        run: |
-          echo "Cleaning up WVA resources for this PR's namespaces only..."
-          echo "  LLMD_NAMESPACE: $LLMD_NAMESPACE"
-          echo "  WVA_NAMESPACE: $WVA_NAMESPACE"
-
-          # Only clean up the namespaces associated with THIS PR
-          # Do NOT touch namespaces from other PRs to avoid race conditions
-          for ns in "$LLMD_NAMESPACE" "$WVA_NAMESPACE"; do
-            if kubectl get namespace "$ns" &>/dev/null; then
-              echo ""
-              echo "=== Cleaning up namespace: $ns ==="
-              # Delete WVA resources in this namespace
-              echo "  Removing HPAs and VAs..."
-              kubectl delete hpa -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
-              kubectl delete variantautoscaling -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
-              # Uninstall all helm releases in the namespace
-              for release in $(helm list -n "$ns" -q 2>/dev/null); do
-                echo "  Uninstalling helm release: $release"
-                helm uninstall "$release" -n "$ns" --ignore-not-found --wait --timeout 60s || true
-              done
-              echo "  Deleting namespace: $ns"
-              kubectl delete namespace "$ns" --ignore-not-found --timeout=60s || true
-            else
-              echo "Namespace $ns does not exist, skipping cleanup"
-            fi
-          done
-
-          # Clean up legacy namespaces if they exist (these are not PR-specific)
-          for legacy_ns in llm-d-optimized-baseline workload-variant-autoscaler-system; do
-            if kubectl get namespace "$legacy_ns" &>/dev/null; then
-              echo ""
-              echo "=== Cleaning up legacy namespace: $legacy_ns ==="
-              # Uninstall all helm releases in the namespace first
-              for release in $(helm list -n "$legacy_ns" -q 2>/dev/null); do
-                echo "  Uninstalling helm release: $release"
-                helm uninstall "$release" -n "$legacy_ns" --ignore-not-found --wait --timeout 60s || true
-              done
-              echo "  Deleting namespace: $legacy_ns"
-              kubectl delete namespace "$legacy_ns" --ignore-not-found --timeout=60s || true
-            fi
-          done
-
-          echo ""
-          echo "Cleanup complete for this PR's namespaces"
+        run: deploy/ci-e2e-openshift/cleanup-pr-resources.sh
 
       - name: Apply latest CRDs
-        run: |
-          echo "Applying latest VariantAutoscaling CRD..."
-          # Apply CRDs from the Kustomize source of truth (config/crd/bases/)
-          kubectl apply -f config/crd/bases/
+        run: deploy/ci-e2e-openshift/apply-crds.sh
 
       - name: Deploy WVA and llm-d infrastructure
         env:
@@ -693,255 +501,22 @@ jobs:
           MODEL_ID: ${{ env.MODEL_ID }}
           ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
           GAIE_VERSION: ${{ env.GAIE_VERSION }}
-        run: |
-          echo "Deploying WVA and llm-d infrastructure..."
-          echo "  MODEL_ID: $MODEL_ID"
-          echo "  ACCELERATOR_TYPE: $ACCELERATOR_TYPE"
-          echo "  LLMD_NS: $LLMD_NS"
-          echo "  WVA_NS: $WVA_NS"
-          echo "  WVA_IMAGE_TAG: $WVA_IMAGE_TAG"
-          echo "  CONTROLLER_INSTANCE: $CONTROLLER_INSTANCE"
-          echo "  VLLM_MAX_NUM_SEQS: $VLLM_MAX_NUM_SEQS"
-          echo "  KV_SPARE_TRIGGER: ${KV_SPARE_TRIGGER:-<default>}"
-          echo "  QUEUE_SPARE_TRIGGER: ${QUEUE_SPARE_TRIGGER:-<default>}"
-          echo "  HF token configuration: ✓"
-          # Base monitoring + WVA + scaler backend.
-          ./deploy/install.sh --environment openshift
-
-          # Create llm-d namespace and HuggingFace token secret.
-          kubectl create namespace "$LLMD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create secret generic llm-d-hf-token \
-            --from-literal="HF_TOKEN=${HF_TOKEN}" \
-            -n "$LLMD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-
-          # OpenShift: install GAIE CRDs before standalone chart.
-          kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd/?ref=${GAIE_VERSION}" || true
-
-          # Model server via Kustomize (reduce replicas for CI).
-          yq ".spec.replicas = 1" -i llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base/patch-vllm.yaml
-          kubectl apply -k llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base -n "$LLMD_NAMESPACE"
-
-          # Post-apply: patch model ID and vLLM batch size.
-          MODELSERVICE="optimized-baseline-nvidia-gpu-vllm-decode"
-          kubectl patch deployment "$MODELSERVICE" -n "$LLMD_NAMESPACE" --type=json \
-            -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args/1\",\"value\":\"$MODEL_ID\"}]"
-          [ -n "${VLLM_MAX_NUM_SEQS:-}" ] && kubectl patch deployment "$MODELSERVICE" -n "$LLMD_NAMESPACE" --type=json \
-            -p="[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/args/-\",\"value\":\"--max-num-seqs=$VLLM_MAX_NUM_SEQS\"}]"
-
-          # EPP / scheduler via install-epp.sh (handles GAIE standalone chart +
-          # flowControl feature gate + tokenreview RBAC).  llm-d is already
-          # checked out at $GITHUB_WORKSPACE/llm-d so the script reuses it.
-          WVA_PROJECT="$GITHUB_WORKSPACE" \
-          LLMD_NS="$LLMD_NAMESPACE" \
-          GAIE_VERSION="$GAIE_VERSION" \
-          LLM_D_RELEASE="$LLM_D_RELEASE" \
-          ENVIRONMENT=openshift \
-          ENABLE_SCALE_TO_ZERO=true \
-          ./deploy/install-epp.sh
-
-          # Tune saturation thresholds for CI simulator mode.
-          kubectl patch configmap workload-variant-autoscaler-saturation-scaling-config \
-            -n "$WVA_NAMESPACE" --type=merge \
-            -p "$(printf '{"data":{"default":"kvSpareTrigger: %s\\nqueueSpareTrigger: %s\\n"}}' \
-              "${KV_SPARE_TRIGGER}" "${QUEUE_SPARE_TRIGGER}")"
+        run: deploy/ci-e2e-openshift/deploy-infrastructure.sh
 
       - name: Label namespaces for OpenShift monitoring
-        run: |
-          echo "Adding openshift.io/user-monitoring label to namespaces for Prometheus scraping..."
-          kubectl label namespace "$LLMD_NAMESPACE" openshift.io/user-monitoring=true --overwrite
-          kubectl label namespace "$WVA_NAMESPACE" openshift.io/user-monitoring=true --overwrite
-          echo "Namespace labels applied"
+        run: deploy/ci-e2e-openshift/label-namespaces.sh
 
       - name: Wait for infrastructure to be ready
-        run: |
-          echo "Waiting for WVA controller to be ready..."
-          kubectl rollout status deployment -l app.kubernetes.io/name=workload-variant-autoscaler -n "$WVA_NAMESPACE" --timeout=300s || true
-          kubectl get pods -n "$WVA_NAMESPACE"
-
-          # Wait for model server decode Deployment to exist (Kustomize apply can lag; names derive from guide namePrefix).
-          CANONICAL_DECODE="optimized-baseline-nvidia-gpu-vllm-decode"
-          DECODE_DEPLOY=""
-          for i in $(seq 1 90); do
-            if kubectl get deployment "$CANONICAL_DECODE" -n "$LLMD_NAMESPACE" &>/dev/null; then
-              DECODE_DEPLOY="$CANONICAL_DECODE"
-              break
-            fi
-            DECODE_DEPLOY=$(kubectl get deploy -n "$LLMD_NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E -- '-decode$' | head -1 || true)
-            if [ -n "$DECODE_DEPLOY" ]; then
-              break
-            fi
-            echo "Waiting for ModelService decode Deployment in $LLMD_NAMESPACE ($i/90)..."
-            sleep 10
-          done
-          if [ -z "$DECODE_DEPLOY" ]; then
-            echo "::error::No decode Deployment found in $LLMD_NAMESPACE (check llm-d kustomize/helm deploy)"
-            kubectl get deploy -n "$LLMD_NAMESPACE" -o wide || true
-            exit 1
-          fi
-          echo "Using Model A1 decode Deployment: $DECODE_DEPLOY"
-
-          # Ensure the vLLM deployment has the correct replica count.
-          # A previous failed run's "Scale down GPU workloads" step may have set replicas=0
-          # and kustomize apply doesn't override manually-changed replicas on re-deploy.
-          # kubectl rollout status returns instantly on 0-replica deployments, so we must
-          # ensure replicas > 0 before waiting.
-          DESIRED_REPLICAS="${DECODE_REPLICAS:-1}"
-          CURRENT_REPLICAS=$(kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
-          if ! [[ "${CURRENT_REPLICAS:-}" =~ ^[0-9]+$ ]]; then
-            CURRENT_REPLICAS=0
-          fi
-          if [ "${CURRENT_REPLICAS}" -eq 0 ]; then
-            echo "WARNING: Model A1 deployment has 0 replicas (likely from previous failed run cleanup)"
-            echo "Scaling to $DESIRED_REPLICAS replica(s)..."
-            kubectl scale "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" --replicas="$DESIRED_REPLICAS" || {
-              echo "ERROR: Failed to scale Model A1 deployment"
-              exit 1
-            }
-          fi
-
-          echo "Waiting for Model A1 vLLM deployment to be ready (up to 25 minutes for model loading)..."
-          # kubectl rollout status waits for all replicas to be Ready, unlike
-          # --for=condition=available which is satisfied even at 0 ready replicas.
-          # vLLM model loading takes 15-20 minutes, so we use a 25-minute timeout.
-          kubectl rollout status "deployment/$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" --timeout=1500s || {
-            echo "WARNING: Model A1 deployment not ready after 25 minutes"
-            echo "=== Pod status ==="
-            kubectl get pods -n "$LLMD_NAMESPACE"
-            echo "=== Deployment conditions ==="
-            kubectl get deployment "$DECODE_DEPLOY" -n "$LLMD_NAMESPACE" -o jsonpath='{.status.conditions}' | jq . || true
-            echo "=== Recent events ==="
-            kubectl get events -n "$LLMD_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
-          }
-          kubectl get pods -n "$LLMD_NAMESPACE"
+        run: deploy/ci-e2e-openshift/wait-infrastructure-ready.sh
 
       - name: Verify deployment
-        run: |
-          echo "=== Deployment Status ==="
-          echo ""
-          echo "=== Model A1 ($LLMD_NAMESPACE) ==="
-          kubectl get deployment -n "$LLMD_NAMESPACE" | grep -E "decode|NAME" || true
-          kubectl get hpa -n "$LLMD_NAMESPACE" || true
-          kubectl get variantautoscaling -n "$LLMD_NAMESPACE" || true
-          echo ""
-          echo "=== WVA Controller ($WVA_NAMESPACE) ==="
-          kubectl get pods -n "$WVA_NAMESPACE"
+        run: deploy/ci-e2e-openshift/verify-deployment.sh
 
       - name: Verify metrics pipeline
-        run: |
-          echo "=== Verifying metrics pipeline before running tests ==="
-          echo ""
-
-          # 1. Verify vLLM pods are serving /metrics endpoint
-          echo "--- Step 1: Checking vLLM /metrics endpoint ---"
-          for ns in "$LLMD_NAMESPACE"; do
-            VLLM_POD=$(kubectl get pods -n "$ns" -l llm-d.ai/inference-serving=true -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$VLLM_POD" ]; then
-              PORT="${VLLM_SVC_PORT:-8000}"
-              echo "  Checking vLLM pod $VLLM_POD in $ns (port $PORT)..."
-              METRICS=$(kubectl exec -n "$ns" "$VLLM_POD" -- curl -s "http://localhost:${PORT}/metrics" 2>/dev/null | head -5 || true)
-              if [ -n "$METRICS" ]; then
-                echo "  ✅ vLLM metrics endpoint responding in $ns"
-              else
-                echo "  ⚠️  vLLM metrics endpoint not responding in $ns (may still be loading)"
-              fi
-              # Show pod labels for debugging
-              echo "  Pod labels:"
-              kubectl get pod "$VLLM_POD" -n "$ns" -o jsonpath='{.metadata.labels}' | jq -r 'to_entries[] | "    \(.key)=\(.value)"' 2>/dev/null || true
-            else
-              echo "  ⚠️  No vLLM pods found with label llm-d.ai/inference-serving=true in $ns"
-              echo "  All pods in $ns:"
-              kubectl get pods -n "$ns" --show-labels 2>/dev/null || true
-            fi
-          done
-
-          # 1b. Verify vllm-service has endpoints (critical for ServiceMonitor scraping)
-          echo ""
-          echo "--- Step 1b: Checking vllm-service endpoints ---"
-          for ns in "$LLMD_NAMESPACE"; do
-            SVC_NAME=$(kubectl get svc -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$SVC_NAME" ]; then
-              ENDPOINTS=$(kubectl get endpoints "$SVC_NAME" -n "$ns" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
-              if [ -n "$ENDPOINTS" ]; then
-                echo "  ✅ Service $SVC_NAME in $ns has endpoints: $ENDPOINTS"
-              else
-                echo "  ❌ Service $SVC_NAME in $ns has NO endpoints — label selector mismatch!"
-                echo "  Service selector:"
-                kubectl get svc "$SVC_NAME" -n "$ns" -o jsonpath='{.spec.selector}' 2>/dev/null | jq . || true
-              fi
-            else
-              echo "  ⚠️  No vllm-service found in $ns"
-            fi
-          done
-
-          # 1c. Check PodMonitors (llm-d guide deploys these for direct pod scraping)
-          echo ""
-          echo "--- Step 1c: PodMonitor configuration ---"
-          for ns in "$LLMD_NAMESPACE"; do
-            PM_COUNT=$(kubectl get podmonitor -n "$ns" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-            echo "  PodMonitors in $ns: $PM_COUNT"
-            kubectl get podmonitor -n "$ns" 2>/dev/null || true
-          done
-
-          # 2. Check WVA controller health
-          echo ""
-          echo "--- Step 2: WVA controller status ---"
-          kubectl get pods -n "$WVA_NAMESPACE" -l app.kubernetes.io/name=workload-variant-autoscaler
-          WVA_POD=$(kubectl get pods -n "$WVA_NAMESPACE" -l app.kubernetes.io/name=workload-variant-autoscaler -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-          if [ -n "$WVA_POD" ]; then
-            echo "  Recent WVA controller logs:"
-            kubectl logs "$WVA_POD" -n "$WVA_NAMESPACE" --tail=20 | grep -E "reconcil|metrics|error|saturation" || echo "  (no matching log lines)"
-          fi
-
-          # 3. Check VariantAutoscaling status
-          echo ""
-          echo "--- Step 3: VariantAutoscaling status ---"
-          kubectl get variantautoscaling -A -o wide 2>/dev/null || echo "  No VariantAutoscalings found"
-
-          # 4. Check ServiceMonitors exist
-          echo ""
-          echo "--- Step 4: ServiceMonitor configuration ---"
-          for ns in "$LLMD_NAMESPACE" "$WVA_NAMESPACE"; do
-            SM_COUNT=$(kubectl get servicemonitor -n "$ns" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-            echo "  ServiceMonitors in $ns: $SM_COUNT"
-            kubectl get servicemonitor -n "$ns" 2>/dev/null || true
-          done
-
-          # 5. Wait for WVA to start processing metrics (up to 3 minutes)
-          echo ""
-          echo "--- Step 5: Waiting for WVA to detect metrics (up to 3 minutes) ---"
-          METRICS_READY=false
-          for i in $(seq 1 18); do
-            VA_STATUS=$(kubectl get variantautoscaling -n "$LLMD_NAMESPACE" -o jsonpath='{.items[0].status.desiredOptimizedAlloc.accelerator}' 2>/dev/null || true)
-            if [ -n "$VA_STATUS" ]; then
-              echo "  ✅ WVA optimization active — accelerator: $VA_STATUS"
-              METRICS_READY=true
-              break
-            fi
-            echo "  Attempt $i/18: WVA not yet optimizing, waiting 10s..."
-            sleep 10
-          done
-
-          if [ "$METRICS_READY" = "false" ]; then
-            echo "  ⚠️  WVA has not started optimizing after 3 minutes"
-            echo "  This may cause test timeouts — dumping diagnostics:"
-            echo ""
-            echo "  === WVA controller logs (last 50 lines) ==="
-            kubectl logs "$WVA_POD" -n "$WVA_NAMESPACE" --tail=50 2>/dev/null || true
-            echo ""
-            echo "  === HPA status ==="
-            kubectl get hpa -A 2>/dev/null || true
-            echo ""
-            echo "  Continuing to tests anyway (they have their own timeouts)..."
-          fi
-
-          echo ""
-          echo "=== Metrics pipeline verification complete ==="
+        run: deploy/ci-e2e-openshift/verify-metrics-pipeline.sh
 
       - name: Install Go dependencies
-        run: |
-          GOTOOLCHAIN=auto go version
-          GOTOOLCHAIN=auto go env GOTOOLCHAIN
-          GOTOOLCHAIN=auto go mod download
+        run: deploy/ci-e2e-openshift/install-go-dependencies.sh
 
       - name: Run OpenShift E2E tests
         env:
@@ -965,59 +540,17 @@ jobs:
           MODEL_ID: ${{ env.MODEL_ID }}
           REQUEST_RATE: ${{ env.REQUEST_RATE }}
           NUM_PROMPTS: ${{ env.NUM_PROMPTS }}
-        run: |
-          echo "Running consolidated E2E tests on OpenShift with configuration:"
-          echo "  ENVIRONMENT: $ENVIRONMENT"
-          echo "  USE_SIMULATOR: $USE_SIMULATOR"
-          echo "  SCALE_TO_ZERO_ENABLED: $SCALE_TO_ZERO_ENABLED"
-          echo "  WVA_NAMESPACE: $WVA_NAMESPACE"
-          echo "  MONITORING_NAMESPACE: $MONITORING_NAMESPACE"
-          echo "  LLMD_NAMESPACE: $LLMD_NAMESPACE"
-          echo "  DEPLOYMENT: $DEPLOYMENT"
-          echo "  GATEWAY_NAME: $GATEWAY_NAME"
-          echo "  MODEL_ID: $MODEL_ID"
-          echo "  REQUEST_RATE: $REQUEST_RATE"
-          echo "  NUM_PROMPTS: $NUM_PROMPTS"
-          echo "  WVA_RELEASE_NAME: $WVA_RELEASE_NAME"
-          make test-e2e-full
+        run: deploy/ci-e2e-openshift/run-e2e-tests.sh
 
       - name: Cleanup infrastructure
         # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
         # Use SKIP_CLEANUP=true to keep resources after successful runs
         if: (success() || cancelled()) && env.SKIP_CLEANUP != 'true'
-        run: |
-          echo "Cleaning up ALL test infrastructure..."
-          echo "  LLMD_NAMESPACE: $LLMD_NAMESPACE"
-          echo "  WVA_NAMESPACE: $WVA_NAMESPACE"
-
-          echo "Removing cluster-scoped WVA resources..."
-          kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
-
-          echo "Uninstalling llm-d helm releases..."
-          for release in $(helm list -n "$LLMD_NAMESPACE" -q 2>/dev/null); do
-            echo "  Uninstalling release: $release"
-            helm uninstall "$release" -n "$LLMD_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
-          done
-
-          echo "Deleting llm-d namespace $LLMD_NAMESPACE..."
-          kubectl delete namespace "$LLMD_NAMESPACE" --ignore-not-found --timeout=120s || true
-
-          echo "Deleting WVA namespace $WVA_NAMESPACE..."
-          kubectl delete namespace "$WVA_NAMESPACE" --ignore-not-found --timeout=120s || true
-
-          echo "Cleanup complete"
+        run: deploy/ci-e2e-openshift/cleanup-infrastructure.sh
 
       - name: Collect cluster diagnostics
         if: always()
-        run: |
-          mkdir -p /tmp/cluster-diagnostics
-          for ns in "$WVA_NAMESPACE" "$LLMD_NAMESPACE"; do
-            if kubectl get namespace "$ns" &>/dev/null; then
-              kubectl get va,hpa,all -n "$ns" 2>/dev/null > /tmp/cluster-diagnostics/${ns}-resources.txt || true
-              kubectl get events -n "$ns" --sort-by='.lastTimestamp' 2>/dev/null > /tmp/cluster-diagnostics/${ns}-events.txt || true
-              kubectl logs -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --tail=500 2>/dev/null > /tmp/cluster-diagnostics/${ns}-wva-logs.txt || true
-            fi
-          done
+        run: deploy/ci-e2e-openshift/collect-diagnostics.sh
 
       - name: Upload cluster diagnostics
         if: always()
@@ -1031,22 +564,7 @@ jobs:
         # On failure, scale down decode deployments to free GPUs while preserving
         # other resources (VA, HPA, controller, gateway) for debugging
         if: failure()
-        run: |
-          echo "Test failed - scaling down decode deployments to free GPUs..."
-          echo "Other resources (VA, HPA, controller logs) are preserved for debugging"
-          echo ""
-
-          for ns in "$LLMD_NAMESPACE"; do
-            if kubectl get namespace "$ns" &>/dev/null; then
-              echo "=== Scaling down decode deployments in $ns ==="
-              kubectl scale deployment -n "$ns" -l llm-d.ai/inferenceServing=true --replicas=0 || true
-              # Also try by name pattern in case labels are missing
-              kubectl get deployment -n "$ns" -o name 2>/dev/null | grep decode | while read -r deploy; do
-                echo "  Scaling down: $deploy"
-                kubectl scale "$deploy" -n "$ns" --replicas=0 || true
-              done
-            fi
-          done
+        run: deploy/ci-e2e-openshift/scale-down-on-failure.sh
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete

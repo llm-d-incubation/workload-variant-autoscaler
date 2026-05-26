@@ -297,17 +297,7 @@ jobs:
         run: go mod download
 
       - name: Install Kind
-        run: |
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64)  KIND_ARCH="amd64" ;;
-            aarch64) KIND_ARCH="arm64" ;;
-            *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-          esac
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-${KIND_ARCH}"
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
+        run: deploy/ci/prchecks/install-kind.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -316,22 +306,7 @@ jobs:
         id: build-image
         env:
           CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
-        run: |
-          # Generate unique image tag for this PR run (local image, no registry needed)
-          IMAGE_NAME="llm-d-workload-variant-autoscaler"
-          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
-          # Use localhost prefix for local-only image (Kind will load it directly)
-          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
-
-          echo "Building local image: $FULL_IMAGE"
-          echo "Image will be loaded into Kind cluster (no push needed)"
-
-          # Build image locally (no push needed for Kind)
-          make docker-build IMG="$FULL_IMAGE"
-
-          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "Image built locally: $FULL_IMAGE"
+        run: deploy/ci/prchecks/build-wva-image-local.sh
 
       - name: Run e2e tests (smoke)
         shell: bash
@@ -418,17 +393,7 @@ jobs:
         run: go mod download
 
       - name: Install Kind
-        run: |
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64)  KIND_ARCH="amd64" ;;
-            aarch64) KIND_ARCH="arm64" ;;
-            *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-          esac
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-${KIND_ARCH}"
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
+        run: deploy/ci/prchecks/install-kind.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -437,14 +402,7 @@ jobs:
         id: build-image
         env:
           CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
-        run: |
-          IMAGE_NAME="llm-d-workload-variant-autoscaler"
-          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
-          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
-          echo "Building local image: $FULL_IMAGE"
-          make docker-build IMG="$FULL_IMAGE"
-          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        run: deploy/ci/prchecks/build-wva-image-local.sh
 
       - name: Run e2e tests (full)
         shell: bash
