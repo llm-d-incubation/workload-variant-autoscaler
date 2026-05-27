@@ -201,6 +201,14 @@ jobs:
               }
             }
 
+            // Same-repo pull_request: always run full tests
+            if (context.eventName === 'pull_request') {
+              const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
+              const headRepo = context.payload.pull_request.head.repo?.full_name ?? baseRepo;
+              core.setOutput('run_full', headRepo === baseRepo ? 'true' : 'false');
+              return;
+            }
+
             // Check workflow_dispatch input
             const workflowInput = '${{ github.event.inputs.run_full_tests }}';
             // Handle both boolean and string inputs
@@ -334,7 +342,7 @@ jobs:
         run: |
           make test-e2e-smoke-with-setup
 
-  # Full Kind E2E - runs only when triggered (/ok-to-test or workflow_dispatch with run_full_tests).
+  # Full Kind E2E - runs on same-repo pull_request events, /ok-to-test comments, or workflow_dispatch.
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
   # and must run and pass before merge (shows as "Expected" until triggered).
   e2e-tests-full:
@@ -342,7 +350,9 @@ jobs:
     needs: [lint-and-test, check-code-changes, check-full-tests]
     if: >-
       always() && needs.check-full-tests.outputs.run_full == 'true' && needs.check-code-changes.result == 'success'
-      && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch')
+      && needs.lint-and-test.result != 'failure'
+      && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
+          || github.event_name == 'pull_request')
     timeout-minutes: 60
     permissions:
       contents: read
