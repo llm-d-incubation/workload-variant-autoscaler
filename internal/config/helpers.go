@@ -74,15 +74,7 @@ func SystemNamespace() string {
 }
 
 // ConfigMapName returns the main ConfigMap name from environment variable or default.
-// The CONFIG_MAP_NAME environment variable is set by the Helm chart during deployment
-// (see charts/workload-variant-autoscaler/templates/manager/wva-deployment-controller-manager.yaml).
-// Each WVA deployment gets its own uniquely-named ConfigMap based on the Helm release name,
-// allowing multiple WVA instances to coexist in the same cluster without conflicts.
-// The Helm template sets this to: {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
-//
-// Default value: "wva-manager-config"
-// For kustomize deployments using a different ConfigMap name, set the CONFIG_MAP_NAME
-// environment variable in the deployment manifest.
+// Set CONFIG_MAP_NAME in the deployment manifest to use a non-default name.
 func ConfigMapName() string {
 	if name := os.Getenv("CONFIG_MAP_NAME"); name != "" {
 		return name

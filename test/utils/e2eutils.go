@@ -1318,7 +1318,6 @@ func SetupTestEnvironment(image string, numNodes, gpusPerNode int, gpuTypes stri
 	gom.Expect(os.Setenv("WVA_RECONCILE_INTERVAL", "30s")).To(gom.Succeed())
 
 	// Tests deploy their own workloads — skip any model server pre-deploy.
-	gom.Expect(os.Setenv("VLLM_SVC_ENABLED", "false")).To(gom.Succeed()) // tests deploy their own Service
 }
 
 // DeleteAllVariantAutoscalings deletes all VariantAutoscaling objects in a namespace

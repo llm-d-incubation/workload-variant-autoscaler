@@ -83,4 +83,4 @@ All files under `config/` follow the `(<app>-)?<kind>.yaml` pattern:
 
 ## Deprecation
 
-- the helm chart is deprecated. Do not make any changes to the helm chart or add new features to it.
+- the helm chart has been removed. Do not re-introduce it or add helm chart features.
