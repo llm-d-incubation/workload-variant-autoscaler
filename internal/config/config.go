@@ -25,6 +25,9 @@ type Config struct {
 	qmAnalyzer  qmAnalyzerConfig  // namespace-aware
 	scaleToZero scaleToZeroConfig // namespace-aware
 	coordinator coordinatorConfig
+	// nsInventory holds the optional namespace-scoped GPU inventory limiter
+	// configuration (wva-limiter-config ConfigMap). Read once at startup.
+	nsInventory LimiterConfig
 }
 
 // coordinatorConfig holds Coordinator loop configuration. Plugin
@@ -541,6 +544,24 @@ func (c *Config) UpdateSaturationConfigForNamespace(namespace string, config map
 
 // UpdateScaleToZeroConfig updates the global scale-to-zero configuration.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
+// LimiterConfig returns the namespace-scoped GPU inventory limiter
+// configuration. It is populated once at startup; the engine constructs the
+// namespace limiter from it during initialization, so changes require a
+// controller restart. Thread-safe.
+func (c *Config) LimiterConfig() LimiterConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nsInventory
+}
+
+// UpdateLimiterConfig sets the namespace-scoped GPU inventory limiter
+// configuration. Thread-safe.
+func (c *Config) UpdateLimiterConfig(config LimiterConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nsInventory = config
+}
+
 // For namespace-local updates, use UpdateScaleToZeroConfigForNamespace instead.
 func (c *Config) UpdateScaleToZeroConfig(config ScaleToZeroConfigData) {
 	c.UpdateScaleToZeroConfigForNamespace("", config)

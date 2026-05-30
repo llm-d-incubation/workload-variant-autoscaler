@@ -39,6 +39,8 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		{name: config.SaturationConfigMapName(), namespace: systemNamespace, isGlobal: true},
 		{name: config.DefaultScaleToZeroConfigMapName, namespace: systemNamespace, isGlobal: true},
 		{name: config.QMAnalyzerConfigMapName(), namespace: systemNamespace, isGlobal: true},
+		// Limiter config is cluster-scoped (read once at startup); no per-namespace variant.
+		{name: config.LimiterConfigMapName(), namespace: systemNamespace, isGlobal: true},
 	}
 
 	// Determine which namespaces to scan for namespace-local ConfigMaps
@@ -129,6 +131,9 @@ func (r *ConfigMapReconciler) bootstrapConfigMap(ctx context.Context, name, name
 		return fmt.Errorf("failed to bootstrap ConfigMap %s/%s: %w", namespace, name, err)
 	}
 
+	// Note: the limiter ConfigMap is loaded here at bootstrap only. The engine
+	// constructs limiters from it once during initialization, so it is not
+	// hot-reloaded — changing it requires a controller restart.
 	switch name {
 	case config.SaturationConfigMapName():
 		r.handleSaturationConfigMap(ctx, cm, namespace, isGlobal)
@@ -136,9 +141,27 @@ func (r *ConfigMapReconciler) bootstrapConfigMap(ctx context.Context, name, name
 		r.handleScaleToZeroConfigMap(ctx, cm, namespace, isGlobal)
 	case config.QMAnalyzerConfigMapName():
 		r.handleQMAnalyzerConfigMap(ctx, cm, namespace, isGlobal)
+	case config.LimiterConfigMapName():
+		r.handleLimiterConfigMap(ctx, cm)
 	default:
 		logger.V(1).Info("Ignoring unrecognized bootstrap ConfigMap", "name", name, "namespace", namespace)
 	}
 
 	return nil
+}
+
+// handleLimiterConfigMap parses the cluster-scoped limiter ConfigMap and stores
+// it on the Config for the engine to read at startup. A parse error is logged
+// and the limiter config is left empty (no limiter) rather than failing
+// bootstrap.
+func (r *ConfigMapReconciler) handleLimiterConfigMap(ctx context.Context, cm *corev1.ConfigMap) {
+	logger := log.FromContext(ctx)
+	cfg, err := config.ParseLimiterConfig(cm.Data)
+	if err != nil {
+		logger.Error(err, "Failed to parse limiter ConfigMap; limiter configuration ignored", "name", cm.Name)
+		metrics.RecordError(constants.ComponentController, "Failed to parse limiter ConfigMap")
+		return
+	}
+	r.Config.UpdateLimiterConfig(cfg)
+	logger.Info("Loaded limiter configuration", "limiters", len(cfg.Limiters))
 }

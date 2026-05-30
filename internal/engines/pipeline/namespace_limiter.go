@@ -1,0 +1,182 @@
+/*
+Copyright 2025 The llm-d Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package pipeline
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+)
+
+// NamespaceLimiterName is the stable limiter identifier recorded on limited
+// decisions (LimitedBy and the wva_decisions_limited_total metric label). The
+// per-namespace and per-type detail is surfaced in the DecisionStep reason
+// instead, to keep the metric label cardinality bounded.
+const NamespaceLimiterName = "namespace-inventory"
+
+// NamespaceLimiter constrains scaling decisions against per-namespace GPU
+// pools held by a NamespaceInventory. It mirrors DefaultLimiter but performs
+// usage accounting per (namespace bucket, accelerator type) rather than per
+// type cluster-wide, because the Inventory.SetUsed contract cannot carry the
+// namespace dimension.
+//
+// It applies to the V1 (Limit) path only; the V2 constraint path
+// (ComputeConstraints / GreedyByScoreOptimizer) is type-keyed and cannot
+// express per-namespace partitioning, so the engine keeps the cluster-wide
+// TypeInventory limiter there.
+type NamespaceLimiter struct {
+	name           string
+	inventory      *NamespaceInventory
+	algorithm      AllocationAlgorithm
+	metricsEmitter *metrics.MetricsEmitter
+}
+
+// NewNamespaceLimiter creates a limiter backed by a NamespaceInventory and an
+// allocation algorithm.
+func NewNamespaceLimiter(inventory *NamespaceInventory, algorithm AllocationAlgorithm) *NamespaceLimiter {
+	return &NamespaceLimiter{
+		name:           NamespaceLimiterName,
+		inventory:      inventory,
+		algorithm:      algorithm,
+		metricsEmitter: metrics.NewMetricsEmitter(),
+	}
+}
+
+// Name returns the limiter identifier.
+func (l *NamespaceLimiter) Name() string {
+	return l.name
+}
+
+// Limit applies per-namespace GPU constraints to scaling decisions in place.
+func (l *NamespaceLimiter) Limit(ctx context.Context, decisions []*domain.VariantDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+
+	if err := l.inventory.Refresh(ctx); err != nil {
+		return fmt.Errorf("failed to refresh namespace inventory: %w", err)
+	}
+
+	// Resolve empty/unknown accelerator names against the cluster-aggregate
+	// pools so a homogeneous cluster's single type is filled in before usage
+	// accounting and allocation. Mirrors DefaultLimiter.resolveUnknownAccelerators.
+	l.resolveUnknownAccelerators(decisions)
+
+	l.inventory.SetUsedByBucket(l.calculateUsedByBucket(decisions))
+
+	allocator := l.inventory.CreateAllocator(ctx)
+	if err := l.algorithm.Allocate(ctx, decisions, allocator); err != nil {
+		return fmt.Errorf("allocation algorithm failed: %w", err)
+	}
+
+	l.updateDecisionMetadata(decisions)
+	return nil
+}
+
+// resolveUnknownAccelerators fills in unresolved accelerator names against the
+// decision's own namespace pool: when that bucket holds exactly one accelerator
+// type, the name resolves to it. Resolving per bucket (rather than against the
+// cluster-wide aggregate) is required so existing replicas in a single-type
+// namespace still debit that pool even when the cluster as a whole is
+// heterogeneous; otherwise their usage would go uncounted and a sibling
+// decision could over-allocate.
+func (l *NamespaceLimiter) resolveUnknownAccelerators(decisions []*domain.VariantDecision) {
+	for _, d := range decisions {
+		if constants.IsAcceleratorResolved(d.AcceleratorName) {
+			continue
+		}
+		bucket, excluded, hasPool := l.inventory.resolver.resolve(d.Namespace)
+		if excluded || !hasPool {
+			continue
+		}
+		if types := l.inventory.bucketAcceleratorTypes(bucket); len(types) == 1 {
+			d.AcceleratorName = types[0]
+		}
+	}
+}
+
+// calculateUsedByBucket sums current GPU usage (CurrentReplicas * GPUsPerReplica)
+// per (namespace bucket, accelerator type). Namespaces that bypass the limiter
+// (excluded) or have no pool (denied) contribute no usage. The bucket keys must
+// match those the allocator resolves to, so the default-fallback namespaces'
+// usage aggregates under the shared default bucket rather than their own names.
+func (l *NamespaceLimiter) calculateUsedByBucket(decisions []*domain.VariantDecision) map[string]map[string]int {
+	used := make(map[string]map[string]int)
+	for _, d := range decisions {
+		// Skip unresolved accelerators (empty or the "unknown" sentinel): their
+		// usage cannot be attributed to a real type pool. resolveUnknownAccelerators
+		// resolves single-type buckets; in a multi-type bucket an unresolved
+		// replica stays unattributable, the same limitation the cluster-wide
+		// limiter has. Booking it under a synthetic key would not debit any real
+		// pool anyway, so skip it rather than create a phantom entry.
+		if !constants.IsAcceleratorResolved(d.AcceleratorName) {
+			continue
+		}
+		bucket, excluded, hasPool := l.inventory.resolver.resolve(d.Namespace)
+		if excluded || !hasPool {
+			continue
+		}
+		if used[bucket] == nil {
+			used[bucket] = make(map[string]int)
+		}
+		used[bucket][d.AcceleratorName] += d.CurrentReplicas * d.GPUsPerReplica
+	}
+	return used
+}
+
+// updateDecisionMetadata sets LimitedBy and records the limiting metric and a
+// DecisionStep for each limited decision.
+func (l *NamespaceLimiter) updateDecisionMetadata(decisions []*domain.VariantDecision) {
+	for _, d := range decisions {
+		if d.WasLimited {
+			d.LimitedBy = l.name
+			l.metricsEmitter.RecordDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
+		}
+		d.AddDecisionStep(l.name, l.buildStepReason(d), d.WasLimited)
+	}
+}
+
+// buildStepReason describes the limiting outcome, including the namespace
+// bucket and accelerator type for limited scale-ups so operators can see which
+// pool was exhausted.
+func (l *NamespaceLimiter) buildStepReason(d *domain.VariantDecision) string {
+	replicaChange := d.TargetReplicas - d.CurrentReplicas
+	if replicaChange <= 0 {
+		return fmt.Sprintf("no scale-up (target=%d, current=%d)", d.TargetReplicas, d.CurrentReplicas)
+	}
+	if d.WasLimited {
+		bucket, excluded, hasPool := l.inventory.resolver.resolve(d.Namespace)
+		switch {
+		case excluded:
+			// Excluded namespaces are unconstrained, so they are never limited
+			// here; fall through to the generic message defensively.
+		case !hasPool:
+			return fmt.Sprintf("limited by %s[ns=%s, type=%s]: no inventory (namespace has no node selector and no default)",
+				l.name, d.Namespace, d.AcceleratorName)
+		default:
+			return fmt.Sprintf("limited by %s[ns=%s, type=%s]: allocated %d GPUs for +%d replicas",
+				l.name, bucket, d.AcceleratorName, d.GPUsAllocated, replicaChange)
+		}
+	}
+	return fmt.Sprintf("allocated %d GPUs for +%d replicas", d.GPUsAllocated, replicaChange)
+}
+
+// Ensure NamespaceLimiter implements Limiter.
+var _ Limiter = (*NamespaceLimiter)(nil)
