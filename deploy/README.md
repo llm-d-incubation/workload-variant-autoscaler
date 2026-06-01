@@ -203,7 +203,7 @@ export WVA_IMAGE_TAG="latest"
 export DEPLOY_WVA=false                     # Monitoring + scaler only
 export DEPLOY_PROMETHEUS=false
 export DEPLOY_OPERATIONAL_DASHBOARD=false   # Deploy Grafana and operational dashboard
-export DEPLOY_LWS=false                     # Skip LeaderWorkerSet if already on cluster (needed for full e2e suite)
+# export DEPLOY_LWS=true           # Install LeaderWorkerSet (needed for full e2e suite; default false)
 ```
 
 #### Script deployment examples
