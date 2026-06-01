@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wva-system
+
+namePrefix: wva-
+
+resources:
+- ../../../base/
+# OpenShift's user-workload-monitoring Prometheus needs cluster-monitoring-view
+# permissions to scrape the controller's secure /metrics endpoint.
+- prometheus-adapter-monitoring.yaml
+
+components:
+- ../../../components/namespace-scoped/
+
+patches:
+# Point WVA at the in-cluster Thanos Querier (OpenShift's user-workload-monitoring
+# stack) and tighten TLS verification — the Service CA certificate is mounted
+# from /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt by the
+# deployment patch below.
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: manager-config
+- path: deployment-patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+# Move the Prometheus auth subject to OpenShift's user-workload-monitoring SA.
+- patch: |-
+    - op: replace
+      path: /subjects/0
+      value:
+        kind: ServiceAccount
+        name: prometheus-user-workload
+        namespace: openshift-user-workload-monitoring
+  target:
+    kind: ClusterRoleBinding
+    name: prometheus-metrics-auth-rolebinding

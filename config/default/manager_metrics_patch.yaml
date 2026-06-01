@@ -1,8 +1,0 @@
-# This patch adds the args to allow exposing the metrics endpoint using HTTP
-- op: add
-  path: /spec/template/spec/containers/0/args/0
-  value: --metrics-bind-address=:8443
-# TODO: For production deployments, consider enabling secure metrics with TLS certificates
-- op: add
-  path: /spec/template/spec/containers/0/args/1
-  value: --metrics-secure=true

@@ -20,12 +20,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration (Kind emulator). llm-d deploy is via deploy/install-llmd-infra.sh — set MODEL_ID / gateway vars there or in Makefile.
+# Configuration (Kind emulator). EPP deploy is via deploy/install-epp.sh — set LLM_D_RELEASE / GAIE_VERSION / LLMD_NS there or in Makefile.
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
-LLM_D_PROJECT=${LLM_D_PROJECT:-llm-d}
-WELL_LIT_PATH_NAME="simulated-accelerators"
 NAMESPACE_SUFFIX="sim"
-EXAMPLE_DIR="$WVA_PROJECT/$LLM_D_PROJECT/guides/$WELL_LIT_PATH_NAME"
 
 # Namespaces
 LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
@@ -36,16 +33,6 @@ WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconcile interval - tests set 30s interval
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
-POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
-
-# llm-d naming (used by WVA ServiceMonitor / install-llmd-infra; kind uses guides/simulated-accelerators, not optimized-baseline)
-LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
-LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
-
-LLM_D_MODELSERVICE_NAME="ms-$NAMESPACE_SUFFIX-llm-d-modelservice"
-LLM_D_MODELSERVICE_VALUES="ms-$NAMESPACE_SUFFIX/values.yaml"
-LLM_D_EPP_NAME="gaie-$NAMESPACE_SUFFIX-epp"
-
 # Prometheus Configuration
 PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
 PROMETHEUS_BASE_URL="https://$PROMETHEUS_SVC_NAME.$MONITORING_NAMESPACE.svc.cluster.local"

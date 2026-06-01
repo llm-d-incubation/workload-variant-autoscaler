@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Prerequisite checks for deploy/install.sh and deploy/install-llmd-infra.sh.
+# Prerequisite checks for deploy/install.sh.
 # Requires vars: REQUIRED_TOOLS.
 # Requires funcs: log_info/log_success/log_error.
 #

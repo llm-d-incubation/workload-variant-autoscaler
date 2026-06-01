@@ -177,6 +177,22 @@ rules:
   verbs:
   - get
   - update
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - keda.sh
+  resources:
+  - scaledobjects
+  verbs:
+  - get
+  - list
+  - watch
 - nonResourceURLs:
   - /metrics
   - /debug/pprof/*

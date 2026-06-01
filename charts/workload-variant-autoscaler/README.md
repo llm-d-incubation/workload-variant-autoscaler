@@ -1,6 +1,11 @@
 # workload-variant-autoscaler
 
-![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
+> **DEPRECATED**: This Helm chart is deprecated. Kustomize is now the recommended install method.
+> Use `kubectl apply -k config/default/` (Kubernetes) or `kubectl apply -k config/openshift/` (OpenShift).
+> See the [Deployment Guide](../../deploy/README.md) for details.
+> This chart will be removed in the next minor release.
+
+![Version: 0.7.0](https://img.shields.io/badge/Version-0.7.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.7.0](https://img.shields.io/badge/AppVersion-v0.7.0-informational?style=flat-square)
 
 Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads
 
@@ -9,7 +14,7 @@ Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM 
 The chart is published to GitHub Container Registry under the **llm-d** org (not llm-d-incubation). Use this OCI URL in Helm or Helmfile:
 
 - **OCI URL:** `oci://ghcr.io/llm-d/workload-variant-autoscaler`
-- **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.5.1`
+- **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.7.0`
 
 ## Installation (OpenShift)
 Helm is the recommended installation method. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler` and `prometheus-adapter`. To list all helm charts installed in the cluster run `helm ls -A`.
@@ -18,7 +23,7 @@ Helm is the recommended installation method. Before running, be sure to delete a
 ```
 export OWNER="llm-d"
 export WVA_PROJECT="llm-d-workload-variant-autoscaler"
-export WVA_RELEASE="v0.5.1"
+export WVA_RELEASE="v0.7.0"
 export WVA_NS="workload-variant-autoscaler-system"
 export MON_NS="openshift-user-workload-monitoring"
 

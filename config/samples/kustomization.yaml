@@ -1,4 +1,0 @@
-## Append samples of your project ##
-resources:
-- llmd_v1alpha1_VariantAutoscalings.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples

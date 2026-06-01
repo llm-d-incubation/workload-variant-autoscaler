@@ -51,6 +51,8 @@ Summary of WVA benchmark runs with configuration details.
 
 ## Prefill Heavy Scenario
 
+### Prefill Heavy — Qwen/Qwen3-32B
+
 **llm-d Release:** v0.6.0
 **Model:** Qwen/Qwen3-32B
 **Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
@@ -68,7 +70,64 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 115 | 106 | 109 | 110 | _TBD_ |
 | Cost (avg replicas × GPU/hr) | _TBD_ | 1.77 | 1.73 | 1.73 | _TBD_ |
 
+### Prefill Heavy — Qwen/Qwen3-32B (Static 2 Replicas, 600s)
+
+**llm-d Release:** main (includes v0.7.0 WVA)
+**Model:** Qwen/Qwen3-32B
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 553,930 | 552,625 | 559,358 | 555,305 |
+| P99 ITL (ms/token) | 58.2 | 57.5 | 58.8 | 58.2 |
+| Avg replicas | 2.00 | 2.00 | 2.00 | 2.00 |
+| Max replicas | 2 | 2 | 2 | 2 |
+| Avg KV cache utilization | 50.6% | 52.6% | 50.8% | 51.3% |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 94 | 94 | 92 | 93 |
+
+### Prefill Heavy — Qwen/Qwen3-0.6B (600s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 86,969 | 79,724 | 77,481 | 81,391 |
+| P99 ITL (ms/token) | 50.87 | 53.10 | 51.84 | 51.94 |
+| Avg replicas | 1.93 | 1.85 | 2.00 | 1.93 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 67.3% | 61.9% | 66.2% | 65.1% |
+| Avg queue depth (EPP) | 65.9 | 78.9 | 84.8 | 76.5 |
+| Error count | 384 | 636 | 182 | 401 |
+| Avg pod startup (s) | 65 | 64 | 65 | 65 |
+| Cost (avg replicas × GPU/hr) | 1.93 | 1.85 | 2.00 | 1.93 |
+
+### Prefill Heavy — Qwen/Qwen3-0.6B (1800s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 1800s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 67,747 | 65,054 | 65,731 | 66,177 |
+| P99 ITL (ms/token) | 50.51 | 46.66 | 44.57 | 47.25 |
+| Avg replicas | 2.70 | 3.27 | 3.54 | 3.17 |
+| Max replicas | 5 | 6 | 5 | 5 |
+| Avg KV cache utilization | 56.3% | 56.0% | 54.9% | 55.7% |
+| Avg queue depth (EPP) | 56.1 | 37.2 | 30.4 | 41.2 |
+| Error count | 1,196 | 754 | 629 | 860 |
+| Avg pod startup (s) | 67 | 64 | 66 | 66 |
+| Cost (avg replicas × GPU/hr) | 2.70 | 3.27 | 3.54 | 3.17 |
+
 ## Decode Heavy Scenario
+
+### Decode Heavy — Qwen/Qwen3-32B
 
 **llm-d Release:** v0.6.0
 **Model:** Qwen/Qwen3-32B
@@ -87,7 +146,64 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 119 | 103 | 106 | 109 | _TBD_ |
 | Cost (avg replicas × GPU/hr) | _TBD_ | 1.82 | 1.96 | 1.89 | _TBD_ |
 
+### Decode Heavy — Qwen/Qwen3-32B (Static 2 Replicas, 600s)
+
+**llm-d Release:** main (includes v0.7.0 WVA)
+**Model:** Qwen/Qwen3-32B
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 357,610 | 356,292 | 355,795 | 356,566 |
+| P99 ITL (ms/token) | 113.4 | 114.9 | 113.2 | 113.8 |
+| Avg replicas | 2.00 | 2.00 | 2.00 | 2.00 |
+| Max replicas | 2 | 2 | 2 | 2 |
+| Avg KV cache utilization | 67.0% | 66.3% | 67.0% | 66.8% |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 91 | 93 | 108 | 97 |
+
+### Decode Heavy — Qwen/Qwen3-0.6B (600s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 61,435 | 61,923 | 63,530 | 62,296 |
+| P99 ITL (ms/token) | 41.25 | 40.86 | 41.22 | 41.11 |
+| Avg replicas | 1.98 | 1.86 | 1.83 | 1.89 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 61.9% | 61.6% | 61.7% | 61.7% |
+| Avg queue depth (EPP) | 58.0 | 49.0 | 46.3 | 51.1 |
+| Error count | 1,280 | 1,515 | 1,430 | 1,408 |
+| Avg pod startup (s) | 63 | 66 | 66 | 65 |
+| Cost (avg replicas × GPU/hr) | 1.98 | 1.86 | 1.83 | 1.89 |
+
+### Decode Heavy — Qwen/Qwen3-0.6B (1800s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 1800s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 60,654 | 60,983 | 55,166 | 58,934 |
+| P99 ITL (ms/token) | 39.61 | 38.00 | 56.65 | 44.75 |
+| Avg replicas | 2.65 | 2.24 | 2.88 | 2.59 |
+| Max replicas | 4 | 3 | 4 | 4 |
+| Avg KV cache utilization | 55.9% | 58.0% | 57.6% | 57.2% |
+| Avg queue depth (EPP) | 30.4 | 40.7 | 21.2 | 30.8 |
+| Error count | 2,610 | 3,207 | 1,743 | 2,520 |
+| Avg pod startup (s) | 64 | 68 | 67 | 66 |
+| Cost (avg replicas × GPU/hr) | 2.65 | 2.24 | 2.88 | 2.59 |
+
 ## Bursty Scenario
+
+### Bursty — Qwen/Qwen3-32B
 
 **llm-d Release:** v0.6.0
 **Model:** Qwen/Qwen3-32B
@@ -106,7 +222,49 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 109 | 101 | 100 | 103 |
 | Cost (avg replicas × GPU/hr) | 2.46 | 2.29 | 2.55 | 2.43 |
 
+### Bursty — Qwen/Qwen3-0.6B (600s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** ~1000 prompt tokens, ~1000 output tokens, multi-stage bursty RPS (15→2→10→15→5→2), 900s total duration
+**Saturation Engine:** Default(v1)
+**Harness:** inference-perf
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 14,900 | 11,671 | 13,556 | 13,376 |
+| P99 ITL (ms/token) | 49.0 | 47.8 | 47.3 | 48.0 |
+| Avg replicas | 2.03 | 1.95 | 1.99 | 1.99 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 36.7% | 34.2% | 34.8% | 35.2% |
+| Avg queue depth (EPP) | 16.5 | 17.0 | 14.6 | 16.0 |
+| Error count | 54 | 49 | 49 | 51 |
+| Avg pod startup (s) | 66 | 65 | 66 | 66 |
+| Cost (avg replicas × GPU/hr) | 2.03 | 1.95 | 1.99 | 1.99 |
+
+### Bursty — Qwen/Qwen3-0.6B (1800s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** ~1000 prompt tokens, ~1000 output tokens, multi-stage bursty RPS (15→2→10→15→5→2), 1800s total duration
+**Saturation Engine:** Default(v1)
+**Harness:** inference-perf
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 21,925 | 20,680 | 27,228 | 23,278 |
+| P99 ITL (ms/token) | 49.8 | 49.1 | 51.4 | 50.1 |
+| Avg replicas | 1.62 | 1.66 | 1.62 | 1.63 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 29.8% | 27.4% | 31.4% | 29.5% |
+| Avg queue depth (EPP) | 0.9 | 1.3 | 1.1 | 1.1 |
+| Error count | 73 | 68 | 73 | 71 |
+| Avg pod startup (s) | 65 | 63 | 64 | 64 |
+| Cost (avg replicas × GPU/hr) | 1.62 | 1.66 | 1.62 | 1.63 |
+
 ## Symmetrical Scenario
+
+### Symmetrical — Qwen/Qwen3-32B
 
 **llm-d Release:** v0.6.0
 **Model:** Qwen/Qwen3-32B
@@ -124,3 +282,58 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 3,773 | 3,710 | 3,705 | 3,729 |
 | Avg pod startup (s) | 97 | 107 | 105 | 103 |
 | Cost (avg replicas × GPU/hr) | _TBD_ | 1.75 | 1.64 | 1.70 |
+
+### Symmetrical — Qwen/Qwen3-32B (Static 2 Replicas, 600s)
+
+**llm-d Release:** main (includes v0.7.0 WVA)
+**Model:** Qwen/Qwen3-32B
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 492,921 | 515,307 | 514,286 | 507,504 |
+| P99 ITL (ms/token) | 70.5 | 70.5 | 70.4 | 70.5 |
+| Avg replicas | 2.00 | 2.00 | 2.00 | 2.00 |
+| Max replicas | 2 | 2 | 2 | 2 |
+| Avg KV cache utilization | 50.4% | 48.6% | 48.7% | 49.3% |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 96 | 97 | 99 | 97 |
+
+### Symmetrical — Qwen/Qwen3-0.6B (600s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 22,560 | 24,180 | 22,766 | 23,169 |
+| P99 ITL (ms/token) | 44.07 | 43.26 | 42.47 | 43.27 |
+| Avg replicas | 1.79 | 1.81 | 1.81 | 1.80 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 53.1% | 51.9% | 51.1% | 52.0% |
+| Avg queue depth (EPP) | 12.2 | 14.0 | 12.8 | 13.0 |
+| Error count | 0 | 52 | 0 | 17 |
+| Avg pod startup (s) | 62 | 64 | 67 | 64 |
+| Cost (avg replicas × GPU/hr) | 1.79 | 1.81 | 1.81 | 1.80 |
+
+### Symmetrical — Qwen/Qwen3-0.6B (1800s)
+
+**llm-d Release:** v0.6.0
+**Model:** Qwen/Qwen3-0.6B
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 1800s duration
+**Saturation Engine:** Default(v1)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 21,272 | 19,368 | 21,836 | 20,825 |
+| P99 ITL (ms/token) | 39.41 | 40.52 | 41.13 | 40.36 |
+| Avg replicas | 1.80 | 1.78 | 1.82 | 1.80 |
+| Max replicas | 3 | 3 | 3 | 3 |
+| Avg KV cache utilization | 46.5% | 48.0% | 45.9% | 46.8% |
+| Avg queue depth (EPP) | 8.1 | 11.6 | 12.7 | 10.8 |
+| Error count | 359 | 348 | 321 | 342 |
+| Avg pod startup (s) | 66 | 67 | 66 | 66 |
+| Cost (avg replicas × GPU/hr) | 1.80 | 1.78 | 1.82 | 1.80 |

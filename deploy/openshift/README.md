@@ -2,7 +2,7 @@
 
 Automated deployment script for WVA and llm-d infrastructure on OpenShift clusters.
 
-> **Note**: This guide covers OpenShift-specific deployment details. For a complete overview of deployment methods, Helm chart configuration, and the full configuration reference, see the [main deployment guide](../README.md).
+> **Note**: This guide covers OpenShift-specific deployment details. For a complete overview of deployment methods and the full configuration reference, see the [main deployment guide](../README.md).
 
 ## Table of Contents
 
@@ -103,7 +103,7 @@ export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (bat
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 ```
 
-**Deployment flags** (`deploy/install.sh`) — llm-d is **`deploy/install-llmd-infra.sh`** after base infra:
+**Deployment flags** (`deploy/install.sh`) — llm-d is deployed separately via `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline):
 
 ```bash
 export DEPLOY_WVA=true                    # Deploy WVA controller
@@ -134,7 +134,7 @@ make deploy-wva-on-openshift
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-make deploy-wva-on-openshift   # install.sh + install-llmd-infra.sh
+make deploy-wva-on-openshift   # install.sh (WVA + monitoring + scaler + LWS)
 ```
 
 ### Example 4: Deploy Only WVA (llm-d already deployed)
@@ -225,7 +225,7 @@ Displays:
 
 ### 2. llm-d Infrastructure
 
-- **Namespace**: `llm-d-inference-scheduler` (default)
+- **Namespace**: `llm-d-optimized-baseline` (default)
 - **Components**:
   - Gateway (kgateway)
   - Inference Scheduler (GAIE)
@@ -305,7 +305,7 @@ export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
 
 ```bash
 kubectl get pods -n openshift-user-workload-monitoring | grep prometheus-adapter
-kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-inference-scheduler/wva_desired_replicas" | jq
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-optimized-baseline/wva_desired_replicas" | jq
 ```
 
 ### vLLM Pods Not Starting
@@ -313,7 +313,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-infere
 **Check logs**:
 
 ```bash
-kubectl logs -n llm-d-inference-scheduler deployment/ms-inference-scheduling-llm-d-modelservice-decode
+kubectl logs -n llm-d-optimized-baseline deployment/optimized-baseline-nvidia-gpu-vllm-decode
 ```
 
 **Common issues**:
@@ -333,19 +333,19 @@ kubectl logs -n llm-d-inference-scheduler deployment/ms-inference-scheduling-llm
 ```bash
 # Check all components
 kubectl get pods -n workload-variant-autoscaler-system
-kubectl get pods -n llm-d-inference-scheduler
-kubectl get variantautoscaling -n llm-d-inference-scheduler
-kubectl get hpa -n llm-d-inference-scheduler
+kubectl get pods -n llm-d-optimized-baseline
+kubectl get variantautoscaling -n llm-d-optimized-baseline
+kubectl get hpa -n llm-d-optimized-baseline
 
 # Check external metrics
-kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-inference-scheduler/wva_desired_replicas" | jq
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-optimized-baseline/wva_desired_replicas" | jq
 ```
 
 ### Monitor WVA Logs
 
 ```bash
 kubectl logs -n workload-variant-autoscaler-system \
-  deployment/workload-variant-autoscaler-controller-manager \
+  deployment/controller-manager \
   -f
 ```
 
@@ -365,7 +365,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: vllm-bench-test
-  namespace: llm-d-inference-scheduler
+  namespace: llm-d-optimized-baseline
 spec:
   template:
     spec:
@@ -377,7 +377,7 @@ spec:
         - |
           python3 -m vllm.entrypoints.cli.main bench serve \
             --backend openai \
-            --base-url http://infra-inference-scheduling-inference-gateway:80 \
+            --base-url http://optimized-baseline-inference-gateway:80 \
             --model unsloth/Meta-Llama-3.1-8B \
             --request-rate 20 \
             --num-prompts 1000
@@ -390,10 +390,9 @@ EOF
 To remove all deployed components:
 
 ```bash
-# Delete llm-d infrastructure
-helm uninstall infra-inference-scheduling -n llm-d-inference-scheduler
-helm uninstall gaie-inference-scheduling -n llm-d-inference-scheduler
-helm uninstall ms-inference-scheduling -n llm-d-inference-scheduler
+# Delete llm-d infrastructure (v0.7.0+: single GAIE Helm release + Kustomize model server)
+helm uninstall optimized-baseline -n llm-d-optimized-baseline
+kubectl delete -k llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base -n llm-d-optimized-baseline
 
 # Delete Prometheus Adapter
 helm uninstall prometheus-adapter -n openshift-user-workload-monitoring
@@ -402,5 +401,5 @@ helm uninstall prometheus-adapter -n openshift-user-workload-monitoring
 make undeploy
 
 # Delete namespaces
-kubectl delete namespace llm-d-inference-scheduler
+kubectl delete namespace llm-d-optimized-baseline
 ```

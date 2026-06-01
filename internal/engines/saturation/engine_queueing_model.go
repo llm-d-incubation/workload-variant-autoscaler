@@ -35,7 +35,7 @@ func (e *Engine) optimizeQueueingModel(
 	e.queueingModelAnalyzer.Update(currentModelKeys)
 
 	// Stage 1: Collect ModelScalingRequests for all models
-	var requests []pipeline.ModelScalingRequest
+	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
