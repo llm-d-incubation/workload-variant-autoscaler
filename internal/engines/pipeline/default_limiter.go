@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
@@ -52,6 +53,12 @@ func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*interfaces.Vari
 		return fmt.Errorf("failed to refresh inventory: %w", err)
 	}
 
+	// Step 1b: Resolve empty/unknown accelerator names using inventory.
+	// In homogeneous clusters (single GPU type), map to the real type so
+	// usage counting and allocation both use the correct pool. Decisions
+	// are mutated in place — the resolved type flows to status and metrics.
+	l.resolveUnknownAccelerators(decisions)
+
 	// Step 2: Calculate current GPU usage from decisions
 	usedByType := l.calculateUsedGPUs(decisions)
 	l.inventory.SetUsed(usedByType)
@@ -68,6 +75,26 @@ func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*interfaces.Vari
 	l.updateDecisionMetadata(decisions)
 
 	return nil
+}
+
+// resolveUnknownAccelerators maps empty or "unknown" accelerator names to the
+// real GPU type when the inventory has exactly one type (homogeneous cluster).
+// This must run before calculateUsedGPUs so existing replicas are counted
+// against the correct pool, and before TryAllocate so new allocations use it.
+func (l *DefaultLimiter) resolveUnknownAccelerators(decisions []*interfaces.VariantDecision) {
+	pools := l.inventory.GetResourcePools()
+	if len(pools) != 1 {
+		return // heterogeneous or empty — can't resolve
+	}
+	var realType string
+	for t := range pools {
+		realType = t
+	}
+	for _, d := range decisions {
+		if !constants.IsAcceleratorResolved(d.AcceleratorName) {
+			d.AcceleratorName = realType
+		}
+	}
 }
 
 // calculateUsedGPUs computes current GPU usage per accelerator type.

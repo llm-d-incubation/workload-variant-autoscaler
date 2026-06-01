@@ -75,7 +75,7 @@ var _ = Describe("Saturation Engine", func() {
 
 	Context("When handling multiple VariantAutoscalings", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 
 		BeforeEach(func() {
@@ -306,7 +306,7 @@ var _ = Describe("Saturation Engine", func() {
 
 	Context("Source Infrastructure Optimization Tests", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 		var sourceRegistry *source.SourceRegistry
 		var mockPromAPI *testutils.MockPromAPI

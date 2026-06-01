@@ -10,7 +10,7 @@ import (
 
 const (
 	// DefaultConfigMapName is the default name of the ConfigMap containing autoscaler configuration
-	DefaultConfigMapName = "wva-variantautoscaling-config"
+	DefaultConfigMapName = "wva-manager-config"
 	// DefaultSaturationConfigMapName is the default name of the ConfigMap for saturation scaling
 	DefaultSaturationConfigMapName = "wva-saturation-scaling-config"
 	// DefaultQMAnalyzerConfigMapName is the default name of the ConfigMap for queueing model based scaling
@@ -80,7 +80,7 @@ func SystemNamespace() string {
 // allowing multiple WVA instances to coexist in the same cluster without conflicts.
 // The Helm template sets this to: {{ include "workload-variant-autoscaler.fullname" . }}-variantautoscaling-config
 //
-// Default value: "wva-variantautoscaling-config"
+// Default value: "wva-manager-config"
 // For kustomize deployments using a different ConfigMap name, set the CONFIG_MAP_NAME
 // environment variable in the deployment manifest.
 func ConfigMapName() string {

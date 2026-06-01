@@ -31,7 +31,7 @@ var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, fu
 		By("Creating model service to ensure EPP pods exist")
 		// EPP pods are created when a model service is deployed to an InferencePool
 		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace,
-			modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+			modelServiceName, poolName, cfg.ModelID, "", cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		By("Creating service to expose model server")

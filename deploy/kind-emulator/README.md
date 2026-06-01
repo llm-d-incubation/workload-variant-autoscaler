@@ -2,7 +2,7 @@
 
 Quick start guide for local development using Kind (Kubernetes in Docker) with emulated GPU resources.
 
-> **Note**: This guide covers Kind-specific deployment for local testing. For a complete overview of deployment methods, Helm chart configuration, and the full configuration reference, see the [main deployment guide](../README.md).
+> **Note**: This guide covers Kind-specific deployment for local testing. For a complete overview of deployment methods and the full configuration reference, see the [main deployment guide](../README.md).
 
 ## Table of Contents
 
@@ -71,7 +71,7 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
 export DEPLOY_WVA=true                # Deploy WVA controller
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-# llm-d: `make deploy-wva-emulated-on-kind` runs install.sh then install-llmd-infra.sh
+# llm-d: deploy model serving separately via the llm-d guides after install.sh
 ```
 
 ### Step-by-Step Setup
@@ -138,7 +138,7 @@ Destroys the Kind cluster.
 
 ### install.sh (Kind environment plugin)
 
-`deploy/kind-emulator/install.sh` is **sourced** by `deploy/install-llmd-infra.sh` when `ENVIRONMENT=kind-emulator`. It handles Kind-specific setup (namespaces, image load, monitoring wiring, and related helpers). **llm-d ModelService post-deploy cleanup** for emulated clusters (remove chart prefill; optionally remove chart decode when `LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`, the default) runs from **`deploy/lib/infra_llmd.sh`** inside `deploy_llm_d_infrastructure`, not from this `install.sh`.
+`deploy/kind-emulator/install.sh` is **sourced** by `deploy/install.sh` when `ENVIRONMENT=kind-emulator`. It handles Kind-specific setup (namespaces, image load, monitoring wiring, and related helpers). llm-d model serving (EPP + ModelService) is deployed separately using `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline).
 
 ## Cluster Configuration
 
@@ -170,7 +170,7 @@ GPUs are emulated using extended resources:
 
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-system \
-  svc/workload-variant-autoscaler-controller-manager-metrics 8080:8080
+  svc/wva-controller-manager-metrics-service 8080:8080
 ```
 
 **Port-forward Prometheus:**
@@ -253,7 +253,7 @@ make create-kind-cluster
 ```bash
 # Check controller logs
 kubectl logs -n workload-variant-autoscaler-system \
-  deployment/workload-variant-autoscaler-controller-manager
+  deployment/controller-manager
 
 # Verify CRDs installed
 kubectl get crd variantautoscalings.llmd.ai
@@ -318,7 +318,7 @@ WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUST
 4. **Update deployment:**
 
    ```bash
-   kubectl set image deployment/workload-variant-autoscaler-controller-manager \
+   kubectl set image deployment/controller-manager \
      -n workload-variant-autoscaler-system \
      manager=localhost:5000/wva:dev
    ```
@@ -327,7 +327,7 @@ WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUST
 
    ```bash
    kubectl logs -n workload-variant-autoscaler-system \
-     deployment/workload-variant-autoscaler-controller-manager -f
+     deployment/controller-manager -f
    ```
 
 ## Clean Up

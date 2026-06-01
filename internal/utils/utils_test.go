@@ -298,13 +298,13 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 			expected:   "T4",
 		},
 		{
-			name:       "nil_va_and_deployment_returns_empty",
+			name:       "nil_va_and_deployment_returns_default",
 			va:         nil,
 			deployment: nil,
-			expected:   "",
+			expected:   constants.DefaultAcceleratorName,
 		},
 		{
-			name: "no_gpu_info_returns_empty",
+			name: "no_gpu_info_returns_default",
 			va:   &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
 			deployment: &appsv1.Deployment{
 				Spec: appsv1.DeploymentSpec{
@@ -313,7 +313,7 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 					},
 				},
 			},
-			expected: "",
+			expected: constants.DefaultAcceleratorName,
 		},
 	}
 

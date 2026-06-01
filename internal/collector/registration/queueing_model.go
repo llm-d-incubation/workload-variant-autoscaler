@@ -49,11 +49,11 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 	// Average time-to-first-token per instance (seconds).
 	// Uses histogram rate(sum[1m]) / rate(count[1m]) over a 1m sliding window.
 	// Used by queueing model tuner as the observed TTFT for Kalman filter updates.
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:     QueryAvgTTFT,
 		Type:     source.QueryTypePromQL,
-		Template: `max by (instance, pod) (rate(vllm:time_to_first_token_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:time_to_first_token_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template: `max by (instance, pod, llm_d_ai_variant) (rate(vllm:time_to_first_token_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:time_to_first_token_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:   []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Average time-to-first-token per instance (seconds), " +
 			"used by queueing model tuner for parameter learning",
@@ -62,11 +62,11 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 	// Average inter-token latency per instance (seconds).
 	// Uses histogram rate(sum[1m]) / rate(count[1m]) over a 1m sliding window.
 	// Used by queueing model tuner as the observed ITL for Kalman filter updates.
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:     QueryAvgITL,
 		Type:     source.QueryTypePromQL,
-		Template: `max by (instance, pod) (rate(vllm:inter_token_latency_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:inter_token_latency_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template: `max by (instance, pod, llm_d_ai_variant) (rate(vllm:inter_token_latency_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]) / rate(vllm:inter_token_latency_seconds_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:   []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Average inter-token latency per instance (seconds), " +
 			"used by queueing model tuner for parameter learning",

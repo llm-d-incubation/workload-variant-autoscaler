@@ -22,6 +22,13 @@ spec:
       insecureSkipVerify: {{ .Values.wva.prometheus.tls.insecureSkipVerify }}
     bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
     {{- end }}
+    # Propagate the llm-d.ai/variant pod label into scraped metrics.
+    # __meta_* labels are only available during target relabeling, so this
+    # must live under relabelings (not metricRelabelings).
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_label_llm_d_ai_variant]
+      targetLabel: llm_d_ai_variant
+      action: replace
   namespaceSelector:
     any: true
 {{- end }}

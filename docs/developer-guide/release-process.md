@@ -48,8 +48,8 @@ Do these on the branch you intend to tag (e.g. `main`).
    - Optionally reference it in release notes when you create the GitHub Release.
 
 2. **Kustomize default image tag (optional)**  
-   - If you want the default kustomize install to use the new version, update `config/manager/kustomization.yaml`: set `newTag` to the new version (e.g. `v0.5.2`) and commit.  
-   - The Helm release workflow does **not** update this file; it only updates `charts/workload-variant-autoscaler/Chart.yaml` and `charts/workload-variant-autoscaler/values.yaml`.
+   - If you want the default kustomize install to use the new version, update `config/base/manager/kustomization.yaml`: set `newTag` to the new version (e.g. `v0.5.2`) and commit.  
+   - The Helm release workflow also updates `charts/workload-variant-autoscaler/Chart.yaml` and `charts/workload-variant-autoscaler/values.yaml`, but the Helm chart is deprecated and will be removed in a future release.
 
 3. **Upstream dependency pins**  
    - If this release pins a new version of an upstream dependency (e.g. [llm-d-inference-sim](https://github.com/llm-d/llm-d-inference-sim)), update [docs/upstream-versions.md](../upstream-versions.md) and the referenced files (e.g. `test/e2e/fixtures/model_service_builder.go`, `test/utils/resources/llmdsim.go`) before releasing.
@@ -96,12 +96,12 @@ So after the workflow runs, the default branch will have the chart metadata alig
 
 ---
 
-## Helm chart details
+## Helm chart details (deprecated)
+
+> The Helm chart is deprecated. Kustomize (`config/overlays/cluster-scoped/kubernetes/` or `config/overlays/namespace-scoped/openshift/`) is the recommended install path. The chart and its release workflow will be removed in a future minor release.
 
 - **Chart location:** `charts/workload-variant-autoscaler/`.
 - **Publish location:** `oci://ghcr.io/llm-d` (package name: `workload-variant-autoscaler`).
-- **Install example:**  
-  `helm install wva oci://ghcr.io/llm-d/workload-variant-autoscaler --version X.Y.Z`
 - The workflow sets the chart **version** and **appVersion** from the release tag and updates the default controller **image tag** in `values.yaml`; it then commits those changes back to the default branch.
 
 ---

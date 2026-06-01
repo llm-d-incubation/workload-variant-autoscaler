@@ -136,7 +136,7 @@ func cleanupScaleFromZeroResources() {
 
 // Scale-from-zero test validates that the WVA controller correctly detects pending requests
 // and scales up scale targets from zero replicas. Requires GIE queuing (flowControl feature gate
-// enabled on EPP from install when LLMD_PATCH_EPP_FLOW_CONTROL=true) and an InferenceObjective (applied below in BeforeAll).
+// enabled on EPP via SCALE_TO_ZERO_ENABLED=true on make deploy-e2e-infra) and an InferenceObjective (applied below in BeforeAll).
 // This suite needs a scaler that allows minReplicas=0 on the scaled workload: either
 // SCALE_TO_ZERO_ENABLED=true where native HPA supports it (HPAScaleToZero), or SCALER_BACKEND=keda
 // (ScaledObject). OpenShift usually lacks HPAScaleToZero; e2e config ignores SCALE_TO_ZERO_ENABLED there,
@@ -219,7 +219,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 
 		By("Creating model service deployment with 0 initial replicas")
 		// Create deployment with 0 replicas using the fixture
-		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, vaName, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		// Immediately scale deployment to 0 (with retry to handle race conditions)
@@ -406,6 +406,12 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 					GinkgoWriter.Printf("Found inference gateway service: %s\n", gatewayServiceName)
 					break
 				}
+			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
 			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 
@@ -668,7 +674,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, vaName, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS
@@ -921,6 +927,12 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 					break
 				}
 			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
+			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 
 			By("Creating a job to send requests while LWS is at zero")
@@ -1089,7 +1101,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 		}).Should(Succeed(), "EPP pods should be ready")
 
 		By("Creating model service LeaderWorkerSet with single-node (leader only) with 0 initial replicas")
-		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
+		err := fixtures.EnsureModelServiceLWS(ctx, crClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, vaName, cfg.UseSimulator, cfg.MaxNumSeqs, lwsGroupSize)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service LWS")
 
 		// Register cleanup for LWS
@@ -1341,6 +1353,12 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 					GinkgoWriter.Printf("Found inference gateway service: %s\n", gatewayServiceName)
 					break
 				}
+			}
+			// Fallback: GAIE standalone chart embeds Envoy in the EPP pod and exposes port 80
+			// on the EPP service itself — no separate inference-gateway Service is created.
+			if gatewayServiceName == "" {
+				gatewayServiceName = cfg.EPPServiceName
+				GinkgoWriter.Printf("No inference-gateway service found; using EPP service as gateway (standalone chart): %s\n", gatewayServiceName)
 			}
 			Expect(gatewayServiceName).NotTo(BeEmpty(), "Inference gateway service should exist")
 

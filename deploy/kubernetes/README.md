@@ -2,7 +2,7 @@
 
 Automated deployment script for WVA, llm-d infrastructure, Prometheus, and HPA on Kubernetes clusters.
 
-> **Note**: This guide covers Kubernetes-specific deployment details. For a complete overview of deployment methods, Helm chart configuration, and the full configuration reference, see the [main deployment guide](../README.md).
+> **Note**: This guide covers Kubernetes-specific deployment details. For a complete overview of deployment methods and the full configuration reference, see the [main deployment guide](../README.md).
 
 ## Table of Contents
 
@@ -62,7 +62,7 @@ This script automates the complete deployment process on kubernetes cluster incl
 export HF_TOKEN="your-hf-token-here"
 
 # Optional: Customize deployment (basename under llm-d guides/; llm-d main uses optimized-baseline)
-export GUIDE_NAME="inference-scheduling"                                  # Default for pinned LLM_D_RELEASE (e.g. v0.6.0)
+export GUIDE_NAME="optimized-baseline"                                  # Default for LLM_D_RELEASE v0.7.0+
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"                               # Default
 export WVA_IMAGE_REPO="ghcr.io/llm-d/llm-d-workload-variant-autoscaler"         # Default
 export WVA_IMAGE_TAG="latest"                                             # Default
@@ -100,15 +100,14 @@ export HF_TOKEN="hf_xxxxx"                  # Required: HuggingFace token
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B" # Model to deploy
 export ACCELERATOR_TYPE="H100"              # GPU type
 export WVA_IMAGE_TAG="latest"               # WVA version
-# HPA stabilization: set on Helm chart (`hpa.behavior.*`), not install.sh
+# HPA stabilization: configure on the HPA resource directly, not install.sh
 
-# Performance tuning (optional; passed to install-llmd-infra / ModelService)
+# Performance tuning (optional; set in llm-d ModelService manifest)
 export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
 export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
-export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway (for install-llmd-infra.sh)
 ```
 
-**Deployment flags** (`deploy/install.sh`) — use Helm for chart VA/HPA; llm-d is **`deploy/install-llmd-infra.sh`**:
+**Deployment flags** (`deploy/install.sh`) — VA/HPA are managed separately; llm-d is deployed via `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline):
 
 ```bash
 export DEPLOY_PROMETHEUS=true         # Deploy kube-prometheus-stack
@@ -142,7 +141,7 @@ make deploy-wva-on-k8s
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-make deploy-wva-on-k8s   # install.sh + install-llmd-infra.sh
+make deploy-wva-on-k8s   # install.sh (WVA + monitoring + scaler + LWS)
 ```
 
 ### Example 4: Deploy only WVA + Prometheus (llm-d already deployed)
@@ -247,7 +246,7 @@ Displays:
 
 ### 3. llm-d Infrastructure
 
-- **Namespace**: `llm-d-inference-scheduler` (default)
+- **Namespace**: `llm-d-optimized-baseline` (default)
 - **Components**:
   - Gateway
   - Inference Scheduler (GAIE/EPP)
@@ -376,7 +375,7 @@ kubectl logs -n workload-variant-autoscaler-system -l control-plane=controller-m
 kubectl logs -n workload-variant-autoscaler-system -l control-plane=controller-manager | grep "Metrics unavailable"
 
 # Check if vLLM is exposing metrics
-kubectl port-forward -n llm-d-inference-scheduling <vllm-pod> 8200:8200
+kubectl port-forward -n llm-d-optimized-baseline <vllm-pod> 8200:8200
 curl http://localhost:8200/metrics | grep vllm:
 ```
 
@@ -385,8 +384,8 @@ curl http://localhost:8200/metrics | grep vllm:
 **Check logs**:
 
 ```bash
-kubectl logs -n llm-d-inference-scheduling deployment/ms-inference-scheduling-llm-d-modelservice-decode
-kubectl describe pod -n llm-d-inference-scheduling -l llm-d.ai/model
+kubectl logs -n llm-d-optimized-baseline deployment/optimized-baseline-nvidia-gpu-vllm-decode
+kubectl describe pod -n llm-d-optimized-baseline -l llm-d.ai/model
 ```
 
 **Common issues**:
@@ -415,7 +414,7 @@ kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-promethe
 
 ```bash
 kubectl get servicemonitor vllm-servicemonitor -n workload-variant-autoscaler-monitoring -o yaml
-kubectl get svc -n llm-d-inference-scheduling --show-labels
+kubectl get svc -n llm-d-optimized-baseline --show-labels
 ```
 
 ## Post-Deployment
@@ -426,19 +425,19 @@ kubectl get svc -n llm-d-inference-scheduling --show-labels
 # Check all namespaces
 kubectl get pods -n workload-variant-autoscaler-system
 kubectl get pods -n workload-variant-autoscaler-monitoring
-kubectl get pods -n llm-d-inference-scheduling
+kubectl get pods -n llm-d-optimized-baseline
 
 # Check VariantAutoscaling (with NEW MetricsReady column!)
-kubectl get variantautoscaling -n llm-d-inference-scheduling -o wide
+kubectl get variantautoscaling -n llm-d-optimized-baseline -o wide
 
 # Check detailed status with conditions
-kubectl describe variantautoscaling ms-inference-scheduling-llm-d-modelservice-decode -n llm-d-inference-scheduling
+kubectl describe variantautoscaling optimized-baseline-nvidia-gpu-vllm-decode -n llm-d-optimized-baseline
 
 # Check HPA
-kubectl get hpa -n llm-d-inference-scheduling
+kubectl get hpa -n llm-d-optimized-baseline
 
 # Check external metrics
-kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-inference-scheduling/wva_desired_replicas" | jq
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-optimized-baseline/wva_desired_replicas" | jq
 ```
 
 ### Monitor WVA Logs (See Metrics Validation!)
@@ -494,7 +493,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: guidellm-load-test
-  namespace: llm-d-inference-scheduling
+  namespace: llm-d-optimized-baseline
 spec:
   template:
     spec:
@@ -503,7 +502,7 @@ spec:
         image: quay.io/vishakharamani/guidellm:latest
         args:
           - benchmark
-          - --target=http://infra-inference-scheduling-inference-gateway:80
+          - --target=http://optimized-baseline-inference-gateway:80
           - --rate-type=constant
           - --rate=10
           - --max-seconds=300
@@ -516,13 +515,13 @@ Watch the autoscaling:
 
 ```bash
 # Watch VariantAutoscaling status update
-kubectl get variantautoscaling -n llm-d-inference-scheduling -w
+kubectl get variantautoscaling -n llm-d-optimized-baseline -w
 
 # Watch HPA scaling
-kubectl get hpa -n llm-d-inference-scheduling -w
+kubectl get hpa -n llm-d-optimized-baseline -w
 
 # Watch pod count change
-kubectl get pods -n llm-d-inference-scheduling -w
+kubectl get pods -n llm-d-optimized-baseline -w
 ```
 
 ## Cleanup
@@ -536,9 +535,9 @@ make undeploy-wva-on-k8s
 Or manually:
 
 ```bash
-# Delete llm-d infrastructure
-cd llm-d-infra/quickstart/examples/inference-scheduling
-helmfile destroy -e kgateway
+# Delete llm-d infrastructure (v0.7.0+)
+helm uninstall optimized-baseline -n llm-d-optimized-baseline
+kubectl delete -k llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base -n llm-d-optimized-baseline
 
 # Delete Prometheus Adapter
 helm uninstall prometheus-adapter -n workload-variant-autoscaler-monitoring
@@ -548,10 +547,10 @@ helm uninstall kube-prometheus-stack -n workload-variant-autoscaler-monitoring
 
 # Delete WVA
 cd /path/to/workload-variant-autoscaler
-kubectl delete -k config/default
+kubectl delete -k config/overlays/cluster-scoped/kubernetes
 
 # Delete namespaces
-kubectl delete namespace llm-d-inference-scheduling
+kubectl delete namespace llm-d-optimized-baseline
 kubectl delete namespace workload-variant-autoscaler-system
 kubectl delete namespace workload-variant-autoscaler-monitoring
 ```
@@ -573,7 +572,7 @@ This deployment includes the **NEW metrics health monitoring system**:
 
 ```bash
 # See MetricsReady column
-kubectl get variantautoscaling -n llm-d-inference-scheduling
+kubectl get variantautoscaling -n llm-d-optimized-baseline
 
 # Example output:
 # NAME        MODEL           ACCELERATOR  CURRENT  OPTIMIZED  METRICSREADY  AGE
@@ -583,8 +582,8 @@ kubectl get variantautoscaling -n llm-d-inference-scheduling
 ### Viewing Detailed Conditions
 
 ```bash
-kubectl describe variantautoscaling ms-inference-scheduling-llm-d-modelservice-decode \
-  -n llm-d-inference-scheduling
+kubectl describe variantautoscaling optimized-baseline-nvidia-gpu-vllm-decode \
+  -n llm-d-optimized-baseline
 
 # Look for:
 # Status:
@@ -604,8 +603,8 @@ When metrics are unavailable, you'll see structured logs like:
   "level": "WARN",
   "ts": "2025-10-13T18:36:52.670Z",
   "msg": "Metrics unavailable, skipping optimization for variant",
-  "variant": "ms-inference-scheduling-llm-d-modelservice-decode",
-  "namespace": "llm-d-inference-scheduling",
+  "variant": "optimized-baseline-nvidia-gpu-vllm-decode",
+  "namespace": "llm-d-optimized-baseline",
   "model": "meta-llama/Llama-3.1-8B",
   "reason": "MetricsMissing",
   "troubleshooting": "Check: (1) ServiceMonitor exists in monitoring namespace..."
@@ -642,7 +641,7 @@ make deploy-wva-on-k8s
 
 ```bash
 # Enable debug logging in WVA
-kubectl set env deployment/workload-variant-autoscaler-controller-manager \
+kubectl set env deployment/controller-manager \
   LOG_LEVEL=debug \
   -n workload-variant-autoscaler-system
 ```
@@ -652,7 +651,7 @@ kubectl set env deployment/workload-variant-autoscaler-controller-manager \
 ```bash
 export IMG="ghcr.io/yourorg/llm-d-workload-variant-autoscaler:custom-tag"
 export DEPLOY_PROMETHEUS=false
-make deploy-wva-on-k8s   # base infra only; skip install-llmd-infra if you manage llm-d separately
+make deploy-wva-on-k8s   # WVA + monitoring + scaler + LWS; llm-d is managed separately
 ```
 
 ## Performance Tuning
@@ -661,13 +660,13 @@ make deploy-wva-on-k8s   # base infra only; skip install-llmd-infra if you manag
 
 ```bash
 # Change how often WVA runs optimization (default: 60s)
-kubectl patch configmap workload-variant-autoscaler-variantautoscaling-config \
+kubectl patch configmap wva-manager-config \
   -n workload-variant-autoscaler-system \
   --type merge \
   -p '{"data":{"GLOBAL_OPT_INTERVAL":"30s"}}'
 
 # Restart WVA to apply
-kubectl rollout restart deployment workload-variant-autoscaler-controller-manager \
+kubectl rollout restart deployment controller-manager \
   -n workload-variant-autoscaler-system
 ```
 
@@ -675,7 +674,7 @@ kubectl rollout restart deployment workload-variant-autoscaler-controller-manage
 
 ```bash
 # Faster scale-up
-kubectl patch hpa vllm-deployment-hpa -n llm-d-inference-scheduling --type merge -p '
+kubectl patch hpa vllm-deployment-hpa -n llm-d-optimized-baseline --type merge -p '
 {
   "spec": {
     "behavior": {

@@ -59,44 +59,70 @@ set_wva_logging_level() {
 deploy_wva_controller() {
     log_info "Deploying Workload-Variant-Autoscaler..."
     log_info "Using image: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
-    log_info "Using release name: $WVA_RELEASE_NAME"
 
-    # Deploy WVA using Helm chart
-    log_info "Installing Workload-Variant-Autoscaler via Helm chart"
+    # Select the Kustomize overlay by install scope. OpenShift installs use the
+    # namespace-scoped overlay; Kubernetes installs use the cluster-scoped overlay.
+    local kustomize_overlay
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/namespace-scoped/openshift" && pwd)"
+    else
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/cluster-scoped/kubernetes" && pwd)"
+    fi
 
-    # Default namespaceScoped to true if not set (matches chart default)
-    # But allow override via env var (e.g. for E2E tests)
-    NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-true}
+    # Build a throw-away overlay that pins the image without modifying tracked files.
+    # Symlink the base overlay so kustomization.yaml can reference it with a relative
+    # path — Kustomize rejects absolute paths in resources.
+    local tmp_overlay
+    tmp_overlay=$(mktemp -d)
+    trap 'rm -rf "$tmp_overlay"' EXIT
 
-    # Chart baseName is the controller's logical pool name (InferencePool prefix), not necessarily the llm-d guide folder.
-    WVA_BASE_NAME="${WVA_BASE_NAME:-inference-scheduling}"
+    ln -s "$kustomize_overlay" "$tmp_overlay/base"
 
-    # VA / HPA / capacity thresholds are chart defaults unless changed via helm --set separately (see deploy README).
-    # llmd.modelName / llmd.modelID are optional Helm overrides here when the vars are exported (often unset for infra-only installs).
-    helm upgrade -i "$WVA_RELEASE_NAME" ${WVA_PROJECT}/charts/workload-variant-autoscaler \
-        -n "$WVA_NS" \
-        --values $VALUES_FILE \
-        --set-file wva.prometheus.caCert="$PROM_CA_CERT_PATH" \
-        --set wva.image.repository="$WVA_IMAGE_REPO" \
-        --set wva.image.tag="$WVA_IMAGE_TAG" \
-        --set wva.imagePullPolicy="$WVA_IMAGE_PULL_POLICY" \
-        --set wva.baseName="$WVA_BASE_NAME" \
-        ${LLM_D_MODELSERVICE_NAME:+--set llmd.modelName="$LLM_D_MODELSERVICE_NAME"} \
-        ${MODEL_ID:+--set llmd.modelID="$MODEL_ID"} \
-        --set llmd.namespace="$LLMD_NS" \
-        --set wva.prometheus.baseURL="$PROMETHEUS_URL" \
-        --set wva.prometheus.monitoringNamespace="$MONITORING_NAMESPACE" \
-        --set vllmService.enabled="$VLLM_SVC_ENABLED" \
-        --set vllmService.port="$VLLM_SVC_PORT" \
-        --set vllmService.targetPort="$VLLM_SVC_PORT" \
-        --set vllmService.nodePort="$VLLM_SVC_NODEPORT" \
-        --set wva.logging.level="$WVA_LOG_LEVEL" \
-        --set wva.prometheus.tls.insecureSkipVerify="$SKIP_TLS_VERIFY" \
-        --set wva.namespaceScoped="$NAMESPACE_SCOPED" \
-        --set wva.metrics.secure="$WVA_METRICS_SECURE" \
-        --set wva.scaleToZero="$ENABLE_SCALE_TO_ZERO" \
-        ${CONTROLLER_INSTANCE:+--set wva.controllerInstance=$CONTROLLER_INSTANCE} \
-        ${POOL_GROUP:+--set wva.poolGroup=$POOL_GROUP}
+    # config/base/manager/kustomization.yaml transforms the base image name "controller"
+    # to the published release image. The overlay must match the POST-transform name.
+    local base_image
+    base_image=$(grep 'newName:' "$WVA_PROJECT/config/base/manager/kustomization.yaml" | awk '{print $2}' | head -1)
+    cat > "$tmp_overlay/kustomization.yaml" <<EOF
+namespace: $WVA_NS
+resources:
+- ./base
+images:
+- name: $base_image
+  newName: $WVA_IMAGE_REPO
+  newTag: "$WVA_IMAGE_TAG"
+EOF
+
+    log_info "Installing WVA CRDs..."
+    kubectl apply -k "$WVA_PROJECT/config/base/crd/"
+
+    log_info "Applying Kustomize overlay: $kustomize_overlay"
+    kubectl apply -k "$tmp_overlay"
+
+    if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
+        log_info "Enabling scale-to-zero in WVA ConfigMap (ENABLE_SCALE_TO_ZERO=true)..."
+        kubectl patch configmap wva-manager-config \
+            -n "$WVA_NS" --type=merge \
+            -p '{"data":{"WVA_SCALE_TO_ZERO":"true"}}'
+    fi
+
+    # On shared clusters (e.g. OpenShift CI), concurrent runs produce the same
+    # ClusterRoleBinding name (wva-manager-rolebinding) because the overlay uses a
+    # fixed name. Each apply overwrites the subject namespace, breaking any other
+    # run that applied first. Create a per-deployment binding named after WVA_NS so
+    # each run has its own authoritative binding that survives concurrent applies.
+    log_info "Creating per-deployment ClusterRoleBindings for SA in $WVA_NS (shared cluster isolation)"
+    kubectl create clusterrolebinding "workload-variant-autoscaler-manager-${WVA_NS}" \
+        --clusterrole=wva-manager-role \
+        --serviceaccount="${WVA_NS}:wva-controller-manager" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    if kubectl get clusterrole cluster-monitoring-view &>/dev/null; then
+        kubectl create clusterrolebinding "workload-variant-autoscaler-cluster-monitoring-view-${WVA_NS}" \
+            --clusterrole=cluster-monitoring-view \
+            --serviceaccount="${WVA_NS}:wva-controller-manager" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    else
+        log_info "cluster-monitoring-view ClusterRole not found — skipping binding (non-OpenShift cluster)"
+    fi
 
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
@@ -167,24 +193,13 @@ delete_namespaces_kube_like() {
 deploy_wva_prerequisites_kube_like() {
     log_info "Deploying Workload-Variant-Autoscaler prerequisites for Kubernetes..."
 
-    # Extract Prometheus CA certificate
+    # InferencePool CRDs must exist before the controller starts or its initial
+    # watch fails. install-epp.sh installs them again later (idempotent).
+    install_inference_crds
+
+    # Extract Prometheus CA certificate (used by the Prometheus Adapter scaler backend).
     log_info "Extracting Prometheus TLS certificate"
     kubectl get secret "$PROMETHEUS_SECRET_NAME" -n "$MONITORING_NAMESPACE" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$PROM_CA_CERT_PATH"
-
-    local use_values_dev=false
-    if [ "$SKIP_TLS_VERIFY" = "true" ]; then
-        use_values_dev=true
-    elif [ "${KUBE_LIKE_VALUES_DEV_IF_PRESENT:-false}" = "true" ] && [ -f "$WVA_PROJECT/charts/workload-variant-autoscaler/values-dev.yaml" ]; then
-        use_values_dev=true
-    fi
-
-    if [ "$use_values_dev" = "true" ]; then
-        log_warning "TLS verification NOT enabled: using values-dev.yaml for dev deployments - NOT FOR PRODUCTION USE"
-        VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values-dev.yaml"
-    else
-        log_info "TLS verification enabled: using values.yaml for production deployments"
-        VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values.yaml"
-    fi
 
     # LeaderWorkerSet (WVA dependency; see upstream chart / #910).
     if [ "${DEPLOY_LWS:-true}" = "true" ]; then

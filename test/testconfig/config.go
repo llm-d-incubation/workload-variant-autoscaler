@@ -31,7 +31,7 @@ type SharedConfig struct {
 	EPPMode          string            // "poolName" or "endpointSelector"
 	PoolName         string            // InferencePool name (if using poolName mode)
 	EndpointSelector map[string]string // Pod selector (if using endpointSelector)
-	EPPServiceName   string            // EPP service name (e.g. gaie-<guide>-epp; guide basename matches llm-d guides/)
+	EPPServiceName   string            // EPP service name (e.g. optimized-baseline-epp; matches GAIE chart release name + "-epp")
 
 	// Model configuration
 	ModelID         string // e.g., "unsloth/Meta-Llama-3.1-8B"
@@ -52,10 +52,7 @@ type SharedConfig struct {
 // LoadSharedConfig reads the shared test configuration from environment variables.
 func LoadSharedConfig() SharedConfig {
 	env := GetEnv("ENVIRONMENT", "kind-emulator")
-	eppServiceDefault := "gaie-inference-scheduling-epp"
-	if env == "kind-emulator" {
-		eppServiceDefault = "gaie-sim-epp"
-	}
+	eppServiceDefault := "optimized-baseline-epp"
 
 	return SharedConfig{
 		Environment: env,
