@@ -3,8 +3,8 @@
 # Workload-Variant-Autoscaler infrastructure bootstrap: optional WVA controller,
 # Prometheus monitoring stack, and scaler backend (KEDA or Prometheus Adapter).
 #
-# For llm-d (gateway, EPP, ModelService, HF secret, WVA poolGroup alignment), run
-# deploy/install-llmd-infra.sh after this script when you need that stack.
+# For llm-d (gateway, EPP, ModelService), see the llm-d project guides at https://github.com/llm-d/llm-d.
+# For EPP setup (all environments), run deploy/install-epp.sh after this script.
 #
 # Prerequisites:
 # - kubectl and helm installed
@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
 
 # Namespaces
-LLMD_NS=${LLMD_NS:-"llm-d-inference-scheduler"}
+LLMD_NS=${LLMD_NS:-"llm-d-optimized-baseline"}
 MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"workload-variant-autoscaler-monitoring"}
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 PROMETHEUS_SECRET_NS=${PROMETHEUS_SECRET_NS:-$MONITORING_NAMESPACE}
@@ -34,17 +34,10 @@ PROMETHEUS_SECRET_NS=${PROMETHEUS_SECRET_NS:-$MONITORING_NAMESPACE}
 WVA_IMAGE_REPO=${WVA_IMAGE_REPO:-"ghcr.io/llm-d/llm-d-workload-variant-autoscaler"}
 WVA_IMAGE_TAG=${WVA_IMAGE_TAG:-"latest"}
 WVA_IMAGE_PULL_POLICY=${WVA_IMAGE_PULL_POLICY:-"Always"}
-WVA_RELEASE_NAME=${WVA_RELEASE_NAME:-"workload-variant-autoscaler"}
-VLLM_SVC_ENABLED=${VLLM_SVC_ENABLED:-true}
-VLLM_SVC_PORT=${VLLM_SVC_PORT:-8200}
-VLLM_SVC_NODEPORT=${VLLM_SVC_NODEPORT:-30000}
 SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-"false"}
 WVA_LOG_LEVEL=${WVA_LOG_LEVEL:-"info"}
-VALUES_FILE=${VALUES_FILE:-"$WVA_PROJECT/charts/workload-variant-autoscaler/values.yaml"}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
-WVA_BASE_NAME=${WVA_BASE_NAME:-"inference-scheduling"}
-NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-true}
 
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 
@@ -70,8 +63,8 @@ KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
 # On kubernetes: default false (cluster-managed KEDA); kind-emulator flows often set true or use cluster path.
 KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
 
-# LeaderWorkerSet (WVA dependency). Set false when LWS is pre-installed or not needed (e.g. some benchmarks).
-DEPLOY_LWS=${DEPLOY_LWS:-true}
+# LeaderWorkerSet. Set true when LWS tests run (e.g. full e2e suite). Defaults false so smoke and benchmarks skip it.
+DEPLOY_LWS=${DEPLOY_LWS:-false}
 LWS_NAMESPACE=${LWS_NAMESPACE:-"lws-system"}
 LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.8.0"}
 
@@ -104,6 +97,8 @@ source "$DEPLOY_LIB_DIR/infra_scaler_backend.sh"
 source "$DEPLOY_LIB_DIR/scaler_runtime.sh"
 # shellcheck source=lib/infra_wva.sh
 source "$DEPLOY_LIB_DIR/infra_wva.sh"
+# shellcheck source=lib/infra_epp.sh
+source "$DEPLOY_LIB_DIR/infra_epp.sh"
 # shellcheck source=lib/infra_monitoring.sh
 source "$DEPLOY_LIB_DIR/infra_monitoring.sh"
 # shellcheck source=lib/cleanup.sh

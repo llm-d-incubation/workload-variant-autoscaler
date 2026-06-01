@@ -192,7 +192,7 @@ When debugging deployment lifecycle issues, watch for these log messages:
 
 ```bash
 # Deployment created - VA should trigger immediately
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager | grep "Deployment created"
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager | grep "Deployment created"
 
 # Example output:
 # "Deployment created, triggering VA reconciliation" deployment="llama-8b" va="llama-8b-autoscaler"
@@ -200,7 +200,7 @@ kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-a
 
 ```bash
 # Deployment deleted - VA should update status
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager | grep -i "deployment.*delete\|DeploymentNotFound"
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager | grep -i "deployment.*delete\|DeploymentNotFound"
 ```
 
 ### Check VA Status After Deployment Deletion
@@ -219,7 +219,7 @@ Check that the controller's event predicates are working correctly:
 
 ```bash
 # Count reconciliation events in logs
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager | grep "Reconciling" | wc -l
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager | grep "Reconciling" | wc -l
 
 # If this number is extremely high, event filtering may be misconfigured
 ```

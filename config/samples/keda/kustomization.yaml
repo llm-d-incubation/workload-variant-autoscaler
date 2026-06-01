@@ -2,6 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 metadata:
   name: keda-sample
+# Legacy (deprecated): requires a VariantAutoscaling CRD.
+# For the annotation-based approach (no CRD) use the annotations/ overlay instead.
 resources:
 - va.yaml
 - scaledobject.yaml

@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: workload-variant-autoscaler-controller-manager
+  name: controller-manager
 spec:
   replicas: 0
 

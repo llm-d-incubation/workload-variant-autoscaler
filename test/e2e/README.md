@@ -123,9 +123,7 @@ export E2E_PROM_ADAPTER_PROBE_SEC=90
 
 `deploy/install.sh` runs **`helm repo update`** by default. To skip (faster but requires existing repo indexes), set **`SKIP_HELM_REPO_UPDATE=true`**.
 
-When using **`LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true`** (as in `make deploy-e2e-infra`), **`E2E_DEPLOY_WAIT_TIMEOUT`** (default **`120s`**) bounds how long `install-llmd-infra.sh` waits for the EPP and inference-gateway deployments to become Available. Increase if your cluster is slow to pull images.
-
-Emulated Kind post-deploy ModelService cleanup (prefill removal; decode removal when **`LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`**, the default) lives in **`deploy/lib/infra_llmd.sh`**, not in `deploy/kind-emulator/install.sh`.
+`deploy/install-epp.sh` waits up to 120s for the EPP deployment to become Available. Increase `kubectl wait --timeout` in `deploy/lib/infra_epp.sh` if your cluster is slow to pull images.
 
 ### Example: Run on Kind with Emulated GPUs
 
@@ -181,7 +179,6 @@ ENVIRONMENT=kind-emulator \
 USE_SIMULATOR=true \
 SCALE_TO_ZERO_ENABLED=false \
 CREATE_CLUSTER=true \
-INSTALL_GATEWAY_CTRLPLANE=true \
 IMG=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:0.0.1-test \
 DELETE_CLUSTER=false \
 SCALER_BACKEND=keda \
@@ -231,7 +228,7 @@ ginkgo -v --label-filter="smoke" ./test/e2e/
 
 **Tests:**
 1. **Scale-From-Zero** (~7 min)
-   - Requires EPP flow control (`LLMD_PATCH_EPP_FLOW_CONTROL=true` / `ENABLE_SCALE_TO_ZERO=true` on `install-llmd-infra.sh`, or `make deploy-e2e-infra`). The scale-from-zero spec applies **InferenceObjective** `e2e-default` via `test/e2e/fixtures` when the CRD exists.
+   - Requires EPP flow control (`SCALE_TO_ZERO_ENABLED=true` on `make deploy-e2e-infra`, which passes `ENABLE_SCALE_TO_ZERO=true` to `install-epp.sh`). The scale-from-zero spec applies **InferenceObjective** `e2e-default` via `test/e2e/fixtures` when the CRD exists.
    - Create HPA (or KEDA ScaledObject) with minReplicas=0
    - Verify deployment scales to 0 when idle
    - Generate first request, verify scale-up from 0 → 1
@@ -261,26 +258,20 @@ ginkgo -v --label-filter="smoke" ./test/e2e/
    - Tests PodScrapingSource discovery and scraping
    - Note: Direct scraping tests skipped on Kind (use in-cluster tests)
 
-4. **Saturation analyzer path and status propagation** (~2-6 min)
+4. **Saturation analyzer path and status propagation** (~2-4 min, simulator only)
    - Toggle saturation config `analyzerName` between `"saturation"` (V2) and unset (V1)
    - Verify controller processing path transitions for a dedicated test model
    - Verify stable status contract: `DesiredOptimizedAlloc` is populated and `MetricsAvailable=True`
-   - Run a bounded V1 threshold-crossing request job (no sustained load)
-   - Bounded deterministic assertions only (no benchmark/load criteria)
+   - Drive V1 threshold crossings via `--fake-metrics` (no HTTP load, no curl Job)
+   - Skipped when `USE_SIMULATOR=false` (fake-metrics flag is simulator-only)
 
-   **Threshold-crossing tunables** ([`createSaturationThresholdTriggerJob`](saturation_analyzer_path_test.go); shell in [`fixtures/saturation_threshold_trigger.sh`](fixtures/saturation_threshold_trigger.sh), embedded with `//go:embed`):
+   **Fake metrics calibration** (`v1FakeMetricsJSON` in [`saturation_analyzer_path_test.go`](saturation_analyzer_path_test.go)):
 
-   | Parameter | Current value | Role |
-   |-----------|---------------|------|
-   | `numRequests` | `6` | Exact, bounded completion requests for the V1 threshold scenario. |
-   | `max_tokens` | `400` | Keeps each request active long enough for metrics scrape/analyzer evaluation. |
-   | Service preflight retries | `24` | Retry budget before sending traffic (`/v1/models` probe loop). |
-   | Service preflight delay | `5s` | Delay between `/v1/models` probe attempts. |
-   | Per-request HTTP timeout | `curl --max-time 240` | Bounds request runtime while tolerating cold starts. |
-   | Job `backoffLimit` | `1` | One retry max to reduce hidden variability. |
-   | Target URL | `http://<model-service>:8000/v1/completions` | Direct model service path (not gateway) to keep trigger deterministic. |
-   | Endpoint readiness gate | service Endpoints ready `> 0` | Test waits for Kubernetes endpoints before creating the trigger job. |
-   | Job container image | `quay.io/curl/curl:8.11.1` | Non–Docker Hub image per e2e policy. |
+   | Field | Value | Role |
+   |-------|-------|------|
+   | `kv-cache-usage` | `0.3` | Above aggressive threshold (0.05) → scale-up; below conservative threshold (1.00) → no scale-up |
+   | `waiting-requests` | `2` | Above aggressive threshold (1) → scale-up; below conservative threshold (100) → no scale-up |
+   | `running-requests` | `1` | Baseline activity signal |
 
 **Run Command:**
 ```bash
@@ -404,7 +395,7 @@ Use this when smoke/full tests fail on **VA reconciliation**, **HPA / desired re
 **Things to verify:**
 1. **Prometheus** is scraping model/EPP targets; **`MetricsAvailable`** on the VA in `kubectl describe`.
 2. **`external.metrics.k8s.io`** works when using **`SCALER_BACKEND=prometheus-adapter`**; on kind-emulator, the default `auto` mode already probes adapter pod Ready + `external.metrics.k8s.io/v1beta1` discovery. If the API is still empty after install, set **`RESTART_PROMETHEUS_ADAPTER=true`** to force a restart.
-3. **Scale-from-zero:** infra deployed with **`make deploy-e2e-infra`** (or **`LLMD_PATCH_EPP_FLOW_CONTROL=true`** / **`ENABLE_SCALE_TO_ZERO=true`** on `install-llmd-infra.sh`) so EPP flow control is on; raise **`E2E_EVENTUALLY_*`** / **`SCALE_UP_TIMEOUT`** if cold start is slow; see **Tier 2** trigger job tunables.
+3. **Scale-from-zero:** infra deployed with **`SCALE_TO_ZERO_ENABLED=true make deploy-e2e-infra`** so EPP flow control is on; raise **`E2E_EVENTUALLY_*`** / **`SCALE_UP_TIMEOUT`** if cold start is slow; see **Tier 2** trigger job tunables.
 
 **Debug commands** (adjust `-n` to your llm-d namespace, e.g. `LLMD_NAMESPACE`):
 ```bash

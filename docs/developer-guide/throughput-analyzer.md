@@ -15,10 +15,10 @@ operating point, and scales before demand exceeds that supply.
 - **λ_dec** — decode token demand: how many tokens/sec the scheduler is dispatching to this model
 - **ITL(k)** — inter-token latency as a function of KV utilization k: fitted as `A·k + B` via OLS
 
-> **Status (PR-1/PR-2 — query registration + collector wiring):** Three PromQL queries
-> registered; `GenerationTokenRate`, `KvUsageInstant`, and `VLLMRequestRate` fields wired in the
-> collector. Full analyzer implementation (ShapeTracker, ObservationWindow, ITL model,
-> `ThroughputAnalyzer`) and engine wiring are pending PR-3 through PR-5.
+> **Implementation status:** Query registration, collector wiring (three PromQL queries +
+> `GenerationTokenRate`, `KvUsageInstant`, `VLLMRequestRate` fields), ShapeTracker,
+> ObservationWindow, and SanityReport are implemented. ITL model fitting, supply/demand estimation,
+> scaling signal (full `ThroughputAnalyzer`), and engine wiring are not yet implemented.
 
 ## Table of Contents
 
@@ -162,9 +162,9 @@ namespace filtering limitation of the scheduler metric.
 
 ## Architecture
 
-> **Note:** The Query Registration and Metrics Collector components below are implemented in
-> PR-1/PR-2. All other components — Package Structure, ShapeTracker, ObservationWindow, ITLModel,
-> ThroughputAnalyzer, Analysis Pipeline, and Data Flow — are **pending PR-3/PR-4**.
+> **Note:** Query Registration, Metrics Collector, Package Structure, ShapeTracker,
+> ObservationWindow, and SanityReport are implemented. ITLModel, full ThroughputAnalyzer,
+> Analysis Pipeline, and Data Flow are **not yet implemented**.
 
 ### Package Structure
 
@@ -197,11 +197,26 @@ The remaining TA fields (`TotalKvCapacityTokens`, `AvgITL`, `AvgOutputTokens`, `
 `PrefixCacheHitRate`, `ArrivalRate`) are populated by saturation and queueing model queries.
 
 **ShapeTracker (`shape_tracker.go`)**  
-Maintains the current workload shape bucket `(IL, OL, IL_eff, KVreq)`. Detects shape changes
+Maintains the current workload shape bucket `(IL, OL, H%, IL_eff, KVreq)`. Detects shape changes
 (>20% shift in IL or OL) and triggers observation window reset.
 
-- `IL_eff = IL × (1 − PrefixCacheHitRate)` — effective input length after prefix cache
+- `IL_eff = IL × (1 − H%)` — effective input length after prefix cache
 - `KVreq = IL_eff + OL/2` — time-averaged KV footprint per decode request
+
+**Shape dimensions — design note:**  
+The tracker stores IL, OL, and H% but change detection uses only IL and OL (see `Within()`).
+H% is stored because it feeds IL_eff and KVreq; a H%-only change does not reset the window.
+
+The minimal sufficient representation for KVreq is `(OL, IL_eff)` rather than `(IL, OL, H%)`
+separately — we track all three because it is not yet clear whether IL and H% should be treated
+as independent shape dimensions or collapsed into IL_eff alone.
+
+Likewise, the slope A in `ITL(k) = A·k + B` may be independent of H%: A captures how quickly
+decode latency grows with KV load, which is driven by hardware and concurrency, not by the
+fraction of input tokens served from cache. We do not have enough data to confirm this yet.
+If it holds, a H%-only shift would warrant updating only B (via a new Tier-2 constrained fit)
+while carrying over the previous A — avoiding a full window reset.  
+*(This is a potential future optimization; the current implementation resets nothing on H%-only changes.)*
 
 **ObservationWindow (`observation_window.go`)**  
 Rolling window of `(k*, ITL_obs)` pairs collected per replica per cycle. Filters observations
@@ -215,6 +230,25 @@ Two-tier calibration of `ITL(k) = A·k + B`. See [ITL Model Calibration](#itl-mo
 Implements `interfaces.Analyzer`. Groups replicas by `VariantName`, runs sanity checks,
 updates per-variant shape tracker and observation window in `Observe()`, then computes
 supply, demand, and model-level RC/SC signals in `Analyze()`.
+
+### State and High Availability
+
+`ThroughputAnalyzer` is stateful across reconcile cycles: it accumulates `(k*, ITL)` observations until the window is ready to fit the ITL model. The state is **in-memory only** — a `map[string]*variantState` held inside the analyzer instance, with no persistence to etcd or Kubernetes.
+
+Per-variant state is minimal:
+
+| Field | What it holds |
+|---|---|
+| `ShapeTracker` | Current workload shape snapshot (IL, OL, hit rate); overwritten each cycle |
+| `ObservationWindow` | Rolling slice of ≤ 20 `(k*, ITL_obs)` pairs + timestamps |
+| `lastSanityReport` | Most recent sanity check result |
+| `lastObservedAt` | Timestamp of last observation |
+
+**In HA mode**, the engine reconciliation loops run only on the elected leader (gated in `main.go`). The `ThroughputAnalyzer` instance lives inside that loop — state is local to the leader process and is never shared across replicas.
+
+On leader failover the incoming leader starts with an empty analyzer. During warm-up (until the observation window re-accumulates ≥ 10 samples with ≥ 0.30 k-spread), the TA emits no scaling signal (`RC = 0, SC = 0`). The saturation analyzer runs unaffected and provides coverage throughout. Warm-up completes within a few minutes at normal traffic levels.
+
+**No external state store is needed.** State loss on failover is equivalent to a workload shape change (which already clears the window by design). The gap is bounded and temporary; adding a ConfigMap or lease annotation to persist calibration state would not be worth the added complexity at this stage.
 
 ### Analysis Pipeline
 
@@ -308,7 +342,7 @@ supply, demand, and model-level RC/SC signals in `Analyze()`.
 
 ## ITL Model Calibration
 
-> **Pending: PR-3/PR-4.**
+> **Not yet implemented.**
 
 The ITL model `ITL(k) = A·k + B` captures how inter-token latency grows with KV cache
 utilization k. It is calibrated independently per variant (different hardware → different A, B).
@@ -340,7 +374,7 @@ zero-replica fallback using the last successful tier-1 fit. It is not wired into
 
 ## Supply Estimation
 
-> **Pending: PR-3/PR-4.**
+> **Not yet implemented.**
 
 Per replica `r`:
 
@@ -358,7 +392,7 @@ per-analyzer constant pending alignment with the EPP system-wide k_sat (see open
 
 ## Demand Estimation
 
-> **Pending: PR-3/PR-4.**
+> **Not yet implemented.**
 
 ### Priority Chain
 
@@ -407,7 +441,7 @@ variant** — `Σ VariantCapacity.TotalDemand ≤ result.TotalDemand` when a que
 
 ## Scaling Signal
 
-> **Pending: PR-3/PR-4.**
+> **Not yet implemented.**
 
 ### Model-Level Aggregation
 
@@ -445,7 +479,7 @@ use the same decode-rate framework.
 | `DefaultKSat` | 0.85 | KV utilization at which μ_dec_sat is evaluated |
 | `DefaultBaselineITLSec` | 0.006 | B in tier-2 ITL model (H100 near-zero-load baseline) |
 | `DefaultQueueDrainFactor` | 2.0 | Bounds queueing time to ≤ factor × ITL(k_sat) × OL |
-| `DefaultWindowMaxSize` | 100 | Max (k*, ITL) pairs in ObservationWindow |
+| `DefaultWindowMaxSize` | 20 | Max (k*, ITL) pairs in ObservationWindow |
 | `DefaultObservationMaxAge` | 30m | Observations older than this are pruned |
 | `DefaultMinSamples` | 10 | Minimum samples for OLS Ready flag |
 | `DefaultMinKSpread` | 0.30 | Minimum k-spread for OLS Ready flag |

@@ -1310,16 +1310,14 @@ func SetupTestEnvironment(image string, numNodes, gpusPerNode int, gpuTypes stri
 	gom.Expect(os.Setenv("WVA_IMAGE_PULL_POLICY", "IfNotPresent")).To(gom.Succeed()) // The image is built locally by the tests
 	gom.Expect(os.Setenv("CREATE_CLUSTER", "true")).To(gom.Succeed())                // Always create a new cluster for E2E tests
 
-	// llm-d stack is deployed by ./deploy/install-llmd-infra.sh (fixtures / Makefile); install.sh does not own it.
-	// Chart-managed VariantAutoscaling / HPA are opt-in Helm values — tests typically apply their own CRs instead.
-	// Enable components needed for the tests (Makefile deploy-e2e-infra runs install.sh + install-llmd-infra.sh)
+	// EPP is deployed by ./deploy/install-epp.sh (via deploy-e2e-infra Makefile target); install.sh deploys WVA only.
+	// Tests apply their own VariantAutoscaling / HPA / model workloads.
 	gom.Expect(os.Setenv("DEPLOY_WVA", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("DEPLOY_PROMETHEUS", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("DEPLOY_PROMETHEUS_ADAPTER", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("WVA_RECONCILE_INTERVAL", "30s")).To(gom.Succeed())
 
-	// install-llmd-infra: skip default ModelService; tests deploy their own workloads
-	gom.Expect(os.Setenv("DEPLOY_LLM_D_INFERENCE_SIM", "false")).To(gom.Succeed())
+	// Tests deploy their own workloads — skip any model server pre-deploy.
 	gom.Expect(os.Setenv("VLLM_SVC_ENABLED", "false")).To(gom.Succeed()) // tests deploy their own Service
 }
 

@@ -366,27 +366,28 @@ func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
 // - amd.com/gpu.product-name
 // - cloud.google.com/gke-accelerator
 // If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
-// Returns the first matching value found, or an empty string if none are found.
+// Returns the first matching value found, or constants.DefaultAcceleratorName ("unknown") if none are found.
+// The sentinel allows callers to proceed without hard-stopping; the GPU limiter resolves
+// it to the real type in homogeneous clusters before it reaches status or metrics.
 func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, scaleTarget scaletarget.ScaleTargetAccessor) string {
 	// Check scaleTarget for accelerator name if it's not nil
 	if scaleTarget != nil {
 		podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
-		if podTemplateSpec == nil {
-			return ""
-		}
-		// Check nodeSelector first
-		if podTemplateSpec.Spec.NodeSelector != nil {
-			for _, key := range constants.GpuProductKeys {
-				if val, ok := podTemplateSpec.Spec.NodeSelector[key]; ok {
-					return val
+		if podTemplateSpec != nil {
+			// Check nodeSelector first
+			if podTemplateSpec.Spec.NodeSelector != nil {
+				for _, key := range constants.GpuProductKeys {
+					if val, ok := podTemplateSpec.Spec.NodeSelector[key]; ok {
+						return val
+					}
 				}
 			}
-		}
 
-		// Check nodeAffinity
-		if podTemplateSpec.Spec.Affinity != nil && podTemplateSpec.Spec.Affinity.NodeAffinity != nil {
-			if val := extractGPUFromNodeAffinity(podTemplateSpec.Spec.Affinity.NodeAffinity, constants.GpuProductKeys); val != "" {
-				return val
+			// Check nodeAffinity
+			if podTemplateSpec.Spec.Affinity != nil && podTemplateSpec.Spec.Affinity.NodeAffinity != nil {
+				if val := extractGPUFromNodeAffinity(podTemplateSpec.Spec.Affinity.NodeAffinity, constants.GpuProductKeys); val != "" {
+					return val
+				}
 			}
 		}
 	}
@@ -397,7 +398,7 @@ func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.Varian
 			return accName
 		}
 	}
-	return ""
+	return constants.DefaultAcceleratorName
 }
 
 // extractGPUFromNodeAffinity extracts GPU product information from NodeAffinity.

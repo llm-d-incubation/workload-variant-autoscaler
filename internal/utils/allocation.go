@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -32,12 +31,13 @@ func BuildAllocationFromMetrics(
 		numReplicas = int(constants.SpecReplicasFallback)
 	}
 
-	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels
+	// Accelerator type - extract from deployment/LWS nodeSelector/nodeAffinity or VA labels.
+	// When unresolved, GetAcceleratorNameFromScaleTarget returns the sentinel value
+	// ("unknown") so that metrics collection can proceed for deployments without
+	// nodeSelector (common in homogeneous GPU clusters). The GPU limiter resolves
+	// the sentinel to the real type in homogeneous clusters before it reaches
+	// status or metrics.
 	acc := GetAcceleratorNameFromScaleTarget(va, scaleTarget)
-	if acc == "" {
-		return interfaces.Allocation{},
-			fmt.Errorf("accelerator name not found in scale target nodeSelector/nodeAffinity or VA label %q for: %s", AcceleratorNameLabel, va.Name)
-	}
 
 	// Calculate variant cost
 	// VariantCost removed from Status as it is duplicated from Spec (per-replica cost)

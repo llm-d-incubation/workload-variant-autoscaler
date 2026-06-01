@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -621,7 +622,7 @@ func (e *Engine) optimizeV2(
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Stage 1: Collect ModelScalingRequests for all models
-	var requests []pipeline.ModelScalingRequest
+	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
 	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
 
@@ -1173,12 +1174,17 @@ func (e *Engine) applySaturationDecisions(
 				"variant", vaName)
 		}
 
-		// Fetch latest version from API server to avoid conflicts
+		// Fetch latest version from API server to avoid conflicts.
+		// Synthetic (annotation-sourced) variants have no CRD instance; use the in-memory copy.
 		var updateVa llmdVariantAutoscalingV1alpha1.VariantAutoscaling
-		if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
-			logger.Error(err, "Failed to get latest VA from API server",
-				"name", va.Name)
-			continue
+		if utils.IsSynthetic(va) {
+			updateVa = *va.DeepCopy()
+		} else {
+			if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
+				logger.Error(err, "Failed to get latest VA from API server",
+					"name", va.Name)
+				continue
+			}
 		}
 
 		// Update CurrentAlloc from local analysis (which has the latest metrics)
@@ -1212,17 +1218,17 @@ func (e *Engine) applySaturationDecisions(
 			} else if curr, ok := currentAllocations[vaName]; ok {
 				targetReplicas = curr.NumReplicas
 			}
-			// Keep existing accelerator or use current
-			if updateVa.Status.DesiredOptimizedAlloc.Accelerator != "" {
-				acceleratorName = updateVa.Status.DesiredOptimizedAlloc.Accelerator
-			} else if curr, ok := currentAllocations[vaName]; ok {
+			// Keep existing accelerator or use current (skip sentinel values)
+			if acc := updateVa.Status.DesiredOptimizedAlloc.Accelerator; constants.IsAcceleratorResolved(acc) {
+				acceleratorName = acc
+			} else if curr, ok := currentAllocations[vaName]; ok && constants.IsAcceleratorResolved(curr.Accelerator) {
 				acceleratorName = curr.Accelerator
 			}
 
 			// Fallback for new VAs without prior status or collected metrics:
 			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
 			// and use current deployment replicas as target to avoid unintended scaling.
-			if acceleratorName == "" {
+			if !constants.IsAcceleratorResolved(acceleratorName) {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
 					var scaleTarget scaletarget.ScaleTargetAccessor
@@ -1247,30 +1253,57 @@ func (e *Engine) applySaturationDecisions(
 		if acceleratorName == "" {
 			logger.Info("Skipping status update for VA without accelerator info, but setting MetricsAvailable=False",
 				"variant", vaName, "cacheKey.name", va.Name, "cacheKey.namespace", va.Namespace)
-			// Still set the cache entry so the controller can set MetricsAvailable=False.
-			// This is a partial decision for metrics status only - other fields like
-			// TargetReplicas and AcceleratorName are left at zero values since we don't
-			// have enough information to set them.
-			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-				VariantName:      vaName,
-				Namespace:        va.Namespace,
-				MetricsAvailable: false,
-				MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
-				MetricsMessage:   llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable,
-			})
-			// Trigger reconciler to apply the condition
-			common.DecisionTrigger <- event.GenericEvent{
-				Object: &updateVa,
+			// Synthetic variants have no CRD status to patch; skip cache/trigger.
+			if !utils.IsSynthetic(va) {
+				// Still set the cache entry so the controller can set MetricsAvailable=False.
+				// This is a partial decision for metrics status only - other fields like
+				// TargetReplicas and AcceleratorName are left at zero values since we don't
+				// have enough information to set them.
+				common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
+					VariantName:      vaName,
+					Namespace:        va.Namespace,
+					MetricsAvailable: false,
+					MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
+					MetricsMessage:   llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable,
+				})
+				// Trigger reconciler to apply the condition
+				common.DecisionTrigger <- event.GenericEvent{
+					Object: &updateVa,
+				}
 			}
-			continue
 		}
 
-		// Update DesiredOptimizedAlloc
-		// ALWAYS update LastRunTime to trigger reconciliation in the controller
+		// Emit a K8s event when accelerator cannot be resolved so operators
+		// can see the problem without digging through controller logs.
+		// The message is a constant string (not built per-cycle via Eventf with
+		// formatted args), so each emission produces an identical
+		// (involvedObject, source, type, reason, message) tuple — which the K8s
+		// API server's event aggregator collapses into a single Event entry with
+		// an updated count, rather than creating a new entry each optimization
+		// cycle.
+		if !constants.IsAcceleratorResolved(acceleratorName) {
+			e.emitAcceleratorNotResolvedEvent(&updateVa)
+			logger.V(logging.DEBUG).Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+				"variant", vaName)
+		}
+
+		// Stage the just-computed decision on the in-memory VA so that
+		// act.EmitMetrics below — which reads
+		// Status.DesiredOptimizedAlloc.{NumReplicas,Accelerator}
+		// (see actuator.EmitMetrics) — publishes the fresh target rather than
+		// whatever was last persisted by the controller. This object is local
+		// to the engine; CRD persistence happens later, via the cache write
+		// (DecisionCache.Set) → controller patch path.
+		// Sanitize the sentinel out of the staged value so neither EmitMetrics
+		// nor the cache (which reuses statusAccelerator) ever sees it.
 		numReplicas := int32(targetReplicas)
+		statusAccelerator := acceleratorName
+		if !constants.IsAcceleratorResolved(statusAccelerator) {
+			statusAccelerator = ""
+		}
 		updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 			NumReplicas: &numReplicas,
-			Accelerator: acceleratorName,
+			Accelerator: statusAccelerator,
 			LastRunTime: metav1.Now(),
 		}
 		updateVa.Status.Actuation.Applied = false // Reset applied status until Actuator handles it (if needed)
@@ -1322,7 +1355,13 @@ func (e *Engine) applySaturationDecisions(
 		// 	isSaturationOnly = decision.SaturationOnly
 		// }
 
-		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
+		// Skip metric emission when accelerator is unresolved to avoid publishing
+		// wva_* gauges under an empty or incorrect accelerator_type label.
+		// Status updates and conditions still proceed so the controller can reconcile.
+		if !constants.IsAcceleratorResolved(acceleratorName) {
+			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
+				"variant", updateVa.Name)
+		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			logger.Error(err, "Failed to emit metrics for external autoscalers",
 				"variant", updateVa.Name)
 		} else {
@@ -1346,39 +1385,49 @@ func (e *Engine) applySaturationDecisions(
 			act.RecordSaturationMetrics(ctx, decision)
 		}
 
-		// Update Shared State and Trigger Reconcile via Channel
-		// This avoids any API server interaction from the Engine.
+		// Update Shared State and Trigger Reconcile via Channel.
+		// Synthetic (annotation-sourced) variants have no CRD status to patch;
+		// metric emission above is their sole output, so skip cache/trigger.
+		if !utils.IsSynthetic(va) {
+			// 1. Update Cache
+			// Determine MetricsAvailable status for the cache.
+			// - hasAllocation is true when we successfully collected current replica metrics
+			//   for this variant during this loop (metrics pipeline is working).
+			// - hasDecision is true when the optimizer produced a scaling decision based on
+			//   saturation metrics in this run.
+			// - The accelerator must also be resolved: when it is the sentinel, the
+			//   metric-emission branch above is skipped (no wva_* gauges are published),
+			//   so reporting MetricsAvailable=True would leave HPA/KEDA-side reasoning
+			//   inconsistent with controller-side reporting.
+			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
+			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
+			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
+			if metricsAvailable {
+				metricsReason = llmdVariantAutoscalingV1alpha1.ReasonMetricsFound
+				metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
+			}
 
-		// 1. Update Cache
-		// Determine MetricsAvailable status for the cache.
-		// - hasAllocation is true when we successfully collected current replica metrics
-		//   for this variant during this loop (metrics pipeline is working).
-		// - hasDecision is true when the optimizer produced a scaling decision based on
-		//   saturation metrics in this run.
-		// Either condition implies saturation metrics were available and usable.
-		metricsAvailable := hasAllocation || hasDecision
-		metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
-		metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
-		if metricsAvailable {
-			metricsReason = llmdVariantAutoscalingV1alpha1.ReasonMetricsFound
-			metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
-		}
+			// Use the sanitized statusAccelerator (computed above) rather than the raw
+			// acceleratorName. The controller reads this cache entry and writes
+			// AcceleratorName verbatim into Status.DesiredOptimizedAlloc.Accelerator,
+			// so passing the sentinel here would leak it into the CRD status —
+			// violating the "never persist the sentinel to status" invariant.
+			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
+				VariantName:       vaName,
+				Namespace:         va.Namespace,
+				TargetReplicas:    targetReplicas,
+				AcceleratorName:   statusAccelerator,
+				LastRunTime:       metav1.Now(),
+				CurrentAllocation: currentAllocations[vaName],
+				MetricsAvailable:  metricsAvailable,
+				MetricsReason:     metricsReason,
+				MetricsMessage:    metricsMessage,
+			})
 
-		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-			VariantName:       vaName,
-			Namespace:         va.Namespace,
-			TargetReplicas:    targetReplicas,
-			AcceleratorName:   acceleratorName,
-			LastRunTime:       metav1.Now(),
-			CurrentAllocation: currentAllocations[vaName],
-			MetricsAvailable:  metricsAvailable,
-			MetricsReason:     metricsReason,
-			MetricsMessage:    metricsMessage,
-		})
-
-		// 2. Trigger Reconciler
-		common.DecisionTrigger <- event.GenericEvent{
-			Object: &updateVa,
+			// 2. Trigger Reconciler
+			common.DecisionTrigger <- event.GenericEvent{
+				Object: &updateVa,
+			}
 		}
 
 		if hasDecision {
@@ -1390,6 +1439,23 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
+}
+
+// emitAcceleratorNotResolvedEvent records a Warning event on the given
+// VariantAutoscaling so operators see at-a-glance that the optimization
+// loop ran but could not resolve an accelerator type for it. The message
+// is a constant string so the API server's event aggregator collapses
+// repeated emissions into a single Event entry with an updated count
+// rather than creating a new entry each optimization cycle.
+func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) {
+	if e.Recorder == nil {
+		return
+	}
+	e.Recorder.Event(va, corev1.EventTypeWarning, "AcceleratorNotResolved",
+		"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
+			utils.AcceleratorNameLabel+". "+
+			"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
+			"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
@@ -1441,18 +1507,16 @@ func (e *Engine) emitSafetyNetMetrics(
 				accelerator = curr.Accelerator
 			}
 		}
-		if accelerator == "" {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			// Try to get accelerator name from scale target nodeSelector/nodeAffinity or VA labels
 			if scaleTarget == nil {
 				logger.V(logging.DEBUG).Info("Safety net: no scale target found for VA",
 					"variant", va.Name)
 			} else {
-				if acceleratorName := utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget); acceleratorName != "" {
-					accelerator = acceleratorName
-				}
+				accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget)
 			}
 		}
-		if accelerator == "" {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			logger.Info("Safety net: skipping metric emission - no accelerator name available",
 				"variant", va.Name)
 			continue
