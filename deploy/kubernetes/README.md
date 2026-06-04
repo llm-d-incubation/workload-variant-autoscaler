@@ -111,7 +111,7 @@ export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
 
 ```bash
 export DEPLOY_PROMETHEUS=true               # Deploy kube-prometheus-stack
-export DEPLOY_OPERATIONAL_DASHBOARD=false   # Deploy kube-prometheus-stack-grafana
+export DEPLOY_OPERATIONAL_DASHBOARD=true    # Deploy kube-prometheus-stack-grafana
 export DEPLOY_WVA=true                      # Deploy WVA controller
 export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
 ```
@@ -150,7 +150,7 @@ make deploy-wva-on-k8s   # install.sh (WVA + monitoring + scaler + LWS)
 ```bash
 export DEPLOY_WVA=true
 export DEPLOY_PROMETHEUS=true
-export DEPLOY_OPERATIONAL_DASHBOARD=false  # Grafana and operational dashboard
+export DEPLOY_OPERATIONAL_DASHBOARD=true  # Grafana and operational dashboard
 export VLLM_SVC_ENABLED=true
 export DEPLOY_PROMETHEUS_ADAPTER=false
 make deploy-wva-on-k8s

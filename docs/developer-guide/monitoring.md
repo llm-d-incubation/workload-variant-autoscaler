@@ -4,9 +4,9 @@
 For observability, WVA records a number of metrics which are scraped by Prometheus. This document shows how to enable the operational dashboard in your Kubernetes cluster. Once enabled, you can view these metrics through the provided dashboard with Grafana.
 
 ## Enable Operational Dashboard
-The operational dashboard is not installed by default. To enable, set the environment variable `DEPLOY_OPERATIONAL_DASHBOARD` to `true` and run or re-run the installation. Following is an example for installation using `Make` method:
-```
-export DEPLOY_OPERATIONAL_DASHBOARD=true
+The operational dashboard is installed by default. To disable, set the environment variable `DEPLOY_OPERATIONAL_DASHBOARD` to `false` and run or re-run the installation. Following is an example for installation using `Make` method:
+```console
+export DEPLOY_OPERATIONAL_DASHBOARD=false
 make deploy-wva-on-k8s
 ```
 
@@ -14,13 +14,12 @@ make deploy-wva-on-k8s
 Once the operational dashboard is enabled, Grafana is installed, configured, and ready to display the dashboard. Here are the next steps:
 
 - Forward Grafana port so the dashboard can be accessed locally:
-  ```
-  $ kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-grafana 3000:80 &
+  ```console
+  $ kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-grafana 3000:80
   ```
 - Get Grafana `admin` password:
-  ```
+  ```console
   $ kubectl get secret -n workload-variant-autoscaler-monitoring   kube-prometheus-stack-grafana   -o jsonpath="{.data.admin-password}" | base64 -d;echo
-  Z9FEW12xG2k2tTZJVML75Kd80qi2oI0nJBsCjv7q
   ```
 - Point browser to `http://localhost:3000/`, login with username `admin` and the password obtained in previous step.
 
@@ -44,7 +43,7 @@ The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA 
 ### No Data
   - Check the datasource by browse to "Connections/Data sources", you should see a Prometheus data source `https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090`. Click on `Test` button to test the data source.
   - Check data source which is defined in `kube-prometheus-stack-grafana-datasource` configmap:
-    ```
+    ```console
       $ oc get cm kube-prometheus-stack-grafana-datasource -n workload-
     variant-autoscaler-monitoring -o yaml
     apiVersion: v1
@@ -71,7 +70,7 @@ The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA 
   ### Dashboard Not Found
   - Dashboard is stored in `wva-operation-dashboard` configmap. Check configmap as follows:
 
-    ```
+    ```console
     $ oc get cm wva-operation-dashboard -n workload-variant-autoscaler-monitoring -o yaml
     apiVersion: v1
     data:

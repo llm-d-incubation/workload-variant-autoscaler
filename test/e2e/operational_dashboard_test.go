@@ -399,7 +399,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 					Containers: []corev1.Container{
 						{
 							Name:    "curl",
-							Image:   "curlimages/curl:latest",
+							Image:   "quay.io/curl/curl:latest",
 							Command: []string{"sh", "-c", curlCmd},
 						},
 					},
@@ -478,7 +478,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 					Containers: []corev1.Container{
 						{
 							Name:    "curl",
-							Image:   "curlimages/curl:latest",
+							Image:   "quay.io/curl/curl:latest",
 							Command: []string{"sh", "-c", curlCmd},
 						},
 					},
@@ -574,7 +574,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 					Containers: []corev1.Container{
 						{
 							Name:    "curl",
-							Image:   "curlimages/curl:latest",
+							Image:   "quay.io/curl/curl:latest",
 							Command: []string{"sh", "-c", curlCmd},
 						},
 					},
@@ -688,7 +688,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 						Containers: []corev1.Container{
 							{
 								Name:    "curl",
-								Image:   "curlimages/curl:latest",
+								Image:   "quay.io/curl/curl:latest",
 								Command: []string{"sh", "-c", healthCmd},
 							},
 						},
@@ -826,7 +826,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 					Containers: []corev1.Container{
 						{
 							Name:    "curl",
-							Image:   "curlimages/curl:latest",
+							Image:   "quay.io/curl/curl:latest",
 							Command: []string{"sh", "-c", curlCmd},
 						},
 					},
@@ -923,7 +923,7 @@ var _ = Describe("OperationalDashboard", Label("full"), Label("operational-dashb
 						Containers: []corev1.Container{
 							{
 								Name:    "curl",
-								Image:   "curlimages/curl:latest",
+								Image:   "quay.io/curl/curl:latest",
 								Command: []string{"sh", "-c", dashCmd},
 							},
 						},
