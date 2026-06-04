@@ -9,7 +9,6 @@ resources:
 # More info: https://book.kubebuilder.io/reference/metrics.html
 - metrics-auth-clusterrole.yaml
 - metrics-auth-clusterrolebinding.yaml
-- prometheus-metrics-auth-rolebinding.yaml
 - metrics-reader-clusterrole.yaml
 - metrics-reader-clusterrolebinding.yaml
 # EPP metrics reader: dedicated service account with minimal privileges.

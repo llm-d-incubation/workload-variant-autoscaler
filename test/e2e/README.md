@@ -92,7 +92,7 @@ export SCALE_TO_ZERO_ENABLED=false        # HPAScaleToZero feature gate
 export SCALER_BACKEND=prometheus-adapter  # or keda
 
 # Model configuration
-export MODEL_ID=unsloth/Meta-Llama-3.1-8B
+export MODEL_ID=e2ewva/dummy-model
 export ACCELERATOR_TYPE=nvidia.com/gpu
 export MAX_NUM_SEQS=5                     # Lower = easier to saturate
 
@@ -364,7 +364,7 @@ See [config.go](config.go:1) for the complete list of configuration options.
 | `Environment` | `ENVIRONMENT` | `kind-emulator` | `kind-emulator` (emulated Kind), `openshift`, or `kubernetes` |
 | `UseSimulator` | `USE_SIMULATOR` | `true` | Use emulated GPUs (true) or real vLLM (false) |
 | `ScaleToZeroEnabled` | `SCALE_TO_ZERO_ENABLED` | `false` | Enable HPAScaleToZero feature gate |
-| `ModelID` | `MODEL_ID` | `unsloth/Meta-Llama-3.1-8B` | Model ID for deployments |
+| `ModelID` | `MODEL_ID` | `e2ewva/dummy-model` | Model ID for deployments (dummy name avoids vLLM Render sidecar in simulator v0.9.0+) |
 | `MaxNumSeqs` | `MAX_NUM_SEQS` | `5` | vLLM batch size (lower = easier to saturate) |
 | `EventuallyStandardSec` | `E2E_EVENTUALLY_STANDARD` | `120` | Default `Eventually` timeout (see bash block above for full set) |
 | `ScaleUpTimeout` | `SCALE_UP_TIMEOUT` | `600` | Longest scale / job waits |

@@ -92,6 +92,32 @@ images:
   newTag: "$WVA_IMAGE_TAG"
 EOF
 
+    # On OpenShift shared clusters, all ClusterRoleBindings share the same fixed
+    # names. Concurrent deployments overwrite each other's subject namespace.
+    # Append name-rename patches so each namespace gets its own uniquely named CRBs.
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        local ns_hash
+        ns_hash="$(printf '%s' "${WVA_NS}" | sha256sum | cut -c1-8)"
+        printf 'patches:\n' >> "$tmp_overlay/kustomization.yaml"
+        for crb in \
+            wva-epp-metrics-reader-role-binding \
+            wva-manager-cluster-monitoring-view \
+            wva-manager-rolebinding \
+            wva-metrics-auth-rolebinding \
+            wva-metrics-reader-rolebinding \
+            wva-prometheus-cluster-monitoring-view; do
+            cat >> "$tmp_overlay/kustomization.yaml" <<EOF
+- patch: |-
+    - op: replace
+      path: /metadata/name
+      value: ${crb}-${ns_hash}
+  target:
+    kind: ClusterRoleBinding
+    name: ${crb}
+EOF
+        done
+    fi
+
     log_info "Installing WVA CRDs..."
     kubectl apply -k "$WVA_PROJECT/config/base/crd/"
 
@@ -103,25 +129,6 @@ EOF
         kubectl patch configmap wva-manager-config \
             -n "$WVA_NS" --type=merge \
             -p '{"data":{"WVA_SCALE_TO_ZERO":"true"}}'
-    fi
-
-    # On shared clusters (e.g. OpenShift CI), concurrent runs produce the same
-    # ClusterRoleBinding name (wva-manager-rolebinding) because the overlay uses a
-    # fixed name. Each apply overwrites the subject namespace, breaking any other
-    # run that applied first. Create a per-deployment binding named after WVA_NS so
-    # each run has its own authoritative binding that survives concurrent applies.
-    log_info "Creating per-deployment ClusterRoleBindings for SA in $WVA_NS (shared cluster isolation)"
-    kubectl create clusterrolebinding "workload-variant-autoscaler-manager-${WVA_NS}" \
-        --clusterrole=wva-manager-role \
-        --serviceaccount="${WVA_NS}:wva-controller-manager" \
-        --dry-run=client -o yaml | kubectl apply -f -
-    if kubectl get clusterrole cluster-monitoring-view &>/dev/null; then
-        kubectl create clusterrolebinding "workload-variant-autoscaler-cluster-monitoring-view-${WVA_NS}" \
-            --clusterrole=cluster-monitoring-view \
-            --serviceaccount="${WVA_NS}:wva-controller-manager" \
-            --dry-run=client -o yaml | kubectl apply -f -
-    else
-        log_info "cluster-monitoring-view ClusterRole not found — skipping binding (non-OpenShift cluster)"
     fi
 
     # Wait for WVA to be ready

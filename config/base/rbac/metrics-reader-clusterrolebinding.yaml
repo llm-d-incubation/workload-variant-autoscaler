@@ -1,3 +1,6 @@
+# Lets the Prometheus pod scrape the controller's secure /metrics endpoint by
+# granting it `get` on the /metrics non-resource URL. Override the subject in
+# an overlay if Prometheus runs under a different SA/namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -10,4 +13,5 @@ roleRef:
   name: metrics-reader
 subjects:
 - kind: ServiceAccount
-  name: controller-manager
+  name: kube-prometheus-stack-prometheus
+  namespace: workload-variant-autoscaler-monitoring

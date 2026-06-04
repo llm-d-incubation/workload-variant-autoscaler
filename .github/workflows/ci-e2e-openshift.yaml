@@ -44,7 +44,7 @@ on:
       model_id:
         description: 'Model ID'
         required: false
-        default: 'unsloth/Meta-Llama-3.1-8B'
+        default: 'e2ewva/dummy-model'
       accelerator_type:
         description: 'Accelerator type (H100, A100, L40S)'
         required: false
@@ -378,7 +378,7 @@ jobs:
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
-      MODEL_ID: ${{ github.event.inputs.model_id || 'unsloth/Meta-Llama-3.1-8B' }}
+      MODEL_ID: ${{ github.event.inputs.model_id || 'e2ewva/dummy-model' }}
       GOTOOLCHAIN: auto
       ACCELERATOR_TYPE: ${{ github.event.inputs.accelerator_type || 'A100' }}
       REQUEST_RATE: ${{ github.event.inputs.request_rate || '20' }}

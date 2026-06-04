@@ -34,7 +34,7 @@ type SharedConfig struct {
 	EPPServiceName   string            // EPP service name (e.g. optimized-baseline-epp; matches GAIE chart release name + "-epp")
 
 	// Model configuration
-	ModelID         string // e.g., "unsloth/Meta-Llama-3.1-8B"
+	ModelID         string // e.g., "e2ewva/dummy-model" (dummy name avoids vLLM Render sidecar requirement in v0.9.0+)
 	AcceleratorType string // e.g., "H100", "A100" (must be valid Kubernetes label value)
 	MaxNumSeqs      int    // vLLM batch size (lower = easier to saturate)
 
@@ -73,7 +73,7 @@ func LoadSharedConfig() SharedConfig {
 		EndpointSelector: ParseEndpointSelector(GetEnv("ENDPOINT_SELECTOR", "")),
 		EPPServiceName:   GetEnv("EPP_SERVICE_NAME", eppServiceDefault),
 
-		ModelID:         GetEnv("MODEL_ID", "unsloth/Meta-Llama-3.1-8B"),
+		ModelID:         GetEnv("MODEL_ID", "e2ewva/dummy-model"),
 		AcceleratorType: GetEnv("ACCELERATOR_TYPE", "H100"),
 		MaxNumSeqs:      GetEnvInt("MAX_NUM_SEQS", 5),
 
