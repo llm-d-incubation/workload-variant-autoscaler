@@ -95,24 +95,27 @@ the V2 path is tracked separately.
 
 ## Relationship to the cluster-wide limiter
 
-Namespace inventory replaces the cluster-wide GPU limiter on the V1 path when
-configured. Excluded namespaces are unconstrained by this limiter. A namespace
-whose selector matches no GPU nodes has zero inventory and cannot scale up
-until matching nodes appear — surface this with the decision's `DecisionStep`,
-which records `limited by namespace-inventory[ns=<ns>, type=<type>]`.
+Namespace inventory **replaces** the cluster-wide GPU limiter on the V1 path
+when configured, rather than intersecting with it. This is deliberate: each
+node is assigned to exactly one bucket, so per-bucket capacity never exceeds
+physical capacity and a separate cluster-total cap on top would be redundant.
+One consequence is intentional — **nodes matching no selector and no `default`
+contribute to no pool**, so their GPUs are unusable until those nodes are
+labeled or a `default` selector is added.
+
+Excluded namespaces are unconstrained by this limiter (they are never capped),
+but their existing usage is still charged against the pool they draw from so a
+shared pool is not overcommitted. A namespace whose selector matches no GPU
+nodes has zero inventory and cannot scale up until matching nodes appear —
+surface this with the decision's `DecisionStep`, which records
+`limited by namespace-inventory[ns=<ns>, type=<type>]`.
 
 ## Limitations
 
 Like the cluster-wide limiter, inventory accounting is **decision-based**: it
 subtracts the GPUs used by the WVA-managed variants it sees this cycle, not
-actual pod placement. Two consequences follow:
+actual pod placement. One consequence follows:
 
-- **Excluded namespaces are not charged against any pool.** An excluded
-  namespace is intentionally unconstrained and reaches any node it tolerates;
-  if such a workload runs on a governed pool's nodes, those GPUs are not
-  subtracted from that pool's available capacity. Exclude only namespaces that
-  run on dedicated or non-pool nodes, or accept that they share capacity
-  outside the limiter's view.
 - **Replicas with an unresolved accelerator type in a multi-type pool are not
   counted.** When a namespace's pool spans more than one accelerator type and a
   variant's accelerator cannot be resolved, its existing replicas are not
@@ -120,4 +123,4 @@ actual pod placement. Two consequences follow:
   Pin GPU type via `nodeSelector`/`nodeAffinity` or the VA accelerator label so
   resolution succeeds (see [Accelerator Name Resolution](configuration.md)).
 
-Disjoint, single-accelerator-type node pools per namespace avoid both cases.
+Disjoint, single-accelerator-type node pools per namespace avoid this case.

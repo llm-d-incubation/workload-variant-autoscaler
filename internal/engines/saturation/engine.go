@@ -832,7 +832,13 @@ func (e *Engine) optimizeV1(
 	}
 	if globalSaturationConfig.EnableLimiter && len(allDecisions) > 0 {
 		// Prefer the namespace-scoped limiter on the V1 path when configured;
-		// otherwise apply the live-rebuilt cluster-wide GPU limiter.
+		// otherwise apply the live-rebuilt cluster-wide GPU limiter. The namespace
+		// limiter deliberately replaces the cluster-wide one rather than
+		// intersecting with it: nodes are assigned one-bucket-each, so per-bucket
+		// sums never exceed physical capacity and a separate cluster-total cap is
+		// redundant. One consequence is intentional — nodes matching no selector
+		// and no default contribute to no pool, so their capacity is unusable
+		// until they are labeled or a default selector is added.
 		limiter := e.currentGPULimiter()
 		if e.nsLimiter != nil {
 			limiter = e.nsLimiter

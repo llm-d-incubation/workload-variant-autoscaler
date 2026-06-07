@@ -64,6 +64,24 @@ func (r bucketResolver) resolve(namespace string) (bucket string, excluded bool,
 	return "", false, false
 }
 
+// chargeBucket returns the bucket a namespace's existing GPU usage should be
+// charged against, ignoring exclusion. Excluded namespaces bypass the cap, but
+// their running replicas still occupy physical GPUs in the pool they draw from
+// (named bucket if the namespace has an explicit selector, else the shared
+// default), so their usage must debit that pool — otherwise the pool hands out
+// GPUs that are already gone, diverging from the cluster-wide path that charges
+// all usage. ok is false when no bucket applies (no matching selector and no
+// default), in which case the usage cannot be attributed to any pool.
+func (r bucketResolver) chargeBucket(namespace string) (bucket string, ok bool) {
+	if r.named.Has(namespace) {
+		return namespace, true
+	}
+	if r.hasDefault {
+		return DefaultSelectorKey, true
+	}
+	return "", false
+}
+
 // NamespaceInventory tracks GPU capacity per (namespace bucket, accelerator
 // type) by intersecting discovered cluster nodes with a per-namespace node
 // label selector. It implements the Inventory interface; per-namespace usage

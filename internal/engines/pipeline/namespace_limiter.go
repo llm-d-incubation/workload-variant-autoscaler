@@ -113,9 +113,12 @@ func (l *NamespaceLimiter) resolveUnknownAccelerators(decisions []*domain.Varian
 }
 
 // calculateUsedByBucket sums current GPU usage (CurrentReplicas * GPUsPerReplica)
-// per (namespace bucket, accelerator type). Namespaces that bypass the limiter
-// (excluded) or have no pool (denied) contribute no usage. The bucket keys must
-// match those the allocator resolves to, so the default-fallback namespaces'
+// per (namespace bucket, accelerator type). Usage is charged to the bucket the
+// namespace draws from via chargeBucket, which ignores exclusion: excluded
+// namespaces bypass the cap but their running replicas still occupy physical
+// GPUs in their pool, so charging them keeps shared pools from overcommitting
+// (matching the cluster-wide path, which charges all usage). The bucket keys
+// match those the allocator resolves to, so default-fallback namespaces'
 // usage aggregates under the shared default bucket rather than their own names.
 func (l *NamespaceLimiter) calculateUsedByBucket(decisions []*domain.VariantDecision) map[string]map[string]int {
 	used := make(map[string]map[string]int)
@@ -129,8 +132,8 @@ func (l *NamespaceLimiter) calculateUsedByBucket(decisions []*domain.VariantDeci
 		if !constants.IsAcceleratorResolved(d.AcceleratorName) {
 			continue
 		}
-		bucket, excluded, hasPool := l.inventory.resolver.resolve(d.Namespace)
-		if excluded || !hasPool {
+		bucket, ok := l.inventory.resolver.chargeBucket(d.Namespace)
+		if !ok {
 			continue
 		}
 		if used[bucket] == nil {

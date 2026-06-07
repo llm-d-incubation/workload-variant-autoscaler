@@ -118,6 +118,31 @@ var _ = Describe("NamespaceLimiter", func() {
 		Expect(d.WasLimited).To(BeFalse())
 	})
 
+	It("charges excluded-namespace usage against the shared pool so it is not overcommitted", func() {
+		// An excluded namespace bypasses the cap, but its running replicas still
+		// occupy GPUs in the shared default pool; that usage must be subtracted
+		// so a default-pool tenant cannot be granted GPUs that are physically
+		// gone (regression guard for excluded-namespace overcommit).
+		disc := &fakeNodeDiscovery{nodes: map[string]discovery.NodeInfo{
+			"n1": gpuNode("n1", map[string]string{"pool": "shared"}, "NVIDIA-A100-PCIE-80GB", 10),
+		}}
+		l := newLimiter(disc, sets.New("kube-system"), map[string]labels.Selector{
+			DefaultSelectorKey: labels.SelectorFromSet(labels.Set{"pool": "shared"}),
+		})
+
+		// Excluded namespace running 6 GPUs on the shared pool (not capped, but charged).
+		excluded := &domain.VariantDecision{
+			VariantName: "kube-system-x", Namespace: "kube-system", AcceleratorName: "A100",
+			CurrentReplicas: 6, TargetReplicas: 6, GPUsPerReplica: 1,
+		}
+		tenant := scaleUpDecision("ns-a", "A100", 0, 20) // default-pool tenant wants +20
+		Expect(l.Limit(ctx, []*domain.VariantDecision{excluded, tenant})).To(Succeed())
+
+		// 10 pool - 6 charged to the excluded namespace = 4 left for the tenant.
+		Expect(tenant.TargetReplicas).To(Equal(4))
+		Expect(tenant.WasLimited).To(BeTrue())
+	})
+
 	It("denies scale-up for an unlisted namespace when no default exists", func() {
 		disc := &fakeNodeDiscovery{nodes: map[string]discovery.NodeInfo{
 			"n1": gpuNode("n1", map[string]string{"team": "prod"}, "NVIDIA-A100-PCIE-80GB", 8),
