@@ -4,7 +4,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: workload-variant-autoscaler-prometheus-adapter-monitoring
+  name: prometheus-cluster-monitoring-view
   labels:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize

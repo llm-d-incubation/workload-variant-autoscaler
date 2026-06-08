@@ -29,6 +29,9 @@ LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
 MONITORING_NAMESPACE="workload-variant-autoscaler-monitoring"
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 
+# Simulator image — must match defaultModelServiceSimulatorImage in test/e2e/fixtures/model_service_conventions.go
+SIM_IMAGE=${SIM_IMAGE:-"ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"}
+
 # WVA Configuration
 WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconcile interval - tests set 30s interval
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
@@ -104,6 +107,9 @@ check_specific_prerequisites() {
     # Load WVA image into KIND cluster
     load_image
 
+    # Pre-load the simulator image so tests don't pull it cold (avoids PodReadyTimeout).
+    load_sim_image
+
     log_success "All Kind emulated deployment prerequisites met"
 }
 
@@ -175,97 +181,65 @@ load_image() {
         fi
     fi
     
-    # Load the image into the KIND cluster.
-    # Try `kind load docker-image` first. If it fails (common with Docker Desktop's
-    # containerd image store where `docker save` chokes on multi-platform manifests),
-    # fall back to pulling the image directly into each KIND node's containerd.
+    # Load the image into the KIND cluster via the shared helper.
+    # Tries `kind load docker-image` first, falls back to crictl-per-node for the
+    # containerd image store issue (kubernetes-sigs/kind#3795).
     local full_image="$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
+    if ! _load_into_kind "$full_image"; then
+        log_error "Failed to load WVA image '$full_image' into KIND cluster '$CLUSTER_NAME'"
+        exit 1
+    fi
+}
+
+# _load_into_kind FULL_IMAGE
+# Loads a pre-pulled image into the KIND cluster: tries `kind load docker-image` first,
+# then falls back to crictl-per-node for the containerd image store issue
+# (kubernetes-sigs/kind#3795). Returns 0 on success, 1 on failure.
+_load_into_kind() {
+    local full_image="$1"
     local load_stderr
     if load_stderr="$(kind load docker-image "$full_image" --name "$CLUSTER_NAME" 2>&1)"; then
         log_success "Image '$full_image' loaded into KIND cluster '$CLUSTER_NAME'"
-        return
+        return 0
     fi
 
-    # Only fall back to the crictl/ctr path for the known containerd image store
-    # issue (docker save fails on multi-platform manifests, kubernetes-sigs/kind#3795).
-    # For any other error, report it and abort.
     if ! echo "$load_stderr" | grep -qiE "docker save|multi-?platform|manifest|content digest|no such image|not found"; then
-        log_error "'kind load docker-image' failed:"
-        log_error "$load_stderr"
-        exit 1
+        log_warning "'kind load docker-image' failed for '$full_image': $load_stderr"
+        return 1
     fi
 
     log_warning "'kind load docker-image' failed (containerd image store issue) — falling back to pulling directly into KIND nodes"
-    log_info "kind load stderr: $load_stderr"
-
-    # Pull the image directly into each KIND node's containerd, bypassing
-    # Docker Desktop entirely. This avoids the `docker save` multi-platform
-    # manifest issue (kubernetes-sigs/kind#3795).
     local nodes
-    nodes="$(kind get nodes --name "$CLUSTER_NAME")" || {
-        log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
-        exit 1
-    }
-    if [ -z "$nodes" ]; then
-        log_error "No nodes found in KIND cluster '$CLUSTER_NAME'"
-        exit 1
-    fi
-
-    # Detect if an image reference is qualified with an explicit registry hostname.
-    # Heuristic used by Docker/containerd/podman:
-    # If the first '/'-separated segment contains a '.', a ':', or equals 'localhost',
-    # it is treated as a registry hostname (e.g., quay.io/foo, registry.k8s.io/pause,
-    # localhost:5000/myimg).
-    local first_segment
-    first_segment="${full_image%%/*}"
-    local has_explicit_registry=false
-    case "$first_segment" in
-        *.*|*:*|localhost) has_explicit_registry=true ;;
-    esac
-
-    local successful_nodes=()
+    nodes="$(kind get nodes --name "$CLUSTER_NAME")" || return 1
     for node in $nodes; do
-        log_info "Pulling image on node '$node'..."
-        local pull_stderr
-        if pull_stderr="$(docker exec "$node" crictl pull "$full_image" 2>&1)"; then
-            successful_nodes+=("$node")
-            continue
-        fi
-        log_warning "crictl pull failed on node '$node': $pull_stderr"
-
-        # crictl may not resolve short names; try with docker.io prefix, but
-        # only for unqualified image names (no registry hostname prefix like quay.io/).
-        if [ "$has_explicit_registry" = true ]; then
-            log_error "Failed to pull image on node '$node' (image has explicit registry, skipping docker.io fallback): $pull_stderr"
-            # Best-effort rollback to avoid partial cluster state.
-            for ok_node in "${successful_nodes[@]}"; do
-                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
-            done
-            exit 1
-        fi
-
-        if pull_stderr="$(docker exec "$node" ctr --namespace=k8s.io images pull "docker.io/$full_image" 2>&1)"; then
-            # Tag so kubelet can find it by the original name, but only if it doesn't already exist.
-            if ! docker exec "$node" ctr --namespace=k8s.io images ls -q | grep -Fxq "$full_image"; then
-                if ! docker exec "$node" ctr --namespace=k8s.io images tag "docker.io/$full_image" "$full_image" >/dev/null 2>&1; then
-                    log_error "Failed to tag image on node '$node' (docker.io/$full_image -> $full_image)"
-                    for ok_node in "${successful_nodes[@]}"; do
-                        docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
-                    done
-                    exit 1
-                fi
-            fi
-            successful_nodes+=("$node")
-        else
-            log_error "Failed to pull image on node '$node': $pull_stderr"
-            for ok_node in "${successful_nodes[@]}"; do
-                docker exec "$ok_node" ctr --namespace=k8s.io images rm "$full_image" >/dev/null 2>&1 || true
-            done
-            exit 1
+        if ! docker exec "$node" crictl pull "$full_image" 2>&1; then
+            log_warning "Failed to pre-pull '$full_image' on node '$node'"
+            return 1
         fi
     done
-
     log_success "Image '$full_image' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
+    return 0
+}
+
+# Pre-loads the llm-d-inference-sim image into the KIND cluster so tests that create
+# model service Deployments don't pull it cold and hit PodReadyTimeout.
+load_sim_image() {
+    log_info "Pre-loading simulator image '$SIM_IMAGE' into KIND cluster..."
+
+    local platform="${KIND_IMAGE_PLATFORM:-}"
+    if [ -z "$platform" ]; then
+        case "$(uname -m)" in
+            aarch64|arm64) platform="linux/arm64" ;;
+            *) platform="linux/amd64" ;;
+        esac
+    fi
+
+    if ! docker pull --platform "$platform" "$SIM_IMAGE"; then
+        log_warning "Failed to pull simulator image '$SIM_IMAGE' — tests may be slow on first run"
+        return
+    fi
+
+    _load_into_kind "$SIM_IMAGE" || log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
 }
 
 KUBE_LIKE_VALUES_DEV_IF_PRESENT=true

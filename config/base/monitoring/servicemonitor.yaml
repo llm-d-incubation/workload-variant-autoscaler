@@ -14,7 +14,7 @@ spec:
       scheme: https
       # Use the Prometheus pod's auto-mounted ServiceAccount token.
       # Pair this with a (Cluster)RoleBinding that grants Prometheus the
-      # metrics-auth-role (see prometheus-metrics-auth-rolebinding.yaml).
+      # metrics-reader role (see metrics-reader-clusterrolebinding.yaml).
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
         # WVA metrics endpoint uses self-signed certificates, so Prometheus must skip verification

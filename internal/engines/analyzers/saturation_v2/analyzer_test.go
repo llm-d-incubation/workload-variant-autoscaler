@@ -238,10 +238,10 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
-			// readyCount = 2 - 1 = 1
-			// anticipated = (1 + 1) * perReplicaCapacity
-			// This suppresses scale-up signal since anticipated > ready
-			Expect(result.RequiredCapacity).To(BeNumerically(">=", 0))
+			// readyCount = 2 - 1 = 1; anticipated = (1 + 1) × PRC
+			// RC/SC are left zero by the analyzer; engine post-step sets them.
+			Expect(result.TotalAnticipatedSupply).To(BeNumerically(">", result.TotalSupply))
+			Expect(result.RequiredCapacity).To(BeZero())
 		})
 
 		It("should NOT include pending replicas in scale-down calculation", func() {
@@ -257,9 +257,10 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
-			// spareCapacity uses totalSupply (ready only, not pending)
-			// readyCount = 2, totalSupply = 2 * capacity
-			Expect(result.SpareCapacity).To(BeNumerically(">=", 0))
+			// TotalSupply uses ready replicas only; TotalAnticipatedSupply includes pending.
+			// RC/SC are left zero by the analyzer; engine post-step sets them.
+			Expect(result.TotalAnticipatedSupply).To(BeNumerically(">", result.TotalSupply))
+			Expect(result.SpareCapacity).To(BeZero())
 		})
 	})
 
@@ -492,8 +493,10 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
-			// demand is high relative to supply → requiredCapacity > 0
-			Expect(result.RequiredCapacity).To(BeNumerically(">", 0))
+			// demand is high relative to supply — TotalDemand > TotalAnticipatedSupply.
+			// RC/SC are left zero by the analyzer; engine post-step sets them.
+			Expect(result.TotalDemand).To(BeNumerically(">", result.TotalAnticipatedSupply*0.85))
+			Expect(result.RequiredCapacity).To(BeZero())
 		})
 
 		It("should signal scale-down when utilization is below boundary", func() {
@@ -511,9 +514,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
-			// Very low utilization → spareCapacity > 0
-			Expect(result.SpareCapacity).To(BeNumerically(">", 0))
-			Expect(result.RequiredCapacity).To(Equal(float64(0)))
+			// Very low utilization — TotalSupply well above TotalDemand/scaleDown.
+			// RC/SC are left zero by the analyzer; engine post-step sets them.
+			Expect(result.TotalSupply).To(BeNumerically(">", result.TotalDemand/0.70))
+			Expect(result.SpareCapacity).To(BeZero())
+			Expect(result.RequiredCapacity).To(BeZero())
 		})
 
 		It("should signal steady state when utilization is between thresholds", func() {
@@ -898,11 +903,7 @@ var _ = Describe("aggregateByRole", func() {
 			{VariantName: "v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 			{VariantName: "v2", Role: "", TotalCapacity: 20000, TotalDemand: 10000, ReplicaCount: 1, PerReplicaCapacity: 20000},
 		}
-		config := &config.SaturationScalingConfig{
-			ScaleUpThreshold:  0.85,
-			ScaleDownBoundary: 0.70,
-		}
-		result := analyzer.aggregateByRole(vcs, config, nil)
+		result := analyzer.aggregateByRole(vcs, nil)
 		Expect(result).To(BeNil())
 	})
 
@@ -911,11 +912,7 @@ var _ = Describe("aggregateByRole", func() {
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 5000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
-		config := &config.SaturationScalingConfig{
-			ScaleUpThreshold:  0.85,
-			ScaleDownBoundary: 0.70,
-		}
-		result := analyzer.aggregateByRole(vcs, config, nil)
+		result := analyzer.aggregateByRole(vcs, nil)
 		Expect(result).NotTo(BeNil())
 		Expect(result).To(HaveLen(2))
 
@@ -923,16 +920,19 @@ var _ = Describe("aggregateByRole", func() {
 		Expect(prefill.Role).To(Equal("prefill"))
 		Expect(prefill.TotalSupply).To(Equal(10000.0))
 		Expect(prefill.TotalDemand).To(Equal(9000.0))
-		// requiredCapacity = 9000/0.85 - 10000 = 10588 - 10000 = 588
-		Expect(prefill.RequiredCapacity).To(BeNumerically(">", 0))
+		Expect(prefill.TotalAnticipatedSupply).To(Equal(10000.0)) // 1 replica, no pending
+		// RC/SC are left zero; engine post-step sets them.
+		Expect(prefill.RequiredCapacity).To(BeZero())
+		Expect(prefill.SpareCapacity).To(BeZero())
 
 		decode := result["decode"]
 		Expect(decode.Role).To(Equal("decode"))
 		Expect(decode.TotalSupply).To(Equal(20000.0))
 		Expect(decode.TotalDemand).To(Equal(5000.0))
-		// spareCapacity = 20000 - 5000/0.70 = 20000 - 7143 = 12857
-		Expect(decode.SpareCapacity).To(BeNumerically(">", 0))
-		Expect(decode.RequiredCapacity).To(Equal(0.0))
+		Expect(decode.TotalAnticipatedSupply).To(Equal(20000.0)) // 2 replicas, no pending
+		// RC/SC are left zero; engine post-step sets them.
+		Expect(decode.SpareCapacity).To(BeZero())
+		Expect(decode.RequiredCapacity).To(BeZero())
 	})
 
 	It("should handle mixed roles including 'both'", func() {
@@ -940,11 +940,7 @@ var _ = Describe("aggregateByRole", func() {
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 			{VariantName: "both-v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 		}
-		config := &config.SaturationScalingConfig{
-			ScaleUpThreshold:  0.85,
-			ScaleDownBoundary: 0.70,
-		}
-		result := analyzer.aggregateByRole(vcs, config, nil)
+		result := analyzer.aggregateByRole(vcs, nil)
 		// Has disaggregation because prefill-v1 has role != "both"
 		Expect(result).NotTo(BeNil())
 		Expect(result).To(HaveKey("prefill"))
@@ -956,15 +952,11 @@ var _ = Describe("aggregateByRole", func() {
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 2000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 3000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
-		config := &config.SaturationScalingConfig{
-			ScaleUpThreshold:  0.85,
-			ScaleDownBoundary: 0.70,
-		}
 		queueByRole := map[string]float64{
 			"prefill": 1000, // inputTokens only
 			"decode":  1500, // inputTokens + outputTokens
 		}
-		result := analyzer.aggregateByRole(vcs, config, queueByRole)
+		result := analyzer.aggregateByRole(vcs, queueByRole)
 		Expect(result).NotTo(BeNil())
 
 		prefill := result["prefill"]
@@ -980,16 +972,12 @@ var _ = Describe("aggregateByRole", func() {
 		vcs := []interfaces.VariantCapacity{
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
-		config := &config.SaturationScalingConfig{
-			ScaleUpThreshold:  0.85,
-			ScaleDownBoundary: 0.70,
-		}
 		// Queue demand for decode, but no decode variants exist
 		queueByRole := map[string]float64{
 			"prefill": 1000,
 			"decode":  1500,
 		}
-		result := analyzer.aggregateByRole(vcs, config, queueByRole)
+		result := analyzer.aggregateByRole(vcs, queueByRole)
 		Expect(result).NotTo(BeNil())
 		Expect(result).To(HaveLen(1))
 		Expect(result).To(HaveKey("prefill"))

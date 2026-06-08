@@ -38,7 +38,7 @@ This document covers **WVA-specific** development setup and workflows.
 
 4. **Set up a local Kind cluster with emulated GPUs:**
    ```bash
-   make deploy-llm-d-wva-emulated-on-kind
+   CREATE_CLUSTER=true make deploy-e2e-infra
    ```
 
 5. **Run tests to verify setup:**
@@ -65,10 +65,10 @@ workload-variant-autoscaler/
 ├── api/v1alpha1/         # CRD definitions and types
 ├── cmd/                  # Main application entry point
 ├── config/               # Kubernetes manifests
-│   ├── crd/             # CRD base manifests
-│   ├── rbac/            # RBAC configurations
-│   ├── manager/         # Controller deployment configs
-│   └── samples/         # Example VariantAutoscaling CRs
+│   ├── base/            # Base manifests (crd/, manager/, monitoring/, rbac/)
+│   ├── components/      # Reusable kustomize components
+│   ├── overlays/        # Environment overlays (cluster-scoped/, namespace-scoped/)
+│   └── samples/         # Example resources (hpa/, keda/, simulator/)
 ├── deploy/               # Deployment scripts
 │   ├── kubernetes/      # Standard K8s deployment
 │   ├── openshift/       # OpenShift-specific deployment
@@ -178,7 +178,7 @@ make deploy IMG=<your-registry>/wva-controller:tag
 
 **Deploy with llm-d for testing:**
 ```bash
-make deploy-llm-d-wva-emulated-on-kind IMG=<your-registry>/wva-controller:tag
+make deploy-e2e-infra IMG=<your-registry>/wva-controller:tag
 ```
 
 ## Documentation
@@ -243,7 +243,7 @@ When modifying solvers in `pkg/solver/`:
 make run
 
 # Option 2: Deploy to Kind cluster
-make deploy-llm-d-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
 ### Debugging

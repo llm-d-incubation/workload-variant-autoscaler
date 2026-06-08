@@ -42,14 +42,12 @@ workload-variant-autoscaler/
 ├── api/v1alpha1/          # CRD definitions
 ├── cmd/                   # Main application entry points
 ├── config/                # Kubernetes manifests
-│   ├── crd/              # CRD manifests
-│   ├── rbac/             # RBAC configurations
-│   ├── manager/          # Controller deployment
-│   └── samples/          # Example resources
+│   ├── base/             # Base manifests (crd/, manager/, monitoring/, rbac/)
+│   ├── components/       # Reusable kustomize components (namespace-scoped/)
+│   ├── overlays/         # Environment overlays (cluster-scoped/, namespace-scoped/)
+│   └── samples/          # Example resources (hpa/, keda/, simulator/)
 ├── deploy/                # Deployment scripts
-│   ├── kubernetes/       # K8s deployment
-│   ├── openshift/        # OpenShift deployment
-│   └── kind-emulator/    # Local Kind cluster with GPU emulation
+│   ├── kind-emulator/    # Local Kind cluster with GPU emulation
 ├── docs/                  # Documentation
 ├── internal/              # Private application code
 │   ├── actuator/         # Metric emission & scaling
@@ -93,26 +91,50 @@ make run
 
 #### Option 2: In a Kind cluster
 
-The recommended approach is the one-shot command that creates the cluster and deploys everything
-in a single step, avoiding a CRD timing race (see [Known Setup Issues](#known-setup-issues)):
+**One-shot — create cluster and deploy WVA + EPP + monitoring:**
 
 ```bash
-# Recommended: create cluster + deploy WVA + llm-d infrastructure in one step
-CREATE_CLUSTER=true make deploy-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
-Alternatively, as two separate steps:
+This creates a Kind cluster with emulated GPUs, then deploys the WVA controller, llm-d EPP (GAIE standalone), Prometheus stack, and Prometheus Adapter. No model service is included.
+
+If you already have a cluster running, omit `CREATE_CLUSTER=true`:
 
 ```bash
-# Step 1: Create a Kind cluster with emulated GPUs
-make create-kind-cluster
-
-# Or deploy with the full llm-d infrastructure
-make deploy-wva-emulated-on-kind
+make deploy-e2e-infra
 ```
 
-> **Note:** If the two-step approach fails with `no matches for kind "InferencePool"`,
-> see [Known Setup Issues](#known-setup-issues).
+**Step 2 (optional) — Deploy a simulator model service:**
+
+The simulator samples are under `config/samples/simulator/` and support three configurations:
+
+```bash
+# Decode only
+kubectl apply -k config/samples/simulator/decode/
+
+# Prefill only
+kubectl apply -k config/samples/simulator/prefill/
+
+# Both prefill and decode (disaggregated serving)
+kubectl apply -k config/samples/simulator/disaggregated/
+```
+
+Each configuration creates a Deployment (using `llm-d-inference-sim:v0.9.0`), a Service, a ServiceMonitor, and an HPA in the `llm-d-sim` namespace. The HPAs carry `llm-d.ai/managed: "true"` annotations so WVA discovers them without a VariantAutoscaling CRD and begins emitting `wva_desired_replicas` metrics.
+
+To clean up the simulator, use the same path you applied:
+
+```bash
+kubectl delete -k config/samples/simulator/decode/
+# or
+kubectl delete -k config/samples/simulator/disaggregated/
+```
+
+To tear down the cluster entirely:
+
+```bash
+make destroy-kind-cluster
+```
 
 ### Making Changes
 
@@ -212,16 +234,16 @@ See [Testing Guide](testing.md) and [E2E Test Suite README](../../test/e2e/READM
 
 ### Manual Testing
 
-1. **Deploy to Kind cluster:**
+1. **Deploy infrastructure to Kind cluster:**
 
    ```bash
-   make deploy-wva-emulated-on-kind IMG=<your-image>
+   CREATE_CLUSTER=true make deploy-e2e-infra
    ```
 
-2. **Create test resources:**
+2. **Deploy simulator model service:**
 
    ```bash
-   kubectl apply -f config/samples/
+   kubectl apply -k config/samples/simulator/disaggregated/
    ```
 
 3. **Monitor controller logs:**
@@ -395,7 +417,7 @@ make create-kind-cluster
 
 ## Known Setup Issues
 
-### InferencePool CRD not found during `make deploy-wva-emulated-on-kind`
+### InferencePool CRD not found during `make deploy-e2e-infra`
 
 **Symptom:**
 ```
@@ -403,24 +425,13 @@ Error: no matches for kind "InferencePool" in version "inference.networking.x-k8
 ensure CRDs are installed first
 ```
 
-**Cause:** When running `make create-kind-cluster` and `make deploy-wva-emulated-on-kind` as two
-separate commands, there can be a timing race: the Gateway API Inference Extension CRDs are
-applied by the deploy script but the Kubernetes API server hasn't finished registering them
-before `kubectl apply -k` registers the `InferencePool` resource with the API server.
+**Cause:** The Gateway API Inference Extension CRDs are applied by `deploy/install-epp.sh` but
+the Kubernetes API server may not have finished registering them before the next `kubectl apply`
+runs.
 
-**Fix (Option 1 — preferred):** Use the one-shot command, which gives the API server enough
-time to register the CRDs during cluster startup:
-
-```bash
-CREATE_CLUSTER=true make deploy-wva-emulated-on-kind
-```
-
-**Fix (Option 2):** If you already have a running cluster and hit this error, install the CRDs
-manually and re-run the deploy (it is idempotent):
+**Fix:** Re-run `make deploy-e2e-infra` — it is idempotent and the CRDs will be registered by
+the second run. If the error persists, wait a few seconds and retry:
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.0.1/manifests.yaml
-kubectl wait --for=condition=Established crd/inferencepools.inference.networking.x-k8s.io --timeout=30s
-kubectl wait --for=condition=Established crd/inferencepools.inference.networking.k8s.io --timeout=30s
-make deploy-wva-emulated-on-kind
+make deploy-e2e-infra
 ```

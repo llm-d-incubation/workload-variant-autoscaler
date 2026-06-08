@@ -263,6 +263,153 @@ var _ = Describe("CostAwareOptimizer", func() {
 			Expect(dm["mid"].TargetReplicas).To(Equal(2))
 			Expect(dm["cheap"].TargetReplicas).To(Equal(1))
 		})
+
+		It("should shed only the role with spare for disaggregated models", func() {
+			// Prefill is saturated (zero role spare) and is the more expensive role;
+			// decode has spare. Model-level SpareCapacity aggregates both roles, so a
+			// role-blind scale-down would trim the expensive prefill. Role-aware
+			// scale-down must leave the saturated prefill untouched and shed decode.
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 20000, // aggregate (decode's spare) — gates scale-down
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill", Role: "prefill", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+							{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", SpareCapacity: 0},
+							"decode":  {Role: "decode", SpareCapacity: 20000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 2},
+						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// Prefill (saturated role) is never trimmed despite being most expensive.
+			Expect(dm["prefill"].TargetReplicas).To(Equal(2))
+			Expect(dm["prefill"].Action).To(Equal(interfaces.ActionNoChange))
+			// Decode sheds its own spare: floor(20000/10000)=2 → 3 - 2 = 1.
+			Expect(dm["decode"].TargetReplicas).To(Equal(1))
+			Expect(dm["decode"].Action).To(Equal(interfaces.ActionScaleDown))
+		})
+
+		It("should shed each role by its own spare when both have slack", func() {
+			// Both roles have spare, but different amounts. Each role must shed by
+			// its own per-role spare, not the aggregate.
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 30000, // aggregate — gates scale-down
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill", Role: "prefill", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+							{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+						},
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", SpareCapacity: 10000}, // 1 replica
+							"decode":  {Role: "decode", SpareCapacity: 20000},  // 2 replicas
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 3},
+						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// prefill sheds floor(10000/10000)=1 → 3 - 1 = 2.
+			Expect(dm["prefill"].TargetReplicas).To(Equal(2))
+			// decode sheds floor(20000/10000)=2 → 3 - 2 = 1.
+			Expect(dm["decode"].TargetReplicas).To(Equal(1))
+		})
+
+		It("sheds within a single role when only one role has capacity", func() {
+			// Only decode has a RoleCapacities entry (e.g. a prefill data-collection
+			// gap). The one-iteration path must shed decode against its own spare and
+			// keep the cheapest decode variant at one replica.
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 20000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "decode-exp", Role: "decode", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+							{VariantName: "decode-cheap", Role: "decode", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+						},
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"decode": {Role: "decode", SpareCapacity: 20000}, // 2 replicas
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "decode-exp", Role: "decode", CurrentReplicas: 1},
+						{VariantName: "decode-cheap", Role: "decode", CurrentReplicas: 1},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// Most-expensive-first removes decode-exp (1→0); decode-cheap is then the
+			// last with replicas in the role → protected at one.
+			Expect(dm["decode-exp"].TargetReplicas).To(Equal(0))
+			Expect(dm["decode-cheap"].TargetReplicas).To(Equal(1))
+		})
+
+		It("leaves an empty-role variant untouched when RoleCapacities is per-role", func() {
+			// A variant with Role "" canonicalizes to RoleBoth, which has no entry in a
+			// prefill/decode RoleCapacities map — so the per-role sheds never include it.
+			// The design assumes one role per variant; this pins the defensive behavior
+			// if that assumption is violated: the orphan is left as-is.
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-1",
+					Namespace: "default",
+					Result: &interfaces.AnalyzerResult{
+						SpareCapacity: 20000,
+						VariantCapacities: []interfaces.VariantCapacity{
+							{VariantName: "prefill", Role: "prefill", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+							{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+							{VariantName: "orphan", Role: "", Cost: 20.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+						},
+						RoleCapacities: map[string]interfaces.RoleCapacity{
+							"prefill": {Role: "prefill", SpareCapacity: 0},
+							"decode":  {Role: "decode", SpareCapacity: 20000},
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 2},
+						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
+						{VariantName: "orphan", Role: "", CurrentReplicas: 2},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, nil)
+			dm := decisionMap(decisions)
+
+			// orphan (role "") matches no per-role set → never trimmed, despite being
+			// the most expensive variant.
+			Expect(dm["orphan"].TargetReplicas).To(Equal(2))
+			Expect(dm["orphan"].Action).To(Equal(interfaces.ActionNoChange))
+			// prefill saturated → untouched; decode sheds its own spare → 3 - 2 = 1.
+			Expect(dm["prefill"].TargetReplicas).To(Equal(2))
+			Expect(dm["decode"].TargetReplicas).To(Equal(1))
+		})
 	})
 
 	Context("Steady State", func() {
@@ -518,14 +665,17 @@ var _ = Describe("CostAwareOptimizer", func() {
 			Expect(sorted[2].VariantName).To(Equal("cheap"))
 		})
 
-		It("findCheapestVariant should return lowest cost variant", func() {
+		It("sortByCostDesc should tie-break equal cost by per-replica capacity ascending", func() {
+			// Among equal-cost variants, the higher-PRC one must land last — the
+			// deterministic slot scale-down protects at one replica.
 			capacities := []interfaces.VariantCapacity{
-				{VariantName: "mid", Cost: 10.0},
-				{VariantName: "cheap", Cost: 5.0},
-				{VariantName: "expensive", Cost: 15.0},
+				{VariantName: "lo-prc", Cost: 5.0, PerReplicaCapacity: 1000},
+				{VariantName: "hi-prc", Cost: 5.0, PerReplicaCapacity: 9000},
 			}
 
-			Expect(findCheapestVariant(capacities)).To(Equal("cheap"))
+			sorted := sortByCostDesc(capacities)
+
+			Expect(sorted[len(sorted)-1].VariantName).To(Equal("hi-prc"))
 		})
 
 		It("mergeConstraints should take minimum available per type", func() {

@@ -153,7 +153,7 @@ make deploy-wva-on-k8s
 make deploy-wva-on-openshift
 
 # Deploy to Kind (with emulated GPUs)
-make deploy-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
 #### Manual Script Execution

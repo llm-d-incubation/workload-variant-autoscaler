@@ -264,7 +264,6 @@ func buildModelServerBaseArgs(modelID string, useSimulator bool, maxNumSeqs int)
 			"--enable-kvcache",
 			fmt.Sprintf("--kv-cache-size=%d", simulatorKVCacheSize),
 			fmt.Sprintf("--block-size=%d", simulatorBlockSize),
-			"--tokenizers-cache-dir=/tmp",
 			"--max-num-seqs", strconv.Itoa(maxNumSeqs),
 			"--max-model-len", strconv.Itoa(simulatorMaxModelLen),
 		}
