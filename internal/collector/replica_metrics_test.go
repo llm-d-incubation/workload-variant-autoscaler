@@ -127,7 +127,7 @@ func TestRecordMetricsUnavailableEvent(t *testing.T) {
 				}
 			}
 
-			collector.recordMetricsUnavailableEvent(variantAutoscalings, "Test metrics unavailable")
+			collector.recordMetricsUnavailableEvent(variantAutoscalings, nil, "Test metrics unavailable")
 
 			// Count recorded events
 			eventCount := 0
@@ -186,7 +186,7 @@ func TestCollectReplicaMetrics_ErrorRecordsEvent(t *testing.T) {
 	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
 	// First call with error: no event (first observation, unknown previous state)
-	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.Error(t, err, "Should return error when refresh fails")
 	require.Nil(t, metrics, "Should return nil metrics on error")
 
@@ -198,7 +198,7 @@ func TestCollectReplicaMetrics_ErrorRecordsEvent(t *testing.T) {
 	}
 
 	// Second call: metrics still fail, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.Error(t, err, "Should still return error")
 
 	select {
@@ -244,7 +244,7 @@ func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
 	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
 	// First call: no metrics, should NOT emit event (first observation, unknown previous state)
-	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err, "Should not return error when no metrics available")
 	require.Empty(t, metrics, "Should return empty metrics slice")
 
@@ -256,7 +256,7 @@ func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
 	}
 
 	// Second call: still no metrics, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err, "Should not return error")
 
 	select {
@@ -267,7 +267,7 @@ func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
 	}
 
 	// Third call: still no metrics, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err, "Should not return error")
 
 	select {
@@ -319,7 +319,7 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder)
 
 	// First call: metrics unavailable, should NOT emit event (first observation, unknown previous state)
-	_, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err)
 
 	select {
@@ -330,7 +330,7 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 	}
 
 	// Second call: metrics still unavailable, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err)
 
 	select {
@@ -341,7 +341,7 @@ func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
 	}
 
 	// Third call: still unavailable, should NOT emit event
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, variantCosts)
+	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
 	require.NoError(t, err)
 
 	select {
@@ -386,6 +386,7 @@ func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
 		"test-namespace",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -496,6 +497,7 @@ func TestCollectReplicaMetrics_ErrorMetrics(t *testing.T) {
 		"test-namespace",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
 		make(map[string]float64),
 	)
 	if err == nil {

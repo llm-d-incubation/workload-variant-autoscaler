@@ -92,13 +92,20 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 
 func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	vaEventTracker map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool,
 	reason string,
 ) {
 	if c.recorder == nil {
 		return
 	}
+
 	for _, va := range variantAutoscalings {
-		c.recorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
+		if vaEventTracker != nil {
+			if _, ok := vaEventTracker[va]; ok { // ensures only one event is recorded per VA
+				continue
+			}
+		}
+		c.recorder.Event(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
 	}
 }
 
@@ -128,6 +135,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	namespace string,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	vaEventTracker map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool,
 	variantCosts map[string]float64,
 ) ([]interfaces.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
@@ -148,9 +156,9 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 
 		if shouldEmitEvent {
 			if err != nil {
-				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, "Failed to collect metrics for model")
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "Failed to collect metrics for model")
 			} else if len(replicaMetrics) == 0 {
-				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, "No saturation metrics available for model")
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "No saturation metrics available for model")
 			}
 		}
 
