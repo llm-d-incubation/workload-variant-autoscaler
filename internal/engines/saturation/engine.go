@@ -123,8 +123,9 @@ type Engine struct {
 	// Recorder - use wrapper function recordEvent to limit number of events per va in an optimization cycle
 	Recorder record.EventRecorder
 
-	// vaEventTracker is used to track whether a K8S event has been issued for a variant in an optimization cycle
-	vaEventTracker map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool
+	// vaEventTracker tracks whether a K8S event has been issued for a variant in an optimization cycle.
+	// Key is namespace/name from utils.GetNamespacedKey.
+	vaEventTracker map[string]bool
 
 	Config *config.Config // Unified configuration (injected from main.go)
 
@@ -352,7 +353,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	}
 
 	// Initialize vaEventTracker for this optimize cycle
-	e.vaEventTracker = make(map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool)
+	e.vaEventTracker = make(map[string]bool)
 
 	// Collected accelerator inventory (only in limited mode)
 	if e.Config.LimitedModeEnabled() {
@@ -476,14 +477,16 @@ func (e *Engine) recordEvent(
 		e.Recorder.Event(va, eventType, reason, message)
 		return
 	}
+
+	key := utils.GetNamespacedKey(va.Namespace, va.Name)
 	if e.vaEventTracker != nil {
-		if _, ok := e.vaEventTracker[va]; ok { // ensures only one event is recorded per VA
+		if _, ok := e.vaEventTracker[key]; ok { // ensures only one event is recorded per VA
 			return
 		}
 	}
 	e.Recorder.Event(va, eventType, reason, message)
 	if e.vaEventTracker != nil {
-		e.vaEventTracker[va] = true
+		e.vaEventTracker[key] = true
 	}
 }
 

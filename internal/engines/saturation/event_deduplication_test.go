@@ -36,7 +36,7 @@ func TestEventDeduplication(t *testing.T) {
 	fakeRecorder := record.NewFakeRecorder(100)
 	engine := &Engine{
 		Recorder:       fakeRecorder,
-		vaEventTracker: make(map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool),
+		vaEventTracker: make(map[string]bool),
 	}
 
 	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
@@ -89,7 +89,7 @@ func TestEventDeduplicationResourceConstrainedException(t *testing.T) {
 	fakeRecorder := record.NewFakeRecorder(100)
 	engine := &Engine{
 		Recorder:       fakeRecorder,
-		vaEventTracker: make(map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool),
+		vaEventTracker: make(map[string]bool),
 	}
 
 	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
@@ -185,7 +185,7 @@ func TestEventDeduplicationMultipleVAs(t *testing.T) {
 	fakeRecorder := record.NewFakeRecorder(100)
 	engine := &Engine{
 		Recorder:       fakeRecorder,
-		vaEventTracker: make(map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool),
+		vaEventTracker: make(map[string]bool),
 	}
 
 	va1 := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{

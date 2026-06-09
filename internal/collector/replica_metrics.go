@@ -92,7 +92,7 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 
 func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	vaEventTracker map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool,
+	vaEventTracker map[string]bool,
 	reason string,
 ) {
 	if c.recorder == nil {
@@ -100,12 +100,16 @@ func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 	}
 
 	for _, va := range variantAutoscalings {
+		key := utils.GetNamespacedKey(va.Namespace, va.Name)
 		if vaEventTracker != nil {
-			if _, ok := vaEventTracker[va]; ok { // ensures only one event is recorded per VA
+			if _, ok := vaEventTracker[key]; ok { // ensures only one event is recorded per VA
 				continue
 			}
 		}
 		c.recorder.Event(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
+		if vaEventTracker != nil {
+			vaEventTracker[key] = true
+		}
 	}
 }
 
@@ -135,7 +139,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	namespace string,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	vaEventTracker map[*llmdVariantAutoscalingV1alpha1.VariantAutoscaling]bool,
+	vaEventTracker map[string]bool,
 	variantCosts map[string]float64,
 ) ([]interfaces.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
