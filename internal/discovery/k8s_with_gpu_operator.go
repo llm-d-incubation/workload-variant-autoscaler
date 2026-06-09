@@ -111,9 +111,20 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 					Accelerators: make(map[string]AcceleratorModelInfo),
 				}
 			}
+			// i915 and xe share the product label gpu.intel.com/product, so an
+			// i915 node is also selected during the xe iteration (and vice versa).
+			// In the non-matching iteration this resource has no allocatable, so
+			// count is 0 (and memKey resolves to the wrong vendor's label). Don't
+			// let that zero overwrite a non-zero count/memory already recorded for
+			// the same model in an earlier iteration.
+			memory := node.Labels[memKey]
+			if prev, seen := ni.Accelerators[model]; seen && count == 0 {
+				count = prev.Count
+				memory = prev.Memory
+			}
 			ni.Accelerators[model] = AcceleratorModelInfo{
 				Count:  count,
-				Memory: node.Labels[memKey],
+				Memory: memory,
 			}
 			nodes[node.Name] = ni
 			accelerators[model] += count
