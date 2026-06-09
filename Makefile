@@ -133,28 +133,6 @@ destroy-kind-cluster:
 	export KIND=$(KIND) KUBECTL=$(KUBECTL) && \
         deploy/kind-emulator/teardown.sh
 
-# Deploys the WVA controller on a pre-existing Kind cluster or creates one if specified.
-# Set SCALER_BACKEND=keda if you want to install KEDA instead of Prometheus Adapter.
-.PHONY: deploy-wva-emulated-on-kind
-deploy-wva-emulated-on-kind: ## Deploy WVA + EPP on Kind (Prometheus Adapter as scaler backend)
-	@echo ">>> Deploying workload-variant-autoscaler (cluster args: $(KIND_ARGS), image: $(IMG))"
-	KIND=$(KIND) KUBECTL=$(KUBECTL) IMG=$(IMG) ENVIRONMENT=kind-emulator CREATE_CLUSTER=$(CREATE_CLUSTER) CLUSTER_GPU_TYPE=$(CLUSTER_GPU_TYPE) CLUSTER_NODES=$(CLUSTER_NODES) CLUSTER_GPUS=$(CLUSTER_GPUS) SCALER_BACKEND=$(SCALER_BACKEND) \
-		deploy/install.sh
-	@ENVIRONMENT=kind-emulator \
-		LLM_D_RELEASE=$(LLM_D_RELEASE) \
-		GAIE_VERSION=$(GAIE_VERSION) \
-		LLMD_NS=$${LLMD_NS:-$(E2E_EMULATED_LLMD_NAMESPACE)} \
-		WVA_PROJECT=$(CURDIR) \
-		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
-		./deploy/install-epp.sh
-
-## Undeploy WVA from the emulated environment on Kind.
-## Undeploy WVA from Kind (set SCALER_BACKEND=keda if you deployed with KEDA)
-.PHONY: undeploy-wva-emulated-on-kind
-undeploy-wva-emulated-on-kind:
-	@echo ">>> Undeploying workload-variant-autoscaler from Kind"
-	KIND=$(KIND) KUBECTL=$(KUBECTL) ENVIRONMENT=kind-emulator DELETE_NAMESPACES=$(DELETE_NAMESPACES) DELETE_CLUSTER=$(DELETE_CLUSTER) SCALER_BACKEND=$(SCALER_BACKEND) \
-		deploy/install.sh --undeploy
 
 ## Deploy WVA to OpenShift cluster with specified image.
 .PHONY: deploy-wva-on-openshift

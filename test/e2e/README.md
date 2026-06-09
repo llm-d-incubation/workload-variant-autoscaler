@@ -168,7 +168,7 @@ make test-e2e-smoke SCALER_BACKEND=keda
 make deploy-e2e-infra SCALER_BACKEND=keda && make test-e2e-full SCALER_BACKEND=keda
 ```
 
-To undeploy after using KEDA: `SCALER_BACKEND=keda make undeploy-wva-emulated-on-kind`.
+To tear down the Kind cluster after: `make destroy-kind-cluster`.
 
 ### Run smoke with full setup (Kind + KEDA) and save output
 

@@ -18,6 +18,7 @@ package saturation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -51,6 +52,14 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
+
+// analyzerEntry binds a registered analyzer to its name. The engine stores
+// these in registration order so runAnalyzersAndScore iterates analyzers
+// deterministically.
+type analyzerEntry struct {
+	name     string
+	analyzer interfaces.Analyzer
+}
 
 // v1Analyzer is the minimal surface of *saturation.Analyzer that optimizeV1
 // depends on. Defined here so tests can substitute a stub via Engine's
@@ -128,6 +137,7 @@ type Engine struct {
 	metricsRegistry *source.SourceRegistry
 
 	// saturationV2Analyzer is the V2 token-based saturation analyzer (initialized once).
+	// Also pre-registered in analyzers under interfaces.SaturationAnalyzerName.
 	saturationV2Analyzer *saturation_v2.SaturationAnalyzer
 
 	// queueingModelAnalyzer is the queueing model-based analyzer (initialized once).
@@ -136,6 +146,26 @@ type Engine struct {
 
 	// capacityStore is shared with the V2 analyzer for caching capacity knowledge.
 	capacityStore *saturation_v2.CapacityKnowledgeStore
+
+	// analyzers is the engine's analyzer registry, mutated only during setup
+	// (NewEngine + RegisterAnalyzer). After StartOptimizeLoop it is frozen —
+	// further RegisterAnalyzer calls return an error. The optimize goroutine reads
+	// analyzersSnapshot, never analyzers, so iteration is race-free without
+	// runtime locking.
+	analyzers []analyzerEntry
+
+	// analyzersSnapshot is the frozen, registration-ordered view that
+	// runAnalyzersAndScore iterates. Built from analyzers in StartOptimizeLoop
+	// before the goroutine launches. Saturation always runs and drives scaling
+	// decisions; other registered analyzers are invoked but their results are
+	// not consumed yet — combine and per-analyzer threshold logic lands in
+	// follow-up PRs.
+	analyzersSnapshot []analyzerEntry
+
+	// started transitions to true in StartOptimizeLoop. Late RegisterAnalyzer
+	// calls return an error so the contract "register before Start" is enforced
+	// rather than just documented.
+	started bool
 
 	// optimizer is the V2 scaling optimizer that produces VariantDecisions from
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
@@ -170,6 +200,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	gpuLimiter := pipeline.NewDefaultLimiter("gpu-limiter", gpuInventory, gpuAlgorithm)
 
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
+	satV2 := saturation_v2.NewSaturationAnalyzer(capacityStore)
 
 	// Initialize with default optimizer. The actual optimizer is selected
 	// per-cycle in optimize() based on dynamic config (enableLimiter flag
@@ -185,12 +216,15 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		ScaleToZeroEnforcer:     pipeline.NewEnforcer(requestCountFunc),
 		GPULimiter:              gpuLimiter,
 		metricsRegistry:         metricsRegistry,
-		saturationV2Analyzer:    saturation_v2.NewSaturationAnalyzer(capacityStore),
+		saturationV2Analyzer:    satV2,
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
 		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
+		analyzers: []analyzerEntry{
+			{name: interfaces.SaturationAnalyzerName, analyzer: satV2},
+		},
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -220,9 +254,35 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	return &engine
 }
 
+// RegisterAnalyzer adds an external analyzer to the engine's analyzer
+// registry. Returns an error if called after StartOptimizeLoop or if name
+// is already registered — callers must check the error. The analyzer is
+// appended in registration order.
+func (e *Engine) RegisterAnalyzer(name string, a interfaces.Analyzer) error {
+	if e.started {
+		return errors.New("RegisterAnalyzer: called after StartOptimizeLoop")
+	}
+	for i := range e.analyzers {
+		if e.analyzers[i].name == name {
+			return fmt.Errorf("RegisterAnalyzer: duplicate analyzer name %q", name)
+		}
+	}
+	e.analyzers = append(e.analyzers, analyzerEntry{name: name, analyzer: a})
+	return nil
+}
+
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
+//
+// Before launching the goroutine, the registered analyzers are snapshotted
+// to a frozen slice that runAnalyzersAndScore iterates. The started flag is
+// flipped so subsequent RegisterAnalyzer calls return an error. The snapshot is the
+// natural place to invoke any future per-analyzer Init(ctx) hook.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	e.analyzersSnapshot = make([]analyzerEntry, len(e.analyzers))
+	copy(e.analyzersSnapshot, e.analyzers)
+	e.started = true
+
 	e.recordActiveOptimizer() // record active optimizer
 	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)

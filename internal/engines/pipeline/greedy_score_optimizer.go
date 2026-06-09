@@ -233,7 +233,7 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 		return o.allocateByRole(ctx, w, target, stateMap, available)
 	}
 
-	return o.allocateToVariants(ctx, w, target, w.req.Result.VariantCapacities, stateMap, available, "both")
+	return o.allocateToVariants(ctx, w, target, w.req.Result.VariantCapacities, stateMap, available, interfaces.RoleBoth)
 }
 
 // allocateByRole distributes replicas between roles proportional to their demand.
@@ -367,16 +367,16 @@ func (o *GreedyByScoreOptimizer) allocateToVariants(
 }
 
 // filterVariantCapacitiesByRole returns variant capacities matching the specified role.
-// For role "both" or empty, returns all capacities.
+// For role RoleBoth or empty, returns all capacities.
 func filterVariantCapacitiesByRole(capacities []interfaces.VariantCapacity, role string) []interfaces.VariantCapacity {
-	if role == "both" || role == "" {
+	if role == interfaces.RoleBoth || role == "" {
 		return capacities
 	}
 	var filtered []interfaces.VariantCapacity
 	for _, vc := range capacities {
 		vcRole := vc.Role
 		if vcRole == "" {
-			vcRole = "both"
+			vcRole = interfaces.RoleBoth
 		}
 		if vcRole == role {
 			filtered = append(filtered, vc)
