@@ -50,7 +50,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -92,7 +92,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of available GPUs by accelerator type. WVA only discovers GPUs when a configuration such as \"enableLimiter\" is \"true\". Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG",
+      "description": "Number of available GPUs by accelerator type. WVA only discovers GPUs when a configuration such as \"enableLimiter\" is \"true\". Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG. Metric is wva_available_gpus.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -113,8 +113,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 6,
+        "x": 6,
         "y": 0
       },
       "id": 50,
@@ -169,7 +169,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of models processed in the last optimization cycle",
+      "description": "Number of models processed in the last optimization cycle. Metric is wva_models_processed.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -194,8 +194,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 6,
+        "x": 12,
         "y": 0
       },
       "id": 10,
@@ -250,7 +250,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of new errors by component in the last hour. Shows how many errors occurred in the past 60 minutes. Resets to 0 once errors age beyond the 1-hour window.",
+      "description": "Number of new errors by component in the last hour. Shows how many errors occurred in the past 60 minutes. Resets to 0 once errors age beyond the 1-hour window. Metric is wva_errors_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -277,7 +277,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 0
       },
       "id": 49,
@@ -317,71 +317,11 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"collector\"}[1h])) or vector(0))",
+          "expr": "floor(sum by (component) (increase(wva_errors_total[1h])))",
           "instant": false,
-          "legendFormat": "collector",
+          "legendFormat": "{{component}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"analyzer\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "analyzer",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"optimizer\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "optimizer",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"limiter\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "limiter",
-          "range": true,
-          "refId": "D"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"enforcer\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "enforcer",
-          "range": true,
-          "refId": "E"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_errors_total{component=\"controller\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "controller",
-          "range": true,
-          "refId": "F"
         }
       ],
       "title": "WVA Errors",
@@ -392,7 +332,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of pods with metrics discovered for a namespace",
+      "description": "Number of pods with metrics discovered for a namespace. Metric is wva_metrics_pods_discovered.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -418,14 +358,14 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 3,
-        "x": 18,
-        "y": 0
+        "w": 8,
+        "x": 0,
+        "y": 4
       },
       "id": 24,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
@@ -435,7 +375,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "pluginVersion": "13.0.1",
       "targets": [
@@ -445,9 +385,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(wva_metrics_pods_discovered) by (exported_namespace)",
+          "expr": "sum(wva_metrics_pods_discovered{exported_namespace=~\"$namespace\"}) by ($namespace_label)",
           "instant": false,
-          "legendFormat": "{{exported_namespace}}",
+          "legendFormat": "{{$namespace_label}}",
           "range": true,
           "refId": "A"
         }
@@ -460,12 +400,11 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Freshness status of metrics for each variant. \"fresh\": metric collected < 1 minute ago, \"stale\": metric collected < 5 minutes ago, \"unavailable\": metric collected >= 5 minutes ago, \"missing\": metric doesn't exist",
+      "description": "Freshness status of metrics for each variant. \"fresh\": metric collected < 1 minute ago, \"stale\": metric collected < 5 minutes ago, \"unavailable\": metric collected >= 5 minutes ago, \"missing\": metric doesn't exist. wva_metrics_freshness_status.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "fixedColor": "gray",
-            "mode": "fixed"
+            "mode": "thresholds"
           },
           "mappings": [],
           "thresholds": {
@@ -482,8 +421,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*fresh.*"
+              "id": "byName",
+              "options": "fresh"
             },
             "properties": [
               {
@@ -497,14 +436,14 @@
           },
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*stale.*"
+              "id": "byName",
+              "options": "stale"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "yellow",
+                  "fixedColor": "semi-dark-green",
                   "mode": "fixed"
                 }
               }
@@ -512,8 +451,8 @@
           },
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*missing.*"
+              "id": "byName",
+              "options": "missing"
             },
             "properties": [
               {
@@ -527,14 +466,14 @@
           },
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*unavailable.*"
+              "id": "byName",
+              "options": "unavailable"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "dark-red",
+                  "fixedColor": "yellow",
                   "mode": "fixed"
                 }
               }
@@ -544,9 +483,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 3,
-        "x": 21,
-        "y": 0
+        "w": 8,
+        "x": 8,
+        "y": 4
       },
       "id": 25,
       "options": {
@@ -571,9 +510,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(wva_metrics_freshness_status) by (variant_name, status)",
+          "expr": "sum(wva_metrics_freshness_status{variant_name=~\"$variant\"}) by (variant_name, status)",
           "instant": false,
-          "legendFormat": "{{variant_name}} - {{status}}",
+          "legendFormat": "{{status}}",
           "range": true,
           "refId": "A"
         }
@@ -586,7 +525,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Number of metrics collection errors during the last hour",
+      "description": "Number of metrics collection errors during the last hour. Metric is wva_metrics_collection_errors_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -612,8 +551,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 24,
-        "x": 0,
+        "w": 8,
+        "x": 16,
         "y": 4
       },
       "id": 26,
@@ -653,47 +592,11 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"kv_cache\"}[1h])) or vector(0))",
+          "expr": "floor(sum by (query_type) (increase(wva_metrics_collection_errors_total[1h])))",
           "instant": false,
-          "legendFormat": "kv_cache",
+          "legendFormat": "{{query_type}}",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"queue_length\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "queue_length",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"request_count\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "request_count",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "floor(sum(increase(wva_metrics_collection_errors_total{query_type=\"cache_config\"}[1h])) or vector(0))",
-          "instant": false,
-          "legendFormat": "cache_config",
-          "range": true,
-          "refId": "D"
         }
       ],
       "title": "Metric Collection Errors",
@@ -704,7 +607,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Duration of metrics collection operations by query type in seconds",
+      "description": "Duration of metrics collection operations by query type in seconds. Metric is wva_metrics_collection_duration_seconds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -838,7 +741,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.",
+      "description": "Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases. wva_saturation_utilization.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -924,7 +827,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (namespace, variant_name, accelerator_type) (wva_saturation_utilization)",
+          "expr": "max by ($namespace_label, variant_name, accelerator_type) (wva_saturation_utilization{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{accelerator_type}}",
           "range": true,
@@ -1040,7 +943,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (namespace, variant_name) (wva_kv_cache_tokens_used)",
+          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_used{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - used",
           "range": true,
@@ -1052,7 +955,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (namespace, variant_name) (wva_kv_cache_tokens_capacity)",
+          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_capacity{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - capacity",
           "range": true,
@@ -1060,6 +963,103 @@
         }
       ],
       "title": "Capacity Breakdown",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Rate of scaling decisions by reason. Metric is wva_replica_scaling_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 52,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(wva_replica_scaling_total{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
+          "instant": false,
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Scaling Decision Rate",
       "type": "timeseries"
     },
     {
@@ -1144,7 +1144,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "id": 43,
       "options": {
@@ -1169,7 +1169,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (namespace, variant_name) (wva_current_replicas)",
+          "expr": "max by ($namespace_label, variant_name) (wva_current_replicas{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - current",
           "range": true,
@@ -1181,7 +1181,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (namespace, variant_name) (wva_desired_replicas)",
+          "expr": "max by ($namespace_label, variant_name) (wva_desired_replicas{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - desired",
           "range": true,
@@ -1196,7 +1196,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Average number of scaling decisions limited by constraints per optimization cycle (30 seconds, averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, if there were 36 limited decisions total in the last hour, and there are 120 optimization cycles per hour (3600 seconds ÷ 30 seconds), then the average is 36 ÷ 120 = 0.3 decisions per cycle.",
+      "description": "Average number of scaling decisions limited by constraints per optimization cycle (averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, there were 36 limited decisions total in the last hour for 30 seconds optimization interval, and there are 120 optimization cycles per hour (3600 seconds ÷ 30 seconds), then the average is 36 ÷ 120 = 0.3 decisions per cycle. The metric is wva_decisions_limited_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1253,7 +1253,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 47
       },
       "id": 51,
       "options": {
@@ -1279,7 +1279,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_decisions_limited_total[1h])) by (namespace, variant_name, limiter_name) * 30",
+          "expr": "sum(rate(wva_decisions_limited_total{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"}[1h])) by ($namespace_label, variant_name, limiter_name) * max(wva_config_optimization_interval_seconds)",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{limiter_name}}",
           "range": true,
@@ -1294,7 +1294,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Duration of optimization loop cycles in seconds",
+      "description": "Duration of optimization loop cycles in seconds. Metric is wva_optimization_duration_seconds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1422,7 +1422,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 55
       },
       "id": 30,
       "options": {
@@ -1502,7 +1502,71 @@
     "operational"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "exported_namespace",
+          "value": "exported_namespace"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "namespace_label",
+        "options": [
+          {
+            "selected": true,
+            "text": "exported_namespace",
+            "value": "exported_namespace"
+          },
+          {
+            "selected": false,
+            "text": "namespace",
+            "value": "namespace"
+          }
+        ],
+        "query": "exported_namespace,namespace",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Namespace",
+        "multi": true,
+        "name": "namespace",
+        "query": {
+          "query": "label_values(wva_metrics_pods_discovered, $namespace_label)",
+          "refId": "ns"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Variant",
+        "multi": true,
+        "name": "variant",
+        "query": {
+          "query": "label_values(wva_current_replicas{$namespace_label=~\"$namespace\"}, variant_name)",
+          "refId": "var"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-6h",

@@ -1,10 +1,10 @@
 # Operational Dashboard
 
 ## Overview
-For observability, WVA records a number of metrics which are scraped by Prometheus. This document shows how to enable the operational dashboard in your Kubernetes cluster. Once enabled, you can view these metrics through the provided dashboard with Grafana.
+For observability, WVA records a number of metrics which are scraped by Prometheus. This document shows how to enable the operational dashboard in your Kubernetes cluster. Once installed, you can view these metrics through the provided dashboard with Grafana.
 
-## Enable Operational Dashboard
-The operational dashboard is installed by default. To disable, set the environment variable `DEPLOY_OPERATIONAL_DASHBOARD` to `false` and run or re-run the installation. Following is an example for installation using `Make` method:
+## Installation
+The operational dashboard is installed by default. To uninstall, set the environment variable `DEPLOY_OPERATIONAL_DASHBOARD` to `false` and run or re-run the installation. Following is an example for installation using `Make` method:
 ```console
 export DEPLOY_OPERATIONAL_DASHBOARD=false
 make deploy-wva-on-k8s
@@ -36,11 +36,44 @@ The pre-installed `WVA Operational Dashboard` is read-only. You can import `WVA 
 - Your new dashboard now is the same as `WVA Operational Dashboard` except that you can edit and save.
 
 
+## Understanding Namespace Labels in Metrics
+
+### The `namespace` vs `exported_namespace` Issue
+
+When viewing per-variant metrics in the operational dashboard, you may notice labels named `namespace` and `exported_namespace`. Understanding the difference is important for correctly interpreting dashboard data.
+
+**Root Cause: Prometheus `honorLabels` Setting**
+
+WVA's metrics include a `namespace` label indicating which namespace each variant is running in. However, when Prometheus scrapes these metrics via a ServiceMonitor, the `honorLabels` configuration (default: `false`) affects how labels are handled:
+
+- **With `honorLabels: false` (default)**:
+  - Prometheus **renames** WVA's original `namespace` label to `exported_namespace`
+  - Prometheus adds its own `namespace` label containing the **controller's pod namespace** (e.g., `workload-variant-autoscaler-system`)
+  - **Result**: Per-variant panels show `exported_namespace` for the variant's actual namespace
+
+- **With `honorLabels: true`**:
+  - WVA's original `namespace` label is **preserved** as-is
+  - The `namespace` label contains the **variant's namespace**
+  - **Result**: Per-variant panels use `namespace` for the variant's actual namespace
+
+**Dashboard Configuration**
+
+The operational dashboard includes a template variable `$namespace_label` that can be toggled between:
+- `exported_namespace` (default) - for `honorLabels: false` configurations
+- `namespace` - for `honorLabels: true` configurations
+
+If you see incorrect namespace groupings in per-variant panels (e.g., all variants showing the controller's namespace instead of their actual namespaces), toggle the `$namespace_label` dropdown at the top of the dashboard.
+
+**Why the Default is `honorLabels: false`**
+
+Setting `honorLabels: false` is a security best practice that prevents scraped applications from spoofing infrastructure labels. For example, it prevents a pod from claiming to be in a different namespace via its exported metrics.
+
 ## Troubleshooting
 ### services "kube-prometheus-stack-grafana" not found
-  - Make sure to install WVA cluster with `DEPLOY_OPERATIONAL_DASHBOARD=true` as this would install Grafana.
+  - Make sure to install WVA cluster with `DEPLOY_OPERATIONAL_DASHBOARD=true` (default) as this would install Grafana.
   
 ### No Data
+  - Hover over the information (`i`) icon in the panel. The information may show cases where data is not available.
   - Check the datasource by browse to "Connections/Data sources", you should see a Prometheus data source `https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090`. Click on `Test` button to test the data source.
   - Check data source which is defined in `kube-prometheus-stack-grafana-datasource` configmap:
     ```console
