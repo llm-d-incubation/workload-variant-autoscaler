@@ -1491,7 +1491,9 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		if hasDecision {
-			e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), reason)
+			if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), reason); err != nil {
+				logger.Error(err, "Failed to emit replica scaling metrics")
+			}
 			logger.Info("Applied saturation decision via shared cache",
 				"variant", vaName,
 				"namespace", updateVa.Namespace,
