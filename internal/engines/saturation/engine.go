@@ -1512,6 +1512,7 @@ func (e *Engine) applySaturationDecisions(
 // sanitizeReasonForMetrics converts detailed reason strings into bounded categorical
 // values safe for use as Prometheus label values. This prevents cardinality explosion
 // from dynamic numeric values embedded in reason strings.
+// TODO: look fragile, refactor this function for better solution
 func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction) string {
 	// Check for saturation-only mode patterns
 	if strings.Contains(reason, "saturation-only mode:") {
