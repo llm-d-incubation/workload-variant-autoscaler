@@ -8,13 +8,4 @@ kind: Kustomization
 #   - optional --controller-instance arg patch
 
 resources:
-- ../../../../config/default
-
-patches:
-- target:
-    kind: Deployment
-    name: controller-manager
-  patch: |
-    - op: add
-      path: /spec/template/spec/containers/0/args/-
-      value: "--watch-namespace=$(POD_NAMESPACE)"
+- ../../../../config/overlays/namespace-scoped/kubernetes

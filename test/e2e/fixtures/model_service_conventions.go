@@ -16,7 +16,7 @@ const (
 	defaultServicePortName               = "http"
 	defaultServiceMonitorMetricsPath     = "/metrics"
 
-	defaultModelServiceSimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
+	defaultModelServiceSimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
 	defaultModelServiceRuntimeImage   = "ghcr.io/llm-d/llm-d-cuda-dev:latest"
 	defaultModelServiceContainerPort  = 8000
 	defaultHFTokenSecretName          = "llm-d-hf-token"

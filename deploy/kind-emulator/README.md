@@ -26,22 +26,29 @@ Quick start guide for local development using Kind (Kubernetes in Docker) with e
 
 ## Quick Start
 
-### One-Command Setup
-
-Deploy WVA with full llm-d infrastructure:
+### Setup
 
 ```bash
-# From project root
-make deploy-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
-This creates:
+This deploys:
 
 - Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
 - WVA controller
-- llm-d infrastructure (simulation mode)
-- Prometheus monitoring
-- vLLM emulator
+- llm-d EPP (GAIE standalone)
+- Prometheus monitoring + Prometheus Adapter
+
+To also deploy a simulator model service for manual testing:
+
+```bash
+# Both prefill and decode (disaggregated serving)
+kubectl apply -k config/samples/simulator/disaggregated/
+
+# Or deploy only what you need
+kubectl apply -k config/samples/simulator/decode/
+kubectl apply -k config/samples/simulator/prefill/
+```
 
 ## Configuration Options
 
@@ -71,7 +78,7 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
 export DEPLOY_WVA=true                # Deploy WVA controller
 export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
-# llm-d: `make deploy-wva-emulated-on-kind` runs install.sh then install-llmd-infra.sh
+# llm-d: deploy model serving separately via the llm-d guides after install.sh
 ```
 
 ### Step-by-Step Setup
@@ -96,20 +103,10 @@ export ENVIRONMENT=kind-emulator
 ./deploy/install.sh
 ```
 
-**3. Full stack (WVA + llm-d emulated):**
+**3. Full stack (WVA + EPP + monitoring):**
 
 ```bash
-make deploy-wva-emulated-on-kind
-```
-
-**4. Testing configuration with fast saturation:**
-
-```bash
-export DEPLOY_VA=true
-export DEPLOY_HPA=true
-export VLLM_MAX_NUM_SEQS=8              # Low batch size for easy saturation
-export HPA_STABILIZATION_SECONDS=30     # Fast scaling for testing
-make deploy-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
 ## Scripts
@@ -138,7 +135,7 @@ Destroys the Kind cluster.
 
 ### install.sh (Kind environment plugin)
 
-`deploy/kind-emulator/install.sh` is **sourced** by `deploy/install-llmd-infra.sh` when `ENVIRONMENT=kind-emulator`. It handles Kind-specific setup (namespaces, image load, monitoring wiring, and related helpers). **llm-d ModelService post-deploy cleanup** for emulated clusters (remove chart prefill; optionally remove chart decode when `LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`, the default) runs from **`deploy/lib/infra_llmd.sh`** inside `deploy_llm_d_infrastructure`, not from this `install.sh`.
+`deploy/kind-emulator/install.sh` is **sourced** by `deploy/install.sh` when `ENVIRONMENT=kind-emulator`. It handles Kind-specific setup (namespaces, image load, monitoring wiring, and related helpers). llm-d model serving (EPP + ModelService) is deployed separately using `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline).
 
 ## Cluster Configuration
 
@@ -170,7 +167,7 @@ GPUs are emulated using extended resources:
 
 ```bash
 kubectl port-forward -n workload-variant-autoscaler-system \
-  svc/workload-variant-autoscaler-controller-manager-metrics 8080:8080
+  svc/wva-controller-manager-metrics-service 8080:8080
 ```
 
 **Port-forward Prometheus:**
@@ -199,7 +196,7 @@ kubectl apply -f ../../config/samples/
 The consolidated e2e suite (`test/e2e/`) exercises infra-only deploy, resource wiring, reconciliation, and deterministic correctness checks. For sustained load or benchmarking, use **Option B** or separate perf workflows — not required for e2e.
 
 ```bash
-# From repo root, after deploying (e.g. make deploy-wva-emulated-on-kind)
+# From repo root, after deploying infra (make create-kind-cluster && make deploy-e2e-infra)
 make deploy-e2e-infra   # if not already done
 make test-e2e-smoke    # quick validation
 # or
@@ -253,7 +250,7 @@ make create-kind-cluster
 ```bash
 # Check controller logs
 kubectl logs -n workload-variant-autoscaler-system \
-  deployment/workload-variant-autoscaler-controller-manager
+  deployment/controller-manager
 
 # Verify CRDs installed
 kubectl get crd variantautoscalings.llmd.ai
@@ -287,17 +284,17 @@ This can happen when loading a multi-platform image into Kind: the image manifes
 
 ```bash
 # Force linux/amd64 (e.g. for Intel or emulated nodes)
-KIND_IMAGE_PLATFORM=linux/amd64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
+KIND_IMAGE_PLATFORM=linux/amd64 make create-kind-cluster && make deploy-e2e-infra
 
 # Force linux/arm64 (e.g. for Apple Silicon with native arm64 nodes)
-KIND_IMAGE_PLATFORM=linux/arm64 make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
+KIND_IMAGE_PLATFORM=linux/arm64 make create-kind-cluster && make deploy-e2e-infra
 ```
 
 Alternatively, build the image locally and deploy with `IfNotPresent` so the script skips the registry pull and loads your local single-platform image:
 
 ```bash
 make docker-build IMG=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:latest
-WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUSTER=true
+CREATE_CLUSTER=true WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-e2e-infra IMG=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:latest
 ```
 
 ## Development Workflow
@@ -318,7 +315,7 @@ WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUST
 4. **Update deployment:**
 
    ```bash
-   kubectl set image deployment/workload-variant-autoscaler-controller-manager \
+   kubectl set image deployment/controller-manager \
      -n workload-variant-autoscaler-system \
      manager=localhost:5000/wva:dev
    ```
@@ -327,21 +324,16 @@ WVA_IMAGE_PULL_POLICY=IfNotPresent make deploy-wva-emulated-on-kind CREATE_CLUST
 
    ```bash
    kubectl logs -n workload-variant-autoscaler-system \
-     deployment/workload-variant-autoscaler-controller-manager -f
+     deployment/controller-manager -f
    ```
 
 ## Clean Up
 
-**Remove deployments:**
+**Remove simulator model service (if deployed):**
 
 ```bash
-make undeploy-wva-emulated-on-kind
-```
-
-**Remove deployments and delete the Kind cluster:**
-
-```bash
-make undeploy-wva-emulated-on-kind-delete-cluster
+kubectl delete -k config/samples/simulator/disaggregated/
+# or whichever target you applied (decode/ or prefill/)
 ```
 
 **Destroy cluster:**

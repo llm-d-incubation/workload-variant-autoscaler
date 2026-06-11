@@ -54,6 +54,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/coordinator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/scalefromzero"
@@ -232,7 +233,7 @@ func main() {
 		TLSOpts: webhookTLSOpts,
 	})
 
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
+	// Metrics endpoint is enabled in 'config/base/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
@@ -245,7 +246,7 @@ func main() {
 	if cfg.SecureMetrics() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
-		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
+		// can access the metrics endpoint. The RBAC are configured in 'config/base/rbac/kustomization.yaml'. More info:
 		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
@@ -255,9 +256,9 @@ func main() {
 	// this setup is not recommended for production.
 	//
 	// TODO(user): If you enable certManager, uncomment the following lines:
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
+	// - [METRICS-WITH-CERTS] at config/base/kustomization.yaml to generate and use certificates
 	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
+	// - [PROMETHEUS-WITH-CERTS] at config/base/monitoring/kustomization.yaml for TLS certification.
 	if len(cfg.MetricsCertPath()) > 0 {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metricsCertPath", cfg.MetricsCertPath(),
@@ -465,7 +466,7 @@ func main() {
 
 	// Register scale from zero engine loop with the manager. Only start when leader.
 	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		engine, err := scalefromzero.NewEngine(mgr.GetClient(), mgr.GetRESTMapper(), restConfig, ds, cfg)
+		engine, err := scalefromzero.NewEngine(mgr.GetClient(), mgr.GetEventRecorderFor("workload-variant-autoscaler-scalezero-engine"), mgr.GetRESTMapper(), restConfig, ds, cfg)
 		if err != nil {
 			return err
 		}
@@ -569,6 +570,30 @@ func main() {
 	if err = configMapReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create configmap controller")
 		os.Exit(1)
+	}
+
+	// Coordinator: cluster-wide leader-elected loop that dispatches a
+	// selected set of HPAs and ScaledObjects to registered plugins.
+	// Off by default; opt in via coordinator.enabled in the unified config.
+	if cfg.CoordinatorEnabled() {
+		coord, err := coordinator.New(mgr.GetClient(), nil, coordinator.Options{
+			Interval:    cfg.CoordinatorInterval(),
+			KEDAEnabled: kedaEnabled,
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to construct Coordinator")
+			os.Exit(1)
+		}
+		if err := mgr.Add(coord); err != nil {
+			setupLog.Error(err, "unable to add Coordinator to manager")
+			os.Exit(1)
+		}
+		setupLog.Info("Coordinator enabled",
+			"interval", cfg.CoordinatorInterval(),
+			"kedaEnabled", kedaEnabled,
+		)
+	} else {
+		setupLog.Info("Coordinator disabled (set coordinator.enabled=true to enable)")
 	}
 
 	if metricsCertWatcher != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/aggregation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
@@ -87,16 +88,14 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 	// Phase 2: Per-variant aggregation
 	variantCapacities := a.aggregateByVariant(replicaCapacities, input.ReplicaMetrics, input.VariantStates, input.ModelID, input.Namespace, satConfig.KvCacheThreshold)
 
-	// Phase 3: Model-level aggregation
-	var totalSupply, totalAnticipatedSupply, totalDemand float64
+	// Phase 3: Model-level aggregation via shared helpers (enforces linearity invariant).
+	totalSupply := aggregation.SumTotalSupply(variantCapacities)
+	totalAnticipatedSupply := aggregation.SumTotalAnticipatedSupply(variantCapacities)
+	totalDemand := aggregation.SumTotalDemand(variantCapacities)
+
+	// Track active roles for queue demand attribution.
 	activeRoles := make(map[string]bool)
 	for _, vc := range variantCapacities {
-		totalSupply += vc.TotalCapacity
-		totalDemand += vc.TotalDemand
-		// Anticipated supply includes pending replicas
-		anticipatedCapacity := float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
-		totalAnticipatedSupply += anticipatedCapacity
-		// Track active roles for queue demand attribution
 		role := vc.Role
 		if role == "" {
 			role = interfaces.RoleBoth
@@ -104,7 +103,7 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		activeRoles[role] = true
 	}
 
-	// Add scheduler queue demand (requests queued upstream in llm-d flow control)
+	// Add scheduler queue demand (requests queued upstream in llm-d flow control).
 	queueDemand := estimateSchedulerQueueDemand(input.SchedulerQueue, input.ReplicaMetrics, activeRoles)
 	totalDemand += queueDemand.total
 
@@ -113,38 +112,25 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input interfaces.Analy
 		utilization = totalDemand / totalSupply
 	}
 
-	// Phase 4: Scaling signals
-	var requiredCapacity, spareCapacity float64
-	if satConfig.ScaleUpThreshold > 0 {
-		requiredCapacity = totalDemand/satConfig.ScaleUpThreshold - totalAnticipatedSupply
-	}
-	if requiredCapacity < 0 {
-		requiredCapacity = 0
-	}
+	// Phase 4: Per-role aggregation (P/D disaggregation).
+	// RequiredCapacity and SpareCapacity are NOT computed here — the engine's
+	// universal threshold post-step writes them after Analyze() returns.
+	roleCapacities := a.aggregateByRole(variantCapacities, queueDemand.byRole)
 
-	if satConfig.ScaleDownBoundary > 0 {
-		spareCapacity = totalSupply - totalDemand/satConfig.ScaleDownBoundary
-	}
-	if spareCapacity < 0 {
-		spareCapacity = 0
-	}
-
-	// Phase 4b: Per-role aggregation (P/D disaggregation)
-	roleCapacities := a.aggregateByRole(variantCapacities, satConfig, queueDemand.byRole)
-
-	// Phase 5: Build result
+	// Phase 5: Build result. RequiredCapacity and SpareCapacity left zero;
+	// the engine post-step overwrites them using TotalDemand, TotalSupply,
+	// and TotalAnticipatedSupply with the resolved thresholds.
 	result := &interfaces.AnalyzerResult{
-		AnalyzerName:      a.Name(),
-		ModelID:           input.ModelID,
-		Namespace:         input.Namespace,
-		AnalyzedAt:        time.Now(),
-		VariantCapacities: variantCapacities,
-		TotalSupply:       totalSupply,
-		TotalDemand:       totalDemand,
-		Utilization:       utilization,
-		RequiredCapacity:  requiredCapacity,
-		SpareCapacity:     spareCapacity,
-		RoleCapacities:    roleCapacities,
+		AnalyzerName:           a.Name(),
+		ModelID:                input.ModelID,
+		Namespace:              input.Namespace,
+		AnalyzedAt:             time.Now(),
+		VariantCapacities:      variantCapacities,
+		TotalSupply:            totalSupply,
+		TotalDemand:            totalDemand,
+		TotalAnticipatedSupply: totalAnticipatedSupply,
+		Utilization:            utilization,
+		RoleCapacities:         roleCapacities,
 	}
 
 	return result, nil
@@ -416,16 +402,19 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 	return result
 }
 
-// aggregateByRole groups variant capacities by P/D role and computes per-role
-// scaling signals. Returns nil when no disaggregation is active (all variants
-// are role "both" or empty). The queueDemandByRole map adds scheduler queue
-// demand attributed to each role (nil when there's no queue demand).
+// aggregateByRole groups variant capacities by role and returns per-role
+// Total* aggregates for the engine post-step to compute RC/SC from.
+// Returns nil when no disaggregation is active (all variants are role "both"
+// or empty). The queueDemandByRole map adds scheduler queue demand attributed
+// to each role (nil when there's no queue demand).
+//
+// RequiredCapacity and SpareCapacity are left zero — the engine post-step
+// writes them after Analyze() returns using the universal threshold formula.
 func (a *SaturationAnalyzer) aggregateByRole(
 	variantCapacities []interfaces.VariantCapacity,
-	config *config.SaturationScalingConfig,
 	queueDemandByRole map[string]float64,
 ) map[string]interfaces.RoleCapacity {
-	// Check if any variant has a non-"both" role
+	// Check if any variant has a non-"both" role.
 	hasDisaggregation := false
 	for _, vc := range variantCapacities {
 		if vc.Role != "" && vc.Role != interfaces.RoleBoth {
@@ -437,60 +426,24 @@ func (a *SaturationAnalyzer) aggregateByRole(
 		return nil
 	}
 
-	// Group supply/demand by role
-	type roleAccum struct {
-		supply      float64
-		anticipated float64
-		demand      float64
-	}
-	roles := make(map[string]*roleAccum)
-	for _, vc := range variantCapacities {
-		role := vc.Role
-		if role == "" {
-			role = interfaces.RoleBoth
-		}
-		ra, ok := roles[role]
-		if !ok {
-			ra = &roleAccum{}
-			roles[role] = ra
-		}
-		ra.supply += vc.TotalCapacity
-		ra.anticipated += float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
-		ra.demand += vc.TotalDemand
-	}
+	// Aggregate supply/demand/anticipated per role via shared helpers.
+	totals := aggregation.AggregateByRole(variantCapacities)
 
-	// Add scheduler queue demand attributed to each role
+	// Add scheduler queue demand attributed to each role.
 	for role, qd := range queueDemandByRole {
-		ra, ok := roles[role]
-		if !ok {
-			// Queue demand for a role with no variants — skip
-			continue
+		if t, ok := totals[role]; ok {
+			t.TotalDemand += qd
+			totals[role] = t
 		}
-		ra.demand += qd
 	}
 
-	// Compute per-role scaling signals
-	result := make(map[string]interfaces.RoleCapacity, len(roles))
-	for role, ra := range roles {
-		var required, spare float64
-		if config.ScaleUpThreshold > 0 {
-			required = ra.demand/config.ScaleUpThreshold - ra.anticipated
-		}
-		if required < 0 {
-			required = 0
-		}
-		if config.ScaleDownBoundary > 0 {
-			spare = ra.supply - ra.demand/config.ScaleDownBoundary
-		}
-		if spare < 0 {
-			spare = 0
-		}
+	result := make(map[string]interfaces.RoleCapacity, len(totals))
+	for role, t := range totals {
 		result[role] = interfaces.RoleCapacity{
-			Role:             role,
-			TotalSupply:      ra.supply,
-			TotalDemand:      ra.demand,
-			RequiredCapacity: required,
-			SpareCapacity:    spare,
+			Role:                   role,
+			TotalSupply:            t.TotalSupply,
+			TotalDemand:            t.TotalDemand,
+			TotalAnticipatedSupply: t.TotalAnticipatedSupply,
 		}
 	}
 	return result

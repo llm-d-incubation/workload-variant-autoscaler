@@ -60,14 +60,13 @@ deploy_wva_controller() {
     log_info "Deploying Workload-Variant-Autoscaler..."
     log_info "Using image: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
 
-    NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-false}
-
-    # Select the Kustomize overlay for this environment
+    # Select the Kustomize overlay by install scope. OpenShift installs use the
+    # namespace-scoped overlay; Kubernetes installs use the cluster-scoped overlay.
     local kustomize_overlay
     if [ "$ENVIRONMENT" = "openshift" ]; then
-        kustomize_overlay="$(cd "$WVA_PROJECT/config/openshift" && pwd)"
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/namespace-scoped/openshift" && pwd)"
     else
-        kustomize_overlay="$(cd "$WVA_PROJECT/config/default" && pwd)"
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/cluster-scoped/kubernetes" && pwd)"
     fi
 
     # Build a throw-away overlay that pins the image without modifying tracked files.
@@ -75,12 +74,14 @@ deploy_wva_controller() {
     # path — Kustomize rejects absolute paths in resources.
     local tmp_overlay
     tmp_overlay=$(mktemp -d)
+    trap 'rm -rf "$tmp_overlay"' EXIT
+
     ln -s "$kustomize_overlay" "$tmp_overlay/base"
 
-    # config/manager/kustomization.yaml transforms the base image from "controller:latest"
+    # config/base/manager/kustomization.yaml transforms the base image name "controller"
     # to the published release image. The overlay must match the POST-transform name.
     local base_image
-    base_image=$(grep 'newName:' "$WVA_PROJECT/config/manager/kustomization.yaml" | awk '{print $2}' | head -1)
+    base_image=$(grep 'newName:' "$WVA_PROJECT/config/base/manager/kustomization.yaml" | awk '{print $2}' | head -1)
     cat > "$tmp_overlay/kustomization.yaml" <<EOF
 namespace: $WVA_NS
 resources:
@@ -91,39 +92,44 @@ images:
   newTag: "$WVA_IMAGE_TAG"
 EOF
 
-    # When namespace-scoped, restrict the controller to its own namespace only.
-    # The patch itself lives in a tracked file; symlink it into the temp overlay
-    # so the kustomization.yaml can reference it with a relative path.
-    if [ "$NAMESPACE_SCOPED" = "true" ]; then
-        ln -s "$WVA_PROJECT/config/manager/namespace-scoped-patch.yaml" "$tmp_overlay/namespace-scoped-patch.yaml"
-        cat >> "$tmp_overlay/kustomization.yaml" <<'PATCH'
-patches:
-- target:
-    kind: Deployment
-    name: controller-manager
-  path: ./namespace-scoped-patch.yaml
-PATCH
+    # On OpenShift shared clusters, all ClusterRoleBindings share the same fixed
+    # names. Concurrent deployments overwrite each other's subject namespace.
+    # Append name-rename patches so each namespace gets its own uniquely named CRBs.
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        local ns_hash
+        ns_hash="$(printf '%s' "${WVA_NS}" | sha256sum | cut -c1-8)"
+        printf 'patches:\n' >> "$tmp_overlay/kustomization.yaml"
+        for crb in \
+            wva-epp-metrics-reader-role-binding \
+            wva-manager-cluster-monitoring-view \
+            wva-manager-rolebinding \
+            wva-metrics-auth-rolebinding \
+            wva-metrics-reader-rolebinding \
+            wva-prometheus-cluster-monitoring-view; do
+            cat >> "$tmp_overlay/kustomization.yaml" <<EOF
+- patch: |-
+    - op: replace
+      path: /metadata/name
+      value: ${crb}-${ns_hash}
+  target:
+    kind: ClusterRoleBinding
+    name: ${crb}
+EOF
+        done
     fi
 
-    log_info "Applying Kustomize overlay: $kustomize_overlay (namespace-scoped=$NAMESPACE_SCOPED)"
-    kubectl apply -k "$tmp_overlay"
-    rm -rf "$tmp_overlay"
+    log_info "Installing WVA CRDs..."
+    kubectl apply -k "$WVA_PROJECT/config/base/crd/"
 
-    # On shared clusters (e.g. OpenShift CI), concurrent runs produce the same
-    # ClusterRoleBinding name (workload-variant-autoscaler-manager-rolebinding) because
-    # Kustomize uses a fixed namePrefix. Each apply overwrites the subject namespace,
-    # breaking any other run that applied first. Create a per-deployment binding named
-    # after WVA_NS so each run has its own authoritative binding that survives concurrent
-    # applies.
-    log_info "Creating per-deployment ClusterRoleBindings for SA in $WVA_NS (shared cluster isolation)"
-    kubectl create clusterrolebinding "workload-variant-autoscaler-manager-${WVA_NS}" \
-        --clusterrole=workload-variant-autoscaler-manager-role \
-        --serviceaccount="${WVA_NS}:workload-variant-autoscaler-controller-manager" \
-        --dry-run=client -o yaml | kubectl apply -f -
-    kubectl create clusterrolebinding "workload-variant-autoscaler-cluster-monitoring-view-${WVA_NS}" \
-        --clusterrole=cluster-monitoring-view \
-        --serviceaccount="${WVA_NS}:workload-variant-autoscaler-controller-manager" \
-        --dry-run=client -o yaml | kubectl apply -f -
+    log_info "Applying Kustomize overlay: $kustomize_overlay"
+    kubectl apply -k "$tmp_overlay"
+
+    if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
+        log_info "Enabling scale-to-zero in WVA ConfigMap (ENABLE_SCALE_TO_ZERO=true)..."
+        kubectl patch configmap wva-manager-config \
+            -n "$WVA_NS" --type=merge \
+            -p '{"data":{"WVA_SCALE_TO_ZERO":"true"}}'
+    fi
 
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
@@ -193,6 +199,10 @@ delete_namespaces_kube_like() {
 #   - KUBE_LIKE_VALUES_DEV_IF_PRESENT=true|false (defaults false)
 deploy_wva_prerequisites_kube_like() {
     log_info "Deploying Workload-Variant-Autoscaler prerequisites for Kubernetes..."
+
+    # InferencePool CRDs must exist before the controller starts or its initial
+    # watch fails. install-epp.sh installs them again later (idempotent).
+    install_inference_crds
 
     # Extract Prometheus CA certificate (used by the Prometheus Adapter scaler backend).
     log_info "Extracting Prometheus TLS certificate"

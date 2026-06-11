@@ -14,30 +14,44 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
+// withSatEntryV2 adds a single-saturation AnalyzerResults to req from r.
+// Mirrors the helper in cost_aware_optimizer_test.go for use in the saturation package.
+func withSatEntryV2(r *interfaces.AnalyzerResult, req pipeline.ModelScalingRequest) pipeline.ModelScalingRequest {
+	if r != nil {
+		req.AnalyzerResults = []pipeline.NamedAnalyzerResult{{
+			Name:      interfaces.SaturationAnalyzerName,
+			Result:    r,
+			Remaining: r.RequiredCapacity,
+			Spare:     r.SpareCapacity,
+		}}
+	}
+	return req
+}
+
 var _ = Describe("V2 Engine Integration", func() {
 
 	Context("CostAwareOptimizer via engine path", func() {
 
 		It("should scale up cheapest variant by cost-efficiency", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 5000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "variant-cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+					{VariantName: "variant-expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
+				},
+			}
 			requests := []pipeline.ModelScalingRequest{
-				{
+				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					Result: &interfaces.AnalyzerResult{
-						ModelID:          "model-1",
-						Namespace:        "default",
-						RequiredCapacity: 5000,
-						VariantCapacities: []interfaces.VariantCapacity{
-							{VariantName: "variant-cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
-							{VariantName: "variant-expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
-						},
-					},
 					VariantStates: []interfaces.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 2},
 						{VariantName: "variant-expensive", CurrentReplicas: 1},
 					},
-				},
+				}),
 			}
 
 			decisions := optimizer.Optimize(context.Background(), requests, nil)
@@ -51,24 +65,24 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should scale down most expensive variant", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
+			r := &interfaces.AnalyzerResult{
+				ModelID:       "model-1",
+				Namespace:     "default",
+				SpareCapacity: 25000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
+					{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
+				},
+			}
 			requests := []pipeline.ModelScalingRequest{
-				{
+				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					Result: &interfaces.AnalyzerResult{
-						ModelID:       "model-1",
-						Namespace:     "default",
-						SpareCapacity: 25000,
-						VariantCapacities: []interfaces.VariantCapacity{
-							{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
-							{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
-						},
-					},
 					VariantStates: []interfaces.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 3},
 						{VariantName: "variant-expensive", CurrentReplicas: 2},
 					},
-				},
+				}),
 			}
 
 			decisions := optimizer.Optimize(context.Background(), requests, nil)
@@ -80,24 +94,24 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should protect cheapest variant at 1 during scale-down", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
+			r := &interfaces.AnalyzerResult{
+				ModelID:       "model-1",
+				Namespace:     "default",
+				SpareCapacity: 30000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
+					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
 			requests := []pipeline.ModelScalingRequest{
-				{
+				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					Result: &interfaces.AnalyzerResult{
-						ModelID:       "model-1",
-						Namespace:     "default",
-						SpareCapacity: 30000,
-						VariantCapacities: []interfaces.VariantCapacity{
-							{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
-							{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
-						},
-					},
 					VariantStates: []interfaces.VariantReplicaState{
 						{VariantName: "variant-expensive", CurrentReplicas: 1},
 						{VariantName: "variant-cheap", CurrentReplicas: 1},
 					},
-				},
+				}),
 			}
 
 			decisions := optimizer.Optimize(context.Background(), requests, nil)
@@ -109,24 +123,24 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should not skip variants with pending replicas", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 5000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
+					{VariantName: "variant-mid", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
+				},
+			}
 			requests := []pipeline.ModelScalingRequest{
-				{
+				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					Result: &interfaces.AnalyzerResult{
-						ModelID:          "model-1",
-						Namespace:        "default",
-						RequiredCapacity: 5000,
-						VariantCapacities: []interfaces.VariantCapacity{
-							{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
-							{VariantName: "variant-mid", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
-						},
-					},
 					VariantStates: []interfaces.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 2, PendingReplicas: 1},
 						{VariantName: "variant-mid", CurrentReplicas: 1},
 					},
-				},
+				}),
 			}
 
 			decisions := optimizer.Optimize(context.Background(), requests, nil)

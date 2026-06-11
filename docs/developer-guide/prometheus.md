@@ -14,7 +14,7 @@ Set Prometheus configuration via environment variables in the WVA deployment:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: workload-variant-autoscaler-controller-manager
+  name: controller-manager
 spec:
   template:
     spec:
@@ -69,7 +69,7 @@ Alternatively, configure Prometheus via the controller's ConfigMap:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: wva-variantautoscaling-config
+  name: wva-manager-config
   namespace: workload-variant-autoscaler-system
 data:
   PROMETHEUS_BASE_URL: "https://prometheus-k8s.monitoring.svc.cluster.local:9091"

@@ -103,7 +103,7 @@ export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (bat
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 ```
 
-**Deployment flags** (`deploy/install.sh`) — llm-d is **`deploy/install-llmd-infra.sh`** after base infra:
+**Deployment flags** (`deploy/install.sh`) — llm-d is deployed separately via `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline):
 
 ```bash
 export DEPLOY_WVA=true                    # Deploy WVA controller
@@ -134,7 +134,7 @@ make deploy-wva-on-openshift
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-make deploy-wva-on-openshift   # install.sh + install-llmd-infra.sh
+make deploy-wva-on-openshift   # install.sh (WVA + monitoring + scaler + LWS)
 ```
 
 ### Example 4: Deploy Only WVA (llm-d already deployed)
@@ -345,7 +345,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-optimi
 
 ```bash
 kubectl logs -n workload-variant-autoscaler-system \
-  deployment/workload-variant-autoscaler-controller-manager \
+  deployment/controller-manager \
   -f
 ```
 

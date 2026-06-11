@@ -28,6 +28,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -35,7 +36,6 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -75,7 +75,7 @@ var _ = Describe("Saturation Engine", func() {
 
 	Context("When handling multiple VariantAutoscalings", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 
 		BeforeEach(func() {
@@ -216,7 +216,8 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -278,7 +279,8 @@ var _ = Describe("Saturation Engine", func() {
 			sourceRegistry.Register("prometheus", source.NewNoOpSource()) // nolint:errcheck
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
@@ -304,7 +306,7 @@ var _ = Describe("Saturation Engine", func() {
 
 	Context("Source Infrastructure Optimization Tests", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 		var sourceRegistry *source.SourceRegistry
 		var mockPromAPI *testutils.MockPromAPI
@@ -454,7 +456,8 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -575,7 +578,7 @@ var _ = Describe("Saturation Engine", func() {
 			By("Running optimize() with EnableLimiter=false")
 			err := engine.optimize(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(engine.optimizer.Name()).To(Equal(pipeline.CostAwareOptimizerName),
+			Expect(engine.optimizer.Name()).To(Equal("cost-aware"),
 				"Expected CostAwareOptimizer when EnableLimiter=false")
 
 			By("Updating config to EnableLimiter=true")
@@ -589,7 +592,7 @@ var _ = Describe("Saturation Engine", func() {
 			By("Running optimize() with EnableLimiter=true")
 			err = engine.optimize(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(engine.optimizer.Name()).To(Equal(pipeline.GreedyByScoreOptimizerName),
+			Expect(engine.optimizer.Name()).To(Equal("greedy-by-score"),
 				"Expected GreedyByScoreOptimizer when EnableLimiter=true")
 
 			By("Updating config back to EnableLimiter=false")
@@ -603,7 +606,7 @@ var _ = Describe("Saturation Engine", func() {
 			By("Running optimize() with EnableLimiter=false again")
 			err = engine.optimize(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(engine.optimizer.Name()).To(Equal(pipeline.CostAwareOptimizerName),
+			Expect(engine.optimizer.Name()).To(Equal("cost-aware"),
 				"Expected CostAwareOptimizer when EnableLimiter=false (second toggle)")
 		})
 	})

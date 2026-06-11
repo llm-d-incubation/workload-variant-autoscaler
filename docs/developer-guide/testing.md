@@ -160,21 +160,19 @@ go test ./test/e2e/... -run TestDoesNotExist
 
 ### Infra-Only Setup (Required Before Running Tests)
 
-Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; they create VariantAutoscaling resources, HPAs, and model workloads themselves. Use **`make deploy-e2e-infra`** (runs `deploy/install.sh` then `deploy/install-llmd-infra.sh`) or invoke those scripts with the same environment variables the Makefile sets.
+Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; they create VariantAutoscaling resources, HPAs, and model workloads themselves. Use **`make deploy-e2e-infra`** (runs `deploy/install.sh` then `deploy/install-epp.sh`) or invoke those scripts with the same environment variables the Makefile sets.
 
 This deploys:
-- WVA controller
-- llm-d gateway/EPP (and related infra); `make deploy-e2e-infra` skips the default chart ModelService release (`LLMD_SKIP_DEFAULT_MODELSERVICE=true`)
+- WVA controller (via Kustomize)
+- llm-d EPP (GAIE standalone chart) via `deploy/install-epp.sh`
 - Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
-- **No** chart VariantAutoscaling or HPA (tests create these)
-- On **emulated** clusters, **`deploy/lib/infra_llmd.sh`** applies ModelService post-deploy cleanup (drop prefill; drop decode when **`LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`**, the default) after helmfile deploy — not from **`deploy/kind-emulator/install.sh`**.
+- **No** VariantAutoscaling or HPA (tests create these)
 
-When `LLMD_PATCH_EPP_FLOW_CONTROL=true` (set by `make deploy-e2e-infra`) or `ENABLE_SCALE_TO_ZERO=true`, **`install-llmd-infra.sh`** enables **GIE queuing** on the EPP (flowControl feature gate + image). For **e2e**, the **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts. For non-e2e scale-to-zero (`ENABLE_SCALE_TO_ZERO=true` without `LLMD_SKIP_INFERENCE_OBJECTIVE`), `install-llmd-infra.sh` can still apply `deploy/inference-objective-e2e.yaml`. Queuing helps populate `inference_extension_flow_control_queue_size` when requests hit the gateway.
+When `ENABLE_SCALE_TO_ZERO=true` (set by `make deploy-e2e-infra` when `SCALE_TO_ZERO_ENABLED=true`), **`install-epp.sh`** enables the **flowControl feature gate** on the EPP so it exposes `inference_extension_flow_control_queue_size`. The **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts.
 
 **Install script tuning (optional, same variables as `deploy/install.sh`):**
 
 - **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.
-- **`E2E_DEPLOY_WAIT_TIMEOUT`**: When `LLMD_WAIT_FOR_ESSENTIAL_LLM_D_ONLY=true` (as in `make deploy-e2e-infra`), caps the `kubectl wait` for the EPP and inference-gateway deployments (default **`120s`**). Raise it if image pulls rollouts routinely exceed that window.
 
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
@@ -227,7 +225,7 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
 | `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
 
-Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile applies a follow-up `helm upgrade` when set) — see **Install script tuning** above.
+Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile patches the `wva-saturation-scaling-config` ConfigMap when set) — see **Install script tuning** above.
 
 For running multiple test runs in parallel, use [multi-controller isolation](../user-guide/multi-controller-isolation.md) (`CONTROLLER_INSTANCE`).
 
@@ -468,11 +466,11 @@ go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="full && !flaky" -timeout 
 # For Kind E2E tests (default cluster name: kind-wva-gpu-cluster or from CLUSTER_NAME)
 export KUBECONFIG=~/.kube/config   # or path from kind get kubeconfig
 kubectl get pods -A
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 
 # For OpenShift E2E tests
 oc get pods -A
-oc logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+oc logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Keep Cluster Alive After Failure
@@ -501,7 +499,7 @@ make test-e2e-smoke-with-setup
 ```bash
 kubectl get events -A --sort-by='.lastTimestamp'
 kubectl describe va -n <namespace>
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Metrics Not Available

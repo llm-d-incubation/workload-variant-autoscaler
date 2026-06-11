@@ -121,7 +121,7 @@ func DeploymentPredicate() predicate.Predicate {
 - **Generic**: ❌ Blocked
 
 **Watched ConfigMaps:**
-- `wva-variantautoscaling-config` (default name)
+- `wva-manager-config` (default name)
   - Contains global optimization configuration (e.g., `GLOBAL_OPT_INTERVAL`)
 - `wva-saturation-scaling-config` (default name)
   - Contains per-accelerator saturation scaling thresholds
@@ -154,7 +154,7 @@ func ConfigMapPredicate(namespaceChecker func(string) bool) predicate.Predicate 
 - **Generic**: ❌ Blocked
 
 **Purpose:**
-The controller watches its own ServiceMonitor (`workload-variant-autoscaler-controller-manager-metrics-monitor`) for observability purposes. When the ServiceMonitor is deleted:
+The controller watches its own ServiceMonitor (`wva-controller-manager-metrics-monitor`) for observability purposes. When the ServiceMonitor is deleted:
 
 1. Prometheus stops scraping controller metrics
 2. External autoscalers (HPA/KEDA) can't access optimized replica metrics
@@ -354,7 +354,7 @@ kubectl get va llama-8b-autoscaler -o jsonpath='{.spec.scaleTargetRef.name}'
 kubectl get deployment llama-8b
 
 # Check controller logs for deployment events
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager | grep "Deployment created"
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager | grep "Deployment created"
 ```
 
 **Solution**: Ensure VA's `scaleTargetRef` or inferred target matches the deployment name.
@@ -418,7 +418,7 @@ kubectl patch podmonitor <name> -n <monitoring-namespace> \
 **Diagnosis**:
 ```bash
 # Check if ServiceMonitor exists
-kubectl get servicemonitor -n workload-variant-autoscaler-system workload-variant-autoscaler-controller-manager-metrics-monitor
+kubectl get servicemonitor -n workload-variant-autoscaler-system wva-controller-manager-metrics-monitor
 
 # Check controller events
 kubectl get events -n workload-variant-autoscaler-system --field-selector involvedObject.kind=ServiceMonitor

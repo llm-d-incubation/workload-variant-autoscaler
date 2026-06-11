@@ -38,7 +38,11 @@ type AnalyzerInput struct {
 
 	// SchedulerQueue holds model-level queue metrics from the llm-d inference
 	// scheduler flow control layer. These represent requests queued upstream
-	// before reaching any vLLM pod and contribute to demand estimation.
+	// of any pod and are not yet attributed to a specific variant or role.
+	// Any analyzer with a demand model may convert this into per-analyzer
+	// demand using its own unit (e.g., kv-tokens for saturation_v2,
+	// tokens/sec for a future throughput analyzer). Demand attribution to
+	// roles or variants is each analyzer's choice.
 	// Nil when flow control is disabled or metrics are unavailable.
 	SchedulerQueue *SchedulerQueueMetrics
 }
@@ -66,11 +70,16 @@ type SchedulerQueueMetrics struct {
 
 // RoleCapacity holds per-role capacity aggregation for P/D disaggregated models.
 type RoleCapacity struct {
-	Role             string
-	TotalSupply      float64
-	TotalDemand      float64
-	RequiredCapacity float64
-	SpareCapacity    float64
+	Role        string
+	TotalSupply float64
+	TotalDemand float64
+	// TotalAnticipatedSupply is the per-role anticipated supply used by the
+	// engine's universal threshold post-step for the RC formula. Analyzer-
+	// supplied; the engine reads it as-is (zero is a literal value, not a
+	// sentinel). Use aggregation.AggregateByRole to populate this correctly.
+	TotalAnticipatedSupply float64
+	RequiredCapacity       float64
+	SpareCapacity          float64
 }
 
 // AnalyzerResult is the common output produced by all analyzers.
@@ -91,15 +100,22 @@ type AnalyzerResult struct {
 	TotalDemand float64 // Sum of all variant TotalDemand
 	Utilization float64 // TotalDemand / TotalSupply (0.0-1.0)
 
-	// Scaling signals — the core output consumed by the engine.
-	// These are the primary inputs for the engine's signal combination logic.
-	RequiredCapacity float64 // >0 means scale-up needed (demand/threshold - supply)
-	SpareCapacity    float64 // >0 means scale-down possible (supply - demand/boundary)
+	// TotalAnticipatedSupply is the anticipated supply the engine's universal
+	// threshold post-step subtracts from TotalDemand/scaleUp to compute RC.
+	// Analyzer-supplied; the engine reads it as-is (zero is a literal value,
+	// not a sentinel). Saturation V2 sets this to
+	// Σ_v (ReplicaCount + PendingReplicas) × PerReplicaCapacity so pending
+	// replicas count against demand, preventing double-scaling. Use
+	// aggregation.SumTotalAnticipatedSupply to populate this correctly.
+	TotalAnticipatedSupply float64
 
-	// Score is the composite priority score for this model.
-	// Computed as: priority * sum(requiredCapacity_i * analyzerScore_i)
-	// Used by GreedyByScoreOptimizer for fair-share ordering.
-	Score float64
+	// Scaling signals — written by the engine post-step; read by the optimizer.
+	// The engine overwrites both fields after each analyzer's Analyze() returns:
+	//   RC = max(0, TotalDemand/scaleUp − TotalAnticipatedSupply)
+	//   SC = max(0, TotalSupply    − TotalDemand/scaleDown)
+	// Analyzer-written values are discarded; analyzers should leave these zero.
+	RequiredCapacity float64 // >0 means scale-up needed
+	SpareCapacity    float64 // >0 means scale-down possible
 
 	// RoleCapacities holds per-role capacity aggregation for P/D disaggregated models.
 	// nil when no disaggregation is active (all variants are role "both").

@@ -3,8 +3,8 @@
 # Workload-Variant-Autoscaler infrastructure bootstrap: optional WVA controller,
 # Prometheus monitoring stack, and scaler backend (KEDA or Prometheus Adapter).
 #
-# For llm-d (gateway, EPP, ModelService, HF secret, WVA poolGroup alignment), run
-# deploy/install-llmd-infra.sh after this script when you need that stack.
+# For llm-d (gateway, EPP, ModelService), see the llm-d project guides at https://github.com/llm-d/llm-d.
+# For EPP setup (all environments), run deploy/install-epp.sh after this script.
 #
 # Prerequisites:
 # - kubectl and helm installed
@@ -38,7 +38,6 @@ SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-"false"}
 WVA_LOG_LEVEL=${WVA_LOG_LEVEL:-"info"}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
-NAMESPACE_SCOPED=${NAMESPACE_SCOPED:-false}
 
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 
@@ -98,6 +97,8 @@ source "$DEPLOY_LIB_DIR/infra_scaler_backend.sh"
 source "$DEPLOY_LIB_DIR/scaler_runtime.sh"
 # shellcheck source=lib/infra_wva.sh
 source "$DEPLOY_LIB_DIR/infra_wva.sh"
+# shellcheck source=lib/infra_epp.sh
+source "$DEPLOY_LIB_DIR/infra_epp.sh"
 # shellcheck source=lib/infra_monitoring.sh
 source "$DEPLOY_LIB_DIR/infra_monitoring.sh"
 # shellcheck source=lib/cleanup.sh

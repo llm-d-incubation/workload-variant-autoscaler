@@ -18,7 +18,7 @@ import (
 
 // V2 smoke calibration via the simulator's --fake-metrics flag.
 //
-// kv-cache-usage = 0.4 is the operating point that deterministically exercises
+// kv-cache-usage = 0.3 is the operating point that deterministically exercises
 // both arcs of the V2 cost-aware optimizer with the suite's chosen thresholds:
 //
 //   - At 1 replica with scaleUpThreshold = 0.30, replicaDemand crosses the
@@ -38,7 +38,7 @@ import (
 // --fake-metrics format:
 //
 //	https://github.com/llm-d/llm-d-inference-sim/blob/main/docs/configuration.md
-const v2SmokeFakeMetricsJSON = `{"kv-cache-usage":0.4,"running-requests":1,"waiting-requests":0}`
+const v2SmokeFakeMetricsJSON = `{"kv-cache-usage":0.3,"running-requests":1,"waiting-requests":0}`
 
 // V2 saturation config knobs. The kvCacheThreshold / queueLength* /
 // *SpareTrigger fields are V1-specific and have no effect on the V2
@@ -225,7 +225,7 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 	// recommends a smaller target. Uses canonical-ordering thresholds
 	// (scaleUpThreshold > scaleDownBoundary):
 	//
-	//   scaleUpThreshold  = 0.95 (high, so kv=0.4 demand does not trigger scale-up)
+	//   scaleUpThreshold  = 0.95 (high, so kv=0.3 demand does not trigger scale-up)
 	//   scaleDownBoundary = 0.85 (chosen so spareCapacity at 2 replicas exceeds
 	//                             one full per-replica capacity — see calibration
 	//                             comment on v2SmokeFakeMetricsJSON for the math)

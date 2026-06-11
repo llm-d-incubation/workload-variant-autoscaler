@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 
 	vav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	poolreconciler "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
@@ -153,10 +154,12 @@ func TestSingleInactiveVariant(t *testing.T) {
 
 			// (2) Create scalefromzero engine loop
 			mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+			fakeRecorder := record.NewFakeRecorder(100)
 
 			engine := &Engine{
 				client:         fakeClient,
 				executor:       nil,
+				recorder:       fakeRecorder,
 				Datastore:      ds,
 				DynamicClient:  fakeDynamicClient,
 				Mapper:         mapper,
@@ -235,10 +238,12 @@ func TestMultipleInactiveVariants(t *testing.T) {
 	}
 
 	mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+	fakeRecorder := record.NewFakeRecorder(100)
 
 	engine := &Engine{
 		client:         fakeClient,
 		executor:       nil,
+		recorder:       fakeRecorder,
 		Datastore:      ds,
 		DynamicClient:  fakeDynamicClient,
 		Mapper:         mapper,
@@ -333,10 +338,12 @@ func TestEmptyInactiveVariants(t *testing.T) {
 	}
 
 	mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+	fakeRecorder := record.NewFakeRecorder(100)
 
 	engine := &Engine{
 		client:         fakeClient,
 		executor:       nil,
+		recorder:       fakeRecorder,
 		Datastore:      ds,
 		DynamicClient:  fakeDynamicClient,
 		Mapper:         mapper,
@@ -464,10 +471,12 @@ func TestNamespacedMetricsSourceLookup(t *testing.T) {
 			}
 
 			mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+			fakeRecorder := record.NewFakeRecorder(100)
 
 			engine := &Engine{
 				client:         fakeClient,
 				executor:       nil,
+				recorder:       fakeRecorder,
 				Datastore:      ds,
 				DynamicClient:  fakeDynamicClient,
 				Mapper:         mapper,

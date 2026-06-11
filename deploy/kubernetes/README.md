@@ -102,13 +102,12 @@ export ACCELERATOR_TYPE="H100"              # GPU type
 export WVA_IMAGE_TAG="latest"               # WVA version
 # HPA stabilization: configure on the HPA resource directly, not install.sh
 
-# Performance tuning (optional; passed to install-llmd-infra / ModelService)
+# Performance tuning (optional; set in llm-d ModelService manifest)
 export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
 export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
-export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway (for install-llmd-infra.sh)
 ```
 
-**Deployment flags** (`deploy/install.sh`) — VA/HPA are managed separately; llm-d is **`deploy/install-llmd-infra.sh`**:
+**Deployment flags** (`deploy/install.sh`) — VA/HPA are managed separately; llm-d is deployed via `deploy/install-epp.sh` or the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline):
 
 ```bash
 export DEPLOY_PROMETHEUS=true         # Deploy kube-prometheus-stack
@@ -142,7 +141,7 @@ make deploy-wva-on-k8s
 
 ```bash
 export HF_TOKEN="hf_xxxxx"
-make deploy-wva-on-k8s   # install.sh + install-llmd-infra.sh
+make deploy-wva-on-k8s   # install.sh (WVA + monitoring + scaler + LWS)
 ```
 
 ### Example 4: Deploy only WVA + Prometheus (llm-d already deployed)
@@ -548,7 +547,7 @@ helm uninstall kube-prometheus-stack -n workload-variant-autoscaler-monitoring
 
 # Delete WVA
 cd /path/to/workload-variant-autoscaler
-kubectl delete -k config/default
+kubectl delete -k config/overlays/cluster-scoped/kubernetes
 
 # Delete namespaces
 kubectl delete namespace llm-d-optimized-baseline
@@ -642,7 +641,7 @@ make deploy-wva-on-k8s
 
 ```bash
 # Enable debug logging in WVA
-kubectl set env deployment/workload-variant-autoscaler-controller-manager \
+kubectl set env deployment/controller-manager \
   LOG_LEVEL=debug \
   -n workload-variant-autoscaler-system
 ```
@@ -652,7 +651,7 @@ kubectl set env deployment/workload-variant-autoscaler-controller-manager \
 ```bash
 export IMG="ghcr.io/yourorg/llm-d-workload-variant-autoscaler:custom-tag"
 export DEPLOY_PROMETHEUS=false
-make deploy-wva-on-k8s   # base infra only; skip install-llmd-infra if you manage llm-d separately
+make deploy-wva-on-k8s   # WVA + monitoring + scaler + LWS; llm-d is managed separately
 ```
 
 ## Performance Tuning
@@ -661,13 +660,13 @@ make deploy-wva-on-k8s   # base infra only; skip install-llmd-infra if you manag
 
 ```bash
 # Change how often WVA runs optimization (default: 60s)
-kubectl patch configmap workload-variant-autoscaler-variantautoscaling-config \
+kubectl patch configmap wva-manager-config \
   -n workload-variant-autoscaler-system \
   --type merge \
   -p '{"data":{"GLOBAL_OPT_INTERVAL":"30s"}}'
 
 # Restart WVA to apply
-kubectl rollout restart deployment workload-variant-autoscaler-controller-manager \
+kubectl rollout restart deployment controller-manager \
   -n workload-variant-autoscaler-system
 ```
 

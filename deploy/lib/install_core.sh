@@ -4,7 +4,7 @@
 # Requires vars: ENVIRONMENT, SCRIPT_DIR, SKIP_CHECKS, deployment toggles.
 # Requires funcs sourced by install.sh: parse_args(), check_prerequisites(),
 # set_tls_verification(), set_wva_logging_level(), create_namespaces(), deploy_*(), verify_deployment(), print_summary().
-# llm-d install is deploy/install-llmd-infra.sh (not sourced here).
+# llm-d install: see llm-d project guides or deploy/install-epp.sh for kind EPP setup.
 #
 
 main() {
@@ -77,16 +77,12 @@ main() {
     deploy_monitoring_stack
     deploy_optional_benchmark_grafana
 
-    # llm-d (gateway, EPP, ModelService, clone/helmfile, emulated ModelService cleanup) is not part of
-    # install.sh — run deploy/install-llmd-infra.sh after this script when you need that stack; see
-    # deploy/install.sh header and deploy/README.md. GPU discovery for llm-d lives there too.
-
     # Deploy WVA prerequisites first (environment-specific).
     if [ "$DEPLOY_WVA" = "true" ]; then
         deploy_wva_prerequisites
     fi
 
-    # Deploy WVA controller (autoscaler + chart); InferencePool CRDs and llm-d workloads follow install-llmd-infra.sh.
+    # Deploy WVA controller via Kustomize.
     if [ "$DEPLOY_WVA" = "true" ]; then
         deploy_wva_controller
     else

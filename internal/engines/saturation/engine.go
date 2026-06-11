@@ -18,11 +18,13 @@ package saturation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -51,6 +53,14 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
+
+// analyzerEntry binds a registered analyzer to its name. The engine stores
+// these in registration order so runAnalyzersAndScore iterates analyzers
+// deterministically.
+type analyzerEntry struct {
+	name     string
+	analyzer interfaces.Analyzer
+}
 
 // v1Analyzer is the minimal surface of *saturation.Analyzer that optimizeV1
 // depends on. Defined here so tests can substitute a stub via Engine's
@@ -116,8 +126,14 @@ type Engine struct {
 	// (see utils.ActiveVariantAutoscaling). Required.
 	ds datastore.Datastore
 
+	// Recorder - use wrapper function recordEvent to limit number of events per va in an optimization cycle
 	Recorder record.EventRecorder
-	Config   *config.Config // Unified configuration (injected from main.go)
+
+	// vaEventTracker tracks whether a K8S event has been issued for a variant in an optimization cycle.
+	// Key is namespace/name from utils.GetNamespacedKey.
+	vaEventTracker map[string]bool
+
+	Config *config.Config // Unified configuration (injected from main.go)
 
 	// ReplicaMetricsCollector is the collector for replica metrics using the source infrastructure
 	ReplicaMetricsCollector *collector.ReplicaMetricsCollector
@@ -133,6 +149,7 @@ type Engine struct {
 	metricsRegistry *source.SourceRegistry
 
 	// saturationV2Analyzer is the V2 token-based saturation analyzer (initialized once).
+	// Also pre-registered in analyzers under interfaces.SaturationAnalyzerName.
 	saturationV2Analyzer *saturation_v2.SaturationAnalyzer
 
 	// queueingModelAnalyzer is the queueing model-based analyzer (initialized once).
@@ -141,6 +158,26 @@ type Engine struct {
 
 	// capacityStore is shared with the V2 analyzer for caching capacity knowledge.
 	capacityStore *saturation_v2.CapacityKnowledgeStore
+
+	// analyzers is the engine's analyzer registry, mutated only during setup
+	// (NewEngine + RegisterAnalyzer). After StartOptimizeLoop it is frozen —
+	// further RegisterAnalyzer calls return an error. The optimize goroutine reads
+	// analyzersSnapshot, never analyzers, so iteration is race-free without
+	// runtime locking.
+	analyzers []analyzerEntry
+
+	// analyzersSnapshot is the frozen, registration-ordered view that
+	// runAnalyzersAndScore iterates. Built from analyzers in StartOptimizeLoop
+	// before the goroutine launches. Saturation always runs and drives scaling
+	// decisions; other registered analyzers are invoked but their results are
+	// not consumed yet — combine and per-analyzer threshold logic lands in
+	// follow-up PRs.
+	analyzersSnapshot []analyzerEntry
+
+	// started transitions to true in StartOptimizeLoop. Late RegisterAnalyzer
+	// calls return an error so the contract "register before Start" is enforced
+	// rather than just documented.
+	started bool
 
 	// optimizer is the V2 scaling optimizer that produces VariantDecisions from
 	// AnalyzerResults. Selected per-cycle based on enableLimiter config:
@@ -179,6 +216,7 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	gpuLimiter := pipeline.NewDefaultLimiter("gpu-limiter", gpuInventory, gpuAlgorithm)
 
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
+	satV2 := saturation_v2.NewSaturationAnalyzer(capacityStore)
 
 	// Initialize with default optimizer. The actual optimizer is selected
 	// per-cycle in optimize() based on dynamic config (enableLimiter flag
@@ -191,16 +229,19 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 		ds:                      ds,
 		Recorder:                recorder,
 		Config:                  cfg,
-		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client),
+		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client, recorder),
 		ScaleToZeroEnforcer:     pipeline.NewEnforcer(requestCountFunc),
 		GPULimiter:              gpuLimiter,
 		metricsRegistry:         metricsRegistry,
-		saturationV2Analyzer:    saturation_v2.NewSaturationAnalyzer(capacityStore),
+		saturationV2Analyzer:    satV2,
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
 		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
+		analyzers: []analyzerEntry{
+			{name: interfaces.SaturationAnalyzerName, analyzer: satV2},
+		},
 	}
 
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
@@ -230,9 +271,35 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	return &engine
 }
 
+// RegisterAnalyzer adds an external analyzer to the engine's analyzer
+// registry. Returns an error if called after StartOptimizeLoop or if name
+// is already registered — callers must check the error. The analyzer is
+// appended in registration order.
+func (e *Engine) RegisterAnalyzer(name string, a interfaces.Analyzer) error {
+	if e.started {
+		return errors.New("RegisterAnalyzer: called after StartOptimizeLoop")
+	}
+	for i := range e.analyzers {
+		if e.analyzers[i].name == name {
+			return fmt.Errorf("RegisterAnalyzer: duplicate analyzer name %q", name)
+		}
+	}
+	e.analyzers = append(e.analyzers, analyzerEntry{name: name, analyzer: a})
+	return nil
+}
+
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
 // It runs until the context is cancelled.
+//
+// Before launching the goroutine, the registered analyzers are snapshotted
+// to a frozen slice that runAnalyzersAndScore iterates. The started flag is
+// flipped so subsequent RegisterAnalyzer calls return an error. The snapshot is the
+// natural place to invoke any future per-analyzer Init(ctx) hook.
 func (e *Engine) StartOptimizeLoop(ctx context.Context) {
+	e.analyzersSnapshot = make([]analyzerEntry, len(e.analyzers))
+	copy(e.analyzersSnapshot, e.analyzers)
+	e.started = true
+
 	e.recordActiveOptimizer() // record active optimizer
 	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
 	e.executor.Start(ctx)
@@ -240,10 +307,7 @@ func (e *Engine) StartOptimizeLoop(ctx context.Context) {
 
 func (e *Engine) recordActiveOptimizer() {
 	// Record metrics for which optimizer is active
-	optimizerNames := []string{
-		pipeline.GreedyByScoreOptimizerName,
-		pipeline.CostAwareOptimizerName,
-	}
+	optimizerNames := []string{"greedy-by-score", "cost-aware"}
 	for _, name := range optimizerNames {
 		isActive := false // default is false
 		if name == e.optimizer.Name() {
@@ -295,6 +359,9 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.Info("No active VariantAutoscalings found, skipping optimization")
 		return nil
 	}
+
+	// Initialize vaEventTracker for this optimize cycle
+	e.vaEventTracker = make(map[string]bool)
 
 	// Collected accelerator inventory (only in limited mode)
 	if e.Config.LimitedModeEnabled() {
@@ -402,6 +469,68 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	return nil
 }
 
+// recordEvent ensures only one event is recorded per VA in an optimization cycle.
+// Exception: K8SEventResourceConstrained events bypass deduplication and can be
+// recorded alongside other event types (e.g., ScaledUp + ResourceConstrained).
+func (e *Engine) recordEvent(
+	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	eventType, reason, message string,
+) {
+	if e.Recorder == nil {
+		return
+	}
+
+	if reason == constants.K8SEventResourceConstrained {
+		// This is the only exception where a variant can have 2 K8S events in an optimize cycle: K8SEventScaledUp & K8SEventResourceConstrained
+		e.Recorder.Event(va, eventType, reason, message)
+		return
+	}
+
+	key := utils.GetNamespacedKey(va.Namespace, va.Name)
+	if e.vaEventTracker != nil {
+		if _, ok := e.vaEventTracker[key]; ok { // ensures only one event is recorded per VA
+			return
+		}
+	}
+	e.Recorder.Event(va, eventType, reason, message)
+	if e.vaEventTracker != nil {
+		e.vaEventTracker[key] = true
+	}
+}
+
+func (e *Engine) recordOptimizationFailedEvent(
+	variantAutoscalings []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	message string,
+) {
+	if e.Recorder == nil {
+		return
+	}
+	for _, va := range variantAutoscalings {
+		e.recordEvent(&va, corev1.EventTypeWarning, constants.K8SEventOptimizationFailed, message)
+	}
+}
+
+func (e *Engine) recordScalingEvent(
+	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	action interfaces.SaturationAction,
+	targetReplicas int,
+	reason string,
+) {
+	if e.Recorder == nil {
+		return
+	}
+	switch action {
+	case interfaces.ActionScaleUp:
+		e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
+	case interfaces.ActionScaleDown:
+		if targetReplicas == 0 {
+			e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, reason)
+		} else {
+			e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, reason)
+		}
+	}
+}
+
 // Resolve saturation config and record config metrics
 func (e *Engine) resolveSaturationConfig(
 	configMap map[string]config.SaturationScalingConfig,
@@ -456,11 +585,14 @@ func (e *Engine) optimizeV1(
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 
 		if err != nil {
-			logger.Error(err, "Saturation data preparation failed", "modelID", modelID)
+			msg := "Saturation data preparation failed"
+			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
 		if data == nil {
+			e.recordOptimizationFailedEvent(modelVAs, "No saturation metrics available for model")
 			logger.Info("No saturation metrics available for model, skipping analysis",
 				"modelID", modelID, "namespace", namespace)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
@@ -518,6 +650,7 @@ func (e *Engine) optimizeV1(
 		}
 
 		if err := e.GPULimiter.Limit(ctx, decisionPtrs); err != nil {
+			// skip record K8S events since there's no VA
 			logger.Error(err, "GPU limiter failed, proceeding with original decisions")
 		} else {
 			for _, d := range decisionPtrs {
@@ -656,7 +789,9 @@ func (e *Engine) optimizeV2(
 		saturationConfig := e.resolveSaturationConfig(saturationConfigMap, modelID, namespace)
 		data, err := e.prepareModelData(ctx, modelID, modelVAs, e.client)
 		if err != nil {
-			logger.Error(err, "Model data preparation failed", "modelID", modelID)
+			msg := "Model data preparation failed"
+			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, nil)
 			continue
 		}
@@ -667,9 +802,11 @@ func (e *Engine) optimizeV2(
 
 		req, err := e.collectV2ModelRequest(ctx, modelID, namespace,
 			data.replicaMetrics, saturationConfig, data.variantStates,
-			data.scaleTargets, data.variantAutoscalings)
+			data.scaleTargets, data.variantAutoscalings, data.schedulerQueue)
 		if err != nil {
-			logger.Error(err, "V2 analysis failed", "modelID", modelID)
+			msg := "V2 analysis failed"
+			logger.Error(err, msg, "modelID", modelID)
+			e.recordOptimizationFailedEvent(modelVAs, msg)
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, data.scaleTargets)
 			continue
 		}
@@ -1069,6 +1206,7 @@ type modelData struct {
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 	variantCosts        map[string]float64
 	variantStates       []interfaces.VariantReplicaState
+	schedulerQueue      *interfaces.SchedulerQueueMetrics
 }
 
 // prepareModelData collects metrics and builds lookup maps for a model's VAs.
@@ -1124,7 +1262,7 @@ func (e *Engine) prepareModelData(
 	logger.V(logging.DEBUG).Info("Using source infrastructure for replica metrics",
 		"modelID", modelID,
 		"namespace", namespace)
-	replicaMetrics, err := e.ReplicaMetricsCollector.CollectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
+	replicaMetrics, err := e.ReplicaMetricsCollector.CollectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, e.vaEventTracker, variantCosts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect Saturation metrics for model %s: %w", modelID, err)
 	}
@@ -1142,6 +1280,7 @@ func (e *Engine) prepareModelData(
 	}
 
 	variantStates := e.BuildVariantStates(ctx, modelVAs, scaleTargets, k8sClient)
+	schedulerQueue := e.ReplicaMetricsCollector.CollectSchedulerQueueMetrics(ctx, modelID)
 
 	return &modelData{
 		modelID:             modelID,
@@ -1151,6 +1290,7 @@ func (e *Engine) prepareModelData(
 		variantAutoscalings: variantAutoscalings,
 		variantCosts:        variantCosts,
 		variantStates:       variantStates,
+		schedulerQueue:      schedulerQueue,
 	}, nil
 }
 
@@ -1191,8 +1331,9 @@ func (e *Engine) applySaturationDecisions(
 			updateVa = *va.DeepCopy()
 		} else {
 			if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
-				logger.Error(err, "Failed to get latest VA from API server",
-					"name", va.Name)
+				msg := "Failed to get latest VA from API server"
+				e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, msg)
+				logger.Error(err, msg, "name", va.Name)
 				continue
 			}
 		}
@@ -1228,17 +1369,17 @@ func (e *Engine) applySaturationDecisions(
 			} else if curr, ok := currentAllocations[vaName]; ok {
 				targetReplicas = curr.NumReplicas
 			}
-			// Keep existing accelerator or use current
-			if updateVa.Status.DesiredOptimizedAlloc.Accelerator != "" {
-				acceleratorName = updateVa.Status.DesiredOptimizedAlloc.Accelerator
-			} else if curr, ok := currentAllocations[vaName]; ok {
+			// Keep existing accelerator or use current (skip sentinel values)
+			if acc := updateVa.Status.DesiredOptimizedAlloc.Accelerator; constants.IsAcceleratorResolved(acc) {
+				acceleratorName = acc
+			} else if curr, ok := currentAllocations[vaName]; ok && constants.IsAcceleratorResolved(curr.Accelerator) {
 				acceleratorName = curr.Accelerator
 			}
 
 			// Fallback for new VAs without prior status or collected metrics:
 			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
 			// and use current deployment replicas as target to avoid unintended scaling.
-			if acceleratorName == "" {
+			if !constants.IsAcceleratorResolved(acceleratorName) {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
 					var scaleTarget scaletarget.ScaleTargetAccessor
@@ -1281,15 +1422,39 @@ func (e *Engine) applySaturationDecisions(
 					Object: &updateVa,
 				}
 			}
-			continue
 		}
 
-		// Update DesiredOptimizedAlloc
-		// ALWAYS update LastRunTime to trigger reconciliation in the controller
+		// Emit a K8s event when accelerator cannot be resolved so operators
+		// can see the problem without digging through controller logs.
+		// The message is a constant string (not built per-cycle via Eventf with
+		// formatted args), so each emission produces an identical
+		// (involvedObject, source, type, reason, message) tuple — which the K8s
+		// API server's event aggregator collapses into a single Event entry with
+		// an updated count, rather than creating a new entry each optimization
+		// cycle.
+		if !constants.IsAcceleratorResolved(acceleratorName) {
+			e.emitAcceleratorNotResolvedEvent(&updateVa)
+			logger.V(logging.DEBUG).Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+				"variant", vaName)
+		}
+
+		// Stage the just-computed decision on the in-memory VA so that
+		// act.EmitMetrics below — which reads
+		// Status.DesiredOptimizedAlloc.{NumReplicas,Accelerator}
+		// (see actuator.EmitMetrics) — publishes the fresh target rather than
+		// whatever was last persisted by the controller. This object is local
+		// to the engine; CRD persistence happens later, via the cache write
+		// (DecisionCache.Set) → controller patch path.
+		// Sanitize the sentinel out of the staged value so neither EmitMetrics
+		// nor the cache (which reuses statusAccelerator) ever sees it.
 		numReplicas := int32(targetReplicas)
+		statusAccelerator := acceleratorName
+		if !constants.IsAcceleratorResolved(statusAccelerator) {
+			statusAccelerator = ""
+		}
 		updateVa.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 			NumReplicas: &numReplicas,
-			Accelerator: acceleratorName,
+			Accelerator: statusAccelerator,
 			LastRunTime: metav1.Now(),
 		}
 		updateVa.Status.Actuation.Applied = false // Reset applied status until Actuator handles it (if needed)
@@ -1341,12 +1506,26 @@ func (e *Engine) applySaturationDecisions(
 		// 	isSaturationOnly = decision.SaturationOnly
 		// }
 
-		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
-			logger.Error(err, "Failed to emit metrics for external autoscalers",
+		// Skip metric emission when accelerator is unresolved to avoid publishing
+		// wva_* gauges under an empty or incorrect accelerator_type label.
+		// Status updates and conditions still proceed so the controller can reconcile.
+		if !constants.IsAcceleratorResolved(acceleratorName) {
+			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
 				"variant", updateVa.Name)
+		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
+			msg := "Failed to emit metrics for external autoscalers"
+			// K8s best practice: events should reference the current resource version
+			e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{updateVa}, msg)
+			logger.Error(err, msg, "variant", updateVa.Name)
 		} else {
 			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
 			if hasDecision {
+				// Emit Kubernetes event for observability
+				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason)
+				if decision.WasLimited {
+					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
+				}
+
 				logger.Info("Successfully emitted metrics",
 					"variant", updateVa.Name,
 					"target", targetReplicas,
@@ -1375,8 +1554,11 @@ func (e *Engine) applySaturationDecisions(
 			//   for this variant during this loop (metrics pipeline is working).
 			// - hasDecision is true when the optimizer produced a scaling decision based on
 			//   saturation metrics in this run.
-			// Either condition implies saturation metrics were available and usable.
-			metricsAvailable := hasAllocation || hasDecision
+			// - The accelerator must also be resolved: when it is the sentinel, the
+			//   metric-emission branch above is skipped (no wva_* gauges are published),
+			//   so reporting MetricsAvailable=True would leave HPA/KEDA-side reasoning
+			//   inconsistent with controller-side reporting.
+			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
 			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
 			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
 			if metricsAvailable {
@@ -1384,11 +1566,16 @@ func (e *Engine) applySaturationDecisions(
 				metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
 			}
 
+			// Use the sanitized statusAccelerator (computed above) rather than the raw
+			// acceleratorName. The controller reads this cache entry and writes
+			// AcceleratorName verbatim into Status.DesiredOptimizedAlloc.Accelerator,
+			// so passing the sentinel here would leak it into the CRD status —
+			// violating the "never persist the sentinel to status" invariant.
 			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
 				VariantName:       vaName,
 				Namespace:         va.Namespace,
 				TargetReplicas:    targetReplicas,
-				AcceleratorName:   acceleratorName,
+				AcceleratorName:   statusAccelerator,
 				LastRunTime:       metav1.Now(),
 				CurrentAllocation: currentAllocations[vaName],
 				MetricsAvailable:  metricsAvailable,
@@ -1411,6 +1598,20 @@ func (e *Engine) applySaturationDecisions(
 				"reason", reason)
 		}
 	}
+}
+
+// emitAcceleratorNotResolvedEvent records a Warning event on the given
+// VariantAutoscaling so operators see at-a-glance that the optimization
+// loop ran but could not resolve an accelerator type for it. The message
+// is a constant string so the API server's event aggregator collapses
+// repeated emissions into a single Event entry with an updated count
+// rather than creating a new entry each optimization cycle.
+func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) {
+	e.recordEvent(va, corev1.EventTypeWarning, "AcceleratorNotResolved",
+		"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
+			utils.AcceleratorNameLabel+". "+
+			"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
+			"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
@@ -1462,18 +1663,16 @@ func (e *Engine) emitSafetyNetMetrics(
 				accelerator = curr.Accelerator
 			}
 		}
-		if accelerator == "" {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			// Try to get accelerator name from scale target nodeSelector/nodeAffinity or VA labels
 			if scaleTarget == nil {
 				logger.V(logging.DEBUG).Info("Safety net: no scale target found for VA",
 					"variant", va.Name)
 			} else {
-				if acceleratorName := utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget); acceleratorName != "" {
-					accelerator = acceleratorName
-				}
+				accelerator = utils.GetAcceleratorNameFromScaleTarget(&va, scaleTarget)
 			}
 		}
-		if accelerator == "" {
+		if !constants.IsAcceleratorResolved(accelerator) {
 			logger.Info("Safety net: skipping metric emission - no accelerator name available",
 				"variant", va.Name)
 			continue

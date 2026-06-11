@@ -48,7 +48,7 @@ Do these on the branch you intend to tag (e.g. `main`).
    - Optionally reference it in release notes when you create the GitHub Release.
 
 2. **Kustomize default image tag (optional)**  
-   - If you want the default kustomize install to use the new version, update `config/manager/kustomization.yaml`: set `newTag` to the new version (e.g. `v0.5.2`) and commit.  
+   - If you want the default kustomize install to use the new version, update `config/base/manager/kustomization.yaml`: set `newTag` to the new version (e.g. `v0.5.2`) and commit.  
    - The Helm release workflow also updates `charts/workload-variant-autoscaler/Chart.yaml` and `charts/workload-variant-autoscaler/values.yaml`, but the Helm chart is deprecated and will be removed in a future release.
 
 3. **Upstream dependency pins**  
@@ -98,7 +98,7 @@ So after the workflow runs, the default branch will have the chart metadata alig
 
 ## Helm chart details (deprecated)
 
-> The Helm chart is deprecated. Kustomize (`config/default/` or `config/openshift/`) is the recommended install path. The chart and its release workflow will be removed in a future minor release.
+> The Helm chart is deprecated. Kustomize (`config/overlays/cluster-scoped/kubernetes/` or `config/overlays/namespace-scoped/openshift/`) is the recommended install path. The chart and its release workflow will be removed in a future minor release.
 
 - **Chart location:** `charts/workload-variant-autoscaler/`.
 - **Publish location:** `oci://ghcr.io/llm-d` (package name: `workload-variant-autoscaler`).

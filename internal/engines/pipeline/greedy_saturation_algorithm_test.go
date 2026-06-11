@@ -14,7 +14,7 @@ type simpleAllocator struct {
 	remaining int
 }
 
-func (s *simpleAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (s *simpleAllocator) TryAllocate(_ context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}

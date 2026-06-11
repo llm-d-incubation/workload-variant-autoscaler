@@ -153,7 +153,7 @@ make deploy-wva-on-k8s
 make deploy-wva-on-openshift
 
 # Deploy to Kind (with emulated GPUs)
-make deploy-wva-emulated-on-kind
+CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
 #### Manual Script Execution
@@ -186,11 +186,9 @@ Options:
   -h, --help               Show help
 ```
 
-**llm-d stack** (gateway, EPP, ModelService): use `deploy/install-llmd-infra.sh` **after** `install.sh` when you need inference infrastructure. That script is **deprecated** as a long-term shim; migrate to llm-d-owned install tooling when available.
+**llm-d stack** (gateway, EPP, ModelService): deploy using the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) directly. For EPP-only setup (GAIE standalone chart + tokenreview RBAC), use `deploy/install-epp.sh` after `install.sh`.
 
-On **emulated** environments (`kind-emulator`), `deploy/lib/infra_llmd.sh` runs post-deploy ModelService cleanup at the end of `deploy_llm_d_infrastructure`: it removes the chart **prefill** deployment (until WVA supports prefill and decode together), and when **`LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS=true`** (default) it also removes the chart **decode** deployment so e2e and local flows can apply their own model workloads. This logic is **not** in `deploy/kind-emulator/install.sh`.
-
-**Environment variables** (see [Configuration Reference](#configuration-reference); llm-d-specific vars are documented in the install-llmd-infra header comment):
+**Environment variables** (see [Configuration Reference](#configuration-reference)):
 
 ```bash
 # Always set for install.sh
@@ -205,35 +203,23 @@ export WVA_IMAGE_TAG="latest"
 export DEPLOY_WVA=false            # Monitoring + scaler only
 export DEPLOY_PROMETHEUS=false
 # export DEPLOY_LWS=true           # Install LeaderWorkerSet (needed for full e2e suite; default false)
-
-# llm-d (install-llmd-infra.sh) — examples
-export HF_TOKEN="hf_xxx"
-export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
-# export INSTALL_GATEWAY_CTRLPLANE=true  # Only needed for Gateway Mode (external Istio/kgateway). Default false (Standalone Mode).
-# Guide basename under llm-d guides/ (llm-d README: GUIDE_NAME). Default optimized-baseline matches v0.7.0+.
-# https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline
-# export GUIDE_NAME=optimized-baseline   # default; change only if using a custom guide path
 ```
-
-#### Gateway control plane (`install-llmd-infra.sh`)
-
-`INSTALL_GATEWAY_CTRLPLANE` defaults to **false** (Standalone Mode bundles Envoy inside the EPP pod — no external gateway controller needed). Set to **`true`** only if you are using Gateway Mode with an external Kubernetes Gateway controller (Istio or kgateway).
 
 #### Script deployment examples
 
 **VariantAutoscaling** and **HPA** resources are not created by `install.sh`; create them directly with `kubectl apply` or let tests/operators manage them.
 
-##### Example 1: Base infra then llm-d
+##### Example 1: Base WVA infra + EPP
 
 ```bash
-export HF_TOKEN="hf_xxxxx"
 ./deploy/install.sh -e kubernetes
-./deploy/install-llmd-infra.sh -e kubernetes
+# EPP (GAIE standalone chart + RBAC):
+LLM_D_RELEASE=v0.7.0 GAIE_VERSION=v1.5.0 LLMD_NS=llm-d-optimized-baseline \
+  ./deploy/install-epp.sh
+# Model server: follow llm-d/llm-d guides/optimized-baseline
 ```
 
 ##### Example 2: E2E-style stack (same as `make deploy-e2e-infra`)
-
-Runs `install.sh` then `install-llmd-infra.sh` with e2e-oriented llm-d flags (skip default ModelService, EPP flow-control patch, etc.).
 
 ```bash
 make deploy-e2e-infra ENVIRONMENT=kind-emulator IMG=localhost/llm-d-workload-variant-autoscaler:dev
@@ -263,26 +249,26 @@ Install the WVA controller directly into an existing cluster using Kustomize. Th
 
 ```bash
 # Set the controller image
-cd config/manager
+cd config/base/manager
 kustomize edit set image controller=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:v0.7.0
 
 # Apply
-kubectl apply -k ../default
+kubectl apply -k ../../overlays/cluster-scoped/kubernetes
 ```
 
 #### OpenShift
 
 ```bash
-cd config/manager
+cd config/base/manager
 kustomize edit set image controller=ghcr.io/llm-d/llm-d-workload-variant-autoscaler:v0.7.0
 
-kubectl apply -k ../openshift
+kubectl apply -k ../../overlays/namespace-scoped/openshift
 ```
 
 #### Undeploy
 
 ```bash
-kubectl delete -k config/default    # or config/openshift
+kubectl delete -k config/overlays/cluster-scoped/kubernetes    # or config/overlays/namespace-scoped/openshift
 ```
 
 ### Legacy: Helm Chart (Deprecated)
@@ -654,14 +640,6 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `MONITORING_NAMESPACE` | Prometheus namespace | `workload-variant-autoscaler-monitoring` |
 | `LLMD_NS` | llm-d namespace | `llm-d-optimized-baseline` |
 
-#### Gateway Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GATEWAY_PROVIDER` | Gateway implementation | `istio` |
-| `INSTALL_GATEWAY_CTRLPLANE` | Install gateway control plane via helmfile (Gateway Mode only) | `false` |
-| `LLMD_REMOVE_EMULATED_DECODE_DEPLOYMENTS` | On emulated clusters, delete chart decode Deployment after deploy (e2e applies its own) | `true` |
-
 #### Deployment Flags (`install.sh`)
 
 | Variable | Description | Default |
@@ -673,7 +651,7 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
 | `SCALER_BACKEND` | `prometheus-adapter`, `keda`, or `none` | `prometheus-adapter` |
 
-VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not controlled by `install.sh`; manage them via `kubectl apply` or **`install-llmd-infra.sh`** (`MODEL_ID`, `VLLM_MAX_NUM_SEQS`, `LLMD_*`, etc.).
+VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not controlled by `install.sh`; manage them via `kubectl apply` directly (see the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) for reference manifests).
 
 #### Advanced (`install.sh`)
 
@@ -688,7 +666,7 @@ VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not cont
 
 #### Optional: capacity thresholds after `make deploy-e2e-infra`
 
-If `KV_SPARE_TRIGGER` and/or `QUEUE_SPARE_TRIGGER` are set in the environment, the Makefile patches the `saturation-scaling-config` ConfigMap after install.
+If `KV_SPARE_TRIGGER` and/or `QUEUE_SPARE_TRIGGER` are set in the environment, the Makefile patches the `wva-saturation-scaling-config` ConfigMap after install.
 
 ## Post-Deployment
 
@@ -774,10 +752,10 @@ kubectl describe variantautoscaling <name> -n <namespace>
 For rapid testing of autoscaling behavior, configure vLLM with a low `max-num-seqs` value to make the server easy to saturate:
 
 ```bash
-# Deploy base infra + llm-d, then tune vLLM via install-llmd-infra env or chart values
+# Deploy WVA infra, then tune vLLM max-num-seqs in the llm-d ModelService manifest
 export VLLM_MAX_NUM_SEQS=8
-make deploy-wva-on-k8s   # runs install.sh + install-llmd-infra for kind-emulator
-# For HPA stabilization when using chart-managed HPA: helm upgrade --set hpa.behavior...
+make deploy-wva-on-k8s   # runs install.sh (WVA + monitoring + scaler + LWS)
+# Apply llm-d model serving manifests separately via kubectl apply or the llm-d guides
 ```
 
 This configuration helps you:
@@ -970,7 +948,7 @@ If you encounter issues not covered here:
 # === WVA Controller ===
 kubectl get pods -n workload-variant-autoscaler-system
 kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=workload-variant-autoscaler -f
-kubectl describe deployment workload-variant-autoscaler-controller-manager -n workload-variant-autoscaler-system
+kubectl describe deployment controller-manager -n workload-variant-autoscaler-system
 
 # === VariantAutoscaling Resources ===
 kubectl get variantautoscaling -A
@@ -1007,7 +985,7 @@ kubectl get configmap model-accelerator-data -n workload-variant-autoscaler-syst
 - **Main Project**: [README.md](../README.md)
 - **Kubernetes Guide**: [kubernetes/README.md](kubernetes/README.md)
 - **OpenShift Guide**: [openshift/README.md](openshift/README.md)
-- **Kustomize overlays**: [config/default](../config/default/), [config/openshift](../config/openshift/)
+- **Kustomize overlays**: [config/overlays/cluster-scoped/kubernetes](../config/overlays/cluster-scoped/kubernetes/), [config/overlays/namespace-scoped/openshift](../config/overlays/namespace-scoped/openshift/)
 - **Helm Chart (deprecated)**: [charts/workload-variant-autoscaler](../charts/workload-variant-autoscaler/)
 - **API Reference**: [api/v1alpha1](../api/v1alpha1/)
 - **Architecture**: [docs/design/modeling-optimization.md](../docs/design/modeling-optimization.md)

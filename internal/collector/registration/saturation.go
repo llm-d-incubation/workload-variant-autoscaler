@@ -53,11 +53,20 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	// Uses max to deduplicate when multiple series exist per instance with different label combinations
 	// Used by Saturation Analyzer V2 for token capacity computation
 	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), llm_d_ai_variant (for direct pod-to-VA mapping), and config labels
+	//
+	// NOTE: vllm:cache_config_info is an info-style metric. Unlike vLLM's regular
+	// gauges/counters, it is NOT labeled with model_name — its label set is derived
+	// from CacheConfig fields (num_gpu_blocks, block_size, cache_dtype, ...) plus
+	// "engine". Filtering it by model_name would match nothing, so it is queried
+	// namespace-wide and the collector correlates the results to this model's pods
+	// by instance key (see CollectReplicaMetrics, which attaches cache config only
+	// to instances already discovered by the model-scoped KV/queue queries).
+	// Do not add a model_name matcher here.
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryCacheConfigInfo,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod, llm_d_ai_variant, num_gpu_blocks, block_size) (vllm:cache_config_info{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
+		Template:    `max by (instance, pod, llm_d_ai_variant, num_gpu_blocks, block_size) (vllm:cache_config_info{namespace="{{.namespace}}"})`,
+		Params:      []string{source.ParamNamespace},
 		Description: "KV cache configuration info per instance (num_gpu_blocks and block_size as labels)",
 	})
 

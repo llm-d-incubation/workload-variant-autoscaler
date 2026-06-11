@@ -40,12 +40,14 @@ type SaturationScalingConfig struct {
 	AnalyzerName string `yaml:"analyzerName,omitempty"`
 
 	// ScaleUpThreshold is the utilization threshold above which scale-up is triggered.
-	// Used by V2 analyzer: requiredCapacity = totalDemand / ScaleUpThreshold - anticipatedSupply
+	// Applied by the engine post-step universally to every analyzer's result:
+	//   requiredCapacity = max(0, totalDemand / ScaleUpThreshold − anticipatedSupply)
 	// Default: 0.85 (85% utilization triggers scale-up)
 	ScaleUpThreshold float64 `yaml:"scaleUpThreshold,omitempty"`
 
 	// ScaleDownBoundary is the utilization boundary below which scale-down is safe.
-	// Used by V2 analyzer: spareCapacity = currentSupply - totalDemand / ScaleDownBoundary
+	// Applied by the engine post-step universally to every analyzer's result:
+	//   spareCapacity = max(0, totalSupply − totalDemand / ScaleDownBoundary)
 	// Default: 0.70 (70% utilization allows scale-down)
 	ScaleDownBoundary float64 `yaml:"scaleDownBoundary,omitempty"`
 

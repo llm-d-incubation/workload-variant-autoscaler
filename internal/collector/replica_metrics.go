@@ -46,6 +46,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -63,6 +64,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 )
 
 // ReplicaMetricsCollector collects replica-level metrics for both saturation
@@ -70,23 +73,54 @@ import (
 type ReplicaMetricsCollector struct {
 	source    source.MetricsSource
 	k8sClient client.Client
+	recorder  record.EventRecorder
+	// metricsAvailableState tracks whether metrics were available in the previous
+	// cycle for each VA (keyed by namespace/name). Used for edge-triggered events.
+	metricsAvailableState map[string]bool
+	mu                    sync.Mutex
 }
 
 // NewReplicaMetricsCollector creates a new replica metrics collector.
-func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client) *ReplicaMetricsCollector {
+func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client, recorder record.EventRecorder) *ReplicaMetricsCollector {
 	return &ReplicaMetricsCollector{
-		source:    metricsSource,
-		k8sClient: k8sClient,
+		source:                metricsSource,
+		k8sClient:             k8sClient,
+		recorder:              recorder,
+		metricsAvailableState: make(map[string]bool),
 	}
 }
 
-// CollectReplicaMetrics collects per-replica metrics for all replicas of a model.
+func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	vaEventTracker map[string]bool,
+	reason string,
+) {
+	if c.recorder == nil {
+		return
+	}
+
+	for _, va := range variantAutoscalings {
+		key := utils.GetNamespacedKey(va.Namespace, va.Name)
+		if vaEventTracker != nil {
+			if _, ok := vaEventTracker[key]; ok { // ensures only one event is recorded per VA
+				continue
+			}
+		}
+		c.recorder.Event(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
+		if vaEventTracker != nil {
+			vaEventTracker[key] = true
+		}
+	}
+}
+
+// CollectReplicaMetrics collects per-replica metrics for all replicas of a model and records
+// K8S events on failures. This wrapper ensures MetricsUnavailable events are emitted when
+// metrics collection fails or returns no data, using edge-triggered emission (only on
+// transitions from available → unavailable) to avoid flooding the event stream.
+//
 // The collected metrics serve both the saturation analyzer and the queueing model analyzer:
 //   - Saturation metrics: KV cache usage, queue length, token capacity, prefix cache hit rate
 //   - Queueing model metrics: scheduler dispatch rate (arrival rate), max batch size
-//
-// Prometheus-sourced metrics are fetched via registered query templates.
-// MaxBatchSize is parsed from the Deployment/LWS's container args (--max-num-seqs).
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -100,6 +134,50 @@ func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient cl
 //   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
 func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
+	ctx context.Context,
+	modelID string,
+	namespace string,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+	vaEventTracker map[string]bool,
+	variantCosts map[string]float64,
+) ([]interfaces.ReplicaMetrics, error) {
+	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
+
+	// Determine if metrics are available in this cycle
+	metricsAvailable := err == nil && len(replicaMetrics) > 0
+
+	// Check previous state and emit events only on available → unavailable transitions
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key, va := range variantAutoscalings {
+		previouslyAvailable, seen := c.metricsAvailableState[key]
+
+		// Edge-triggered: only emit event on available → unavailable transition
+		// Don't emit on first observation (we don't know previous state - VA may have started at zero)
+		shouldEmitEvent := seen && previouslyAvailable && !metricsAvailable
+
+		if shouldEmitEvent {
+			if err != nil {
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "Failed to collect metrics for model")
+			} else if len(replicaMetrics) == 0 {
+				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "No saturation metrics available for model")
+			}
+		}
+
+		// Update state for next cycle
+		c.metricsAvailableState[key] = metricsAvailable
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return replicaMetrics, nil
+}
+
+// collectReplicaMetrics is the internal implementation that collects per-replica metrics.
+func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	ctx context.Context,
 	modelID string,
 	namespace string,
@@ -329,42 +407,49 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	}
 
 	// Process cache config info results (V2)
+	//
+	// vllm:cache_config_info has no model_name label (see QueryCacheConfigInfo),
+	// so it is queried namespace-wide and may include pods of other models in the
+	// same namespace. Attach cache config only to instances already discovered by
+	// the model-scoped KV/queue queries above; skip unknown instances so foreign
+	// pods are not introduced into this model's metrics (and do not inflate the
+	// discovered-pods / freshness counters).
 	if result := results[registration.QueryCacheConfigInfo]; result != nil {
 		if !result.HasError() {
 			for _, value := range result.Values {
-				instanceKey, podName, vaName := buildInstanceKey(value.Labels)
+				instanceKey, podName, _ := buildInstanceKey(value.Labels)
 				if instanceKey == "" {
 					continue
 				}
 
-				if podData[instanceKey] == nil {
-					podData[instanceKey] = &podMetricData{
-						podName: podName,
-						vaName:  vaName,
-					}
+				data := podData[instanceKey]
+				if data == nil {
+					// Instance not seen by the model-scoped queries: it belongs to a
+					// different model (or lacks KV/queue metrics) — not one of ours.
+					continue
 				}
 
 				// Parse num_gpu_blocks and block_size from string labels
 				if blocksStr, ok := value.Labels["num_gpu_blocks"]; ok && blocksStr != "" {
 					if blocks, err := strconv.ParseInt(blocksStr, 10, 64); err == nil {
-						podData[instanceKey].numGpuBlocks = blocks
+						data.numGpuBlocks = blocks
 					}
 				}
 				if sizeStr, ok := value.Labels["block_size"]; ok && sizeStr != "" {
 					if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
-						podData[instanceKey].blockSize = size
+						data.blockSize = size
 					}
 				}
-				if podData[instanceKey].numGpuBlocks > 0 && podData[instanceKey].blockSize > 0 {
-					podData[instanceKey].hasCacheConfig = true
-					podData[instanceKey].cacheConfigTimestamp = value.Timestamp
+				if data.numGpuBlocks > 0 && data.blockSize > 0 {
+					data.hasCacheConfig = true
+					data.cacheConfigTimestamp = value.Timestamp
 				}
 
 				logger.V(logging.DEBUG).Info("Cache config info metric",
 					"instanceKey", instanceKey,
 					"pod", podName,
-					"numGpuBlocks", podData[instanceKey].numGpuBlocks,
-					"blockSize", podData[instanceKey].blockSize)
+					"numGpuBlocks", data.numGpuBlocks,
+					"blockSize", data.blockSize)
 			}
 		}
 	}

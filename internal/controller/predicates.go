@@ -81,7 +81,7 @@ func ConfigMapPredicate(ds datastore.Datastore, cfg *config.Config) predicate.Pr
 // The ServiceMonitor is watched to enable detection when it is deleted, which would prevent
 // Prometheus from scraping controller metrics (including optimized replicas).
 func ServiceMonitorPredicate() predicate.Predicate {
-	const defaultServiceMonitorName = "workload-variant-autoscaler-controller-manager-metrics-monitor"
+	const defaultServiceMonitorName = "wva-controller-manager-metrics-monitor"
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		return obj.GetName() == defaultServiceMonitorName && obj.GetNamespace() == config.SystemNamespace()
 	})

@@ -10,17 +10,16 @@ print_help() {
 Usage: $(basename "$0") [OPTIONS]
 
 Bootstrap WVA (optional), monitoring, and scaler backend on a Kubernetes or OpenShift cluster.
-For llm-d (gateway, EPP, ModelService), run deploy/install-llmd-infra.sh after this script.
+For llm-d (gateway, EPP, ModelService), see the llm-d project's installation guides.
 
 Options:
   -i, --wva-image IMAGE        Container image for WVA (default: $WVA_IMAGE_REPO:$WVA_IMAGE_TAG)
-  -u, --undeploy               Undeploy WVA, monitoring, and scaler backend (not llm-d; use install-llmd-infra.sh --undeploy)
+  -u, --undeploy               Undeploy WVA, monitoring, and scaler backend
   -e, --environment            kubernetes | openshift | kind-emulator (default: kubernetes)
   -h, --help                   Show this help and exit
 
-Deprecated (ignored by install.sh; Helm chart removed, llm-d overrides use install-llmd-infra.sh):
+Deprecated (ignored by install.sh; Helm chart removed):
   --release-name NAME          Helm release name (no-op; WVA now installed via Kustomize)
-  --model MODEL_ID             Same as MODEL_ID env (llm-d / chart overrides use install-llmd-infra.sh)
   --accelerator TYPE           Same as ACCELERATOR_TYPE env
 
 Environment Variables:
@@ -71,11 +70,6 @@ parse_args() {
         if ! containsElement "$ENVIRONMENT" "${COMPATIBLE_ENV_LIST[@]}"; then
           log_error "Invalid environment: $ENVIRONMENT. Valid options are: ${COMPATIBLE_ENV_LIST[*]}"
         fi
-        ;;
-      --model)
-        # Legacy CI/scripts — install.sh does not consume MODEL_ID; install-llmd-infra.sh does.
-        export MODEL_ID="$2"
-        shift 2
         ;;
       --accelerator)
         export ACCELERATOR_TYPE="$2"
