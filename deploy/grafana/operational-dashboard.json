@@ -385,7 +385,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(wva_metrics_pods_discovered{exported_namespace=~\"$namespace\"}) by ($namespace_label)",
+          "expr": "sum(wva_metrics_pods_discovered{$namespace_label=~\"$namespace\"}) by ($namespace_label)",
           "instant": false,
           "legendFormat": "{{$namespace_label}}",
           "range": true,
@@ -827,7 +827,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name, accelerator_type) (wva_saturation_utilization{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "max by ($namespace_label, variant_name, accelerator_type) (wva_saturation_utilization{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{accelerator_type}}",
           "range": true,
@@ -943,7 +943,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_used{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_used{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - used",
           "range": true,
@@ -955,7 +955,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_capacity{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "max by ($namespace_label, variant_name) (wva_kv_cache_tokens_capacity{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - capacity",
           "range": true,
@@ -1052,7 +1052,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(wva_replica_scaling_total{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
+          "expr": "sum by (reason) (rate(wva_replica_scaling_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
           "instant": false,
           "legendFormat": "{{reason}}",
           "range": true,
@@ -1169,7 +1169,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name) (wva_current_replicas{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "max by ($namespace_label, variant_name) (wva_current_replicas{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - current",
           "range": true,
@@ -1181,7 +1181,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name) (wva_desired_replicas{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "max by ($namespace_label, variant_name) (wva_desired_replicas{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
           "instant": false,
           "legendFormat": "{{variant_name}} - desired",
           "range": true,
@@ -1279,7 +1279,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_decisions_limited_total{exported_namespace=~\"$namespace\", variant_name=~\"$variant\"}[1h])) by ($namespace_label, variant_name, limiter_name) * max(wva_config_optimization_interval_seconds)",
+          "expr": "sum(rate(wva_decisions_limited_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[1h])) by ($namespace_label, variant_name, limiter_name) * max(wva_config_optimization_interval_seconds)",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{limiter_name}}",
           "range": true,

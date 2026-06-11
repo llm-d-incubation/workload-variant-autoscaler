@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -1491,8 +1492,12 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		if hasDecision {
-			if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), reason); err != nil {
-				logger.Error(err, "Failed to emit replica scaling metrics")
+			if decision.Action != interfaces.ActionNoChange {
+				// Sanitize reason to prevent Prometheus cardinality explosion from dynamic numeric values
+				sanitizedReason := sanitizeReasonForMetrics(reason, decision.Action)
+				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), sanitizedReason); err != nil {
+					logger.Error(err, "Failed to emit replica scaling metrics")
+				}
 			}
 			logger.Info("Applied saturation decision via shared cache",
 				"variant", vaName,
@@ -1501,6 +1506,57 @@ func (e *Engine) applySaturationDecisions(
 				"target", targetReplicas,
 				"reason", reason)
 		}
+	}
+}
+
+// sanitizeReasonForMetrics converts detailed reason strings into bounded categorical
+// values safe for use as Prometheus label values. This prevents cardinality explosion
+// from dynamic numeric values embedded in reason strings.
+func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction) string {
+	// Check for saturation-only mode patterns
+	if strings.Contains(reason, "saturation-only mode:") {
+		switch action {
+		case interfaces.ActionScaleUp:
+			return "saturation-only mode: scale-up"
+		case interfaces.ActionScaleDown:
+			return "saturation-only mode: scale-down"
+		default:
+			return "saturation-only mode: no-change"
+		}
+	}
+
+	// Check for scale-from-zero pattern
+	if strings.Contains(reason, "scalefromzero") {
+		switch action {
+		case interfaces.ActionScaleUp:
+			return "scalefromzero: scale-up"
+		case interfaces.ActionScaleDown:
+			return "scalefromzero: scale-down"
+		default:
+			return "scalefromzero: no-change"
+		}
+	}
+
+	// Check for V2 optimizer patterns (cost-aware, greedy-by-score, enforced)
+	if strings.Contains(reason, "V2") {
+		switch action {
+		case interfaces.ActionScaleUp:
+			return "V2 scale-up"
+		case interfaces.ActionScaleDown:
+			return "V2 scale-down"
+		default:
+			return "V2 no-change"
+		}
+	}
+
+	// Default fallback based on action
+	switch action {
+	case interfaces.ActionScaleUp:
+		return "scale-up"
+	case interfaces.ActionScaleDown:
+		return "scale-down"
+	default:
+		return "no-change"
 	}
 }
 
