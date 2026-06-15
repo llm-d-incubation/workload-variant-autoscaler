@@ -39,6 +39,15 @@ var (
 		Jitter:   0.1,
 		Steps:    6, // 5s, 10s, 20s, 40s, 80s, 160s = ~5 minutes total
 	}
+
+	// CRDWatchBackoff is the backoff configuration for CRD watcher connection failures
+	CRDWatchBackoff = wait.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Steps:    6, // 1s, 2s, 4s, 8s, 16s, 32s, max 60s = ~63s total
+		Cap:      60 * time.Second,
+	}
 )
 
 var (

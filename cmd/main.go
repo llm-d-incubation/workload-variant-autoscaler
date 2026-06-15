@@ -32,6 +32,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	flag "github.com/spf13/pflag"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -88,7 +89,14 @@ func init() {
 	// KEDA scheme is registered unconditionally so the client can list ScaledObjects
 	// when the CRD is present. Listing fails gracefully (NoMatchError) when not installed.
 	utilruntime.Must(kedav1alpha1.AddToScheme(scheme))
-	// Note: LeaderWorkerSet scheme is added conditionally in main() after checking if CRD exists
+	// LeaderWorkerSet scheme is registered unconditionally (like KEDA) so the client
+	// can list and watch LeaderWorkerSets when the CRD is present.
+	// Listing and watching fail gracefully (NoMatchError) when not installed.
+	utilruntime.Must(lwsv1.AddToScheme(scheme))
+	// apiextensions scheme is required for CRDWatcher to query CustomResourceDefinition objects
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	// Note: LeaderWorkerSet CRD availability is checked dynamically at startup and runtime
+	// via CRDWatcher. See internal/controller/crd_watcher.go
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -166,18 +174,6 @@ func main() {
 		os.Exit(1)     //nolint:gocritic // exitAfterDefer: Sync() called explicitly above
 	}
 	setupLog.Info("Configuration loaded successfully")
-
-	// Conditionally add LeaderWorkerSet scheme if CRD exists
-	lwsEnabled := crd.CheckLeaderWorkerSetCRD(restConfig, setupLog)
-	if lwsEnabled {
-		if err := lwsv1.AddToScheme(scheme); err != nil {
-			setupLog.Error(err, "failed to add LeaderWorkerSet scheme")
-			os.Exit(1)
-		}
-		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
-	} else {
-		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
-	}
 
 	// Detect KEDA for annotation-based ScaledObject discovery (dual-mode, Phase 1)
 	kedaEnabled := crd.CheckKEDACRD(restConfig, setupLog)
@@ -479,6 +475,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Check initial LWS CRD state
+	initialLWSAvailable := crd.CheckLeaderWorkerSetCRD(restConfig, setupLog)
+	lwsStateManager := crd.NewLWSStateManager()
+	lwsStateManager.SetAvailable(initialLWSAvailable)
+	if initialLWSAvailable {
+		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
+	} else {
+		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (will auto-enable if installed)")
+	}
+
+	// Register CRD watcher to detect LWS CRD installation/removal at runtime
+	setupLog.Info("Registering CRD watcher for dynamic LWS detection")
+	crdWatcher := controller.NewCRDWatcher(
+		mgr.GetClient(),
+		"leaderworkersets.leaderworkerset.x-k8s.io",
+		lwsStateManager,
+		ctrl.Log.WithName("crd-watcher"),
+	)
+	if err := mgr.Add(crdWatcher); err != nil {
+		setupLog.Error(err, "unable to add CRD watcher")
+		os.Exit(1)
+	}
+	setupLog.Info("CRD watcher registered successfully")
+
 	// Create the reconciler with unified Config and datastore
 	reconciler := controller.NewVariantAutoscalingReconciler(
 		mgr.GetClient(),
@@ -486,7 +506,7 @@ func main() {
 		mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
 		cfg,
 		ds,
-		lwsEnabled,
+		initialLWSAvailable,
 	)
 
 	// Setup the controller with the manager

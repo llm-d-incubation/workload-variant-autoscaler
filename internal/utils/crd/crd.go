@@ -57,7 +57,6 @@ func CheckKEDACRD(restConfig *rest.Config, logger logr.Logger) bool {
 }
 
 // CheckLeaderWorkerSetCRD reports whether the LeaderWorkerSet CRD is installed.
-// TODO: checked once at startup; handle LWS installed after controller starts.
 func CheckLeaderWorkerSetCRD(restConfig *rest.Config, logger logr.Logger) bool {
 	return CheckCRDInstalled(restConfig, "leaderworkerset.x-k8s.io/v1", "LeaderWorkerSet", logger)
 }
