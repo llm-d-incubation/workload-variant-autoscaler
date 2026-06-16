@@ -45,6 +45,7 @@ func TestVariantAutoscalingFromScaledObject(t *testing.T) {
 			Name:        "my-scaler",
 			Namespace:   "production",
 			Annotations: wvaAnnotations("ibm/granite-13b", "40.0"),
+			Labels:      map[string]string{"inference.optimization/acceleratorName": "h100"},
 		},
 		Spec: kedav1alpha1.ScaledObjectSpec{
 			ScaleTargetRef: &kedav1alpha1.ScaleTarget{
@@ -82,6 +83,9 @@ func TestVariantAutoscalingFromScaledObject(t *testing.T) {
 	}
 	if va.Spec.MaxReplicas != 5 {
 		t.Errorf("MaxReplicas = %d, want %d", va.Spec.MaxReplicas, 5)
+	}
+	if va.Labels["inference.optimization/acceleratorName"] != "h100" {
+		t.Errorf("Labels[acceleratorName] = %q, want %q", va.Labels["inference.optimization/acceleratorName"], "h100")
 	}
 }
 
@@ -129,6 +133,7 @@ func TestVariantAutoscalingFromHPA(t *testing.T) {
 			Name:        "my-hpa",
 			Namespace:   "staging",
 			Annotations: wvaAnnotations("model/llama", "20.0"),
+			Labels:      map[string]string{"inference.optimization/acceleratorName": "cpu"},
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
@@ -160,6 +165,9 @@ func TestVariantAutoscalingFromHPA(t *testing.T) {
 	}
 	if va.Spec.MinReplicas == nil || *va.Spec.MinReplicas != 2 {
 		t.Errorf("MinReplicas = %v, want 2", va.Spec.MinReplicas)
+	}
+	if va.Labels["inference.optimization/acceleratorName"] != "cpu" {
+		t.Errorf("Labels[acceleratorName] = %q, want %q", va.Labels["inference.optimization/acceleratorName"], "cpu")
 	}
 }
 

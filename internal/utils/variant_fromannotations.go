@@ -63,6 +63,7 @@ func VariantAutoscalingFromScaledObject(so *kedav1alpha1.ScaledObject) (*wvav1al
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      so.Name,
 			Namespace: so.Namespace,
+			Labels:    so.Labels,
 			Annotations: map[string]string{
 				annotations.Synthetic: "true",
 			},
@@ -113,6 +114,7 @@ func VariantAutoscalingFromHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) (*wva
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      hpa.Name,
 			Namespace: hpa.Namespace,
+			Labels:    hpa.Labels,
 			Annotations: map[string]string{
 				annotations.Synthetic: "true",
 			},
