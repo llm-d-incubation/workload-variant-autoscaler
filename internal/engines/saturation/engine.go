@@ -1591,7 +1591,7 @@ func (e *Engine) applySaturationDecisions(
 		if hasDecision {
 			if decision.Action != interfaces.ActionNoChange {
 				// Sanitize reason to prevent Prometheus cardinality explosion from dynamic numeric values
-				sanitizedReason := sanitizeReasonForMetrics(reason, decision.Action)
+				sanitizedReason := sanitizeReasonForMetrics(&decision)
 				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, string(decision.Action), sanitizedReason); err != nil {
 					logger.Error(err, "Failed to emit replica scaling metrics")
 				}
@@ -1606,14 +1606,26 @@ func (e *Engine) applySaturationDecisions(
 	}
 }
 
-// sanitizeReasonForMetrics converts detailed reason strings into bounded categorical
-// values safe for use as Prometheus label values. This prevents cardinality explosion
-// from dynamic numeric values embedded in reason strings.
-// TODO: look fragile, refactor this function for better solution
-func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction) string {
-	// Check for saturation-only mode patterns
-	if strings.Contains(reason, "saturation-only mode:") {
-		switch action {
+// scalingReasonPrefix* define the expected reason-string prefixes set by each scaling
+// source. sanitizeReasonForMetrics checks against these constants so that renaming
+// a prefix in any producer requires only a single constant update here.
+const (
+	scalingReasonPrefixScaleFromZero = "scalefromzero"
+	scalingReasonPrefixV2            = "V2"
+)
+
+// sanitizeReasonForMetrics maps a VariantDecision to a bounded categorical string
+// safe for use as a Prometheus label value. Dynamic numeric values embedded in
+// reason strings are removed to prevent cardinality explosion.
+//
+// Classification priority:
+//  1. SaturationOnly flag — set structurally by the saturation-only path, no string match needed.
+//  2. Reason prefix — scale-from-zero and V2-optimizer decisions carry a stable prefix.
+//  3. Action — default fallback when no source-specific prefix is present.
+func sanitizeReasonForMetrics(decision *interfaces.VariantDecision) string {
+	// Saturation-only mode is indicated by a dedicated struct field — no string match needed.
+	if decision.SaturationOnly {
+		switch decision.Action {
 		case interfaces.ActionScaleUp:
 			return "saturation-only mode: scale-up"
 		case interfaces.ActionScaleDown:
@@ -1623,9 +1635,10 @@ func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction)
 		}
 	}
 
-	// Check for scale-from-zero pattern
-	if strings.Contains(reason, "scalefromzero") {
-		switch action {
+	// Scale-from-zero and V2-optimizer decisions carry a stable reason prefix.
+	switch {
+	case strings.HasPrefix(decision.Reason, scalingReasonPrefixScaleFromZero):
+		switch decision.Action {
 		case interfaces.ActionScaleUp:
 			return "scalefromzero: scale-up"
 		case interfaces.ActionScaleDown:
@@ -1633,11 +1646,8 @@ func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction)
 		default:
 			return "scalefromzero: no-change"
 		}
-	}
-
-	// Check for V2 optimizer patterns (cost-aware, greedy-by-score, enforced)
-	if strings.Contains(reason, "V2") {
-		switch action {
+	case strings.HasPrefix(decision.Reason, scalingReasonPrefixV2):
+		switch decision.Action {
 		case interfaces.ActionScaleUp:
 			return "V2 scale-up"
 		case interfaces.ActionScaleDown:
@@ -1647,8 +1657,8 @@ func sanitizeReasonForMetrics(reason string, action interfaces.SaturationAction)
 		}
 	}
 
-	// Default fallback based on action
-	switch action {
+	// Default: categorize by action only.
+	switch decision.Action {
 	case interfaces.ActionScaleUp:
 		return "scale-up"
 	case interfaces.ActionScaleDown:
