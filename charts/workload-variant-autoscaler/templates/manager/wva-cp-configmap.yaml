@@ -23,12 +23,6 @@ metadata:
 data:
   # Global defaults applied to all variants unless overridden
   default: |
-    # Select the V2 token-based saturation analyzer. A non-empty analyzers list
-    # routes the engine to the V2 path (GetAnalyzerName() == "saturation").
-    # Remove this list (and leave analyzerName unset) to fall back to the V1
-    # percentage-based analyzer.
-    analyzers:
-      - name: saturation
     kvCacheThreshold: {{ .Values.wva.capacityScaling.default.kvCacheThreshold }}
     queueLengthThreshold: {{ .Values.wva.capacityScaling.default.queueLengthThreshold }}
     kvSpareTrigger: {{ .Values.wva.capacityScaling.default.kvSpareTrigger }}

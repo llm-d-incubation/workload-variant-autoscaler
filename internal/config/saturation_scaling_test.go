@@ -3,7 +3,6 @@ package config
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gopkg.in/yaml.v3"
 )
 
 func float64Ptr(v float64) *float64 { return &v }
@@ -451,60 +450,6 @@ var _ = Describe("SaturationScalingConfig", func() {
 		It("should return empty when no analyzers and no analyzerName", func() {
 			config := SaturationScalingConfig{}
 			Expect(config.GetAnalyzerName()).To(BeEmpty())
-		})
-	})
-
-	Context("YAML round-trip", func() {
-
-		It("parses the shipped V2 default and fills V2 thresholds via ApplyDefaults", func() {
-			// Mirrors the ConfigMap "default" entry now shipped by kustomize/helm.
-			const yamlStr = `analyzers:
-  - name: saturation
-kvCacheThreshold: 0.80
-queueLengthThreshold: 5
-kvSpareTrigger: 0.1
-queueSpareTrigger: 3
-enableLimiter: false
-`
-			var cfg SaturationScalingConfig
-			Expect(yaml.Unmarshal([]byte(yamlStr), &cfg)).To(Succeed())
-			Expect(cfg.IsV2()).To(BeTrue(), "non-empty analyzers list selects V2")
-			Expect(cfg.Analyzers).To(HaveLen(1))
-			Expect(cfg.Analyzers[0].Name).To(Equal("saturation"))
-
-			// Defaults are not present in the YAML; ApplyDefaults must fill them.
-			Expect(cfg.ScaleUpThreshold).To(BeZero())
-			Expect(cfg.ScaleDownBoundary).To(BeZero())
-			cfg.ApplyDefaults()
-			Expect(cfg.ScaleUpThreshold).To(Equal(DefaultScaleUpThreshold))   // 0.85
-			Expect(cfg.ScaleDownBoundary).To(Equal(DefaultScaleDownBoundary)) // 0.70
-		})
-
-		It("preserves an explicit top-level scaleUpThreshold through unmarshal", func() {
-			const yamlStr = `analyzers:
-  - name: saturation
-scaleUpThreshold: 0.90
-`
-			var cfg SaturationScalingConfig
-			Expect(yaml.Unmarshal([]byte(yamlStr), &cfg)).To(Succeed())
-			Expect(cfg.ScaleUpThreshold).To(Equal(0.90))
-			// ApplyDefaults must not clobber an explicitly-set value.
-			cfg.ApplyDefaults()
-			Expect(cfg.ScaleUpThreshold).To(Equal(0.90))
-		})
-
-		It("sets the per-analyzer *float64 override from YAML", func() {
-			const yamlStr = `analyzers:
-  - name: saturation
-    scaleUpThreshold: 0.90
-`
-			var cfg SaturationScalingConfig
-			Expect(yaml.Unmarshal([]byte(yamlStr), &cfg)).To(Succeed())
-			Expect(cfg.Analyzers).To(HaveLen(1))
-			Expect(cfg.Analyzers[0].ScaleUpThreshold).NotTo(BeNil(), "per-analyzer override pointer must be set")
-			Expect(*cfg.Analyzers[0].ScaleUpThreshold).To(Equal(0.90))
-			// The per-analyzer override wins over the global default.
-			Expect(cfg.Analyzers[0].EffectiveScaleUpThreshold(DefaultScaleUpThreshold)).To(Equal(0.90))
 		})
 	})
 })

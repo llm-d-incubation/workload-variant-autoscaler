@@ -180,17 +180,6 @@ var _ = BeforeSuite(func() {
 		g.Expect(runningPods).To(BeNumerically(">", 0), "No running WVA controller pods")
 	}).Should(Succeed(), "WVA controller should be running")
 
-	// The kustomize base now ships the saturation ConfigMap with
-	// analyzers:[saturation] (the V2 token-based path). Revert it to the V1
-	// percentage-based default so the existing scaling specs run the same path
-	// they were written and validated against. The shipped value is snapshotted
-	// and restored in AfterSuite, so the suite leaves the deployed ConfigMap as
-	// it found it. Suites that exercise V2 (saturation_v2_test.go,
-	// saturation_analyzer_path_test.go) set and restore their own config, so
-	// they are unaffected.
-	By("Reverting saturation config to V1 for suite consistency")
-	revertSaturationConfigToV1()
-
 	By("Verifying llm-d infrastructure")
 	// Verify Gateway CRDs exist
 	Eventually(func(g Gomega) {
@@ -265,77 +254,6 @@ var _ = BeforeSuite(func() {
 	GinkgoWriter.Println("BeforeSuite completed successfully - infrastructure ready")
 })
 
-// satConfigV1Default mirrors the pre-V2 kustomize default for the saturation
-// ConfigMap (no analyzers list and no analyzerName → V1 percentage-based path).
-const satConfigV1Default = `kvCacheThreshold: 0.80
-queueLengthThreshold: 5
-kvSpareTrigger: 0.1
-queueSpareTrigger: 3
-enableLimiter: false
-`
-
-// Snapshot of the saturation ConfigMap "default" entry as it was deployed
-// (the shipped V2 config) before revertSaturationConfigToV1 overwrote it.
-// restoreSaturationConfig uses it in AfterSuite to leave the ConfigMap as the
-// suite found it. saturationDefaultCaptured guards against restoring when the
-// snapshot was never taken (BeforeSuite failed before the revert).
-var (
-	savedSaturationDefault    string
-	saturationDefaultExisted  bool
-	saturationDefaultCaptured bool
-)
-
-// revertSaturationConfigToV1 patches the deployed saturation ConfigMap's
-// "default" entry to the V1 config, so the general e2e suite runs the V1
-// percentage-based analyzer regardless of the kustomize default (which now
-// selects V2). It first snapshots the shipped value so AfterSuite can restore
-// it. The controller hot-reloads the labeled ConfigMap, so no restart is
-// required.
-func revertSaturationConfigToV1() {
-	name := saturationConfigMapName()
-	ns := cfg.WVANamespace
-	cm, err := k8sClient.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
-	Expect(err).NotTo(HaveOccurred(), "failed to get saturation ConfigMap %s/%s", ns, name)
-	if cm.Data == nil {
-		cm.Data = map[string]string{}
-	}
-	savedSaturationDefault, saturationDefaultExisted = cm.Data["default"]
-	saturationDefaultCaptured = true
-	cm.Data["default"] = satConfigV1Default
-	_, err = k8sClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
-	Expect(err).NotTo(HaveOccurred(), "failed to revert saturation ConfigMap to V1")
-}
-
-// restoreSaturationConfig returns the saturation ConfigMap "default" entry to
-// the value captured by revertSaturationConfigToV1 (the shipped V2 config), so
-// the suite leaves the deployed ConfigMap as it found it. Best-effort: it runs
-// during teardown on context.Background() (the suite ctx may be cancelled) and
-// logs rather than fails on error.
-func restoreSaturationConfig() {
-	if !saturationDefaultCaptured || k8sClient == nil {
-		return
-	}
-	name := saturationConfigMapName()
-	ns := cfg.WVANamespace
-	bg := context.Background()
-	cm, err := k8sClient.CoreV1().ConfigMaps(ns).Get(bg, name, metav1.GetOptions{})
-	if err != nil {
-		GinkgoWriter.Printf("Warning: failed to get saturation ConfigMap %s/%s for restore: %v\n", ns, name, err)
-		return
-	}
-	if cm.Data == nil {
-		cm.Data = map[string]string{}
-	}
-	if saturationDefaultExisted {
-		cm.Data["default"] = savedSaturationDefault
-	} else {
-		delete(cm.Data, "default")
-	}
-	if _, err := k8sClient.CoreV1().ConfigMaps(ns).Update(bg, cm, metav1.UpdateOptions{}); err != nil {
-		GinkgoWriter.Printf("Warning: failed to restore saturation ConfigMap %s/%s to shipped config: %v\n", ns, name, err)
-	}
-}
-
 // ReportAfterEach dumps controller logs and VA status after a failed test.
 // This makes E2E failures self-contained and easier to debug (why scaling happened / didn't happen).
 var _ = ReportAfterEach(func(report SpecReport) {
@@ -352,9 +270,6 @@ var _ = ReportAfterEach(func(report SpecReport) {
 })
 
 var _ = AfterSuite(func() {
-	By("Restoring the saturation ConfigMap to its shipped (V2) config")
-	restoreSaturationConfig()
-
 	By("Cleaning up any leftover test resources")
 	if k8sClient != nil && crClient != nil {
 		// Clean up any resources with test labels that might have been left behind

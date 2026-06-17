@@ -486,34 +486,6 @@ var _ = Describe("ConfigMapReconciler", func() {
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
 
-		It("parses a V2 saturation entry end-to-end via parseSaturationConfig", func() {
-			By("Parsing ConfigMap data with a V2 analyzers entry and a per-analyzer threshold")
-			cmData := map[string]string{
-				"default": `analyzers:
-  - name: saturation
-    scaleUpThreshold: 0.90
-kvCacheThreshold: 0.80
-queueLengthThreshold: 5
-kvSpareTrigger: 0.1
-queueSpareTrigger: 3
-`,
-			}
-			configs, count := parseSaturationConfig(cmData, GinkgoLogr)
-
-			Expect(count).To(Equal(1))
-			Expect(configs).To(HaveKey("default"))
-			got := configs["default"]
-			Expect(got.IsV2()).To(BeTrue())
-			Expect(got.Analyzers).To(HaveLen(1))
-
-			// ApplyDefaults ran inside parseSaturationConfig: the global V2 default
-			// is filled while the per-analyzer override survives the parse path.
-			Expect(got.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))   // 0.85
-			Expect(got.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary)) // 0.70
-			Expect(got.Analyzers[0].ScaleUpThreshold).NotTo(BeNil())
-			Expect(*got.Analyzers[0].ScaleUpThreshold).To(Equal(0.90))
-		})
-
 	})
 
 	Context("Metrics Recording", func() {

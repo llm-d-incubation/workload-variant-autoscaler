@@ -44,31 +44,7 @@ These parameters apply when `analyzerName: "saturation"` is set or when the `ana
 
 ### Default Configuration
 
-As shipped (kustomize base and helm chart), the **default ConfigMap selects the V2 token-based analyzer**:
-
-```yaml
-analyzers:
-  - name: saturation
-    # Per-analyzer threshold overrides (optional; shown with their defaults):
-    # scaleUpThreshold: 0.85     # default
-    # scaleDownBoundary: 0.70    # default
-# Global threshold overrides (optional; apply to every analyzer):
-# scaleUpThreshold: 0.85
-# scaleDownBoundary: 0.70
-kvCacheThreshold: 0.80
-queueLengthThreshold: 5
-kvSpareTrigger: 0.1
-queueSpareTrigger: 3
-enableLimiter: false
-```
-
-The non-empty `analyzers:` list routes the engine to V2 (`GetAnalyzerName() == "saturation"`).
-The V2 thresholds (`scaleUpThreshold` / `scaleDownBoundary`) are filled from their defaults
-(0.85 / 0.70) when omitted, and the `kvCacheThreshold` / `queueLengthThreshold` / spare-trigger
-values are retained because V2 still uses them for the per-replica saturation check.
-
-**To use the V1 (percentage-based) analyzer instead,** remove the `analyzers:` list and leave
-`analyzerName` unset:
+The recommended values for the V1 (percentage-based) saturation analyzer are:
 
 ```yaml
 kvCacheThreshold: 0.80
@@ -77,11 +53,10 @@ kvSpareTrigger: 0.1
 queueSpareTrigger: 3
 ```
 
-> **Important:** The V1 threshold values are **not hardcoded** in the analyzer code.
-> If a V1 ConfigMap is missing or has no `default` entry, all V1 thresholds default to zero,
+> **Important:** These V1 threshold values are **not hardcoded** in the analyzer code.
+> If the ConfigMap is missing or has no `default` entry, all V1 thresholds default to zero,
 > which will cause every replica to appear saturated and trigger continuous scale-up.
-> Always deploy a V1 `default` entry containing valid thresholds. (V2 has safe hardcoded
-> threshold defaults, so it degrades gracefully.)
+> Always deploy the ConfigMap with a `default` entry containing valid thresholds.
 
 ### How Scale-Up Triggers Work
 
