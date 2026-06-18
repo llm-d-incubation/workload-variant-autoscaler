@@ -67,7 +67,7 @@ KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
 # LeaderWorkerSet. Set true when LWS tests run (e.g. full e2e suite). Defaults false so smoke and benchmarks skip it.
 DEPLOY_LWS=${DEPLOY_LWS:-false}
 LWS_NAMESPACE=${LWS_NAMESPACE:-"lws-system"}
-LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.8.0"}
+LWS_CHART_VERSION=${LWS_CHART_VERSION:-"0.9.0"}
 
 # Environment-related variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

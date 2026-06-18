@@ -665,7 +665,7 @@ VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not cont
 | `VLLM_SVC_ENABLED` | Enable vLLM Service in chart | `true` |
 | `VLLM_SVC_NODEPORT` | vLLM NodePort | `30000` |
 | `LWS_NAMESPACE` | Namespace for LeaderWorkerSet installation | `lws-system` |
-| `LWS_CHART_VERSION` | LeaderWorkerSet Helm chart version | `0.8.0` |
+| `LWS_CHART_VERSION` | LeaderWorkerSet Helm chart version | `0.9.0` |
 
 #### Optional: capacity thresholds after `make deploy-e2e-infra`
 

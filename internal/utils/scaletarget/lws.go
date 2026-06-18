@@ -78,7 +78,7 @@ func (r *lwsAccessor) GetGroupSize() int32 {
 	// r.lws is always not nil
 	if r.lws.Spec.LeaderWorkerTemplate.Size == nil {
 		// As documented, this is optional (nil) and default to 1
-		// https://pkg.go.dev/sigs.k8s.io/lws@v0.8.0/api/leaderworkerset/v1#LeaderWorkerTemplate.Size
+		// https://pkg.go.dev/sigs.k8s.io/lws@v0.9.0/api/leaderworkerset/v1#LeaderWorkerTemplate.Size
 		return 1
 	}
 	return *r.lws.Spec.LeaderWorkerTemplate.Size
