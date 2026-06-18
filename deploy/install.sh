@@ -60,7 +60,7 @@ WVA_METRICS_SECURE=${WVA_METRICS_SECURE:-true}
 SCALER_BACKEND=${SCALER_BACKEND:-prometheus-adapter}
 KEDA_NAMESPACE=${KEDA_NAMESPACE:-keda-system}
 # Pinned for reproducible Helm installs (used when deploy_keda actually runs helm upgrade).
-KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
+KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.20.1}
 # On kubernetes: default false (cluster-managed KEDA); kind-emulator flows often set true or use cluster path.
 KEDA_HELM_INSTALL=${KEDA_HELM_INSTALL:-false}
 

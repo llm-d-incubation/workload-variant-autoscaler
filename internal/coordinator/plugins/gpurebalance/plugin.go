@@ -27,6 +27,9 @@ type Plugin struct {
 	promAPI promv1.API
 }
 
+// +kubebuilder:rbac:groups="",resources=resourcequotas,verbs=get;list;watch
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;patch;update
+
 // New constructs the gpu-rebalance Plugin.
 func New(c client.Client, promAPI promv1.API) *Plugin {
 	return &Plugin{client: c, promAPI: promAPI}
