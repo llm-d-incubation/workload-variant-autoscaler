@@ -138,6 +138,9 @@ func (e *Engine) runAnalyzersAndScore(
 		if entry.name == interfaces.SaturationAnalyzerName {
 			continue
 		}
+		if !effectiveEnabled(entry.name, config) {
+			continue
+		}
 		result := runRegisteredAnalyzer(ctx, logger, entry, modelID, input)
 		if result == nil {
 			continue
@@ -181,30 +184,19 @@ func resolveThresholds(analyzerName string, cfg config.SaturationScalingConfig) 
 	return cfg.ScaleUpThreshold, cfg.ScaleDownBoundary
 }
 
-// runRegisteredAnalyzers invokes Analyze on every registered non-saturation
-// analyzer in registration order, reading from the frozen analyzersSnapshot
-// built by StartOptimizeLoop. For each result the universal threshold post-step
-// is applied using per-analyzer config overrides where set (falling back to the
-// model-level globals). Results are discarded on this branch — combine logic
-// lands in follow-up PRs. Saturation is skipped; it runs via runV2AnalysisOnly.
-func (e *Engine) runRegisteredAnalyzers(
-	ctx context.Context,
-	logger logr.Logger,
-	modelID string,
-	input interfaces.AnalyzerInput,
-	cfg config.SaturationScalingConfig,
-) {
-	for _, entry := range e.analyzersSnapshot {
-		if entry.name == interfaces.SaturationAnalyzerName {
-			continue
+// effectiveEnabled returns false only when the analyzer has an explicit
+// Enabled:false entry in cfg.Analyzers. Absent entries and nil Enabled
+// pointers default to true (consistent with ApplyDefaults).
+func effectiveEnabled(analyzerName string, cfg config.SaturationScalingConfig) bool {
+	for _, aw := range cfg.Analyzers {
+		if aw.Name == analyzerName {
+			if aw.Enabled != nil {
+				return *aw.Enabled
+			}
+			return true
 		}
-		result := runRegisteredAnalyzer(ctx, logger, entry, modelID, input)
-		if result != nil {
-			up, down := resolveThresholds(entry.name, cfg)
-			applyUniversalThreshold(result, up, down)
-		}
-		// result discarded: optimizer receives only saturation on this branch
 	}
+	return true
 }
 
 // runRegisteredAnalyzer invokes a single non-saturation analyzer's Analyze

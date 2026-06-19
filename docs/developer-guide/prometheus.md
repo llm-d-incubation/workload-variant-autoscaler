@@ -1,6 +1,6 @@
 # Prometheus Integration
 
-WVA integrates with Prometheus to collect metrics from vLLM inference servers and expose custom autoscaling metrics. In addition, WVA also emits internal metrics for observability (See [Internal Metrics](#internal-metrics)). This guide covers Prometheus configuration, metric collection, and security best practices.
+WVA integrates with Prometheus to collect metrics from different sources such as vLLM inference servers, and expose internal as well as custom autoscaling metrics. This guide covers Prometheus configuration, metric collection, and security best practices.
 
 ## Configuration
 
@@ -80,11 +80,37 @@ data:
   PROMETHEUS_SERVER_NAME: "prometheus-k8s.monitoring.svc.cluster.local"
   PROMETHEUS_BEARER_TOKEN: "your-bearer-token"  # Not recommended - use Secret instead
 ```
-
 **Configuration Priority:**
 1. Environment variables (checked first)
 2. ConfigMap values (fallback)
 3. Error if neither provides `PROMETHEUS_BASE_URL`
+   
+### Metrics Endpoint
+The metrics are exposed at the `/metrics` endpoint on port 8080 (HTTP).
+
+### ServiceMonitor Configuration
+
+WVA metrics are exposed on port 8080 (HTTP):
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: workload-variant-autoscaler
+  namespace: workload-variant-autoscaler-system
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  endpoints:
+  - port: http
+    scheme: http
+    interval: 30s
+    path: /metrics
+```
+
+
 
 ## Security Considerations
 
@@ -137,29 +163,588 @@ query := fmt.Sprintf(`vllm_kv_cache_usage{namespace="%s"}`, escapedNamespace)
 - Blocks label injection attacks that could manipulate query results
 - Ensures multi-tenant deployments remain isolated
 
-## Custom Metrics Documentation
 
-## WVA Custom Metrics
 
-WVA exposes custom metrics that provide insights into autoscaling behavior and optimization performance. These metrics are exposed via Prometheus at the `/metrics` endpoint.
+## WVA Metrics
 
-### Metrics Overview
+WVA exposes metrics providing insights into autoscaling behavior and optimization performance. These metrics are exposed via Prometheus at the `/metrics` endpoint.
 
-All custom metrics are prefixed with `inferno_` and include labels for `variant_name`, `namespace`, and other relevant dimensions.
+### Notes on **name_space**s in metrics
+With WVA metrics, the value for the label `namespace` is the WVA controller namespace, not the VA's namespace. The VA namespace has the label `exported_namespace`. Here's an example:
+```
+{
+  "metric": "wva_desired_replicas",
+  "labels": {
+    "accelerator_type": "A100",
+    "container": "manager",
+    "endpoint": "https",
+    "exported_namespace": "llm-d-sim",    <==== VA namespace
+    "instance": "10.244.0.73:8443",
+    "job": "workload-variant-autoscaler-metrics",
+    "namespace": "workload-variant-autoscaler-system",  <=== WVA controller namespace
+    "pod": "workload-variant-autoscaler-controller-manager-75b45dd7c-89g5s",
+    "service": "workload-variant-autoscaler-metrics",
+    "variant_name": "workload-variant-autoscaler-va"
+  },
+  "value": "2"
+}
+```
+
+### Configuration Metrics
+
+### `wva_config_info`
+- **Type**: Gauge
+- **Description**: WVA configuration information (value is always 1)
+- **Labels**:
+  - `analyzer_name`: Name of the saturation analyzer in use
+  - `limiter_enabled`: Whether the limiter is enabled (`true`, `false`)
+  - `scale_to_zero_enabled`: Whether scale-to-zero is enabled (`true`, `false`)
+- **Use Case**: Info-style metric to expose WVA configuration via labels for monitoring and debugging
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_config_info",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "limiter_enabled": "false",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "scale_to_zero_enabled": "false",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
+
+### `wva_config_kv_spare_threshold`
+- **Type**: Gauge
+- **Description**: KV cache spare threshold configuration value
+- **Labels**: None (global configuration)
+- **Use Case**: Monitor the configured KV cache spare threshold used in scaling decisions
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_config_kv_spare_threshold",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "0.1"
+    ]
+  }
+  ```
+
+### `wva_config_queue_spare_threshold`
+- **Type**: Gauge
+- **Description**: Queue spare threshold configuration value
+- **Labels**: None (global configuration)
+- **Use Case**: Monitor the configured queue spare threshold used in scaling decisions
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_config_queue_spare_threshold",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "3"
+    ]
+  }
+  ```
+
+### `wva_config_optimization_interval_seconds`
+- **Type**: Gauge
+- **Description**: Optimization interval in seconds
+- **Labels**: None (global configuration)
+- **Use Case**: Track how frequently the optimization loop runs
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_config_optimization_interval_seconds",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "30"
+    ]
+  }
+  ```
+### Metrics Collection Observability
+
+### `wva_metrics_collection_duration_seconds`
+- **Type**: Histogram
+- **Description**: Duration of metrics collection operations in seconds
+- **Labels**:
+  - `query_type`: Type of metrics query being executed
+- **Buckets**: 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5
+- **Use Case**: Monitor metrics collection performance and identify slow queries
+- ***Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_metrics_collection_duration_seconds_bucket",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "le": "0.001",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "query_type": "cache_config",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "0"
+    ]
+  }
+  ```
+
+### `wva_metrics_collection_errors_total`
+- **Type**: Counter
+- **Description**: Total number of metrics collection errors
+- **Labels**:
+  - `query_type`: Type of metrics query that failed
+  - `reason`: Reason for the error
+- **Use Case**: Track metrics collection failures and identify problematic queries
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_metrics_collection_errors_total",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.59:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-f9fdb95df-wvd9p",
+      "query_type": "kv_cache",
+      "reason": "bad_data",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778854211.669,
+      "3"
+    ]
+  }
+  ```
+
+### `wva_metrics_pods_discovered`
+- **Type**: Gauge
+- **Description**: Number of pods discovered for a namespace
+- **Labels**:
+  - `namespace`: Kubernetes namespace
+- **Use Case**: Monitor pod discovery to ensure all replicas are being tracked
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_metrics_pods_discovered",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
+
+### `wva_metrics_freshness_status`
+- **Type**: Gauge
+- **Description**: Freshness status of metrics for each variant
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `status`: Status of metrics freshness (`fresh`, `stale`, `missing`, `unavailable`)
+- **Use Case**: Track metric staleness to ensure autoscaling decisions are based on current data
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_metrics_freshness_status",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "status": "fresh",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "2"
+    ]
+  }
+  ```
+
+### `wva_pod_mapping_miss_total`
+- **Type**: Counter
+- **Description**: Total number of pods whose metrics could not be attributed to a managed scaler — neither the `llm-d.ai/variant` label nor the pod locator (ownerReference walk) resolved an owning HPA/ScaledObject. Makes the otherwise-silent skip observable.
+- **Labels**:
+  - `namespace`: Kubernetes namespace of the unattributed pod
+  - `reason`: Why the pod was unattributed (currently always `unresolved`)
+- **Use Case**: Alert on a rising rate of unattributed pods — usually a missing `llm-d.ai/variant` label, a scaler missing the `llm-d.ai/managed` annotation, or a shadow-pod layout without the label
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_pod_mapping_miss_total",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.59:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-f9fdb95df-wvd9p",
+      "exported_namespace": "llm-d-sim",
+      "reason": "unresolved",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778854211.669,
+      "2"
+    ]
+  }
+  ```
 
 ### Optimization Metrics
 
-*No optimization metrics are currently exposed. Optimization timing is logged at DEBUG level.*
+### `wva_optimization_duration_seconds`
+- **Type**: Histogram
+- **Description**: Duration of optimization loop cycles in seconds
+- **Labels**:
+  - `status`: Status of the optimization cycle (`success`, `error`)
+- **Buckets**: 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+- **Use Case**: Monitor optimization loop performance and identify slow optimization cycles
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_optimization_duration_seconds_bucket",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "le": "0.01",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "status": "success"
+    },
+    "value": [
+      1778846184.925,
+      "191"
+    ]
+  }
+  ```
 
-### Operational Metrics
+### `wva_models_processed`
+- **Type**: Gauge
+- **Description**: Number of models processed in the last optimization cycle
+- **Labels**: None (global metric)
+- **Use Case**: Track how many models are being processed per optimization cycle to understand workload
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_models_processed",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
+
+### Saturation and Capacity Metrics
+
+### `wva_saturation_utilization`
+- **Type**: Gauge
+- **Description**: Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `accelerator_type`: Type of accelerator being used
+- **Use Case**: Monitor KV cache utilization to understand saturation levels and trigger scaling decisions
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_saturation_utilization",
+      "accelerator_type": "H100",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "model_name": "unsloth/Meta-Llama-3.1-8B",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "0"
+    ]
+  }
+  ```
+
+### `wva_spare_capacity`
+- **Type**: Gauge
+- **Description**: Per-variant spare KV-cache capacity (0.0-1.0) from saturation analysis. V1 path: threshold-relative spare (kvCacheThreshold - avg KV usage). V2 path: 1.0 - utilization.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `accelerator_type`: Type of accelerator being used
+- **Use Case**: Track available capacity headroom to prevent saturation and optimize resource allocation
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_spare_capacity",
+      "accelerator_type": "H100",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "model_name": "unsloth/Meta-Llama-3.1-8B",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "0.8"
+    ]
+  }
+  ```
+
+### `wva_required_capacity`
+- **Type**: Gauge
+- **Description**: Model-level required capacity; >0 indicates scale-up needed. Use the `unit` label to interpret the value: `binary` → 0/1 scale-up signal (V1), `continuous` → token demand (V2).
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+  - `unit`: Interpretation of the value (`binary` or `continuous`)
+- **Use Case**: Identify when additional capacity is needed and understand the magnitude of demand
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_required_capacity",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "model_name": "unsloth/Meta-Llama-3.1-8B",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "0"
+    ]
+  }
+  ```
+
+### `wva_kv_cache_tokens_used`
+- **Type**: Gauge
+- **Description**: Total KV cache tokens currently in use across all replicas of a variant (sum of vLLM TokensInUse).
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `model_name`: Model name served by the variant
+- **Use Case**: Monitor absolute KV cache token usage across variant replicas
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_kv_cache_tokens_used",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "model_name": "unsloth/Meta-Llama-3.1-8B",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "0"
+    ]
+  }
+  ```
+
+### Pipeline Stage Visibility Metrics
+
+### `wva_decisions_limited_total`
+- **Type**: Counter
+- **Description**: Total number of scaling decisions constrained by the limiter. This tracks how often the limiter prevents scaling actions due to resource constraints.
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `limiter_name`: Name of the limiter that constrained the decision
+- **Use Case**: Monitor how frequently resource limiters are constraining scaling decisions to understand capacity bottlenecks
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_decisions_limited_total",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.60:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "limiter_name": "gpu-limiter",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-659d5c9dcf-w6cw7",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778855539.730,
+      "1"
+    ]
+  }
+  ```
+
 ### `wva_available_gpus`
 - **Type**: Gauge
-- **Description**: Number of currently available GPUs group by accelerator type (e.g. "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`.
+- **Description**: Number of currently available GPUs grouped by accelerator type (e.g., "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG.
 - **Labels**:
   - `accelerator_vendor`: Name of the GPU vendor
   - `accelerator_model`: Full name of the accelerator
   - `accelerator_type`: Type of accelerator (short name of the accelerator)
-- **Use Case**: Show number of GPUs discovered by WVA
+- **Use Case**: Track the number of GPUs discovered by WVA and available for allocation
+- **Example**:
+  ```
+  {
+      "metric": {
+        "__name__": "wva_available_gpus",
+        "accelerator_model": "NVIDIA-H100-SXM5-80GB",
+        "accelerator_type": "H100",
+        "accelerator_vendor": "nvidia.com",
+        "container": "manager",
+        "endpoint": "https",
+        "instance": "10.244.2.55:8443",
+        "job": "workload-variant-autoscaler-metrics",
+        "namespace": "workload-variant-autoscaler-system",
+        "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+        "service": "workload-variant-autoscaler-metrics"
+      },
+      "value": [
+        1778847371.083,
+        "4"
+      ]
+    }
+  ```
+
+### `wva_enforcer_modifications_total`
+- **Type**: Counter
+- **Description**: Total number of decision modifications made by the enforcer. The enforcer applies policy constraints (e.g., "scale_to_zero", "minimum_replicas") to scaling decisions.
+- **Labels**:
+  - `policy_type`: Type of enforcement policy applied
+- **Use Case**: Monitor how often the enforcer modifies scaling decisions to enforce policies and understand policy impact
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_enforcer_modifications_total",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.62:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-c8b9c74b5-82t2c",
+      "policy_type": "scale_to_zero",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778859222.859,
+      "1"
+    ]
+  }
+  ```
+
+### `wva_optimizer_active`
+- **Type**: Gauge
+- **Description**: Indicates which optimizer is currently active. Value is 1 for the active optimizer and 0 for inactive optimizers. Only one optimizer should be active at a time. If the label `optimizer_name` is not in the metric, this means V1 saturation optimizer is currently active.
+- **Labels**:
+  - `optimizer_name`: Name of the optimizer
+- **Use Case**: Track which optimization strategy is currently in use for scaling decisions
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_optimizer_active",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "optimizer_name": "cost-aware",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
 
 ### Replica Management Metrics
 
@@ -171,6 +756,28 @@ All custom metrics are prefixed with `inferno_` and include labels for `variant_
   - `namespace`: Kubernetes namespace
   - `accelerator_type`: Type of accelerator being used
 - **Use Case**: Monitor current number of replicas per variant
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_current_replicas",
+      "accelerator_type": "H100",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
 
 ### `wva_desired_replicas`
 - **Type**: Gauge
@@ -180,6 +787,28 @@ All custom metrics are prefixed with `inferno_` and include labels for `variant_
   - `namespace`: Kubernetes namespace
   - `accelerator_type`: Type of accelerator being used
 - **Use Case**: Expose the desired optimized number of replicas per variant
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_desired_replicas",
+      "accelerator_type": "H100",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
 
 ### `wva_desired_ratio`
 - **Type**: Gauge
@@ -189,43 +818,59 @@ All custom metrics are prefixed with `inferno_` and include labels for `variant_
   - `namespace`: Kubernetes namespace
   - `accelerator_type`: Type of accelerator being used
 - **Use Case**: Compare the desired and current number of replicas per variant, for scaling purposes
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_desired_ratio",
+      "accelerator_type": "H100",
+      "container": "manager",
+      "endpoint": "https",
+      "exported_namespace": "llm-d-sim-dual",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics",
+      "variant_name": "smoke-test-dual-shared-va"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
 
-### `wva_replica_scaling_total`
+### Error Tracking
+
+### `wva_errors_total`
 - **Type**: Counter
-- **Description**: Total number of replica scaling operations
+- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the compoments currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
 - **Labels**:
-  - `variant_name`: Name of the variant
-  - `namespace`: Kubernetes namespace
-  - `direction`: Direction of scaling (up, down)
-  - `reason`: Reason for scaling
-- **Use Case**: Track scaling frequency and reasons
-
-## Configuration
-
-### Metrics Endpoint
-The metrics are exposed at the `/metrics` endpoint on port 8080 (HTTP).
-
-### ServiceMonitor Configuration
-
-WVA metrics are exposed on port 8080 (HTTP):
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: workload-variant-autoscaler
-  namespace: workload-variant-autoscaler-system
-  labels:
-    release: kube-prometheus-stack
-spec:
-  selector:
-    matchLabels:
-      control-plane: controller-manager
-  endpoints:
-  - port: http
-    scheme: http
-    interval: 30s
-    path: /metrics
-```
+  - `component`: Component where the error occurred
+  - `error_type`: Type or category of the error
+- **Use Case**: Track error rates across different components to identify problematic areas and monitor system health
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_errors_total",
+      "component": "controller",
+      "container": "manager",
+      "endpoint": "https",
+      "error_type": "Failed to parse saturation scaling config entry",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778850096.639,
+      "1"
+    ]
+  }
+  ```
 
 ## Example Queries
 
@@ -251,13 +896,97 @@ abs(wva_desired_replicas - wva_current_replicas)
 
 # Scaling frequency by reason
 rate(wva_replica_scaling_total[5m]) by (reason)
-```
 
-## Internal Metrics
-### `wva_errors_total`
-- **Type**: Counter
-- **Description**: Total number of errors by WVA components
-- **Labels**:
-  - `component`: Name of the component. The components are `collector`, `analyzer`, `optimizer`, `limiter`, `enforcer`, and `controller`. Currently, this metric is available for `collector`, `enforcer`, `controller`. It will be available for other components as these components handle errors
-  - `error_type`: Short description of the error
-- **Use Case**: Track errors in WVA by components
+# Optimization duration 95th percentile
+histogram_quantile(0.95, rate(wva_optimization_duration_seconds_bucket[5m]))
+
+# Saturation utilization by variant
+wva_saturation_utilization
+
+# KV cache utilization percentage
+(wva_kv_cache_tokens_used / wva_kv_cache_tokens_total) * 100
+
+# Variants requiring scale-up (V1 binary signal)
+wva_required_capacity{unit="binary"} > 0
+
+# Spare capacity below threshold (potential scale-up needed)
+wva_spare_capacity < 0.2
+
+# Models processed over time
+wva_models_processed
+
+# Metrics collection duration 99th percentile by query type
+histogram_quantile(0.99, rate(wva_metrics_collection_duration_seconds_bucket[5m])) by (query_type)
+
+# Metrics collection error rate
+rate(wva_metrics_collection_errors_total[5m])
+
+# Pods discovered per namespace
+wva_metrics_pods_discovered
+
+# Stale metrics by variant
+wva_metrics_freshness_status{status="stale"}
+
+# Fresh metrics ratio
+sum(wva_metrics_freshness_status{status="fresh"}) / sum(wva_metrics_freshness_status)
+
+# WVA configuration info
+wva_config_info
+
+# Check if limiter is enabled
+wva_config_info{limiter_enabled="true"}
+
+# Current KV cache spare threshold
+wva_config_kv_spare_threshold
+
+# Current queue spare threshold
+wva_config_queue_spare_threshold
+
+# Optimization loop interval
+wva_config_optimization_interval_seconds
+
+# Total errors by component
+wva_errors_total
+
+# Error rate over time
+rate(wva_errors_total[5m])
+
+# Error rate by component
+rate(wva_errors_total[5m]) by (component)
+
+# Error rate by error type
+rate(wva_errors_total[5m]) by (error_type)
+
+# Decisions limited by limiter
+wva_decisions_limited_total
+
+# Decisions limited rate over time
+rate(wva_decisions_limited_total[5m])
+
+# Decisions limited by variant
+rate(wva_decisions_limited_total[5m]) by (variant_name)
+
+# Decisions limited by limiter type
+rate(wva_decisions_limited_total[5m]) by (limiter_name)
+
+# Available GPUs by accelerator type
+wva_available_gpus
+
+# Total available GPUs across all types
+sum(wva_available_gpus)
+
+# Enforcer modifications total
+wva_enforcer_modifications_total
+
+# Enforcer modification rate over time
+rate(wva_enforcer_modifications_total[5m])
+
+# Enforcer modifications by policy type
+rate(wva_enforcer_modifications_total[5m]) by (policy_type)
+
+# Active optimizer
+wva_optimizer_active
+
+# Currently active optimizer (filter for value = 1)
+wva_optimizer_active == 1
+```

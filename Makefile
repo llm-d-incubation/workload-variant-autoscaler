@@ -670,3 +670,6 @@ mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)
 endef
+
+
+include config/samples/hpa/co-ordinator/poc.mk

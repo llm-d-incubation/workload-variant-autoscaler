@@ -12,7 +12,7 @@ func healthyReplica(podName string) interfaces.ReplicaMetrics {
 	return interfaces.ReplicaMetrics{
 		PodName:               podName,
 		VariantName:           "v1",
-		KvCacheUsage:          0.50,
+		KvUsageInstant:        0.50,
 		TotalKvCapacityTokens: 65536,
 		AvgInputTokens:        1024,
 		AvgOutputTokens:       256,
@@ -98,33 +98,33 @@ var _ = Describe("CheckModelMetrics", func() {
 	})
 
 	Describe("KV utilization out of range", func() {
-		It("flags SanityIssueKVOutOfRange when KvCacheUsage is negative", func() {
+		It("flags SanityIssueKVOutOfRange when KvUsageInstant (k*) is negative", func() {
 			m := healthyReplica("pod-0")
-			m.KvCacheUsage = -0.01
+			m.KvUsageInstant = -0.01
 			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
 
-		It("flags SanityIssueKVOutOfRange when KvCacheUsage exceeds 1.0", func() {
+		It("flags SanityIssueKVOutOfRange when KvUsageInstant (k*) exceeds 1.0", func() {
 			m := healthyReplica("pod-0")
-			m.KvCacheUsage = 1.01
+			m.KvUsageInstant = 1.01
 			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 		})
 
-		It("flags SanityIssueKVOutOfRange for NaN KvCacheUsage", func() {
+		It("flags SanityIssueKVOutOfRange for NaN KvUsageInstant (k*)", func() {
 			m := healthyReplica("pod-0")
-			m.KvCacheUsage = float64NaN()
+			m.KvUsageInstant = float64NaN()
 			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 		})
 
-		It("accepts KvCacheUsage at the boundary values 0.0 and 1.0", func() {
+		It("accepts KvUsageInstant (k*) at the boundary values 0.0 and 1.0", func() {
 			m0 := healthyReplica("pod-0")
-			m0.KvCacheUsage = 0.0
+			m0.KvUsageInstant = 0.0
 			m1 := healthyReplica("pod-1")
-			m1.KvCacheUsage = 1.0
+			m1.KvUsageInstant = 1.0
 			Expect(CheckModelMetrics([]interfaces.ReplicaMetrics{m0}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
 			Expect(CheckModelMetrics([]interfaces.ReplicaMetrics{m1}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
 		})

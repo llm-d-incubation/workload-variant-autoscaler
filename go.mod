@@ -3,6 +3,7 @@ module github.com/llm-d/llm-d-workload-variant-autoscaler
 go 1.25.0
 
 require (
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/kedacore/keda/v2 v2.18.0
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.0

@@ -100,26 +100,27 @@ func RegisterThroughputAnalyzerQueries(sourceRegistry *source.SourceRegistry) {
 
 	// Per-pod observed generation (decode) token rate (tokens/sec).
 	// Computed as the rate of the _sum histogram counter over 1m.
-	// Uses sum by (pod, llm_d_ai_variant) because request_generation_tokens_sum is an additive
-	// counter — multiple histogram buckets per pod must be summed.
-	// Preserves llm_d_ai_variant for direct pod-to-VA mapping.
+	// Preserves instance (IP:port for composite key), pod (for pod lookup),
+	// and llm_d_ai_variant (for direct pod-to-VA mapping).
+	// llm_d_ai_variant will be dropped from this groupby once PR #1260
+	// (pod→VA derivation) and issue #1263 (remove label from all groupbys) land.
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryGenerationTokenRate,
 		Type:        source.QueryTypePromQL,
-		Template:    `sum by (pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template:    `sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Observed generation (decode) token rate per pod (tokens/sec), proxy for μ_dec^obs",
 	})
 
 	// Per-pod instantaneous KV cache utilization (0.0–1.0).
-	// Uses max by (pod, llm_d_ai_variant) to consolidate any duplicate series to a single per-pod value.
 	// Does NOT use max_over_time: the throughput analyzer needs the current
 	// operating point k*, not the worst-case peak used by the saturation analyzer.
-	// Preserves llm_d_ai_variant for direct pod-to-VA mapping.
+	// Preserves instance (IP:port for composite key), pod (for pod lookup),
+	// and llm_d_ai_variant (for direct pod-to-VA mapping).
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryKvUsageInstant,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (pod, llm_d_ai_variant) (vllm:kv_cache_usage_perc{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (vllm:kv_cache_usage_perc{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Instantaneous KV cache utilization per pod (0.0–1.0), used as k* in the ITL model",
 	})
@@ -129,11 +130,12 @@ func RegisterThroughputAnalyzerQueries(sourceRegistry *source.SourceRegistry) {
 	// completed request). Used as a fallback for λ_dec when EPP/scheduler metrics
 	// are unavailable; per variant V, the analyzer falls back to:
 	//   λ_dec_vllm = Σ_{r∈V}(VLLMRequestRate_r × AvgOutputTokens_r)
-	// Preserves llm_d_ai_variant for direct pod-to-VA mapping.
+	// Preserves instance (IP:port for composite key), pod (for pod lookup),
+	// and llm_d_ai_variant (for direct pod-to-VA mapping).
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryVLLMRequestRate,
 		Type:        source.QueryTypePromQL,
-		Template:    `sum by (pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template:    `sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "vLLM request completion rate per pod (req/s); fallback for λ_dec when EPP metrics are unavailable",
 	})

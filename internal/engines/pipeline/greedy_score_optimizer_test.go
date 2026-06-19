@@ -637,7 +637,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, constraints)
 
 			Expect(decisions).To(HaveLen(1))
-			Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-score"))
+			Expect(decisions[0].Reason()).To(ContainSubstring("greedy-by-score"))
 		})
 	})
 
@@ -759,6 +759,82 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// A gets nothing (GPU budget exhausted by B).
 			Expect(dm["b-v1"].TargetReplicas).To(Equal(3)) // 1 + 2 (all GPUs)
 			Expect(dm["a-v1"].TargetReplicas).To(Equal(1)) // unchanged
+		})
+
+		It("T1.4: non-uniform Score across two analyzers drives fair-share ordering", func() {
+			// Model A has two AnalyzerResults:
+			//   saturation: Score=1.0, RC=20000
+			//   throughput: Score=2.0, RC=20000
+			//   fsv(A) = 1.0 × (20000×1.0 + 20000×2.0) = 60000
+			// Model B has one AnalyzerResult:
+			//   saturation: Score=1.0, RC=20000
+			//   fsv(B) = 1.0 × (20000×1.0) = 20000
+			// With 4 A100 GPUs (2 GPUs/replica): A (higher fsv) gets both
+			// available replicas; B gets none.
+			rA := &interfaces.AnalyzerResult{
+				RequiredCapacity: 20000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "a-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			rB := &interfaces.AnalyzerResult{
+				RequiredCapacity: 20000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "b-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				{
+					ModelID:   "model-A",
+					Namespace: "default",
+					Priority:  1.0,
+					AnalyzerResults: []NamedAnalyzerResult{
+						{
+							Name:      "saturation",
+							Result:    rA,
+							Score:     1.0,
+							Remaining: rA.RequiredCapacity,
+						},
+						{
+							Name:  "throughput",
+							Score: 2.0,
+							// throughput shares rA's variant capacity for simplicity;
+							// its RC signal adds to the fair-share weight.
+							Result:    &interfaces.AnalyzerResult{RequiredCapacity: 20000},
+							Remaining: 20000,
+						},
+					},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				},
+				{
+					ModelID:   "model-B",
+					Namespace: "default",
+					Priority:  1.0,
+					AnalyzerResults: []NamedAnalyzerResult{{
+						Name:      "saturation",
+						Result:    rB,
+						Score:     1.0,
+						Remaining: rB.RequiredCapacity,
+					}},
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				},
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: 4}, // 2 replicas worth
+				}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			// fsv(A)=60000 > fsv(B)=20000: A wins the GPU budget.
+			Expect(dm["a-v1"].TargetReplicas).To(Equal(3)) // 1 + 2 (all 4 GPUs)
+			Expect(dm["b-v1"].TargetReplicas).To(Equal(1)) // unchanged
 		})
 	})
 

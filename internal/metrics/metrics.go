@@ -6,14 +6,39 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 // ControllerInstanceEnvVar is the environment variable name for controller instance label
 const ControllerInstanceEnvVar = "CONTROLLER_INSTANCE"
+
+// replicaSeriesAccel tracks the last accelerator_type label emitted for each VA
+// (keyed by variant/namespace) on the replica scaling gauges. It lets
+// EmitReplicaMetrics evict a stale series only when the accelerator label
+// actually changes, instead of delete-and-reset every cycle (which would expose
+// a zero-value gap to a concurrent scrape of the scaling signal).
+//
+// TODO: entries are not pruned on VariantAutoscaling deletion, so the map grows
+// by one small entry per (variant, namespace) ever seen. This matches the
+// pre-existing behavior of the gauge series themselves (also not deleted on VA
+// removal — they expire via Prometheus staleness). Wire a deletion hook if/when
+// per-VA metric cleanup is added.
+var (
+	replicaSeriesMu    sync.Mutex
+	replicaSeriesAccel = map[string]string{}
+)
+
+// replicaSeriesKey identifies a VA's replica-gauge series independent of
+// accelerator_type. controllerInstance is process-global (set once at
+// InitMetrics) so it is intentionally not part of the key.
+func replicaSeriesKey(variantName, namespace string) string {
+	return variantName + "\x00" + namespace
+}
 
 var (
 	replicaScalingTotal *prometheus.CounterVec
@@ -38,6 +63,7 @@ var (
 	metricsCollectionErrors             *prometheus.CounterVec
 	metricsPodsDiscovered               *prometheus.GaugeVec
 	metricsFreshnessStatus              *prometheus.GaugeVec
+	podMappingMissTotal                 *prometheus.CounterVec
 
 	// Saturation and capacity metrics
 	saturationUtilization *prometheus.GaugeVec
@@ -64,6 +90,12 @@ func GetControllerInstance() string {
 func InitMetrics(registry prometheus.Registerer) error {
 	// Read controller instance from environment
 	controllerInstance = os.Getenv(ControllerInstanceEnvVar)
+
+	// Fresh registry => fresh gauges; drop any stale replica-series tracking so
+	// it never references series from a previous registry.
+	replicaSeriesMu.Lock()
+	replicaSeriesAccel = map[string]string{}
+	replicaSeriesMu.Unlock()
 
 	// Build label sets based on whether controller_instance is configured.
 	// Existing replica metrics (baseLabels, scalingLabels) are unchanged.
@@ -321,6 +353,18 @@ func InitMetrics(registry prometheus.Registerer) error {
 		metricsFreshnessStatusLabels,
 	)
 
+	podMappingMissLabels := []string{constants.LabelNamespace, constants.LabelReason}
+	if controllerInstance != "" {
+		podMappingMissLabels = append(podMappingMissLabels, constants.LabelControllerInstance)
+	}
+	podMappingMissTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.WVAPodMappingMissTotal,
+			Help: "Total number of pods whose metrics could not be attributed to a managed scaler",
+		},
+		podMappingMissLabels,
+	)
+
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
 		return fmt.Errorf("failed to register replicaScalingTotal metric: %w", err)
@@ -376,6 +420,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	if err := registry.Register(metricsPodsDiscovered); err != nil {
 		return fmt.Errorf("failed to register metricsPodsDiscovered metric: %w", err)
 	}
+	if err := registry.Register(podMappingMissTotal); err != nil {
+		return fmt.Errorf("failed to register podMappingMissTotal metric: %w", err)
+	}
 	if err := registry.Register(metricsFreshnessStatus); err != nil {
 		return fmt.Errorf("failed to register metricsFreshnessStatus metric: %w", err)
 	}
@@ -416,12 +463,12 @@ func NewMetricsEmitter() *MetricsEmitter {
 }
 
 // EmitReplicaScalingMetrics emits metrics related to replica scaling
-func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling, direction, reason string) error {
+func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling, direction interfaces.SaturationAction, reason interfaces.DecisionReason) error {
 	labels := prometheus.Labels{
 		constants.LabelVariantName: va.Name,
 		constants.LabelNamespace:   va.Namespace,
-		constants.LabelDirection:   direction,
-		constants.LabelReason:      reason,
+		constants.LabelDirection:   string(direction),
+		constants.LabelReason:      string(reason),
 	}
 
 	// Add controller_instance label if configured
@@ -463,34 +510,69 @@ func SetModelsProcessed(count int) {
 	modelsProcessedGauge.With(labels).Set(float64(count))
 }
 
-// EmitReplicaMetrics emits current and desired replica metrics
+// EmitReplicaMetrics emits current and desired replica metrics — the scaling
+// signal consumed by HPA/KEDA. These gauges are emitted regardless of whether
+// the accelerator type is resolved: the signal must never be withheld just
+// because the accelerator is unknown. When the type is unresolved the
+// accelerator_type label carries the bounded UnresolvedAcceleratorType value
+// (never the internal "unknown" sentinel).
+//
+// The HPA/KEDA query selects a VA by variant_name + namespace, NOT by
+// accelerator_type, so scaling must not depend on that label. To keep that true
+// across an accelerator transition (e.g. unresolved -> a real type) without
+// exposing a gap on the steady-state path, we set the current series first and
+// then — only when the accelerator label actually changed since the last emit —
+// delete the now-stale prior series. Steady state (no label change) is therefore
+// a plain idempotent Set: no gap, no per-cycle churn, exactly one series. Only
+// during an accelerator transition do the old and new series briefly coexist
+// (set-before-delete), which is preferable to a zero-value gap.
 func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling, current, desired int32, acceleratorType string) error {
-	baseLabels := prometheus.Labels{
-		constants.LabelVariantName:     va.Name,
-		constants.LabelNamespace:       va.Namespace,
-		constants.LabelAcceleratorType: acceleratorType,
-	}
-
-	// Add controller_instance label if configured
-	if controllerInstance != "" {
-		baseLabels[constants.LabelControllerInstance] = controllerInstance
-	}
-
 	// These operations are local and should never fail, but we handle errors for debugging
 	if currentReplicas == nil || desiredReplicas == nil || desiredRatio == nil {
 		return errors.New("replica metrics not initialized")
 	}
 
+	if !constants.IsAcceleratorResolved(acceleratorType) {
+		acceleratorType = constants.UnresolvedAcceleratorType
+	}
+
+	labelsFor := func(accel string) prometheus.Labels {
+		l := prometheus.Labels{
+			constants.LabelVariantName:     va.Name,
+			constants.LabelNamespace:       va.Namespace,
+			constants.LabelAcceleratorType: accel,
+		}
+		if controllerInstance != "" {
+			l[constants.LabelControllerInstance] = controllerInstance
+		}
+		return l
+	}
+
+	// Set the current series first so a concurrent scrape never sees a gap.
+	baseLabels := labelsFor(acceleratorType)
 	currentReplicas.With(baseLabels).Set(float64(current))
 	desiredReplicas.With(baseLabels).Set(float64(desired))
-
-	// Avoid division by 0 if current replicas is zero: set the ratio to the desired replicas
-	// Going 0 -> N is treated by using `desired_ratio = N`
+	// Avoid division by 0 if current replicas is zero: set the ratio to the desired replicas.
+	// Going 0 -> N is treated by using `desired_ratio = N`.
 	if current == 0 {
 		desiredRatio.With(baseLabels).Set(float64(desired))
-		return nil
+	} else {
+		desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
 	}
-	desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
+
+	// If the accelerator label changed since the last emit for this VA, evict the
+	// stale prior series (done after Set, so there is no zero-value window).
+	key := replicaSeriesKey(va.Name, va.Namespace)
+	replicaSeriesMu.Lock()
+	prev, had := replicaSeriesAccel[key]
+	replicaSeriesAccel[key] = acceleratorType
+	replicaSeriesMu.Unlock()
+	if had && prev != acceleratorType {
+		stale := labelsFor(prev)
+		currentReplicas.Delete(stale)
+		desiredReplicas.Delete(stale)
+		desiredRatio.Delete(stale)
+	}
 	return nil
 }
 
@@ -675,6 +757,21 @@ func IncMetricsCollectionErrors(queryType, reason string) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 	metricsCollectionErrors.With(labels).Inc()
+}
+
+// IncPodMappingMiss increments the pod-to-managed-scaler mapping miss counter.
+func IncPodMappingMiss(namespace, reason string) {
+	if podMappingMissTotal == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelNamespace: namespace,
+		constants.LabelReason:    reason,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	podMappingMissTotal.With(labels).Inc()
 }
 
 // SetMetricsPodsDiscovered sets the number of pods discovered in a namespace.

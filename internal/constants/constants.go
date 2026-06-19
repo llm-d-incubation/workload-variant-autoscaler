@@ -59,6 +59,10 @@ var (
 const (
 	DeploymentKind            = "Deployment"
 	DeploymentAPIVersion      = "apps/v1"
+	StatefulSetKind           = "StatefulSet"
+	PodKind                   = "Pod"
+	ReplicaSetKind            = "ReplicaSet"
+	PodAPIVersion             = "v1"
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
 
@@ -69,6 +73,7 @@ const (
 	K8SEventMetricsUnavailable        = "MetricsUnavailable"
 	K8SEventScaledToZero              = "ScaledToZero"
 	K8SEventOptimizationFailed        = "OptimizationFailed"
+	K8SEventUnattributedReadyPods     = "UnattributedReadyPods"
 	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
 	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
 
@@ -78,6 +83,14 @@ const (
 	// the real type before it reaches status or metrics. This value must never
 	// be persisted to VA status or used as a Prometheus label.
 	DefaultAcceleratorName = "unknown"
+
+	// UnresolvedAcceleratorType is the bounded accelerator_type label value used
+	// on the replica scaling gauges (wva_current_replicas / wva_desired_replicas /
+	// wva_desired_ratio) when the real accelerator type is not yet known. Unlike
+	// the internal DefaultAcceleratorName sentinel, this IS a valid label value:
+	// it lets the scaling signal flow to HPA/KEDA without leaking "unknown" and
+	// without withholding scaling. It is never persisted to VA status.
+	UnresolvedAcceleratorType = "unresolved"
 )
 
 // Component names identify WVA components for observability (metrics, logging, tracing).
@@ -91,7 +104,11 @@ const (
 )
 
 // IsAcceleratorResolved returns true if the accelerator name is a real GPU type
-// (not empty and not the "unknown" sentinel).
+// (not empty, not the "unknown" internal sentinel, and not the "unresolved"
+// label placeholder). UnresolvedAcceleratorType is a label-only output value;
+// treating it as unresolved here means that if it ever flows back in as an
+// accelerator name it is re-mapped rather than mistaken for a real type, and it
+// is never persisted to VA status.
 func IsAcceleratorResolved(name string) bool {
-	return name != "" && name != DefaultAcceleratorName
+	return name != "" && name != DefaultAcceleratorName && name != UnresolvedAcceleratorType
 }

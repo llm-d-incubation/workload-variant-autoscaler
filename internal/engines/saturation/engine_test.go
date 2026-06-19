@@ -217,7 +217,7 @@ var _ = Describe("Saturation Engine", func() {
 				"default": {},
 			})
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -280,7 +280,7 @@ var _ = Describe("Saturation Engine", func() {
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
@@ -457,7 +457,7 @@ var _ = Describe("Saturation Engine", func() {
 				"default": {},
 			})
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -573,7 +573,7 @@ var _ = Describe("Saturation Engine", func() {
 					EnableLimiter: false,
 				},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			By("Running optimize() with EnableLimiter=false")
 			err := engine.optimize(ctx)

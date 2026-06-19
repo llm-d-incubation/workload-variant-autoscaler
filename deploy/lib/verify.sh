@@ -31,6 +31,15 @@ verify_deployment() {
         fi
     fi
 
+    if [ "$DEPLOY_OPERATIONAL_DASHBOARD" = "true" ]; then
+        log_info "Checking Grafana..."
+        if kubectl get pods -n "$MONITORING_NAMESPACE" -l app.kubernetes.io/name=grafana 2>/dev/null | grep -q Running; then
+            log_success "Grafana is running"
+        else
+            log_warning "Grafana may still be starting"
+        fi
+    fi
+
     # --- Scaler backend
     if [ "$SCALER_BACKEND" = "keda" ]; then
         log_info "Checking KEDA..."
@@ -72,7 +81,10 @@ print_summary() {
     echo "Deployed Components:"
     echo "===================="
     if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
-        echo "✓ kube-prometheus-stack (Prometheus + Grafana)"
+        echo "✓ kube-prometheus-stack (Prometheus)"
+    fi
+    if [ "$DEPLOY_OPERATIONAL_DASHBOARD" = "true" ]; then
+        echo "✓ kube-prometheus-stack-grafana (Grafana)"
     fi
     if [ "$DEPLOY_WVA" = "true" ]; then
         echo "✓ WVA Controller (via Kustomize)"

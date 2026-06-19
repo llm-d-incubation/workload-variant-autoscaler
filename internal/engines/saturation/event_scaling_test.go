@@ -53,19 +53,19 @@ func TestScaledUpEvent(t *testing.T) {
 		VariantName:    "test-va",
 		Action:         interfaces.ActionScaleUp,
 		TargetReplicas: 3,
-		Reason:         "KV cache utilization above threshold",
 	}
+	decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
 		case interfaces.ActionScaleUp:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
 		case interfaces.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason())
 			}
 		}
 	}
@@ -75,7 +75,7 @@ func TestScaledUpEvent(t *testing.T) {
 	case event := <-fakeRecorder.Events:
 		assert.Contains(t, event, constants.K8SEventScaledUp,
 			"Event should contain K8SEventScaledUp constant")
-		assert.Contains(t, event, decision.Reason,
+		assert.Contains(t, event, decision.Reason(),
 			"Event should contain the reason message")
 		assert.Contains(t, event, "Normal",
 			"Event should be Normal type")
@@ -107,19 +107,19 @@ func TestScaledDownEvent(t *testing.T) {
 		VariantName:    "test-va",
 		Action:         interfaces.ActionScaleDown,
 		TargetReplicas: 2,
-		Reason:         "KV cache utilization below threshold",
 	}
+	decision.SetDecisionReason(interfaces.ActionScaleDown, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
 		case interfaces.ActionScaleUp:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
 		case interfaces.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason())
 			}
 		}
 	}
@@ -129,7 +129,7 @@ func TestScaledDownEvent(t *testing.T) {
 	case event := <-fakeRecorder.Events:
 		assert.Contains(t, event, constants.K8SEventScaledDown,
 			"Event should contain K8SEventScaledDown constant")
-		assert.Contains(t, event, decision.Reason,
+		assert.Contains(t, event, decision.Reason(),
 			"Event should contain the reason message")
 		assert.Contains(t, event, "Normal",
 			"Event should be Normal type")
@@ -161,19 +161,19 @@ func TestScaledToZeroEvent(t *testing.T) {
 		VariantName:    "test-va",
 		Action:         interfaces.ActionScaleDown,
 		TargetReplicas: 0,
-		Reason:         "No requests in retention period",
 	}
+	decision.SetDecisionReason(interfaces.ActionScaleDown, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
 		case interfaces.ActionScaleUp:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
 		case interfaces.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason())
 			}
 		}
 	}
@@ -183,7 +183,7 @@ func TestScaledToZeroEvent(t *testing.T) {
 	case event := <-fakeRecorder.Events:
 		assert.Contains(t, event, constants.K8SEventScaledToZero,
 			"Event should contain K8SEventScaledToZero constant")
-		assert.Contains(t, event, decision.Reason,
+		assert.Contains(t, event, decision.Reason(),
 			"Event should contain the reason message")
 		assert.Contains(t, event, "Normal",
 			"Event should be Normal type")
@@ -215,24 +215,24 @@ func TestResourceConstrainedEvent(t *testing.T) {
 		VariantName:    "test-va",
 		Action:         interfaces.ActionScaleUp,
 		TargetReplicas: 3,
-		Reason:         "KV cache utilization above threshold",
 		WasLimited:     true,
 	}
+	decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
 		case interfaces.ActionScaleUp:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
 		case interfaces.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason())
 			}
 		}
 		if decision.WasLimited {
-			fakeRecorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason())
 		}
 	}
 
@@ -247,7 +247,7 @@ func TestResourceConstrainedEvent(t *testing.T) {
 			t.Logf("Received event: %s", event)
 			if !foundScaleUp && assert.Contains(t, event, constants.K8SEventScaledUp) {
 				foundScaleUp = true
-				assert.Contains(t, event, decision.Reason,
+				assert.Contains(t, event, decision.Reason(),
 					"ScaledUp event should contain the reason")
 				assert.Contains(t, event, "Normal",
 					"ScaledUp event should be Normal type")
@@ -255,7 +255,7 @@ func TestResourceConstrainedEvent(t *testing.T) {
 				foundResourceConstrained = true
 				assert.Contains(t, event, "Warning",
 					"ResourceConstrained event should be Warning type")
-				assert.Contains(t, event, decision.Reason,
+				assert.Contains(t, event, decision.Reason(),
 					"ResourceConstrained event should contain the reason")
 			}
 			eventsRecorded++
@@ -292,19 +292,19 @@ func TestNoEventForNoDecision(t *testing.T) {
 		VariantName:    "test-va",
 		Action:         interfaces.ActionNoChange,
 		TargetReplicas: 3,
-		Reason:         "No scaling needed",
 	}
+	decision.SetDecisionReason(interfaces.ActionNoChange, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
 		case interfaces.ActionScaleUp:
-			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason)
+			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
 		case interfaces.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
-				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason)
+				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledDown, decision.Reason())
 			}
 		default:
 			// do nothing

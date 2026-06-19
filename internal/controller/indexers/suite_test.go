@@ -19,12 +19,15 @@ package indexers
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,11 +65,18 @@ var _ = BeforeSuite(func() {
 	err = llmdv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = kedav1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
+	crdPaths := []string{filepath.Join("..", "..", "..", "config", "base", "crd")}
+	if dir := getKEDACRDDir(); dir != "" {
+		crdPaths = append(crdPaths, dir)
+	}
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "base", "crd")},
+		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -91,6 +101,24 @@ var _ = AfterSuite(func() {
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+// getKEDACRDDir returns the path to the KEDA CRD bases bundled with the
+// version of github.com/kedacore/keda/v2 that this module pins. Resolved at
+// test time via `go list -m` so the path tracks whatever go.mod says,
+// without hardcoding a version. Returns "" when resolution fails or the
+// directory does not exist; callers should skip appending the path in
+// that case.
+func getKEDACRDDir() string {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/kedacore/keda/v2").Output()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "bases")
+	if _, err := os.Stat(dir); err != nil {
+		return ""
+	}
+	return dir
+}
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by

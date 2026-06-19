@@ -94,7 +94,7 @@ const (
 	// meaning the KV cache configuration metric (cache_config_info) is unavailable.
 	SanityIssueMissingKV SanityIssue = "missing_kv_capacity"
 
-	// SanityIssueKVOutOfRange indicates KvCacheUsage is outside [0, 1].
+	// SanityIssueKVOutOfRange indicates KvUsageInstant (k*) is outside [0, 1].
 	SanityIssueKVOutOfRange SanityIssue = "kv_utilization_out_of_range"
 
 	// SanityIssueITLNonPositive indicates AvgITL is zero, negative, or NaN.
@@ -148,4 +148,26 @@ type ThroughputVariantState struct {
 	SampleCount int
 	// LastSanityReport is the sanity report from the most recent Observe call.
 	LastSanityReport SanityReport
+
+	// ITLModel is the ITL model last resolved during Analyze for this variant
+	// (tier-1 OLS or tier-2 constrained OLS). IsZero() when no model has been resolved yet.
+	ITLModel ITLModel
+	// PerReplicaSupply is mean(μ_dec_sat) across replicas from the last Analyze call
+	// in tokens/sec. Zero when no supply could be computed.
+	PerReplicaSupply float64
+	// TotalSupply is Σ μ_dec_sat across replicas from the last Analyze call
+	// in tokens/sec. Zero when no supply could be computed.
+	TotalSupply float64
+	// Demand is λ_dec (total decode token demand) from the last Analyze call
+	// in tokens/sec. Zero when no demand signal was available.
+	Demand float64
+	// Role is the P/D disaggregation role: "prefill", "decode", "both", or ""
+	// (non-disaggregated). Populated from VariantStates in Analyze(); empty until first Analyze call.
+	Role string
+
+	// LastFittedB is the B coefficient from the most recent successful Tier-1 OLS fit.
+	// Zero when no Tier-1 fit has occurred yet (HasFittedB is false in that case).
+	LastFittedB float64
+	// HasFittedB is true when at least one Tier-1 OLS fit has succeeded for this variant.
+	HasFittedB bool
 }

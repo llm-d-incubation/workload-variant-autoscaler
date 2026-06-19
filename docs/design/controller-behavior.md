@@ -245,17 +245,21 @@ This periodic reconciliation is why many Update and Delete events can be safely 
 
 ### `llm-d.ai/variant` Label on the Scale Target
 
-WVA identifies which pods belong to a given `VariantAutoscaling` resource by reading the `llm-d.ai/variant` label from Prometheus metrics. Two things must be true for this to work:
+**Required only for shadow-pod layouts.** For ordinary `Deployment` and `LeaderWorkerSet` scale targets, WVA's `PodLocator` (under `internal/collector/locator/`) derives the pod → variant association by walking `ownerReferences` from the vLLM pod up to the managed scaler's `scaleTargetRef`. No operator action is required at the metrics layer for those layouts.
 
-1. The `llm-d.ai/variant` label must be present on the **pod template** of the scale target (Deployment or LeaderWorkerSet), with a value equal to the name of the corresponding `VariantAutoscaling` resource.
+For *shadow-pod* layouts — where the vLLM pod is **not** in the HPA-scaled target's `ownerReferences` chain — the label is the only viable linkage. Two things must be true in that case:
+
+1. The `llm-d.ai/variant` label must be present on the **pod template** of the vLLM-bearing workload, with a value equal to the name of the managed `HorizontalPodAutoscaler` or KEDA `ScaledObject` (which is also the synthetic `VariantAutoscaling` name).
 2. The `ServiceMonitor` or `PodMonitor` that Prometheus uses to scrape those pods must include a target relabeling rule that propagates the pod label into the scraped metrics as `llm_d_ai_variant`.
 
 **Both are your responsibility.** WVA does not configure either automatically.
 
-#### 1. Set the pod template label
+For non-shadow-pod layouts, stamping the label is harmless — the label-driven fast path simply short-circuits the locator. Operators may keep it for backwards compatibility or remove it.
+
+#### 1. Set the pod template label (shadow-pod layouts)
 
 ```yaml
-# Deployment example
+# Deployment example — required for shadow-pod layouts; optional otherwise.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -271,7 +275,7 @@ spec:
 ```
 
 ```yaml
-# LeaderWorkerSet example
+# LeaderWorkerSet example — required for shadow-pod layouts; optional otherwise.
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
@@ -317,13 +321,13 @@ spec:
 
 WVA uses the `llm_d_ai_variant` metric label to associate per-pod metrics with the correct `VariantAutoscaling` resource.
 
-If the pod label or the relabeling rule is absent, WVA will not collect metrics for the affected pods and scaling decisions for that variant will not be made.
+If the pod label or the relabeling rule is absent, WVA will not be able to associate metrics with a variant **for shadow-pod layouts**. For ordinary Deployment / LWS layouts the locator will resolve the variant via `ownerReferences` and metric association continues to work without the label.
 
 ## Best Practices
 
 ### For Operators
 
-1. **Set `llm-d.ai/variant` before creating the VA**: Ensure the pod template label is present on the scale target before creating the `VariantAutoscaling` resource. WVA begins collecting metrics on the first reconciliation and will miss pods that don't yet carry the label.
+1. **For shadow-pod layouts, set `llm-d.ai/variant` before creating the VA**: For shadow-pod workloads (vLLM pods not in the scaler's `ownerReferences` chain), ensure the pod template label is present before creating the `VariantAutoscaling` resource. WVA begins collecting metrics on the first reconciliation and, in those layouts, will miss pods that don't yet carry the label. For ordinary Deployment / LWS scale targets the label is optional — the locator resolves variants via `ownerReferences`.
 
 2. **Create VAs after deployments are ready**: While the controller handles the race condition, creating VAs after deployments are fully initialized avoids unnecessary early reconciliation cycles.
 

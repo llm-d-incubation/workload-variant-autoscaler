@@ -20,7 +20,8 @@ type SaturationAnalyzer struct {
 	// mu protects computeCapacityHistory from concurrent access.
 	mu sync.Mutex
 	// computeCapacityHistory stores rolling averages of observed k2 values,
-	// keyed by "modelID|accelerator|outputBucket".
+	// keyed by "modelID|accelerator|gpuCount|outputBucket".
+	// TODO: check if we need to use other model parameters as key in the future.
 	computeCapacityHistory map[string]*rollingAverage
 	capacityStore          *CapacityKnowledgeStore
 }
@@ -169,6 +170,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	}
 	k2 := a.computeK2(
 		modelID, rm.AcceleratorName,
+		gpuCount,
 		rm.QueueLength, rm.TokensInUse,
 		rm.AvgOutputTokens, rm.AvgInputTokens,
 		config.QueueLengthThreshold,
@@ -270,6 +272,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacityFallback(
 // 4. Fallback → k1 (memory-bound only)
 func (a *SaturationAnalyzer) computeK2(
 	modelID, accelerator string,
+	gpuCount int,
 	queueLen int, tokensInUse int64,
 	avgOutput, avgInput float64,
 	queueThreshold float64,
@@ -277,7 +280,7 @@ func (a *SaturationAnalyzer) computeK2(
 	k1 int64,
 ) int64 {
 	outputBucket := classifyOutputLength(avgOutput)
-	historyKey := fmt.Sprintf("%s|%s|%s", modelID, accelerator, outputBucket)
+	historyKey := fmt.Sprintf("%s|%s|%d|%s", modelID, accelerator, gpuCount, outputBucket)
 
 	// Priority 1: Observed (queue saturated)
 	if queueLen >= int(queueThreshold) && tokensInUse > 0 {

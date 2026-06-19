@@ -32,6 +32,14 @@ data:
     # Enables scale-to-zero behavior across managed workloads.
     WVA_SCALE_TO_ZERO: "false"
 
+    # Coordinator (EXPERIMENTAL): cluster-wide leader-elected loop that manages
+    # HPAs and ScaledObjects that do NOT consume wva_desired_replicas (those are
+    # handled by the WVA engine). The Coordinator writes spec.maxReplicas
+    # directly via registered plugins (e.g. the gpu-rebalance UC1 plugin).
+    # Disabled by default. Set to "true" to enable.
+    EXPERIMENTAL_COORDINATOR_ENABLED: "false"
+    COORDINATOR_INTERVAL: "15s"
+
     # Prometheus Metrics Cache
     # Time-to-live for cached Prometheus metric responses.
     PROMETHEUS_METRICS_CACHE_TTL: "30s"

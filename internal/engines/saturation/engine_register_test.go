@@ -61,11 +61,11 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			Expect(engine.analyzers).To(HaveLen(1))
 			Expect(engine.analyzers[0].name).To(Equal(interfaces.SaturationAnalyzerName))
-			Expect(engine.analyzers[0].analyzer).To(BeIdenticalTo(interfaces.Analyzer(engine.saturationV2Analyzer)))
+			Expect(engine.analyzers[0].analyzer).To(BeIdenticalTo(engine.saturationV2Analyzer))
 		})
 	})
 
@@ -119,7 +119,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			Expect(engine.RegisterAnalyzer("throughput", &spyAnalyzer{name: "throughput"})).To(Succeed())
 			Expect(engine.RegisterAnalyzer("slo", &spyAnalyzer{name: "slo"})).To(Succeed())
@@ -144,7 +144,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 			Expect(engine.RegisterAnalyzer("throughput", &spyAnalyzer{name: "throughput"})).To(Succeed())
 
 			startCtx, cancelStart := context.WithCancel(context.Background())
@@ -185,7 +185,7 @@ var _ = Describe("Engine analyzer registry", func() {
 		})
 	})
 
-	Describe("runRegisteredAnalyzers", func() {
+	Describe("runRegisteredAnalyzer", func() {
 
 		var (
 			testCtx    context.Context
@@ -197,66 +197,24 @@ var _ = Describe("Engine analyzer registry", func() {
 			testLogger = logf.Log
 		})
 
-		It("calls Analyze on every registered non-saturation analyzer exactly once, in registration order", func() {
-			sat := &spyAnalyzer{name: interfaces.SaturationAnalyzerName}
-			ta := &spyAnalyzer{name: "throughput"}
-			slo := &spyAnalyzer{name: "slo"}
-			// runRegisteredAnalyzers iterates analyzersSnapshot (built by
-			// StartOptimizeLoop). Construct it directly to match.
-			snapshot := []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: sat},
-				{name: "throughput", analyzer: ta},
-				{name: "slo", analyzer: slo},
-			}
-			e := &Engine{analyzers: snapshot, analyzersSnapshot: snapshot, started: true}
-
-			e.runRegisteredAnalyzers(testCtx, testLogger, "model-1", interfaces.AnalyzerInput{ModelID: "model-1"}, config.SaturationScalingConfig{})
-
-			// Saturation entry is skipped — engine runs saturation via
-			// runV2AnalysisOnly with full args. When a future PR unifies
-			// saturation into the loop, this expectation flips and the
-			// surrounding test description should be revised.
-			Expect(sat.callCount).To(Equal(0))
-			Expect(ta.callCount).To(Equal(1))
-			Expect(slo.callCount).To(Equal(1))
+		It("returns nil and does not panic when the analyzer returns an error", func() {
+			spy := &spyAnalyzer{name: "throughput", err: errors.New("boom")}
+			entry := analyzerEntry{name: "throughput", analyzer: spy}
+			result := runRegisteredAnalyzer(testCtx, testLogger, entry, "model-1",
+				interfaces.AnalyzerInput{ModelID: "model-1"})
+			Expect(result).To(BeNil())
+			Expect(spy.callCount).To(Equal(1))
 		})
 
-		It("logs and continues when a registered analyzer returns an error", func() {
-			ta := &spyAnalyzer{name: "throughput", err: errors.New("boom")}
-			slo := &spyAnalyzer{name: "slo"}
-			snapshot := []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: interfaces.SaturationAnalyzerName}},
-				{name: "throughput", analyzer: ta},
-				{name: "slo", analyzer: slo},
-			}
-			e := &Engine{analyzers: snapshot, analyzersSnapshot: snapshot, started: true}
-
+		It("recovers from a panicking analyzer and returns nil", func() {
+			spy := &spyAnalyzer{name: "throughput", panicMsg: "boom"}
+			entry := analyzerEntry{name: "throughput", analyzer: spy}
+			var result *interfaces.AnalyzerResult
 			Expect(func() {
-				e.runRegisteredAnalyzers(testCtx, testLogger, "model-1", interfaces.AnalyzerInput{ModelID: "model-1"}, config.SaturationScalingConfig{})
+				result = runRegisteredAnalyzer(testCtx, testLogger, entry, "model-1",
+					interfaces.AnalyzerInput{ModelID: "model-1"})
 			}).NotTo(Panic())
-
-			// Both analyzers are still called even though throughput erred.
-			Expect(ta.callCount).To(Equal(1))
-			Expect(slo.callCount).To(Equal(1))
-		})
-
-		It("recovers from a panicking analyzer and continues with the rest", func() {
-			ta := &spyAnalyzer{name: "throughput", panicMsg: "boom"}
-			slo := &spyAnalyzer{name: "slo"}
-			snapshot := []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: interfaces.SaturationAnalyzerName}},
-				{name: "throughput", analyzer: ta},
-				{name: "slo", analyzer: slo},
-			}
-			e := &Engine{analyzers: snapshot, analyzersSnapshot: snapshot, started: true}
-
-			Expect(func() {
-				e.runRegisteredAnalyzers(testCtx, testLogger, "model-1", interfaces.AnalyzerInput{ModelID: "model-1"}, config.SaturationScalingConfig{})
-			}).NotTo(Panic())
-
-			// throughput panicked but was recovered; slo still ran.
-			Expect(ta.callCount).To(Equal(1))
-			Expect(slo.callCount).To(Equal(1))
+			Expect(result).To(BeNil())
 		})
 	})
 })

@@ -22,12 +22,16 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
@@ -128,7 +132,7 @@ func TestBuildInstanceKey_VANameExtraction(t *testing.T) {
 				},
 			}
 
-			collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
+			collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
 			results, err := collector.CollectReplicaMetrics(
 				context.Background(),
 				"test-model",
@@ -158,5 +162,131 @@ func TestBuildInstanceKey_VANameExtraction(t *testing.T) {
 				t.Errorf("VariantName: got %q, want %q", got, tc.wantVAName)
 			}
 		})
+	}
+}
+
+// mockLocator implements locator.PodLocator for testing.
+type mockLocator struct {
+	locateFunc func(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error)
+}
+
+func (m *mockLocator) Locate(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error) {
+	if m.locateFunc != nil {
+		return m.locateFunc(ctx, namespace, podName)
+	}
+	return nil, nil
+}
+
+func (m *mockLocator) LocateByVariant(_ context.Context, _, _ string) (*locator.ManagedScaler, error) {
+	return nil, nil
+}
+
+// TestBuildInstanceKey_VACRDNameDiffersFromHPAName is the regression test for
+// https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1290.
+//
+// KServe creates a VariantAutoscaling CRD named "{isvc}-kserve-va" and an HPA
+// named "{isvc}-kserve-hpa", both targeting the same Deployment. Before the fix,
+// buildInstanceKey returned the HPA name as vaName; filterReplicaMetricsByVariants
+// then filtered every metric out because the HPA name was not in the VA-CRD-keyed
+// allowed set.
+func TestBuildInstanceKey_VACRDNameDiffersFromHPAName(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	const namespace = "test-ns"
+	const deployName = "foo-deploy"
+	const hpaName = "foo-kserve-hpa"
+	const wantVAName = "foo-kserve-va"
+
+	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      wantVAName,
+			Namespace: namespace,
+		},
+		Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       deployName,
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(va).
+		WithIndex(&llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}, indexers.VAScaleTargetKey, indexers.VAScaleTargetIndexFunc).
+		Build()
+
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      hpaName,
+			Namespace: namespace,
+		},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       deployName,
+			},
+		},
+	}
+
+	mockLoc := &mockLocator{
+		locateFunc: func(_ context.Context, ns, podName string) (*locator.ManagedScaler, error) {
+			if ns == namespace && podName == "foo-pod" {
+				return &locator.ManagedScaler{HPA: hpa}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			return map[string]*source.MetricResult{
+				"kv_cache_usage": {
+					Values: []source.MetricValue{
+						{
+							Labels: map[string]string{
+								"pod":      "foo-pod",
+								"instance": "10.0.0.1:8000",
+							},
+							Value:     0.5,
+							Timestamp: time.Now(),
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	c := NewReplicaMetricsCollector(mockSource, k8sClient, nil, mockLoc)
+	results, err := c.CollectReplicaMetrics(
+		context.Background(),
+		"test-model",
+		namespace,
+		make(map[string]scaletarget.ScaleTargetAccessor),
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
+		make(map[string]float64),
+	)
+	if err != nil {
+		t.Fatalf("CollectReplicaMetrics: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatalf("expected one ReplicaMetrics result; got none — locator returned HPA %q but no metric was produced", hpaName)
+	}
+
+	got := results[0].VariantName
+	if got != wantVAName {
+		t.Errorf("VariantName = %q; want %q (HPA name is %q — fix must resolve to VA CRD name via scaleTargetRef lookup)",
+			got, wantVAName, hpaName)
 	}
 }

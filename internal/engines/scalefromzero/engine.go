@@ -55,7 +55,7 @@ import (
 const (
 	MetricsReasonAvailable  = "ScaleFromZero"
 	MetricsMessageAvailable = "Scaled from zero due to pending requests"
-	reason                  = "scalefromzero mode: pending request - scale-up"
+	reasonDetails           = ": pending request - scale-up"
 	targetEPPMetricName     = "inference_extension_flow_control_queue_size"
 	targetEPPMetricLabel    = "target_model_name"
 )
@@ -349,7 +349,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		if err != nil {
 			return err
 		}
-		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
+		d := interfaces.VariantDecision{
 			VariantName:        va.Name,
 			Namespace:          va.Namespace,
 			ModelID:            va.Spec.ModelID,
@@ -362,11 +362,12 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			SafetyOverride:     false,
 			ModelBasedDecision: false,
 			AcceleratorName:    accelerator,
-			Reason:             reason, // Reason for scaling up
 			MetricsAvailable:   true,
 			MetricsReason:      MetricsReasonAvailable,
 			MetricsMessage:     MetricsMessageAvailable,
-		})
+		}
+		d.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		common.DecisionCache.Set(va.Name, va.Namespace, d)
 	} else {
 		if decision.CurrentReplicas == 0 {
 			decision.TargetReplicas = targetWorkloadReplicas
@@ -376,7 +377,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			decision.SaturationBased = false
 			decision.SafetyOverride = false
 			decision.ModelBasedDecision = false
-			decision.Reason = reason
+			decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 			decision.AcceleratorName = accelerator
 			decision.MetricsAvailable = true
 			decision.MetricsReason = MetricsReasonAvailable
@@ -400,11 +401,11 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		wvav1alpha1.TypeOptimizationReady,
 		metav1.ConditionTrue,
 		"ScaleFromZeroMode",
-		"scalefromzero decision: "+reason)
+		"scalefromzero decision: "+string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 
 	// Record event just before Actuation.Applied = true
 	if hasDecision && targetWorkloadReplicas > 0 {
-		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
+		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 	}
 	va.Status.Actuation.Applied = true
 
@@ -418,7 +419,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		"va", va.Name,
 		"namespace", va.Namespace,
 		"targetReplicas", targetWorkloadReplicas,
-		"reason", reason)
+		"reason", string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 
 	return nil
 }

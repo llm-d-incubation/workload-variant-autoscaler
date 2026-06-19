@@ -1,0 +1,16 @@
+# DEPRECATED: VariantAutoscaling CRD is deprecated.
+# This sample is kept for reference only.
+# Use config/samples/keda/annotations/ for the recommended annotation-based approach.
+# See docs/developer-guide/migrating-from-va-crd.md.
+apiVersion: llmd.ai/v1alpha1
+kind: VariantAutoscaling
+metadata:
+  name: sample-deployment-keda
+  namespace: llm-d-sim
+  labels:
+    inference.optimization/acceleratorName: A100
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: sample-deployment
+  modelID: default/default

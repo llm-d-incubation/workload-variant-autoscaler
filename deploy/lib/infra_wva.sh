@@ -126,9 +126,24 @@ EOF
 
     if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
         log_info "Enabling scale-to-zero in WVA ConfigMap (ENABLE_SCALE_TO_ZERO=true)..."
-        kubectl patch configmap wva-manager-config \
-            -n "$WVA_NS" --type=merge \
-            -p '{"data":{"WVA_SCALE_TO_ZERO":"true"}}'
+        # Flip WVA_SCALE_TO_ZERO inside data["config.yaml"] — the file the
+        # controller actually reads (mounted at /etc/wva/config.yaml).
+        # Patch only that single field so we don't echo back server-managed
+        # metadata (resourceVersion, managedFields, etc.). Use yq so the edit
+        # is idempotent and tolerates quoting/whitespace variance — sed would
+        # silently fail to match e.g. unquoted or single-quoted values.
+        local current_config
+        current_config=$(kubectl get configmap wva-manager-config -n "$WVA_NS" \
+            -o jsonpath='{.data.config\.yaml}')
+        if [ -z "$current_config" ]; then
+            log_error "ConfigMap wva-manager-config has no data['config.yaml'] key"
+        fi
+
+        local updated_config
+        updated_config=$(echo "$current_config" | yq '.WVA_SCALE_TO_ZERO = "true"')
+
+        kubectl patch configmap wva-manager-config -n "$WVA_NS" --type=merge \
+            -p "$(jq -n --arg cfg "$updated_config" '{data:{"config.yaml":$cfg}}')"
     fi
 
     # Wait for WVA to be ready

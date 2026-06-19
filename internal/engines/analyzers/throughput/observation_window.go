@@ -3,10 +3,6 @@ package throughput
 import (
 	"math"
 	"time"
-
-	ctrl "sigs.k8s.io/controller-runtime"
-
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
 // ObservationWindow is a rolling window of (k, ITL_obs) pairs for one variant.
@@ -40,19 +36,20 @@ func newObservationWindow(maxSize int, maxAge time.Duration, minSamples int, min
 
 // Add appends a (k, itl) observation if k ∈ [minK, maxK] and itl > 0.
 // When the window is at capacity, the oldest observation is evicted first.
-func (w *ObservationWindow) Add(k, itl float64, ts time.Time) {
+// Returns true if the observation was dropped (out of range or invalid itl)
+// so the caller can log with a reconcile-scoped logger.
+func (w *ObservationWindow) Add(k, itl float64, ts time.Time) bool {
 	if k < w.minK || k > w.maxK {
-		ctrl.Log.V(logging.DEBUG).Info("throughput analyzer: k-value outside observable range, observation dropped",
-			"k", k, "minK", w.minK, "maxK", w.maxK)
-		return
+		return true // dropped: out of range
 	}
 	if itl <= 0 || math.IsNaN(itl) {
-		return
+		return true // dropped: invalid
 	}
 	if len(w.observations) >= w.maxSize {
 		w.observations = w.observations[1:]
 	}
 	w.observations = append(w.observations, ITLObservation{K: k, ITLSec: itl, Timestamp: ts})
+	return false
 }
 
 // Prune removes observations older than maxAge relative to now.

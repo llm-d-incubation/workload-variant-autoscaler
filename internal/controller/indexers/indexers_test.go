@@ -19,7 +19,9 @@ package indexers
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -62,7 +64,7 @@ var _ = Describe("Indexers", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Setup indexes
-		err = SetupIndexes(testCtx, mgr)
+		err = SetupIndexes(testCtx, mgr, true)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Start the manager's cache
@@ -579,6 +581,175 @@ var _ = Describe("Indexers", Ordered, func() {
 				}, namespace)
 				return err
 			}).Should(MatchError(ContainSubstring("multiple VariantAutoscalings found")))
+		})
+	})
+
+	Describe("HPA index", func() {
+		It("returns a managed HPA for its Deployment scaleTargetRef", func() {
+			ns := namespace + "-hpa-1"
+			Expect(k8sClient.Create(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))).To(Succeed())
+			}()
+
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "managed-hpa",
+					Namespace:   ns,
+					Annotations: map[string]string{"llm-d.ai/managed": "true"},
+				},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: "apps/v1", Kind: "Deployment", Name: "target-deploy",
+					},
+					MaxReplicas: 10,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, hpa)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, hpa))).To(Succeed())
+			}()
+
+			ref := autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "target-deploy",
+			}
+			Eventually(func() string {
+				got, err := FindHPAForScaleTarget(testCtx, mgrClient, ref, ns)
+				if err != nil || got == nil {
+					return ""
+				}
+				return got.Name
+			}).Should(Equal("managed-hpa"))
+
+			got, err := FindHPAForScaleTarget(testCtx, mgrClient, ref, ns)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).ToNot(BeNil())
+			Expect(got.Name).To(Equal("managed-hpa"))
+		})
+
+		It("ignores HPAs without llm-d.ai/managed=true", func() {
+			ns := namespace + "-hpa-2"
+			Expect(k8sClient.Create(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))).To(Succeed())
+			}()
+
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "unmanaged", Namespace: ns},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: "apps/v1", Kind: "Deployment", Name: "target-deploy-2",
+					},
+					MaxReplicas: 5,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, hpa)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, hpa))).To(Succeed())
+			}()
+
+			ref := autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "target-deploy-2",
+			}
+			// Wait for the cached client to ingest the new HPA before checking the
+			// index — without this, the indexed lookup can return (nil, nil) before
+			// the object propagates, masking real failures.
+			Eventually(func() error {
+				return mgrClient.Get(testCtx, client.ObjectKeyFromObject(hpa), &autoscalingv2.HorizontalPodAutoscaler{})
+			}).Should(Succeed())
+
+			got, err := FindHPAForScaleTarget(testCtx, mgrClient, ref, ns)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).To(BeNil())
+		})
+	})
+
+	Describe("ScaledObject index", func() {
+		It("returns a managed ScaledObject for its Deployment scaleTargetRef", func() {
+			ns := namespace + "-so-1"
+			Expect(k8sClient.Create(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))).To(Succeed())
+			}()
+
+			so := &kedav1alpha1.ScaledObject{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "managed-so",
+					Namespace:   ns,
+					Annotations: map[string]string{"llm-d.ai/managed": "true"},
+				},
+				Spec: kedav1alpha1.ScaledObjectSpec{
+					ScaleTargetRef: &kedav1alpha1.ScaleTarget{
+						APIVersion: "apps/v1", Kind: "Deployment", Name: "so-deploy",
+					},
+					// Required by the KEDA CRD's OpenAPI schema; envtest rejects creates without it.
+					Triggers: []kedav1alpha1.ScaleTriggers{
+						{Type: "prometheus", Metadata: map[string]string{"serverAddress": "http://prometheus:9090", "query": "up", "threshold": "1"}},
+					},
+				},
+			}
+			if err := k8sClient.Create(testCtx, so); err != nil {
+				if strings.Contains(err.Error(), "no kind") || strings.Contains(err.Error(), "no matches for kind") {
+					Skip("KEDA CRDs not available in this envtest setup")
+				}
+				Expect(err).ToNot(HaveOccurred())
+			}
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, so))).To(Succeed())
+			}()
+
+			ref := autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "so-deploy",
+			}
+			Eventually(func() error {
+				return mgrClient.Get(testCtx, client.ObjectKeyFromObject(so), &kedav1alpha1.ScaledObject{})
+			}).Should(Succeed())
+
+			got, err := FindSOForScaleTarget(testCtx, mgrClient, ref, ns)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).ToNot(BeNil())
+			Expect(got.Name).To(Equal("managed-so"))
+		})
+
+		It("ignores ScaledObjects without llm-d.ai/managed=true", func() {
+			ns := namespace + "-so-2"
+			Expect(k8sClient.Create(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))).To(Succeed())
+			}()
+
+			so := &kedav1alpha1.ScaledObject{
+				ObjectMeta: metav1.ObjectMeta{Name: "unmanaged-so", Namespace: ns},
+				Spec: kedav1alpha1.ScaledObjectSpec{
+					ScaleTargetRef: &kedav1alpha1.ScaleTarget{
+						APIVersion: "apps/v1", Kind: "Deployment", Name: "so-deploy-2",
+					},
+					// Required by the KEDA CRD's OpenAPI schema; envtest rejects creates without it.
+					Triggers: []kedav1alpha1.ScaleTriggers{
+						{Type: "prometheus", Metadata: map[string]string{"serverAddress": "http://prometheus:9090", "query": "up", "threshold": "1"}},
+					},
+				},
+			}
+			if err := k8sClient.Create(testCtx, so); err != nil {
+				if strings.Contains(err.Error(), "no kind") || strings.Contains(err.Error(), "no matches for kind") {
+					Skip("KEDA CRDs not available in this envtest setup")
+				}
+				Expect(err).ToNot(HaveOccurred())
+			}
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, so))).To(Succeed())
+			}()
+
+			ref := autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "so-deploy-2",
+			}
+			Eventually(func() error {
+				return mgrClient.Get(testCtx, client.ObjectKeyFromObject(so), &kedav1alpha1.ScaledObject{})
+			}).Should(Succeed())
+
+			got, err := FindSOForScaleTarget(testCtx, mgrClient, ref, ns)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).To(BeNil())
 		})
 	})
 

@@ -75,9 +75,10 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 **Deployment flags**:
 
 ```bash
-export DEPLOY_PROMETHEUS=true         # Deploy Prometheus stack
-export DEPLOY_WVA=true                # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true # Deploy Prometheus Adapter
+export DEPLOY_PROMETHEUS=true               # Deploy Prometheus stack
+export DEPLOY_OPERATIONAL_DASHBOARD=true    # Deploy Grafana and operational dashboard
+export DEPLOY_WVA=true                      # Deploy WVA controller
+export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
 # llm-d: deploy model serving separately via the llm-d guides after install.sh
 ```
 

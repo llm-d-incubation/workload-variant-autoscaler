@@ -102,7 +102,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify k2 was stored in history
-			histKey := "test-model|H100|short"
+			histKey := "test-model|H100|1|short"
 			ra, ok := analyzer.computeCapacityHistory[histKey]
 			Expect(ok).To(BeTrue())
 			Expect(ra.Average()).To(Equal(float64(8000)))

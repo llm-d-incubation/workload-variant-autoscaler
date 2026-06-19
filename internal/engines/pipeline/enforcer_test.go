@@ -63,9 +63,11 @@ var _ = Describe("Enforcer", func() {
 					enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 						return 10, nil
 					})
-					decisions := []interfaces.VariantDecision{
-						{VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 3, Action: interfaces.ActionScaleUp, Reason: "original"},
+					decision := interfaces.VariantDecision{
+						VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 3, Action: interfaces.ActionScaleUp,
 					}
+					decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+					decisions := []interfaces.VariantDecision{decision}
 					scaleToZeroConfig := config.ScaleToZeroConfigData{
 						"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 					}
@@ -75,7 +77,7 @@ var _ = Describe("Enforcer", func() {
 					Expect(applied).To(BeFalse())
 					Expect(decisions[0].TargetReplicas).To(Equal(3))
 					Expect(decisions[0].Action).To(Equal(interfaces.ActionScaleUp))
-					Expect(decisions[0].Reason).To(Equal("original"))
+					Expect(decisions[0].Reason()).To(Equal(string(interfaces.DecisionReasonTest)))
 				})
 			})
 
@@ -135,8 +137,12 @@ var _ = Describe("Enforcer", func() {
 					enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 						return 0, nil
 					})
+					decision1 := interfaces.VariantDecision{
+						VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 2.0, CurrentReplicas: 2, TargetReplicas: 2, Action: interfaces.ActionNoChange,
+					}
+					decision1.SetDecisionReason(interfaces.ActionNoChange, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
 					decisions := []interfaces.VariantDecision{
-						{VariantName: "variant-a", ModelID: "test-model", Namespace: "test-ns", Cost: 2.0, CurrentReplicas: 2, TargetReplicas: 2, Action: interfaces.ActionNoChange, Reason: "original"},
+						decision1,
 						{VariantName: "variant-b", ModelID: "test-model", Namespace: "test-ns", Cost: 1.0, CurrentReplicas: 0, TargetReplicas: 0},
 					}
 					scaleToZeroConfig := config.ScaleToZeroConfigData{
@@ -146,7 +152,7 @@ var _ = Describe("Enforcer", func() {
 					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
 
 					Expect(decisions[0].TargetReplicas).To(Equal(2))
-					Expect(decisions[0].Reason).To(Equal("original"))
+					Expect(decisions[0].Reason()).To(Equal(string(interfaces.DecisionReasonTest)))
 					Expect(decisions[1].TargetReplicas).To(Equal(0))
 				})
 			})
@@ -178,11 +184,19 @@ var _ = Describe("Enforcer", func() {
 				enforcer = NewEnforcer(func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 					return 0, nil
 				})
-				decisions := []interfaces.VariantDecision{
-					{VariantName: "v1", ModelID: "model-1", Namespace: "ns-1", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 3, Action: interfaces.ActionScaleUp, Reason: "original-1"},
-					{VariantName: "v2", ModelID: "model-2", Namespace: "ns-1", Cost: 1.0, CurrentReplicas: 1, TargetReplicas: 2, Action: interfaces.ActionScaleUp, Reason: "original-2"},
-					{VariantName: "v3", ModelID: "model-1", Namespace: "ns-2", Cost: 1.0, CurrentReplicas: 1, TargetReplicas: 1, Action: interfaces.ActionNoChange, Reason: "original-3"},
+				d1 := interfaces.VariantDecision{
+					VariantName: "v1", ModelID: "model-1", Namespace: "ns-1", Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 3, Action: interfaces.ActionScaleUp,
 				}
+				d1.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+				d2 := interfaces.VariantDecision{
+					VariantName: "v2", ModelID: "model-2", Namespace: "ns-1", Cost: 1.0, CurrentReplicas: 1, TargetReplicas: 2, Action: interfaces.ActionScaleUp,
+				}
+				d2.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+				d3 := interfaces.VariantDecision{
+					VariantName: "v3", ModelID: "model-1", Namespace: "ns-2", Cost: 1.0, CurrentReplicas: 1, TargetReplicas: 1, Action: interfaces.ActionNoChange,
+				}
+				d3.SetDecisionReason(interfaces.ActionNoChange, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+				decisions := []interfaces.VariantDecision{d1, d2, d3}
 				scaleToZeroConfig := config.ScaleToZeroConfigData{
 					"model-1": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 				}
@@ -196,11 +210,11 @@ var _ = Describe("Enforcer", func() {
 				// model-2/ns-1 → untouched
 				Expect(decisions[1].TargetReplicas).To(Equal(2))
 				Expect(decisions[1].Action).To(Equal(interfaces.ActionScaleUp))
-				Expect(decisions[1].Reason).To(Equal("original-2"))
+				Expect(decisions[1].Reason()).To(Equal(string(interfaces.DecisionReasonTest)))
 				// model-1/ns-2 → untouched (different namespace)
 				Expect(decisions[2].TargetReplicas).To(Equal(1))
 				Expect(decisions[2].Action).To(Equal(interfaces.ActionNoChange))
-				Expect(decisions[2].Reason).To(Equal("original-3"))
+				Expect(decisions[2].Reason()).To(Equal(string(interfaces.DecisionReasonTest)))
 			})
 		})
 
@@ -219,8 +233,8 @@ var _ = Describe("Enforcer", func() {
 
 				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "greedy-by-saturation")
 
-				Expect(decisions[0].Reason).To(ContainSubstring("greedy-by-saturation"))
-				Expect(decisions[0].Reason).To(ContainSubstring("enforced"))
+				Expect(decisions[0].Reason()).To(ContainSubstring("greedy-by-saturation"))
+				Expect(decisions[0].Reason()).To(ContainSubstring("enforced"))
 			})
 		})
 

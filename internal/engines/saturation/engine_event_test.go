@@ -55,8 +55,10 @@ var _ = Describe("emitAcceleratorNotResolvedEvent", func() {
 		Expect(got).To(HavePrefix("Warning AcceleratorNotResolved "))
 		Expect(got).To(ContainSubstring("nodeSelector"),
 			"event message should mention nodeSelector remediation")
-		Expect(got).To(ContainSubstring("HPA/KEDA metrics will not be emitted"),
-			"event message should warn that metrics are gated")
+		Expect(got).To(ContainSubstring("accelerator_type=\"unresolved\""),
+			"event message should note scaling metrics are still emitted with the unresolved label")
+		Expect(got).To(ContainSubstring("saturation/capacity metrics are withheld"),
+			"event message should warn that accelerator-specific metrics are gated until resolution")
 	})
 
 	It("is a no-op when the engine has no recorder configured", func() {

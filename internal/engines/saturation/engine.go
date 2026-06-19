@@ -35,6 +35,7 @@ import (
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	actuator "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/actuator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -150,7 +151,8 @@ type Engine struct {
 
 	// saturationV2Analyzer is the V2 token-based saturation analyzer (initialized once).
 	// Also pre-registered in analyzers under interfaces.SaturationAnalyzerName.
-	saturationV2Analyzer *saturation_v2.SaturationAnalyzer
+	// Typed as interfaces.Analyzer to allow injection in tests.
+	saturationV2Analyzer interfaces.Analyzer
 
 	// queueingModelAnalyzer is the queueing model-based analyzer (initialized once).
 	// Selected via analyzerName: "queueing-model" in SaturationScalingConfig.
@@ -195,7 +197,7 @@ type Engine struct {
 // Config must be non-nil (validated in main.go before engine creation).
 // ds is the namespace-tracking datastore used to scope per-tick discovery; required.
 // Panics if cfg is nil to fail fast on programming errors.
-func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, ds datastore.Datastore, cfg *config.Config) *Engine {
+func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, ds datastore.Datastore, cfg *config.Config) *Engine {
 	if cfg == nil {
 		panic("config is nil in NewEngine - this should not happen (validated in main.go before engine creation)")
 	}
@@ -223,13 +225,20 @@ func NewEngine(client client.Client, scheme *runtime.Scheme, recorder record.Eve
 	// from ConfigMap), since config arrives after engine init.
 	var scalingOptimizer pipeline.ScalingOptimizer = pipeline.NewCostAwareOptimizer()
 
+	podLocator, err := locator.New(client, apiReader)
+	if err != nil {
+		// locator.New only fails when defaultCacheSize <= 0, which is a
+		// programming error we cannot recover from at runtime.
+		panic(fmt.Sprintf("locator.New: %v", err))
+	}
+
 	engine := Engine{
 		client:                  client,
 		scheme:                  scheme,
 		ds:                      ds,
 		Recorder:                recorder,
 		Config:                  cfg,
-		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client, recorder),
+		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client, recorder, podLocator),
 		ScaleToZeroEnforcer:     pipeline.NewEnforcer(requestCountFunc),
 		GPULimiter:              gpuLimiter,
 		metricsRegistry:         metricsRegistry,
@@ -1038,16 +1047,15 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			TargetReplicas:         targetReplicas,
 			OriginalTargetReplicas: targetReplicas, // Store original before limiter modifies it
 			DesiredReplicas:        state.DesiredReplicas,
-			Action:                 action,
 			SaturationBased:        true,
 			SaturationOnly:         true,
 			ModelBasedDecision:     false,
 			SafetyOverride:         false,
-			Reason:                 "saturation-only mode: " + string(action),
 			GPUsPerReplica:         gpusPerReplica,
 			MinReplicas:            state.MinReplicas,
 			MaxReplicas:            state.MaxReplicas,
 		}
+		decision.SetDecisionReason(action, interfaces.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(interfaces.DecisionReasonSaturationOnly), string(action)))
 
 		if va != nil {
 			decision.AcceleratorName = va.AcceleratorName
@@ -1360,7 +1368,7 @@ func (e *Engine) applySaturationDecisions(
 		if hasDecision {
 			targetReplicas = decision.TargetReplicas
 			acceleratorName = decision.AcceleratorName
-			reason = decision.Reason
+			reason = decision.Reason()
 		} else {
 			// No change/decision: Keep current target or default to current replicas
 			// We effectively explicitly "decide" to keep things as they are if no decision was made
@@ -1434,7 +1442,7 @@ func (e *Engine) applySaturationDecisions(
 		// cycle.
 		if !constants.IsAcceleratorResolved(acceleratorName) {
 			e.emitAcceleratorNotResolvedEvent(&updateVa)
-			logger.V(logging.DEBUG).Info("Accelerator name not resolved - status will be updated but metrics will not be emitted",
+			logger.V(logging.DEBUG).Info("Accelerator name not resolved - replica scaling metrics emitted with accelerator_type=\"unresolved\"; accelerator-specific saturation/capacity metrics withheld",
 				"variant", vaName)
 		}
 
@@ -1506,13 +1514,13 @@ func (e *Engine) applySaturationDecisions(
 		// 	isSaturationOnly = decision.SaturationOnly
 		// }
 
-		// Skip metric emission when accelerator is unresolved to avoid publishing
-		// wva_* gauges under an empty or incorrect accelerator_type label.
-		// Status updates and conditions still proceed so the controller can reconcile.
-		if !constants.IsAcceleratorResolved(acceleratorName) {
-			logger.V(logging.DEBUG).Info("Skipping metric emission - no accelerator name available",
-				"variant", updateVa.Name)
-		} else if err := act.EmitMetrics(ctx, &updateVa); err != nil {
+		// Always emit the replica scaling signal (the HPA/KEDA external metric).
+		// EmitReplicaMetrics labels an unresolved accelerator as the bounded
+		// "unresolved" value (never the internal sentinel), so the scaling signal
+		// is never withheld; the scaler matches on variant/namespace rather than
+		// accelerator_type, so it keeps working regardless. Accelerator-dimensioned
+		// metrics (saturation/capacity) remain gated on resolution below.
+		if err := act.EmitMetrics(ctx, &updateVa); err != nil {
 			msg := "Failed to emit metrics for external autoscalers"
 			// K8s best practice: events should reference the current resource version
 			e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{updateVa}, msg)
@@ -1521,9 +1529,9 @@ func (e *Engine) applySaturationDecisions(
 			// Only log detail if we had a decision or periodically (to avoid spamming logs on every loop for no-ops)
 			if hasDecision {
 				// Emit Kubernetes event for observability
-				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason)
+				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason())
 				if decision.WasLimited {
-					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason)
+					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, decision.Reason())
 				}
 
 				logger.Info("Successfully emitted metrics",
@@ -1535,12 +1543,14 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		// Record saturation and capacity metrics when this cycle produced a
-		// fresh decision for the variant. When there is no fresh decision the
-		// existing series persist with their last-recorded values until
-		// Prometheus' staleness marker fires; surfacing freshness on the
+		// fresh decision for the variant. These series carry the accelerator_type
+		// label, so they are emitted only when the type is resolved — otherwise
+		// the internal sentinel would leak into a label. When there is no fresh
+		// decision the existing series persist with their last-recorded values
+		// until Prometheus' staleness marker fires; surfacing freshness on the
 		// dashboard side is tracked in #1082 (an explicit "up" gauge per VA,
 		// rather than deleting series here).
-		if hasDecision {
+		if hasDecision && constants.IsAcceleratorResolved(acceleratorName) {
 			act.RecordSaturationMetrics(ctx, decision)
 		}
 
@@ -1554,10 +1564,12 @@ func (e *Engine) applySaturationDecisions(
 			//   for this variant during this loop (metrics pipeline is working).
 			// - hasDecision is true when the optimizer produced a scaling decision based on
 			//   saturation metrics in this run.
-			// - The accelerator must also be resolved: when it is the sentinel, the
-			//   metric-emission branch above is skipped (no wva_* gauges are published),
-			//   so reporting MetricsAvailable=True would leave HPA/KEDA-side reasoning
-			//   inconsistent with controller-side reporting.
+			// - The accelerator must also be resolved: the replica scaling gauges are
+			//   always emitted (with an "unresolved" accelerator_type) so scaling is not
+			//   blocked, but the accelerator-dimensioned saturation/capacity metrics are
+			//   only emitted when the type is resolved. MetricsAvailable therefore tracks
+			//   full (accelerator-dimensioned) observability, and is False until the
+			//   accelerator resolves even though scaling itself proceeds.
 			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
 			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
 			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
@@ -1590,6 +1602,11 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		if hasDecision {
+			if decision.Action != interfaces.ActionNoChange {
+				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, decision.Action, decision.ReasonCategory()); err != nil {
+					logger.Error(err, "Failed to emit replica scaling metrics")
+				}
+			}
 			logger.Info("Applied saturation decision via shared cache",
 				"variant", vaName,
 				"namespace", updateVa.Namespace,
@@ -1611,7 +1628,8 @@ func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alp
 		"Cannot resolve accelerator type from Deployment nodeSelector/nodeAffinity or VA label "+
 			utils.AcceleratorNameLabel+". "+
 			"Set nodeSelector on Deployment or add the label to the VariantAutoscaling resource. "+
-			"HPA/KEDA metrics will not be emitted until the accelerator is resolved.")
+			"Replica scaling metrics are still emitted with accelerator_type=\"unresolved\" so HPA/KEDA can scale; "+
+			"accelerator-specific saturation/capacity metrics are withheld until the accelerator is resolved.")
 }
 
 // emitSafetyNetMetrics emits fallback metrics when saturation analysis fails.
@@ -1673,9 +1691,12 @@ func (e *Engine) emitSafetyNetMetrics(
 			}
 		}
 		if !constants.IsAcceleratorResolved(accelerator) {
-			logger.Info("Safety net: skipping metric emission - no accelerator name available",
+			// Do NOT withhold the scaling signal: EmitReplicaMetrics labels an
+			// unresolved accelerator with the bounded "unresolved" value, so the
+			// safety-net signal still reaches HPA/KEDA (which match on
+			// variant/namespace, not accelerator_type). Mirrors the main path.
+			logger.V(logging.DEBUG).Info("Safety net: accelerator unresolved, emitting scaling signal with 'unresolved' accelerator_type",
 				"variant", va.Name)
-			continue
 		}
 
 		// Emit safety net metrics

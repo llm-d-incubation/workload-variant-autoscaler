@@ -85,7 +85,7 @@ func TestRecordOptimizationFailedEvent(t *testing.T) {
 
 			testConfig := config.NewTestConfig()
 
-			engine := NewEngine(k8sClient, scheme, fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+			engine := NewEngine(k8sClient, k8sClient, scheme, fakeRecorder, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 			variantAutoscalings := make([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling, 0, tt.numVAs)
 			for i := 0; i < tt.numVAs; i++ {
@@ -151,7 +151,7 @@ func TestRecordOptimizationFailedEvent_NilRecorder(t *testing.T) {
 	testConfig := config.NewTestConfig()
 
 	// Create engine with nil recorder
-	engine := NewEngine(k8sClient, scheme, nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
+	engine := NewEngine(k8sClient, k8sClient, scheme, nil, sourceRegistry, datastore.NewDatastore(testConfig), testConfig)
 
 	variantAutoscalings := []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 		{

@@ -15,14 +15,23 @@ operating point, and scales before demand exceeds that supply.
 - **λ_dec** — decode token demand: how many tokens/sec the scheduler is dispatching to this model
 - **ITL(k)** — inter-token latency as a function of KV utilization k: fitted as `A·k + B` via OLS
 
-> **Implementation status:** Query registration, collector wiring (three PromQL queries +
-> `GenerationTokenRate`, `KvUsageInstant`, `VLLMRequestRate` fields), ShapeTracker,
-> ObservationWindow, and SanityReport are implemented. ITL model fitting, supply/demand estimation,
-> scaling signal (full `ThroughputAnalyzer`), and engine wiring are not yet implemented.
+> **Status:** Implementation complete and wired into the engine's multi-analyzer pipeline.
+> Enable via the `analyzers:` field in `wva-saturation-scaling-config` — see [Configuration](#configuration).
+>
+> **Enablement:** The ThroughputAnalyzer is **opt-in**. At startup, the controller checks whether
+> any saturation config entry lists `throughput` with `enabled != false`. If none does, the
+> analyzer is not registered and never participates in scaling. The default config ships with
+> saturation only, so throughput is off by default.
+>
+> **Runtime toggling requires a restart.** Registration is frozen after `StartOptimizeLoop`.
+> Editing the configmap to add `throughput` takes effect only after a controller restart.
+> This is a stopgap; the per-cycle consumption gate (effectiveEnabled opt-in fix) is the
+> correct long-term home and will remove the need for a restart when it lands.
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Configuration](#configuration)
 - [Metrics](#metrics)
   - [Throughput Analyzer Queries](#throughput-analyzer-queries)
   - [Shared Fields from Collector](#shared-fields-from-collector)
@@ -44,6 +53,46 @@ operating point, and scales before demand exceeds that supply.
 - [Constants and Tuning](#constants-and-tuning)
 - [References](#references)
 
+## Configuration
+
+The Throughput Analyzer is enabled by adding it to the `analyzers:` list in the
+`wva-saturation-scaling-config` ConfigMap alongside the saturation analyzer:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wva-saturation-scaling-config
+  namespace: <workload-variant-autoscaler-namespace>
+data:
+  default: |
+    analyzerName: saturation
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    analyzers:
+      - name: saturation
+        score: 1.0
+      - name: throughput
+        score: 1.0
+```
+
+With this config:
+- **Scale-up** fires when either saturation OR throughput signals overload (any-up).
+- **Scale-down** fires only when both agree there is spare capacity (all-down).
+
+To run the Throughput Analyzer in isolation (without the saturation signal):
+
+```yaml
+analyzers:
+  - name: saturation
+    enabled: false   # provides Cost/AcceleratorName metadata but no RC/SC signal
+  - name: throughput
+    score: 1.0
+```
+
+See [saturation-scaling-config.md — Multi-Analyzer Pipeline](../saturation-scaling-config.md#multi-analyzer-pipeline)
+for the full `analyzers:` field reference and combine algorithm.
+
 ## Metrics
 
 `RegisterThroughputAnalyzerQueries` (in `internal/collector/registration/throughput_analyzer.go`)
@@ -61,8 +110,10 @@ sum by (pod) (rate(vllm:request_generation_tokens_sum{namespace="...",model_name
 
 **What it measures:** Observed generation (decode) token rate per pod in tokens/sec.
 
-**TA notation:** μ_dec^obs — the directly observable supply proxy. Included for observability;
-the analyzer derives supply from the ITL model rather than using this value directly.
+**TA notation:** μ_dec^obs — the directly observable supply proxy. Used for supply model
+verification: the analyzer compares the ITL-model-predicted rate μ_dec(k*) against GPS_obs per
+replica. A deviation > 15% at k* ≥ 0.30 suppresses SpareCapacity for the cycle. See
+[GPS Verification](#gps-verification).
 
 **ReplicaMetrics field:** `GenerationTokenRate`
 
@@ -107,7 +158,7 @@ sum by (pod) (rate(vllm:request_generation_tokens_count{namespace="...",model_na
 generation tokens histogram `_count` counter (increments once per completed request).
 
 **TA notation:** fallback λ_req — used when `ArrivalRate == 0` for all pods (EPP not deployed).
-Per variant V, the analyzer computes `λ_dec_fallback = Σ_{r∈V} VLLMRequestRate_r × AvgOutputTokens_r` over that variant's replicas.
+The analyzer computes `λ_dec_fallback = Σ VLLMRequestRate_r × AvgOutputTokens_r`.
 
 **ReplicaMetrics field:** `VLLMRequestRate`
 
@@ -136,8 +187,8 @@ these fields directly rather than registering duplicate queries.
 | λ_req (per-pod, req/s) | `ReplicaMetrics.ArrivalRate` | `QuerySchedulerDispatchRate` | `RegisterQueueingModelQueries` |
 | Q (scheduler queue size) | `SchedulerQueueMetrics.QueueSize` (model-level) | `QuerySchedulerQueueSize` | `RegisterSaturationQueries` |
 
-**λ_dec primary (per variant V):** `Σ_{r∈V} ArrivalRate_r × AvgOutputTokens_r` over the variant's replicas (EPP deployed).  
-**λ_dec fallback (per variant V):** `Σ_{r∈V} VLLMRequestRate_r × AvgOutputTokens_r` (EPP absent, all ArrivalRate == 0).
+**λ_dec primary:** `Σ ArrivalRate_r × AvgOutputTokens_r` across all replicas (EPP deployed).  
+**λ_dec fallback:** `Σ VLLMRequestRate_r × AvgOutputTokens_r` (EPP absent, all ArrivalRate == 0).
 
 **Note on arrival rate:** `ArrivalRate` comes from `QuerySchedulerDispatchRate` which is per-pod,
 namespaced, and model-scoped — correctly isolating traffic to a specific variant. The TA sums
@@ -162,9 +213,6 @@ namespace filtering limitation of the scheduler metric.
 
 ## Architecture
 
-> **Note:** Query Registration, Metrics Collector, Package Structure, ShapeTracker,
-> ObservationWindow, and SanityReport are implemented. ITLModel, full ThroughputAnalyzer,
-> Analysis Pipeline, and Data Flow are **not yet implemented**.
 
 ### Package Structure
 
@@ -197,26 +245,11 @@ The remaining TA fields (`TotalKvCapacityTokens`, `AvgITL`, `AvgOutputTokens`, `
 `PrefixCacheHitRate`, `ArrivalRate`) are populated by saturation and queueing model queries.
 
 **ShapeTracker (`shape_tracker.go`)**  
-Maintains the current workload shape bucket `(IL, OL, H%, IL_eff, KVreq)`. Detects shape changes
+Maintains the current workload shape bucket `(IL, OL, IL_eff, KVreq)`. Detects shape changes
 (>20% shift in IL or OL) and triggers observation window reset.
 
-- `IL_eff = IL × (1 − H%)` — effective input length after prefix cache
+- `IL_eff = IL × (1 − PrefixCacheHitRate)` — effective input length after prefix cache
 - `KVreq = IL_eff + OL/2` — time-averaged KV footprint per decode request
-
-**Shape dimensions — design note:**  
-The tracker stores IL, OL, and H% but change detection uses only IL and OL (see `Within()`).
-H% is stored because it feeds IL_eff and KVreq; a H%-only change does not reset the window.
-
-The minimal sufficient representation for KVreq is `(OL, IL_eff)` rather than `(IL, OL, H%)`
-separately — we track all three because it is not yet clear whether IL and H% should be treated
-as independent shape dimensions or collapsed into IL_eff alone.
-
-Likewise, the slope A in `ITL(k) = A·k + B` may be independent of H%: A captures how quickly
-decode latency grows with KV load, which is driven by hardware and concurrency, not by the
-fraction of input tokens served from cache. We do not have enough data to confirm this yet.
-If it holds, a H%-only shift would warrant updating only B (via a new Tier-2 constrained fit)
-while carrying over the previous A — avoiding a full window reset.  
-*(This is a potential future optimization; the current implementation resets nothing on H%-only changes.)*
 
 **ObservationWindow (`observation_window.go`)**  
 Rolling window of `(k*, ITL_obs)` pairs collected per replica per cycle. Filters observations
@@ -229,7 +262,8 @@ Two-tier calibration of `ITL(k) = A·k + B`. See [ITL Model Calibration](#itl-mo
 **ThroughputAnalyzer (`analyzer.go`)**  
 Implements `interfaces.Analyzer`. Groups replicas by `VariantName`, runs sanity checks,
 updates per-variant shape tracker and observation window in `Observe()`, then computes
-supply, demand, and model-level RC/SC signals in `Analyze()`.
+supply and demand signals in `Analyze()`, publishing raw `Total*` fields.
+The engine's universal threshold post-step writes `RequiredCapacity` and `SpareCapacity`.
 
 ### State and High Availability
 
@@ -246,9 +280,10 @@ Per-variant state is minimal:
 
 **In HA mode**, the engine reconciliation loops run only on the elected leader (gated in `main.go`). The `ThroughputAnalyzer` instance lives inside that loop — state is local to the leader process and is never shared across replicas.
 
-On leader failover the incoming leader starts with an empty analyzer. During warm-up (until the observation window re-accumulates ≥ 10 samples with ≥ 0.30 k-spread), the TA emits no scaling signal (`RC = 0, SC = 0`). The saturation analyzer runs unaffected and provides coverage throughout. Warm-up completes within a few minutes at normal traffic levels.
+On leader failover the incoming leader starts with an empty analyzer. During warm-up (until the observation window re-accumulates ≥ 10 samples with ≥ 0.30 k-spread), the TA emits no scaling signal (`TotalDemand = 0, TotalSupply = 0`). The saturation analyzer runs unaffected and provides coverage throughout. Warm-up completes within a few minutes at normal traffic levels.
 
 **No external state store is needed.** State loss on failover is equivalent to a workload shape change (which already clears the window by design). The gap is bounded and temporary; adding a ConfigMap or lease annotation to persist calibration state would not be worth the added complexity at this stage.
+
 
 ### Analysis Pipeline
 
@@ -272,20 +307,27 @@ On leader failover the incoming leader starts with an empty analyzer. During war
   │        │                                        [ITL(k_sat) = A·k_sat + B]    │
   │        │                                        → μ_dec_sat, perReplicaSupply │
   │        │                                                                      │
-  │        └─(ArrivalRate / VLLMRequestRate)─────► computeDemand                  │
-  │                                                 → λ_dec, isEPP                │
+  │        ├─(ArrivalRate / VLLMRequestRate)─────► computeDemand                  │
+  │        │                                         → λ_dec, isEPP               │
+  │        │                                                                      │
+  │        └─(GPS_obs, k*, KV_max)──────────────► checkVariantGPSMismatch         │
+  │                                               μ_model = N_dec(k*) / ITL(k*)   │
+  │                                               err = |μ_model − GPS_obs|       │
+  │                                                     / GPS_obs × 100           │
+  │                                               if err > 15% at k* ≥ 0.30:     │
+  │                                                 anyGPSMismatch = true         │
   └──────────────────────────────────┬────────────────────────────────────────────┘
                                      │ per-variant outputs accumulated
   ┌──────────────────────────────────▼────────────────────────────────────────────┐
-  │  Model-Level Aggregation                                                      │
+  │  Model-Level Aggregation (TA publishes; engine post-step writes RC/SC)        │
   │                                                                               │
-  │  totalSupply      = Σ μ_dec_sat                                               │
-  │  totalDemand      = Σ λ_dec  +  QueueSize / (QueueDrainFactor × ITL(k_sat))   │
-  │  totalAnticipated = Σ (current + pending) × perReplicaSupply                  │
+  │  TotalSupply            = Σ μ_dec_sat                                         │
+  │  TotalDemand            = Σ λ_dec  +  QueueSize / (factor × ITL(k_sat))       │
+  │  TotalAnticipatedSupply = Σ (current + pending) × perReplicaSupply            │
   │                                                                               │
-  │  RequiredCapacity = max(0, totalDemand − totalAnticipated)                    │
-  │  SpareCapacity    = max(0, totalSupply  − totalDemand)    [if anyEPP]         │
-  │  RoleCapacities                                           [if P/D roles]      │
+  │  RequiredCapacity = 0  ← engine writes after Analyze() returns                │
+  │  SpareCapacity    = 0  ← engine writes after Analyze() returns                │
+  │  RoleCapacities  [if P/D roles: TotalSupply/TotalDemand/TotalAnticipated]     │
   └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -304,7 +346,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
        │ vllm:request_prompt_tokens_*            (QueryAvgInputTokens        → AvgInputTokens)
        │ vllm:prefix_cache_hits/queries          (QueryPrefixCacheHitRate    → PrefixCacheHitRate)
        │ inference_extension_scheduler_*         (QuerySchedulerDispatchRate → ArrivalRate)
-       │ inference_extension_scheduler_*         (QuerySchedulerQueueSize    → QueueSize)
+       │ inference_extension_flow_control_*      (QuerySchedulerQueueSize    → QueueSize)
        ↓
 ┌─────────────────────────┐
 │ ReplicaMetricsCollector │  ← internal/collector/replica_metrics.go
@@ -324,25 +366,28 @@ On leader failover the incoming leader starts with an empty analyzer. During war
 │                                                          │
 │  model-level:                                            │
 │    + queue demand from QueueSize / (factor×ITL)          │
-│    RC = max(0, totalDemand − totalAnticipated)           │
-│    SC = max(0, totalSupply − totalDemand)  [EPP]         │
+│    TotalSupply, TotalDemand, TotalAnticipatedSupply       │
+│    RequiredCapacity = 0, SpareCapacity = 0 (engine fills) │
 └──────┬───────────────────────────────────────────────────┘
-       │ AnalyzerResult{RequiredCapacity, SpareCapacity, VariantCapacities, RoleCapacities}
+       │ AnalyzerResult{TotalSupply, TotalDemand, TotalAnticipatedSupply,
+       │                VariantCapacities, RoleCapacities}
        ↓
-┌──────────────────────────────────────┐
-│ combineAnalyzerResults()             │  ← any-up / all-down with saturation
-│ (internal/engines/saturation)        │
-└──────────────────┬───────────────────┘
-                   │ combined AnalyzerResult
+┌──────────────────────────────────────────────┐
+│ Engine universal threshold post-step         │
+│   RC = max(0, TotalDemand/scaleUp − TotalAnticipatedSupply) │
+│   SC = max(0, TotalSupply − TotalDemand/scaleDown)          │
+└──────────────────┬───────────────────────────┘
+                   │ AnalyzerResult with RC/SC populated
                    ↓
-┌────────────────────┐
-│ ScalingOptimizer   │  → VariantDecisions → Controller
-└────────────────────┘
+┌──────────────────────────────────────┐
+│ Multi-analyzer optimizer             │  ← slice-predicate any-up/all-down
+│ (internal/engines/pipeline)          │
+└──────────────────┬───────────────────┘
+                   │ VariantDecisions → Controller
+                   ↓
 ```
 
 ## ITL Model Calibration
-
-> **Not yet implemented.**
 
 The ITL model `ITL(k) = A·k + B` captures how inter-token latency grows with KV cache
 utilization k. It is calibrated independently per variant (different hardware → different A, B).
@@ -356,8 +401,7 @@ latency). On success, the fitted model is used for both supply and demand estima
 
 ### Tier 2 — Constrained OLS
 
-When the window is not ready, A is estimated with B pinned to `DefaultBaselineITLSec` (0.006 s —
-H100 hardware baseline at near-zero load):
+When the window is not ready, A is estimated with B pinned and only A fitted:
 
 ```
 A = Σ((ITL_i − B) · k_i) / Σ(k_i²)
@@ -368,13 +412,17 @@ it reduces to the single-point formula `A = (ITL − B) / k*`. For multiple repl
 strictly better — same OLS criterion as tier-1 but with one fewer degree of freedom.
 Accepted only when A > 0.
 
+**B selection:** B is taken from `variantState.lastFittedB` when a prior successful Tier-1 fit
+exists for this variant. B reflects hardware/model characteristics (not workload shape), so it
+survives shape-change window resets. When no prior Tier-1 fit has occurred (`hasFittedB` is
+false), B falls back to `DefaultBaselineITLSec` (0.006 s — H100 baseline at near-zero load).
+`lastFittedB` and `hasFittedB` are exposed in `ThroughputVariantState` for observability.
+
 **Tier 3 (not yet wired):** `itlKnowledgeStore` is present in the package for a future
 zero-replica fallback using the last successful tier-1 fit. It is not wired into the current
 `Analyze()` loop because that loop only iterates variants with active replica metrics.
 
 ## Supply Estimation
-
-> **Not yet implemented.**
 
 Per replica `r`:
 
@@ -392,35 +440,40 @@ per-analyzer constant pending alignment with the EPP system-wide k_sat (see open
 
 ## Demand Estimation
 
-> **Not yet implemented.**
-
 ### Priority Chain
 
-Demand is resolved in priority order per variant. The first non-zero source wins.
+Demand is resolved in priority order per variant. The cascade falls through to the next
+source whenever the current source yields zero.
 
-**1. EPP primary** (isEPP = true)  
+**1. EPP primary**  
 When any replica has `ArrivalRate > 0`:
 ```
-λ_dec = Σ_{r∈V} ArrivalRate_r × AvgOutputTokens_r
+λ_dec = Σ ArrivalRate_r × AvgOutputTokens_r
 ```
-Each replica of variant V contributes its own arrival rate × output length. This avoids
-averaging-the-averages when replicas have different throughput.
+Each replica contributes its own arrival rate × output length. This avoids averaging-the-averages
+when replicas have different throughput.
 
-**2. vLLM fallback** (isEPP = false)  
-When EPP is absent but `VLLMRequestRate > 0`:
+If EPP is present but all `AvgOutputTokens == 0` (warm-up: scheduler is dispatching
+requests but no generation tokens have completed yet), this path yields zero and the
+cascade falls through. `isEPP` remains true so the engine is aware EPP is deployed.
+
+**2. vLLM fallback**  
+When EPP is absent **or** EPP is present but yielded zero (warm-up), and `VLLMRequestRate > 0`:
 ```
-λ_dec = Σ_{r∈V} VLLMRequestRate_r × AvgOutputTokens_r
+λ_dec = Σ VLLMRequestRate_r × AvgOutputTokens_r
 ```
-Same structure as primary but using the vLLM-side completion rate. SpareCapacity (scale-down)
-is suppressed when isEPP is false — the vLLM rate only counts served requests, not arriving ones.
+Same structure as primary but using the vLLM-side completion rate. The vLLM rate counts
+only served (completed) requests and undercounts arriving demand under load.
 
 **3. k\*-based local** (scale-up only)  
-When both EPP and vLLM rates are zero, demand is derived from the current KV utilization:
+When EPP and vLLM both yield zero (EPP absent or warm-up; vLLM rate also zero), demand
+is derived from the current KV utilization:
 ```
-λ_local = Σ_{r∈V}  k_r* × KV_max_r / KVreq / ITL(k_r*)
+λ_local = Σ_r  k_r* × KV_max_r / KVreq / ITL(k_r*)
 ```
 Each replica's in-flight request count `N_r = k_r* × KV_max / KVreq` is divided by `ITL(k_r*)`
-to approximate its current throughput. Scale-down is still gated on EPP when this path is used.
+to approximate its current throughput. This path is scale-up only (no EPP → demand may be
+underestimated; TA publishes the raw `TotalDemand` and the engine post-step determines SC).
 
 ### Scheduler Queue Demand
 
@@ -439,37 +492,106 @@ is independent of OL.
 Queue demand appears in model-level `TotalDemand` but is **not attributed to any specific
 variant** — `Σ VariantCapacity.TotalDemand ≤ result.TotalDemand` when a queue is present.
 
-## Scaling Signal
+**Note:** `SchedulerQueueMetrics` is passed via `AnalyzerInput.SchedulerQueue`. The TA handles
+nil correctly (queue demand = 0 when absent). The engine currently always passes nil due to a
+known bug (`engine_v2.go` never calls `CollectSchedulerQueueMetrics`); fixing this is tracked
+as a separate engine PR and will not require changes to the TA.
 
-> **Not yet implemented.**
+## Scaling Signal
 
 ### Model-Level Aggregation
 
-`RequiredCapacity` and `SpareCapacity` are computed from model-level totals, not accumulated
-per-variant. This prevents simultaneous conflicting signals when variant A is overloaded and
-variant B has spare.
+TA publishes raw `Total*` fields on `AnalyzerResult`; the engine's universal threshold
+post-step writes `RequiredCapacity` and `SpareCapacity` after `Analyze()` returns.
 
 ```
-totalAnticipated = Σ_v (current_replicas_v + pending_replicas_v) × perReplicaSupply_v
-requiredCapacity = max(0, totalDemand − totalAnticipated)
-spareCapacity    = max(0, totalSupply − totalDemand)   if anyEPP else 0
+TotalSupply            = aggregation.SumTotalSupply(VariantCapacities)
+                       = Σ_v ReplicaCount_v × PerReplicaCapacity_v
+TotalAnticipatedSupply = aggregation.SumTotalAnticipatedSupply(VariantCapacities)
+                       = Σ_v (ReplicaCount_v + PendingReplicas_v) × PerReplicaCapacity_v
+TotalDemand            = aggregation.SumTotalDemand(VariantCapacities)
+                       + QueueSize / (DefaultQueueDrainFactor × ITL(k_sat))
 ```
 
-`PendingReplicas` counts replicas that have been provisioned but not yet in service. Including
-them in `totalAnticipated` suppresses redundant scale-up requests while pods are starting.
+`PendingReplicas` (booting replicas not yet in service) are included in anticipated supply
+to suppress redundant scale-up requests while pods are starting.
 
-By construction, `requiredCapacity` and `spareCapacity` cannot both be non-zero in the same
-cycle: if demand exceeds anticipated supply then spare = max(0, supply−demand) = 0.
+The engine post-step formula (using the model's configured `scaleUpThreshold` / `scaleDownBoundary`):
+```
+RC = max(0, TotalDemand / scaleUpThreshold  − TotalAnticipatedSupply)
+SC = max(0, TotalSupply  − TotalDemand / scaleDownBoundary)
+```
+
+See [`saturation-scaling-config.md`](../saturation-scaling-config.md) § Universal Threshold Post-Step
+for the authoritative formula and per-analyzer threshold override configuration.
+
+### Known Regression
+
+**PR-5 drops the EPP-presence and GPS-mismatch gates that previously suppressed `SpareCapacity`.**
+Under the old behavior, TA set `SpareCapacity = 0` when EPP was not deployed or when a GPS
+mismatch flagged the ITL model as unreliable. Under the new contract, TA leaves `SpareCapacity`
+zero and the engine post-step computes it unconditionally from `TotalSupply` and `TotalDemand`.
+
+This means:
+- In EPP-absent deployments, TA's model-level `SC > 0` will be forwarded to the optimizer,
+  potentially triggering scale-down on a supply estimate that may be less reliable.
+- When the GPS mismatch flag is active (ITL model suspect), TA no longer blocks scale-down.
+
+These safety properties will be restored in a follow-up PR once the analyzer→engine contract
+supports an SC opt-out signal (`AnalyzerResult.SuppressSpareCapacity` or equivalent).
+TA-only deployments with EPP and without persistent GPS mismatches are unaffected.
+
+### GPS Verification
+
+`GenerationTokenRate` (GPS_obs = μ_dec^obs) is the directly observed decode token rate per
+replica from `rate(vllm:request_generation_tokens_sum[1m])`. Each cycle, `Analyze()` compares
+this against the ITL model's prediction:
+
+```
+μ_model(k*) = N_dec(k*) / ITL(k*)
+            = (k* × KV_max / KVreq) / (A·k* + B)
+
+gpsErrPct = |μ_model(k*) − GPS_obs| / GPS_obs × 100
+```
+
+When any replica in any variant shows `gpsErrPct > 15%` at `k* ≥ 0.30`, the mismatch is
+recorded and logged. TA sets `consecutiveGPSMismatches` on the variant state; if this reaches
+`DefaultGPSMismatchClearThreshold` (3) consecutive cycles, the observation window is cleared to
+force ITL model recalibration.
+
+**Note:** Prior to PR-5, TA suppressed `SpareCapacity` when a GPS mismatch was active. Under the
+multi-analyzer engine contract, TA leaves `RequiredCapacity` and `SpareCapacity` at zero and the
+engine post-step computes both unconditionally. The GPS-mismatch SC gate is no longer applied.
+See the Known Regression section above.
+
+The `k* ≥ 0.30` guard prevents false positives at low load where GPS is noisy and N_dec is small.
+
+**Near-saturation diagnostics.** When `k* ≥ DefaultKSat − 0.10` (i.e. k* ≥ 0.75), GPS is
+near-oracle quality: a discrepancy between μ_model and GPS_obs is a strong indicator of a
+model error. In this case, `checkVariantGPSMismatch` logs additional root-cause diagnostics:
+
+- **ITL residual high** (`|AvgITL − ITL(k*)| / AvgITL > 20%`): the observed ITL deviates from
+  the model's prediction at k*. Cause: bad data points in the observation window, or the workload
+  has shifted and the model has not yet recalibrated.
+- **N_dec mismatch** (ITL residual small, but `|N_dec_model − GPS_obs × AvgITL| / N_dec_model > 20%`):
+  the ITL model fits observed ITL but GPS × ITL disagrees with KV-derived N_dec. Cause: the
+  workload shape (IL, OL, or prefix-hit-rate) used to compute KVreq is wrong.
+
+GPS mismatch is logged at INFO so operators see it without enabling debug logging.
 
 ### Role-Aware Aggregation
 
 Roles are read from `AnalyzerInput.VariantStates` and stored in per-variant state. All roles
 use the same decode-rate framework.
 
-- `RequiredCapacity` is **suppressed for the prefill role**: decode rate is never the bottleneck
-  for a prefill-only pod. Prefill-specific rate signals (based on prefill token throughput) are
-  deferred to a later PR.
-- `SpareCapacity` for a role requires EPP on at least one variant of that role.
+- TA publishes `TotalSupply`, `TotalAnticipatedSupply`, and `TotalDemand` per role.
+  `RequiredCapacity` and `SpareCapacity` are left zero — the engine post-step fills them.
+- **Prefill role:** `TotalDemand` is negligible after the OL guard in `computeLocalDemand`
+  (EPP and vLLM demand multiply by `AvgOutputTokens ≈ 0` for prefill pods; k*-based local demand
+  is also gated on `AvgOutputTokens > DefaultMinDecodeOLForLocalDemand`). The engine post-step
+  therefore produces RC ≈ 0 for the prefill role naturally.
+- **Queue demand attribution:** queue demand is decode-rate-denominated and split evenly across
+  active non-prefill roles (`distributeQueueDemandByRole`).
 - `RoleCapacities` is nil when all variants have role `""` or `"both"` (non-disaggregated model).
 
 ## Constants and Tuning
@@ -486,6 +608,11 @@ use the same decode-rate framework.
 | `DefaultMinObservableK` | 0.15 | Lower k* filter for ObservationWindow |
 | `DefaultMaxObservableK` | 0.85 | Upper k* filter for ObservationWindow |
 | `DefaultShapeChangeTolerance` | 0.20 | IL or OL shift that triggers window reset |
+| `DefaultGPSMismatchThresholdPct` | 15.0 | GPS error % above which SpareCapacity is suppressed |
+| `DefaultGPSMinKForVerification` | 0.30 | Minimum k* for GPS check to apply |
+| `DefaultNearKSatMargin` | 0.10 | k* within this margin of k_sat triggers deeper diagnostics |
+| `DefaultNearKSatITLResidualThreshold` | 0.20 | ITL residual above which model drift is flagged |
+| `DefaultNearKSatNDecResidualThreshold` | 0.20 | N_dec cross-check residual above which shape mismatch is flagged |
 
 **Open items:**
 - `DefaultKSat = 0.85` is per-analyzer; needs alignment with EPP system-wide k_sat
@@ -494,4 +621,4 @@ use the same decode-rate framework.
 ## References
 
 - Related: [Saturation Analyzer](../user-guide/saturation-analyzer.md)
-- Design: `ideas/TA-Plan.md`, `ideas/TA-supply.md`, `ideas/TA-demand.md`, `ideas/TA-PR4-plan.md`
+- Design: `plans/planning/TA-Plan.md`, `plans/planning/TA-PR4-plan.md`

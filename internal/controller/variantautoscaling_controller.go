@@ -153,6 +153,32 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
+	// Emit a once-per-VA deprecation notice. The annotation persists across
+	// controller restarts, ensuring the warning fires exactly once per VA object.
+	if va.Annotations == nil || va.Annotations["llm-d.ai/deprecation-warned"] != "true" {
+		logger.Info("VariantAutoscaling is deprecated; migrate to the annotation-based path",
+			"name", va.Name,
+			"namespace", va.Namespace,
+			"migration", "docs/developer-guide/migrating-from-va-crd.md")
+		patch := client.MergeFrom(va.DeepCopy())
+		if va.Annotations == nil {
+			va.Annotations = map[string]string{}
+		}
+		va.Annotations["llm-d.ai/deprecation-warned"] = "true"
+		if err := r.Patch(ctx, &va, patch); err != nil {
+			logger.Error(err, "Failed to patch deprecation-warned annotation",
+				"name", va.Name, "namespace", va.Namespace)
+			return ctrl.Result{}, err
+		}
+		if r.Recorder != nil {
+			r.Recorder.Event(&va, corev1.EventTypeWarning, "Deprecated",
+				"VariantAutoscaling is deprecated and will be removed in a future release. "+
+					"Migrate to the annotation-based path (add llm-d.ai/managed=true to your HPA or ScaledObject). "+
+					"See docs/developer-guide/migrating-from-va-crd.md.")
+		}
+		originalVA = va.DeepCopy()
+	}
+
 	// Track namespace for namespace-local ConfigMap watching
 	// Moved after deletion check to avoid tracking deleted VAs
 	// Idempotent: tracking the same VA multiple times (e.g., on retry) has no effect
@@ -219,7 +245,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			"metricsAvailable", decision.MetricsAvailable,
 			"metricsReason", decision.MetricsReason,
 			"metricsMessage", decision.MetricsMessage,
-			"reason", decision.Reason)
+			"reason", decision.Reason())
 		// Only apply if the decision is fresher than the last one applied or if we haven't applied it
 		// Note: We blindly apply for now, assuming the Engine acts as the source of truth for "Desired" state
 		numReplicas, accelerator, lastRunTime := common.DecisionToOptimizedAlloc(decision)

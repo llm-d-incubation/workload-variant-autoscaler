@@ -85,7 +85,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("WVA_LIMITED_MODE", false)
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
-	v.SetDefault("COORDINATOR_ENABLED", false)
+	v.SetDefault("EXPERIMENTAL_COORDINATOR_ENABLED", false)
 	v.SetDefault("COORDINATOR_INTERVAL", "15s")
 
 	// Load from config file (mounted in the container) — sits between env and defaults in precedence
@@ -152,7 +152,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	}
 
 	cfg.coordinator = coordinatorConfig{
-		enabled:  v.GetBool("COORDINATOR_ENABLED"),
+		enabled:  v.GetBool("EXPERIMENTAL_COORDINATOR_ENABLED"),
 		interval: v.GetDuration("COORDINATOR_INTERVAL"),
 	}
 

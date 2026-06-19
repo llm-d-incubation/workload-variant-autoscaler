@@ -26,6 +26,7 @@ Environment Variables:
   IMG                          WVA image as repo:tag (alternative to -i)
   SKIP_CHECKS                  Skip kubectl/helm/git prerequisite check (default: false). Install scripts are non-interactive and fail fast on errors.
   DEPLOY_PROMETHEUS            Deploy Prometheus stack (default: true)
+  DEPLOY_OPERATIONAL_DASHBOARD Deploy Grafana and operational dashboard (default: true)
   DEPLOY_WVA                   Deploy WVA controller (default: true)
   DEPLOY_PROMETHEUS_ADAPTER    Deploy Prometheus Adapter when SCALER_BACKEND=prometheus-adapter (default: true)
   SCALER_BACKEND               prometheus-adapter (default), keda, or none
