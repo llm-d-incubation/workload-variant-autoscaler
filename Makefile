@@ -381,6 +381,26 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 		-w $(BENCHMARK_WORKLOAD) \
 		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
+	@echo ""
+	@echo "========================================="
+	@echo "  Generating benchmark report..."
+	@echo "========================================="
+	@$(MAKE) benchmark-report
+
+BENCHMARK_GPUS_PER_REPLICA ?= 1
+
+.PHONY: benchmark-report
+benchmark-report: ## Generate a markdown table from the latest benchmark results
+	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	if [ -z "$$LATEST_DIR" ]; then \
+		echo "ERROR: No benchmark results found in $(BENCHMARK_WORKSPACE)"; \
+		exit 1; \
+	fi; \
+	echo "Results directory: $$LATEST_DIR"; \
+	echo ""; \
+	python3 $(CURDIR)/hack/benchmark/postprocess.py \
+		--gpus-per-replica $(BENCHMARK_GPUS_PER_REPLICA) \
+		$$LATEST_DIR
 
 BURSTY_WORKLOAD    ?= bursty.yaml
 BENCHMARK_WAIT_TIMEOUT ?= 7200
