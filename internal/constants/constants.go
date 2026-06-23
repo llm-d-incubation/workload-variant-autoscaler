@@ -52,8 +52,11 @@ var (
 	// vendorResources lists each supported GPU resource and its discovery labels.
 	VendorResources = []GpuInfo{
 		{"NVIDIA", "nvidia.com/gpu", "nvidia.com/gpu.product", "nvidia.com/gpu.memory"},
+		// GKE does not provide memory labels, they need to be applied manually:
+		// https://docs.cloud.google.com/kubernetes-engine/docs/how-to/gpus
+		{"NVIDIA", "nvidia.com/gpu", "cloud.google.com/gke-accelerator", "nvidia.com/gpu.memory"},
 		{"AMD", "amd.com/gpu", "amd.com/gpu.product-name", "amd.com/gpu.memory"},
-		// NOTE: Node labeling rules installed for Node Feature Discovery (NFD) by Intel GPU operator,
+		// Node labeling rules installed for Node Feature Discovery (NFD) by Intel GPU operator,
 		// provide product labels only for Data Center products. Current Intel Gaudi / GPU operators
 		// do not label nodes with device memory information, that info needs to be labeled separately.
 		{"Intel", "habana.ai/gaudi", "habana.ai/product.name", "habana.ai/device.memory"},
