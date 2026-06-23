@@ -398,7 +398,7 @@ benchmark-report: ## Generate a markdown table from the latest benchmark results
 	fi; \
 	echo "Results directory: $$LATEST_DIR"; \
 	echo ""; \
-	python3 $(CURDIR)/hack/benchmark/postprocess.py \
+	python3 $(CURDIR)/scripts/postprocess.py \
 		--gpus-per-replica $(BENCHMARK_GPUS_PER_REPLICA) \
 		$$LATEST_DIR
 
