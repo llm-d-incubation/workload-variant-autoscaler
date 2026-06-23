@@ -69,10 +69,10 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 
 	// Query nodes for each GPU vendor separately.
 	// K8s LabelSelectors don't support OR logic across different keys (e.g. nvidia OR amd).
-	for _, gpuInfo := range vendorResources {
-		vendor := gpuInfo.vendor
-		memKey := gpuInfo.memoryLabel
-		prodKey := gpuInfo.productLabel
+	for _, res := range vendorResources {
+		vendor := res.vendor
+		memKey := res.memoryLabel
+		prodKey := res.productLabel
 
 		req, err := labels.NewRequirement(prodKey, selection.Exists, nil)
 		if err != nil {
@@ -99,7 +99,7 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 			}
 
 			count := 0
-			if cap, ok := node.Status.Allocatable[corev1.ResourceName(gpuInfo.resourceName)]; ok {
+			if cap, ok := node.Status.Allocatable[corev1.ResourceName(res.resourceName)]; ok {
 				count = int(cap.Value())
 			}
 
@@ -219,7 +219,7 @@ func (d *K8sWithGpuOperator) DiscoverUsage(ctx context.Context) (map[string]int,
 
 // discoverNodeGPUTypes returns a map of node name to GPU type (model name).
 // For multi-vendor nodes (nodes labeled for more than one GPU vendor), the model
-// from the LAST resource with matching gpuInfo.productLabel wins.
+// from the LAST resource with matching productLabel wins.
 //
 // This preserves the pre-refactor behavior: the original implementation iterated
 // vendorResources in order and assigned `nodeGPUType[node] = model` on each match,
@@ -239,7 +239,7 @@ func (d *K8sWithGpuOperator) discoverNodeGPUTypes(ctx context.Context) (map[stri
 		// Iterate vendor resources in REVERSE order and break on first match so
 		// the last item in `vendorResources` wins (Intel > AMD > NVIDIA).
 		// Relies on the listGPUNodes invariant that n.Accelerators[model]
-		// exists whenever n.Labels[gpuInfo.productLabel] == model.
+		// exists whenever n.Labels[productLabel] == model.
 		for i := len(vendorResources) - 1; i >= 0; i-- {
 			prodKey := vendorResources[i].productLabel
 			if model, ok := n.Labels[prodKey]; ok {
@@ -260,8 +260,8 @@ func getPodGPURequests(pod *corev1.Pod) int {
 	// Sum GPU requests from regular containers (run concurrently)
 	regularTotal := 0
 	for _, container := range pod.Spec.Containers {
-		for _, gpuInfo := range vendorResources {
-			resName := corev1.ResourceName(gpuInfo.resourceName)
+		for _, res := range vendorResources {
+			resName := corev1.ResourceName(res.resourceName)
 			if qty, ok := container.Resources.Requests[resName]; ok {
 				regularTotal += int(qty.Value())
 			}
@@ -272,8 +272,8 @@ func getPodGPURequests(pod *corev1.Pod) int {
 	initMax := 0
 	for _, container := range pod.Spec.InitContainers {
 		containerGPUs := 0
-		for _, gpuInfo := range vendorResources {
-			resName := corev1.ResourceName(gpuInfo.resourceName)
+		for _, res := range vendorResources {
+			resName := corev1.ResourceName(res.resourceName)
 			if qty, ok := container.Resources.Requests[resName]; ok {
 				containerGPUs += int(qty.Value())
 			}

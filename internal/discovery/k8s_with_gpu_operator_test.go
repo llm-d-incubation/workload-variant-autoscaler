@@ -174,7 +174,7 @@ func TestDiscover_MixedVendors(t *testing.T) {
 				Name: "node-intel-gaudi",
 				Labels: map[string]string{
 					"habana.ai/product.name":  "Intel-Gaudi-2-96GB",
-					"habana.ai/device.memory": "98304", // manually set label
+					"habana.ai/device.memory": "98304",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -188,7 +188,7 @@ func TestDiscover_MixedVendors(t *testing.T) {
 				Name: "node-intel-i915",
 				Labels: map[string]string{
 					"gpu.intel.com/product": "Max_1100",
-					"gpu.intel.com/memory":  "49152", // manually set label
+					"gpu.intel.com/memory":  "49152",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -202,7 +202,7 @@ func TestDiscover_MixedVendors(t *testing.T) {
 				Name: "node-intel-xe",
 				Labels: map[string]string{
 					"gpu.intel.com/product": "Pro-B60-Graphics",
-					"gpu.intel.com/memory":  "24576", // manually set label
+					"gpu.intel.com/memory":  "24576",
 				},
 			},
 			Status: corev1.NodeStatus{
