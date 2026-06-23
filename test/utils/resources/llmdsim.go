@@ -13,9 +13,9 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-const SimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
-
 const (
+	SimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
+
 	// gpuResourceDefault is the extended K8s resource type requested when none is specified.
 	gpuResourceDefault = "nvidia.com/gpu"
 )
