@@ -41,23 +41,24 @@ var (
 	}
 )
 
-var (
-	// GpuResources lists extended resource names provided by K8s GPU device vendor plugins
-	GpuResources = []string{
-		"nvidia.com/gpu",
-		"amd.com/gpu",
-		"habana.ai/gaudi",
-		"gpu.intel.com/i915",
-		"gpu.intel.com/xe",
-	}
+type GpuInfo struct {
+	Vendor       string
+	ResourceName string
+	ProductLabel string
+	MemoryLabel  string
+}
 
-	// GpuProductKeys are the node selector/affinity keys used to identify GPU products
-	GpuProductKeys = []string{
-		"nvidia.com/gpu.product",
-		"amd.com/gpu.product-name",
-		"cloud.google.com/gke-accelerator",
-		"habana.ai/product.name",
-		"gpu.intel.com/product",
+var (
+	// vendorResources lists each supported GPU resource and its discovery labels.
+	VendorResources = []GpuInfo{
+		{"NVIDIA", "nvidia.com/gpu", "nvidia.com/gpu.product", "nvidia.com/gpu.memory"},
+		{"AMD", "amd.com/gpu", "amd.com/gpu.product-name", "amd.com/gpu.memory"},
+		// NOTE: Node labeling rules installed for Node Feature Discovery (NFD) by Intel GPU operator,
+		// provide product labels only for Data Center products. Current Intel Gaudi / GPU operators
+		// do not label nodes with device memory information, that info needs to be labeled separately.
+		{"Intel", "habana.ai/gaudi", "habana.ai/product.name", "habana.ai/device.memory"},
+		{"Intel", "gpu.intel.com/i915", "gpu.intel.com/product", "gpu.intel.com/memory"},
+		{"Intel", "gpu.intel.com/xe", "gpu.intel.com/product", "gpu.intel.com/memory"},
 	}
 
 	SpecReplicasFallback int32 = 1 // in case Spec.Replicas is nil
