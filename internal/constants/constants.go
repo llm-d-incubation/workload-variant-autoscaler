@@ -41,23 +41,51 @@ var (
 	}
 )
 
-var (
-	// GpuResources lists extended resource names provided by K8s GPU device vendor plugins
-	GpuResources = []string{
-		"nvidia.com/gpu",
-		"amd.com/gpu",
-		"habana.ai/gaudi",
-		"gpu.intel.com/i915",
-		"gpu.intel.com/xe",
-	}
+type GpuInfo struct {
+	Vendor              string
+	ResourceName        string
+	ProductLabel        string
+	ProductLabelAliases []string
+	MemoryLabel         string
+}
 
-	// GpuProductKeys are the node selector/affinity keys used to identify GPU products
-	GpuProductKeys = []string{
-		"nvidia.com/gpu.product",
-		"amd.com/gpu.product-name",
-		"cloud.google.com/gke-accelerator",
-		"habana.ai/product.name",
-		"gpu.intel.com/product",
+var (
+	// vendorResources lists each supported GPU resource and its discovery labels.
+	VendorResources = []GpuInfo{
+		{
+			Vendor:              "NVIDIA",
+			ResourceName:        "nvidia.com/gpu",
+			ProductLabel:        "nvidia.com/gpu.product",
+			ProductLabelAliases: []string{"cloud.google.com/gke-accelerator"},
+			MemoryLabel:         "nvidia.com/gpu.memory",
+		},
+		{
+			Vendor:       "AMD",
+			ResourceName: "amd.com/gpu",
+			ProductLabel: "amd.com/gpu.product-name",
+			MemoryLabel:  "amd.com/gpu.memory",
+		},
+		// NOTE: Node labeling rules installed for Node Feature Discovery (NFD) by Intel GPU operator,
+		// provide product labels only for Data Center products. Current Intel Gaudi / GPU operators
+		// do not label nodes with device memory information, that info needs to be labeled separately.
+		{
+			Vendor:       "Intel",
+			ResourceName: "habana.ai/gaudi",
+			ProductLabel: "habana.ai/product.name",
+			MemoryLabel:  "habana.ai/device.memory",
+		},
+		{
+			Vendor:       "Intel",
+			ResourceName: "gpu.intel.com/i915",
+			ProductLabel: "gpu.intel.com/product",
+			MemoryLabel:  "gpu.intel.com/memory",
+		},
+		{
+			Vendor:       "Intel",
+			ResourceName: "gpu.intel.com/xe",
+			ProductLabel: "gpu.intel.com/product",
+			MemoryLabel:  "gpu.intel.com/memory",
+		},
 	}
 
 	SpecReplicasFallback int32 = 1 // in case Spec.Replicas is nil
