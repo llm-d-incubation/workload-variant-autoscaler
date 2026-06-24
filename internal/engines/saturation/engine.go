@@ -438,6 +438,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	//   - Queueing model: QueueingModelAnalyzer → AnalyzerResult → Optimizer.Optimize → Enforcer bridge
 	// V1 will be deprecated once V2 is fully validated.
 	// Queueing model is activated by presence of wva-queueing-model-config ConfigMap.
+	mode := modeLabelForAnalyzer(analyzerName)
 	switch analyzerName {
 	case interfaces.QueueingModelAnalyzerName:
 		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
@@ -460,11 +461,25 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
 
 	logger.Info("Optimization completed successfully",
-		"mode", "saturation-only",
+		"mode", mode,
 		"modelsProcessed", len(modelGroups),
 		"decisionsApplied", len(allDecisions))
 
 	return nil
+}
+
+// modeLabelForAnalyzer returns the human-readable mode label for the given
+// analyzer name, used in the "Optimization completed successfully" log entry.
+// It mirrors the analyzer selection in optimize's switch statement.
+func modeLabelForAnalyzer(analyzerName string) string {
+	switch analyzerName {
+	case interfaces.QueueingModelAnalyzerName:
+		return interfaces.QueueingModelAnalyzerName
+	case interfaces.SaturationAnalyzerName:
+		return interfaces.SaturationAnalyzerName
+	default:
+		return "saturation-only"
+	}
 }
 
 // recordEvent ensures only one event is recorded per VA in an optimization cycle.
