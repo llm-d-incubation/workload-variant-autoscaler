@@ -44,6 +44,7 @@ spec:
         severity: warning
       annotations:
         summary: "No GPUs available for WVA scaling"
+        description: "No GPUs available for WVA scaling. Consider adding GPU nodes."
 
     - alert: WVAReplicaScalingThrashing
       expr: rate(wva_replica_scaling_total[10m]) > 2
