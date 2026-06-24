@@ -23,6 +23,7 @@ func testConfigFromEnv(t *testing.T, env map[string]string) *config.Config {
 		"PROMETHEUS_BEARER_TOKEN",
 		"PROMETHEUS_TOKEN_PATH",
 		"PROMETHEUS_TLS_INSECURE_SKIP_VERIFY",
+		"PROMETHEUS_ALLOW_HTTP",
 		"PROMETHEUS_CA_CERT_PATH",
 		"PROMETHEUS_CLIENT_CERT_PATH",
 		"PROMETHEUS_CLIENT_KEY_PATH",
@@ -146,9 +147,42 @@ func TestValidateTLSConfig(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "HTTP URL - should fail",
+			name: "HTTP URL without opt-in - should fail",
 			promConfig: testConfigFromEnv(t, map[string]string{
 				"PROMETHEUS_BASE_URL": "http://prometheus:9090",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTP URL with opt-in - should pass",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":   "http://prometheus:9090",
+				"PROMETHEUS_ALLOW_HTTP": "true",
+			}),
+			expectError: false,
+		},
+		{
+			name: "HTTP URL with opt-in and CA cert - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":     "http://prometheus:9090",
+				"PROMETHEUS_ALLOW_HTTP":   "true",
+				"PROMETHEUS_CA_CERT_PATH": "/tmp/ca.crt",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTP URL with opt-in and bearer token - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":     "http://prometheus:9090",
+				"PROMETHEUS_ALLOW_HTTP":   "true",
+				"PROMETHEUS_BEARER_TOKEN": "secret",
+			}),
+			expectError: true,
+		},
+		{
+			name: "unsupported URL scheme - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL": "ftp://prometheus:9090",
 			}),
 			expectError: true,
 		},

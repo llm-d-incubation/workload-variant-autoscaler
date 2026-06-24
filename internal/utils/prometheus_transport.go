@@ -13,24 +13,27 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
-// CreatePrometheusTransport creates a custom HTTPS transport for Prometheus client with TLS support.
-// TLS is always enabled for HTTPS-only support with configurable certificate validation.
+// CreatePrometheusTransport creates a custom transport for the Prometheus client.
+// TLS configuration is only applied for https:// endpoints; plain http://
+// endpoints (allowed only when PROMETHEUS_ALLOW_HTTP is set, see ValidateTLSConfig)
+// use the default transport unmodified.
 func CreatePrometheusTransport(cfg *config.Config) (http.RoundTripper, error) {
 	// Clone the default transport to get all the good defaults
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 
-	// Configure TLS (always required for HTTPS-only support)
-	tlsConfig, err := CreateTLSConfig(cfg)
-	if err != nil {
-		return nil, err
+	if strings.HasPrefix(cfg.PrometheusBaseURL(), "https://") {
+		tlsConfig, err := CreateTLSConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = tlsConfig
+		ctrl.Log.V(logging.VERBOSE).Info("TLS configuration applied to Prometheus HTTPS transport")
 	}
-	transport.TLSClientConfig = tlsConfig
-	ctrl.Log.V(logging.VERBOSE).Info("TLS configuration applied to Prometheus HTTPS transport")
 
 	return transport, nil
 }
 
-// CreatePrometheusClientConfig creates a complete Prometheus client configuration with HTTPS support.
+// CreatePrometheusClientConfig creates a complete Prometheus client configuration.
 // Supports both direct bearer tokens and token files for flexible authentication.
 func CreatePrometheusClientConfig(cfg *config.Config) (*api.Config, error) {
 	clientConfig := &api.Config{

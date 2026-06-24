@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -421,15 +422,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Always validate TLS configuration since HTTPS is required
+	// Validate Prometheus transport configuration before creating the client.
 	if err := utils.ValidateTLSConfig(cfg); err != nil {
-		setupLog.Error(err, "TLS configuration validation failed - HTTPS is required")
+		setupLog.Error(err, "Prometheus transport configuration validation failed")
 		os.Exit(1)
 	}
 
 	setupLog.Info("Initializing Prometheus client",
 		"address", cfg.PrometheusBaseURL(),
-		"tlsEnabled", true,
+		"tlsEnabled", strings.HasPrefix(cfg.PrometheusBaseURL(), "https://"),
+		"allowHTTP", cfg.PrometheusAllowHTTP(),
 	)
 
 	// Create Prometheus client with TLS support

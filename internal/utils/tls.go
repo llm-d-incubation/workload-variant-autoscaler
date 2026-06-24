@@ -71,8 +71,9 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	return config, nil
 }
 
-// ValidateTLSConfig validates TLS configuration.
-// Ensures HTTPS is used and certificate files exist when verification is enabled.
+// ValidateTLSConfig validates the Prometheus transport configuration.
+// Ensures the URL scheme is supported, and that certificate files exist when
+// HTTPS verification is enabled.
 func ValidateTLSConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
@@ -80,14 +81,33 @@ func ValidateTLSConfig(cfg *config.Config) error {
 
 	baseURL := cfg.PrometheusBaseURL()
 	insecureSkipVerify := cfg.PrometheusInsecureSkipVerify()
+	allowHTTP := cfg.PrometheusAllowHTTP()
 	caCertPath := cfg.PrometheusCACertPath()
 	clientCertPath := cfg.PrometheusClientCertPath()
 	clientKeyPath := cfg.PrometheusClientKeyPath()
 
-	// Validate that the URL uses HTTPS (TLS is always required)
 	u, err := url.Parse(baseURL)
-	if err != nil || u.Scheme != "https" {
-		return fmt.Errorf("HTTPS is required - URL must use https:// scheme: %s", baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid Prometheus URL %q: %w", baseURL, err)
+	}
+
+	switch u.Scheme {
+	case "https":
+		// Continue with the HTTPS-specific validation below.
+	case "http":
+		if !allowHTTP {
+			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
+		}
+		if cfg.PrometheusBearerToken() != "" || cfg.PrometheusTokenPath() != "" {
+			return fmt.Errorf("refusing to send bearer token authentication over plain HTTP Prometheus URL %q", baseURL)
+		}
+		if insecureSkipVerify || caCertPath != "" || clientCertPath != "" || clientKeyPath != "" || cfg.PrometheusServerName() != "" {
+			return fmt.Errorf("TLS-related settings are not supported with plain HTTP Prometheus URL %q; remove them or use an https:// URL", baseURL)
+		}
+		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", baseURL)
+		return nil
+	default:
+		return fmt.Errorf("unsupported Prometheus URL scheme %q in %q; expected http or https", u.Scheme, baseURL)
 	}
 
 	// If InsecureSkipVerify is true, we don't need to validate certificate files

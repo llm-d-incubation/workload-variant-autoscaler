@@ -12,6 +12,7 @@ type prometheusConfig struct {
 	bearerToken        string
 	tokenPath          string
 	insecureSkipVerify bool
+	allowHTTP          bool
 	caCertPath         string
 	clientCertPath     string
 	clientKeyPath      string
@@ -94,6 +95,14 @@ func (c *Config) PrometheusInsecureSkipVerify() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.prometheus.insecureSkipVerify
+}
+
+// PrometheusAllowHTTP returns whether plain HTTP connections to Prometheus are allowed.
+// Thread-safe.
+func (c *Config) PrometheusAllowHTTP() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.prometheus.allowHTTP
 }
 
 // PrometheusCACertPath returns the Prometheus CA certificate path.

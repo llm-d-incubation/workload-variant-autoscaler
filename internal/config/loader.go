@@ -169,6 +169,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	cfg.prometheus.bearerToken = v.GetString("PROMETHEUS_BEARER_TOKEN")
 	cfg.prometheus.tokenPath = v.GetString("PROMETHEUS_TOKEN_PATH")
 	cfg.prometheus.insecureSkipVerify = v.GetBool("PROMETHEUS_TLS_INSECURE_SKIP_VERIFY")
+	cfg.prometheus.allowHTTP = v.GetBool("PROMETHEUS_ALLOW_HTTP")
 	cfg.prometheus.caCertPath = v.GetString("PROMETHEUS_CA_CERT_PATH")
 	cfg.prometheus.clientCertPath = v.GetString("PROMETHEUS_CLIENT_CERT_PATH")
 	cfg.prometheus.clientKeyPath = v.GetString("PROMETHEUS_CLIENT_KEY_PATH")
