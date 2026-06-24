@@ -990,3 +990,70 @@ wva_optimizer_active
 # Currently active optimizer (filter for value = 1)
 wva_optimizer_active == 1
 ```
+
+## Alerts
+
+Prometheus alerting rules are **optional** and **disabled by default**.
+
+- Prometheus Rules are stored in `config/components/prometheus-alerts`
+- Installation: `DEPLOY_ALERTING_RULES=false` (default)
+- When disabled, the deployment script automatically removes any existing PrometheusRule for clean state
+```
+- (base) shuynh@RH-PW0MSFZX:~/sup$ k get PrometheusRule -n workload-variant-autoscaler-system controller-manager-alerts
+NAME                        AGE
+controller-manager-alerts   40h
+```
+
+```
+kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+```
+
+- Browse to: http://localhost:9090/alerts
+- should see ![wva.rules](./wva.rules.png)
+- should see ![wva.rules-firing](./wva.rules-firing.png)
+
+### E2E Test
+
+The e2e test suite includes tests for Prometheus alerting rules in `test/e2e/prometheus_alerts_test.go`.
+
+**Test Approach:**
+The test **dynamically creates** a PrometheusRule during test execution. This ensures the test is self-contained and doesn't require special infrastructure setup or deployment flags.
+
+If a PrometheusRule already exists (from a previous deployment), the test automatically deletes it first before creating a fresh one.
+
+**Test Coverage:**
+- Creates PrometheusRule programmatically with all 5 WVA alert rules
+- Verifies PrometheusRule is created successfully
+- Validates all expected alerts are present
+- Checks each alert has required fields (expression, severity, summary, description)
+- Deletes PrometheusRule and verifies it is removed
+- Automatically cleans up after test completion
+
+**Running the tests:**
+
+```bash
+# Full e2e suite (includes prometheus-alerts tests)
+make test-e2e-full
+
+# Run only prometheus-alerts tests
+go test -v ./test/e2e -ginkgo.label-filter="prometheus-alerts"
+```
+
+**Prerequisites:**
+- PrometheusRule CRD must be available (installed by Prometheus Operator)
+
+**Test will skip if:**
+- PrometheusRule CRD is not available
+
+**Alert Rules Validated:**
+1. `WVAHighErrorRate` - Detects elevated error rates
+2. `WVAOptimizationLoopStalled` - Detects when optimization loop stops processing
+3. `WVAMetricsCollectionFailing` - Detects metrics collection failures
+4. `WVAGPUResourceExhausted` - Detects when no GPUs are available
+5. `WVAReplicaScalingThrashing` - Detects rapid scaling changes
+
+**Technical Implementation:**
+- Loads PrometheusRule directly from `config/components/prometheus-alerts/prometheusrule.yaml`
+- Uses controller-runtime client to create the resource
+- Ensures test validates the actual production alert definitions
+- Automatic cleanup in `AfterAll` hook

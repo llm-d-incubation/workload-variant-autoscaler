@@ -78,6 +78,11 @@ deploy_wva_controller() {
 
     ln -s "$kustomize_overlay" "$tmp_overlay/base"
 
+    # Symlink prometheus-alerts component if needed
+    if [ "${DEPLOY_ALERTING_RULES:-false}" = "true" ]; then
+        ln -s "$WVA_PROJECT/config/components/prometheus-alerts" "$tmp_overlay/prometheus-alerts"
+    fi
+
     # config/base/manager/kustomization.yaml transforms the base image name "controller"
     # to the published release image. The overlay must match the POST-transform name.
     local base_image
@@ -91,6 +96,13 @@ images:
   newName: $WVA_IMAGE_REPO
   newTag: "$WVA_IMAGE_TAG"
 EOF
+
+    # Include Prometheus alerting rules component if requested
+    if [ "${DEPLOY_ALERTING_RULES:-false}" = "true" ]; then
+        log_info "Including Prometheus alerting rules component..."
+        printf 'components:\n' >> "$tmp_overlay/kustomization.yaml"
+        printf -- '- ./prometheus-alerts\n' >> "$tmp_overlay/kustomization.yaml"
+    fi
 
     # On OpenShift shared clusters, all ClusterRoleBindings share the same fixed
     # names. Concurrent deployments overwrite each other's subject namespace.
@@ -123,6 +135,18 @@ EOF
 
     log_info "Applying Kustomize overlay: $kustomize_overlay"
     kubectl apply -k "$tmp_overlay"
+
+    # Clean up PrometheusRule if alerting rules are disabled
+    if [ "${DEPLOY_ALERTING_RULES:-false}" = "false" ]; then
+        log_info "DEPLOY_ALERTING_RULES is false - ensuring PrometheusRule is removed if it exists..."
+        if kubectl get prometheusrule controller-manager-alerts -n "$WVA_NS" &> /dev/null; then
+            log_info "Deleting existing PrometheusRule: controller-manager-alerts"
+            kubectl delete prometheusrule controller-manager-alerts -n "$WVA_NS" --ignore-not-found=true
+            log_success "PrometheusRule removed"
+        else
+            log_info "PrometheusRule does not exist - no cleanup needed"
+        fi
+    fi
 
     if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
         log_info "Enabling scale-to-zero in WVA ConfigMap (ENABLE_SCALE_TO_ZERO=true)..."

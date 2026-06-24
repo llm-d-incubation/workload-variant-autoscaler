@@ -1,0 +1,55 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: controller-manager-alerts
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: workload-variant-autoscaler
+    release: kube-prometheus-stack
+spec:
+  groups:
+  - name: wva.rules
+    rules:
+    - alert: WVAHighErrorRate
+      expr: rate(wva_errors_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "WVA error rate elevated (>0.1 errors/sec)"
+        description: "Error rate exceeds threshold (>30 errors over 5 minutes). Check controller logs for error patterns."
+
+    - alert: WVAOptimizationLoopStalled
+      expr: rate(wva_models_processed_total[10m]) == 0
+      for: 15m
+      labels:
+        severity: critical
+      annotations:
+        summary: "WVA optimization loop has stopped processing models"
+        description: "No models have been processed (zero 10-minute rate sustained for 15 minutes). The optimization loop may be stalled or crashed. Check controller pod status and logs."
+
+    - alert: WVAMetricsCollectionFailing
+      expr: rate(wva_metrics_collection_errors_total[5m]) > 0.5
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "WVA metrics collection failing frequently (>0.5 errors/sec)"
+        description: "Metrics collection error rate exceeds threshold (>150 errors over 5 minutes). Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
+
+    - alert: WVAGPUResourceExhausted
+      expr: wva_available_gpus == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "No GPUs available for WVA scaling"
+
+    - alert: WVAReplicaScalingThrashing
+      expr: rate(wva_replica_scaling_total[10m]) > 2
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "WVA scaling decisions changing rapidly (>2 scales/sec)"
+        description: "Replica scaling rate exceeds threshold, indicating possible thrashing (>1200 scaling operations over 10 minutes). Review scaling thresholds and consider increasing stabilization windows."
