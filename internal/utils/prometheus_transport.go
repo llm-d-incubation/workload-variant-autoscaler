@@ -21,7 +21,7 @@ func CreatePrometheusTransport(cfg *config.Config) (http.RoundTripper, error) {
 	// Clone the default transport to get all the good defaults
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 
-	if strings.HasPrefix(cfg.PrometheusBaseURL(), "https://") {
+	if IsHTTPS(cfg.PrometheusBaseURL()) {
 		tlsConfig, err := CreateTLSConfig(cfg)
 		if err != nil {
 			return nil, err
@@ -72,7 +72,7 @@ func CreatePrometheusClientConfig(cfg *config.Config) (*api.Config, error) {
 	return clientConfig, nil
 }
 
-// bearerTokenRoundTripper adds bearer token authentication to HTTPS requests
+// bearerTokenRoundTripper adds bearer token authentication to HTTP and HTTPS requests
 type bearerTokenRoundTripper struct {
 	base  http.RoundTripper
 	token string

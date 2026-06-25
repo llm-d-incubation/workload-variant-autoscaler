@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -430,7 +429,7 @@ func main() {
 
 	setupLog.Info("Initializing Prometheus client",
 		"address", cfg.PrometheusBaseURL(),
-		"tlsEnabled", strings.HasPrefix(cfg.PrometheusBaseURL(), "https://"),
+		"tlsEnabled", utils.IsHTTPS(cfg.PrometheusBaseURL()),
 		"allowHTTP", cfg.PrometheusAllowHTTP(),
 	)
 

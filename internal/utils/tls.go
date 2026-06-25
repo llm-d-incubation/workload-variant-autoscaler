@@ -14,8 +14,18 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+// IsHTTPS reports whether rawURL uses the https scheme.
+// It uses url.Parse so the comparison is case-insensitive per RFC 3986.
+func IsHTTPS(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https"
+}
+
 // CreateTLSConfig creates a TLS configuration from getter-based Prometheus config.
-// TLS is always enabled for HTTPS-only support. The configuration supports:
+// TLS is applied only for https:// endpoints. The configuration supports:
 // - Server certificate validation via CA certificate
 // - Mutual TLS authentication via client certificates
 // - Insecure certificate verification (development/testing only)
