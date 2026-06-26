@@ -387,8 +387,6 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 	@echo "========================================="
 	@$(MAKE) benchmark-report
 
-BENCHMARK_GPUS_PER_REPLICA ?= 1
-
 .PHONY: benchmark-report
 benchmark-report: ## Generate a markdown table from the latest benchmark results
 	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
@@ -398,9 +396,7 @@ benchmark-report: ## Generate a markdown table from the latest benchmark results
 	fi; \
 	echo "Results directory: $$LATEST_DIR"; \
 	echo ""; \
-	python3 $(CURDIR)/scripts/postprocess.py \
-		--gpus-per-replica $(BENCHMARK_GPUS_PER_REPLICA) \
-		$$LATEST_DIR
+	python3 $(CURDIR)/scripts/postprocess.py $$LATEST_DIR
 
 BURSTY_WORKLOAD    ?= bursty.yaml
 BENCHMARK_WAIT_TIMEOUT ?= 7200

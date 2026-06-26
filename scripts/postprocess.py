@@ -13,9 +13,9 @@ Usage:
                                    results/guidellm-*_2 \\
                                    results/guidellm-*_3
 
-    # With scenario header and GPU count:
+    # With scenario header:
     python scripts/postprocess.py --scenario "Prefill Heavy — Qwen/Qwen3-32B (600s)" \\
-        --gpus-per-replica 2 results/guidellm-*_1 results/guidellm-*_2 results/guidellm-*_3
+        results/guidellm-*_1 results/guidellm-*_2 results/guidellm-*_3
 """
 
 import argparse
@@ -33,7 +33,6 @@ METRICS = [
     "Avg queue depth (EPP)",
     "Error count",
     "Avg pod startup (s)",
-    "Cost (avg replicas × GPU/hr)",
 ]
 
 
@@ -192,12 +191,10 @@ def _fmt(metric, value):
         return f"{int(value):,}"
     if metric == "Avg pod startup (s)":
         return str(round(value))
-    if metric == "Cost (avg replicas × GPU/hr)":
-        return f"{value:.2f}"
     return str(value)
 
 
-def process_one(results_dir, gpus_per_replica=1.0):
+def process_one(results_dir):
     """Extract all benchmark.md metrics from one results directory."""
     p99_ttft, p99_itl = _extract_latency(results_dir)
     avg_rep, max_rep = _extract_replica_stats(results_dir)
@@ -205,9 +202,8 @@ def process_one(results_dir, gpus_per_replica=1.0):
     queue_avg = _extract_queue_depth_avg(results_dir)
     startup_avg = _extract_pod_startup_avg(results_dir)
     error_count = _extract_error_count(results_dir)
-    cost = avg_rep * gpus_per_replica if avg_rep is not None else None
 
-    raw = {
+    return {
         "P99 TTFT (ms)": p99_ttft,
         "P99 ITL (ms/token)": p99_itl,
         "Avg replicas": avg_rep,
@@ -216,9 +212,7 @@ def process_one(results_dir, gpus_per_replica=1.0):
         "Avg queue depth (EPP)": queue_avg,
         "Error count": error_count,
         "Avg pod startup (s)": startup_avg,
-        "Cost (avg replicas × GPU/hr)": cost,
     }
-    return raw
 
 
 def _compute_avg(runs):
@@ -258,8 +252,6 @@ def main():
                     help="One or more benchmark results directories")
     ap.add_argument("--scenario", type=str, default=None,
                     help="Scenario heading (e.g. 'Prefill Heavy — Qwen/Qwen3-32B (600s)')")
-    ap.add_argument("--gpus-per-replica", type=float, default=1.0,
-                    help="GPUs per replica for cost calculation (default: 1)")
     ap.add_argument("--json", action="store_true",
                     help="Output raw JSON instead of markdown")
     args = ap.parse_args()
@@ -271,7 +263,7 @@ def main():
             print(f"WARNING: {d} is not a directory, skipping", file=sys.stderr)
             continue
         print(f"Processing: {d}", file=sys.stderr)
-        runs.append(process_one(d, gpus_per_replica=args.gpus_per_replica))
+        runs.append(process_one(d))
         labels.append(f"Run {len(runs)}")
 
     if not runs:
