@@ -474,7 +474,7 @@ func TestCalculatesaturationTargets_ModelLevelTransitionBlocking(t *testing.T) {
 	}
 }
 
-func TestCalculatesaturationTargets_MetricsMismatchBlocksScaling(t *testing.T) {
+func TestCalculatesaturationTargets_PendingReplicasBlocksScaling(t *testing.T) {
 	analyzer := NewAnalyzer()
 
 	saturationAnalysis := &interfaces.ModelSaturationAnalysis{
@@ -483,28 +483,61 @@ func TestCalculatesaturationTargets_MetricsMismatchBlocksScaling(t *testing.T) {
 		ShouldScaleUp: true,
 		ScaleUpReason: "KV spare Saturation low",
 		VariantAnalyses: []interfaces.VariantSaturationAnalysis{
-			// v1 has 3 replicas but only 2 are reporting metrics
 			{VariantName: "v1-expensive", Cost: 20, ReplicaCount: 2},
 			{VariantName: "v2-cheap", Cost: 5, ReplicaCount: 2},
 		},
 	}
 
-	// v1 has metrics(2) != current(3) - some pods not reporting yet
-	// This puts the MODEL in transition state
+	// v1 has a pending replica (3 current, only 2 ready) - scale-up in progress.
+	// This puts the MODEL in transition state, blocking all scaling decisions.
 	variantStates := []interfaces.VariantReplicaState{
-		{VariantName: "v1-expensive", CurrentReplicas: 3, DesiredReplicas: 0},
+		{VariantName: "v1-expensive", CurrentReplicas: 3, DesiredReplicas: 0, PendingReplicas: 1},
 		{VariantName: "v2-cheap", CurrentReplicas: 2, DesiredReplicas: 0},
 	}
 
 	targets := analyzer.CalculateSaturationTargets(context.Background(), saturationAnalysis, variantStates)
 
-	// v1 should stay at current replicas (metrics incomplete)
+	// v1 should stay at current replicas (pods still starting)
 	if targets["v1-expensive"] != 3 {
-		t.Errorf("expected v1-expensive target=3 (current, metrics incomplete), got %d", targets["v1-expensive"])
+		t.Errorf("expected v1-expensive target=3 (current, pods pending), got %d", targets["v1-expensive"])
 	}
 
-	// v2 should NOT be scaled up because model is in transition (v1 has incomplete metrics)
+	// v2 should NOT be scaled up because model is in transition (v1 has pending replicas)
 	if targets["v2-cheap"] != 2 {
 		t.Errorf("expected v2-cheap target=2 (blocked by model transition), got %d", targets["v2-cheap"])
+	}
+}
+
+// TestCalculatesaturationTargets_LWSGroupSizeDoesNotBlock is the regression test
+// for #1302: a LeaderWorkerSet variant with group size > 1 reports more metric
+// pods (ReplicaCount) than it has replicas/groups (CurrentReplicas). The old
+// metrics(ReplicaCount) != current(CurrentReplicas) transition check treated this
+// as a permanent transition and blocked all scaling. With the pending-based
+// check, a stable LWS variant scales normally and targets are in group units.
+func TestCalculatesaturationTargets_LWSGroupSizeDoesNotBlock(t *testing.T) {
+	analyzer := NewAnalyzer()
+
+	saturationAnalysis := &interfaces.ModelSaturationAnalysis{
+		ModelID:       "test-model",
+		Namespace:     "test-ns",
+		ShouldScaleUp: true,
+		ScaleUpReason: "KV spare Saturation low",
+		VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+			// LWS group size 2: 1 group, 2 pods reporting metrics.
+			{VariantName: "lws-variant", Cost: 5, ReplicaCount: 2},
+		},
+	}
+
+	// 1 group (CurrentReplicas), fully ready (PendingReplicas 0). ReplicaCount (2
+	// metric pods) deliberately differs from CurrentReplicas (1 group).
+	variantStates := []interfaces.VariantReplicaState{
+		{VariantName: "lws-variant", CurrentReplicas: 1, DesiredReplicas: 0, PendingReplicas: 0},
+	}
+
+	targets := analyzer.CalculateSaturationTargets(context.Background(), saturationAnalysis, variantStates)
+
+	// Not blocked: scales up by one group, in group units (1 -> 2), NOT pods (2 -> 3).
+	if targets["lws-variant"] != 2 {
+		t.Errorf("expected lws-variant target=2 (1 group scaled up by 1, in group units), got %d", targets["lws-variant"])
 	}
 }

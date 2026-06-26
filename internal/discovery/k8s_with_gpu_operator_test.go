@@ -93,8 +93,8 @@ func TestDiscover_AMDOnly(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-amd-1",
 				Labels: map[string]string{
-					"amd.com/gpu.product": "AMD-MI300X-192G",
-					"amd.com/gpu.memory":  "196608",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
+					"amd.com/gpu.memory":       "196608",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -107,8 +107,8 @@ func TestDiscover_AMDOnly(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-amd-2",
 				Labels: map[string]string{
-					"amd.com/gpu.product": "AMD-MI250-128G",
-					"amd.com/gpu.memory":  "131072",
+					"amd.com/gpu.product-name": "AMD-MI250-128G",
+					"amd.com/gpu.memory":       "131072",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -159,8 +159,8 @@ func TestDiscover_MixedVendors(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-amd",
 				Labels: map[string]string{
-					"amd.com/gpu.product": "AMD-MI300X-192G",
-					"amd.com/gpu.memory":  "196608",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
+					"amd.com/gpu.memory":       "196608",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -171,15 +171,43 @@ func TestDiscover_MixedVendors(t *testing.T) {
 		},
 		&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "node-intel",
+				Name: "node-intel-gaudi",
 				Labels: map[string]string{
-					"intel.com/gpu.product": "Intel-Gaudi-2-96GB",
-					"intel.com/gpu.memory":  "98304",
+					"habana.ai/product.name":  "Intel-Gaudi-2-96GB",
+					"habana.ai/device.memory": "98304",
 				},
 			},
 			Status: corev1.NodeStatus{
 				Allocatable: corev1.ResourceList{
-					"intel.com/gpu": resource.MustParse("8"),
+					"habana.ai/gaudi": resource.MustParse("8"),
+				},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-intel-i915",
+				Labels: map[string]string{
+					"gpu.intel.com/product": "Max_1100",
+					"gpu.intel.com/memory":  "49152",
+				},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{
+					"gpu.intel.com/i915": resource.MustParse("4"),
+				},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-intel-xe",
+				Labels: map[string]string{
+					"gpu.intel.com/product": "Pro-B60-Graphics",
+					"gpu.intel.com/memory":  "24576",
+				},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{
+					"gpu.intel.com/xe": resource.MustParse("2"),
 				},
 			},
 		},
@@ -191,16 +219,20 @@ func TestDiscover_MixedVendors(t *testing.T) {
 	result, err := discoverer.Discover(context.Background())
 	require.NoError(t, err)
 
-	// Should find all 3 nodes from different vendors
-	assert.Len(t, result, 3)
+	// Should find all 5 nodes from different vendors
+	assert.Len(t, result, 5)
 	assert.Contains(t, result, "node-nvidia")
 	assert.Contains(t, result, "node-amd")
-	assert.Contains(t, result, "node-intel")
+	assert.Contains(t, result, "node-intel-gaudi")
+	assert.Contains(t, result, "node-intel-i915")
+	assert.Contains(t, result, "node-intel-xe")
 
 	// Verify each vendor's GPU details
 	assert.Equal(t, 4, result["node-nvidia"]["NVIDIA-H100-SXM5-80GB"].Count)
 	assert.Equal(t, 8, result["node-amd"]["AMD-MI300X-192G"].Count)
-	assert.Equal(t, 8, result["node-intel"]["Intel-Gaudi-2-96GB"].Count)
+	assert.Equal(t, 8, result["node-intel-gaudi"]["Intel-Gaudi-2-96GB"].Count)
+	assert.Equal(t, 4, result["node-intel-i915"]["Max_1100"].Count)
+	assert.Equal(t, 2, result["node-intel-xe"]["Pro-B60-Graphics"].Count)
 }
 
 func TestDiscover_WithNodeSelector(t *testing.T) {
@@ -274,7 +306,7 @@ func TestDiscoverUsage_MixedVendors(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-amd",
 				Labels: map[string]string{
-					"amd.com/gpu.product": "AMD-MI300X-192G",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -365,15 +397,31 @@ func TestDiscoverNodeGPUTypes_MixedVendors(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-amd",
 				Labels: map[string]string{
-					"amd.com/gpu.product": "AMD-MI300X-192G",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
 				},
 			},
 		},
 		&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "node-intel",
+				Name: "node-intel-gaudi",
 				Labels: map[string]string{
-					"intel.com/gpu.product": "Intel-Gaudi-2-96GB",
+					"habana.ai/product.name": "Intel-Gaudi-2-96GB",
+				},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-intel-i915",
+				Labels: map[string]string{
+					"gpu.intel.com/product": "Max_1100",
+				},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-intel-xe",
+				Labels: map[string]string{
+					"gpu.intel.com/product": "Pro-B60-Graphics",
 				},
 			},
 		},
@@ -385,10 +433,12 @@ func TestDiscoverNodeGPUTypes_MixedVendors(t *testing.T) {
 	result, err := discoverer.discoverNodeGPUTypes(context.Background())
 	require.NoError(t, err)
 
-	assert.Len(t, result, 3)
+	assert.Len(t, result, 5)
 	assert.Equal(t, "NVIDIA-H100-SXM5-80GB", result["node-nvidia"])
 	assert.Equal(t, "AMD-MI300X-192G", result["node-amd"])
-	assert.Equal(t, "Intel-Gaudi-2-96GB", result["node-intel"])
+	assert.Equal(t, "Intel-Gaudi-2-96GB", result["node-intel-gaudi"])
+	assert.Equal(t, "Max_1100", result["node-intel-i915"])
+	assert.Equal(t, "Pro-B60-Graphics", result["node-intel-xe"])
 }
 
 func TestGetPodGPURequests_MixedVendors(t *testing.T) {
@@ -474,8 +524,8 @@ func TestDiscoverNodeGPUTypes_MultiVendorNode_LastWins(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-nvidia-amd",
 				Labels: map[string]string{
-					"nvidia.com/gpu.product": "NVIDIA-A100-PCIE-80GB",
-					"amd.com/gpu.product":    "AMD-MI300X-192G",
+					"nvidia.com/gpu.product":   "NVIDIA-A100-PCIE-80GB",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
 				},
 			},
 			Status: corev1.NodeStatus{
@@ -490,13 +540,13 @@ func TestDiscoverNodeGPUTypes_MultiVendorNode_LastWins(t *testing.T) {
 				Name: "node-nvidia-intel",
 				Labels: map[string]string{
 					"nvidia.com/gpu.product": "NVIDIA-H100-SXM5-80GB",
-					"intel.com/gpu.product":  "Intel-Gaudi-2-96GB",
+					"habana.ai/product.name": "Intel-Gaudi-2-96GB",
 				},
 			},
 			Status: corev1.NodeStatus{
 				Allocatable: corev1.ResourceList{
-					"nvidia.com/gpu": resource.MustParse("2"),
-					"intel.com/gpu":  resource.MustParse("8"),
+					"nvidia.com/gpu":  resource.MustParse("2"),
+					"habana.ai/gaudi": resource.MustParse("8"),
 				},
 			},
 		},
@@ -570,10 +620,10 @@ func TestDiscoverNodes_MultiVendorNode(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-multi",
 				Labels: map[string]string{
-					"nvidia.com/gpu.product": "NVIDIA-A100-PCIE-80GB",
-					"nvidia.com/gpu.memory":  "81920",
-					"amd.com/gpu.product":    "AMD-MI300X-192G",
-					"amd.com/gpu.memory":     "196608",
+					"nvidia.com/gpu.product":   "NVIDIA-A100-PCIE-80GB",
+					"nvidia.com/gpu.memory":    "81920",
+					"amd.com/gpu.product-name": "AMD-MI300X-192G",
+					"amd.com/gpu.memory":       "196608",
 				},
 			},
 			Status: corev1.NodeStatus{

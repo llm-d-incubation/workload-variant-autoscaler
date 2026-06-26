@@ -16,14 +16,14 @@ const (
 	defaultServicePortName               = "http"
 	defaultServiceMonitorMetricsPath     = "/metrics"
 
-	defaultModelServiceSimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
+	defaultModelServiceSimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
 	defaultModelServiceRuntimeImage   = "ghcr.io/llm-d/llm-d-cuda-dev:latest"
 	defaultModelServiceContainerPort  = 8000
 	defaultHFTokenSecretName          = "llm-d-hf-token"
 	defaultHFTokenSecretKey           = "HF_TOKEN"
-	defaultModelServiceLabelValue     = "random" // Changed to match InferencePool selector expectations
+	defaultModelServiceLabelValue     = "random"
 	defaultLabelValueTrue             = "true"
-	defaultGuideLabelValue            = "simulated-accelerators" // Changed to match InferencePool selector
+	defaultGuideLabelValue            = "optimized-baseline" // matches v0.7.0 InferencePool selector (llm-d.ai/guide: optimized-baseline)
 	defaultTestResourceLabelValue     = defaultLabelValueTrue
 	// InferencePool selector label for accelerator variant
 	defaultAcceleratorVariantValue = "cpu"

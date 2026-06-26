@@ -9,8 +9,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	dto "github.com/prometheus/client_model/go"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -159,6 +162,9 @@ func resetMetrics() {
 	kvCacheTokensUsed = nil
 	kvCacheTokensCapacity = nil
 	controllerInstance = ""
+	replicaSeriesMu.Lock()
+	replicaSeriesAccel = map[string]string{}
+	replicaSeriesMu.Unlock()
 }
 
 func gatherMetric(registry *prometheus.Registry, name string) *dto.MetricFamily {
@@ -403,6 +409,78 @@ var _ = Describe("RecordSaturationMetrics", func() {
 			Expect(ok).To(BeTrue(), "gauge not found for %s", metricName)
 			Expect(val).To(Equal(0.0), "expected 0 for %s", metricName)
 		}
+	})
+
+})
+
+var _ = Describe("EmitReplicaScalingMetrics", func() {
+
+	var (
+		registry *prometheus.Registry
+		emitter  *MetricsEmitter
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		resetMetrics()
+		registry = prometheus.NewRegistry()
+		Expect(InitMetrics(registry)).To(Succeed())
+		emitter = NewMetricsEmitter()
+		ctx = context.Background()
+	})
+
+	It("should emit replica scaling metrics with ActionScaleUp and DecisionReasonV2", func() {
+		va := &llmdOptv1alpha1.VariantAutoscaling{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-variant",
+				Namespace: "test-namespace",
+			},
+		}
+
+		err := emitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Gather the metric and verify the counter was incremented
+		mf := gatherMetric(registry, constants.WVAReplicaScalingTotal)
+		Expect(mf).NotTo(BeNil())
+
+		// Find the metric with the expected labels
+		labels := map[string]string{
+			constants.LabelVariantName: "test-variant",
+			constants.LabelNamespace:   "test-namespace",
+			constants.LabelDirection:   string(interfaces.ActionScaleUp),
+			constants.LabelReason:      string(interfaces.DecisionReasonV2),
+		}
+
+		var found bool
+		var counterValue float64
+		for _, m := range mf.GetMetric() {
+			match := true
+			for k, expectedVal := range labels {
+				labelFound := false
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == k && lp.GetValue() == expectedVal {
+						labelFound = true
+						break
+					}
+				}
+				if !labelFound {
+					match = false
+					break
+				}
+			}
+			if match && m.GetCounter() != nil {
+				found = true
+				counterValue = m.GetCounter().GetValue()
+				break
+			}
+		}
+
+		// found==true already verifies the metric carries reason="V2" + direction
+		// labels (the match loop above compares every entry in `labels`, which
+		// includes LabelReason=string(DecisionReasonV2), against the gathered series).
+		Expect(found).To(BeTrue(), "metric with reason=\"V2\" and direction=\"scale-up\" labels should exist")
+		Expect(counterValue).To(Equal(1.0), "counter should be incremented to 1")
 	})
 
 })

@@ -1,0 +1,13 @@
+name: Blank Issue
+description: "Use this template to create a blank issue. This is useful for creating issues that don't fit into any of the other templates."
+title: ""
+labels: ["needs-triage"]
+assignees: []
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the issue or request.
+    validations:
+      required: true

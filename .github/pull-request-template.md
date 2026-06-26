@@ -1,0 +1,48 @@
+Fixes #
+
+<!-- Please include the 'why' behind your changes if no issue exists -->
+
+## Proposed Changes
+
+<!-- Please categorize your changes:
+- :gift: Add new feature
+- :bug: Fix bug
+- :broom: Update or clean up current behavior
+- :wastebasket: Remove feature or internal logic
+-->
+
+-
+-
+-
+
+### Pre-review Checklist
+
+<!-- If these boxes are not checked, you will be asked to complete these requirements or explain why they do not apply to your PR. -->
+
+- [ ] **E2E tests** for any new behavior
+- [ ] **Docs PR** for any user-facing impact
+- [ ] **Proposal PR** for any new enhancement or change to existing behavior
+
+**Release Note**
+
+<!--
+:page_facing_up: If this change has user-visible impact, write a release note in the block
+below. Include the string "action required" if additional action is required of
+users switching to the new release, for example in case of a breaking change.
+
+Write as if you are speaking to users, not other wva contributors. If this
+change has no user-visible impact, no release note is needed.
+-->
+
+```release-note
+
+```
+
+
+**Docs**
+
+<!--
+:book: If this change has user-visible impact, link to an issue or PR in
+- https://github.com/llm-d/llm-d/tree/main/docs/architecture/advanced/autoscaling for user-facingdocumentation
+- https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling for guides
+-->

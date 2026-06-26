@@ -38,6 +38,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
 )
 
+const annotationValueTrue = "true"
+
 var _ = Describe("ConfigMapReconciler", func() {
 	var (
 		reconciler      *ConfigMapReconciler
@@ -295,7 +297,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "labeled-ns",
 					Labels: map[string]string{
-						constants.NamespaceConfigEnabledLabelKey: "true",
+						constants.NamespaceConfigEnabledLabelKey: annotationValueTrue,
 					},
 				},
 			}
@@ -312,7 +314,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "excluded-ns",
 					Annotations: map[string]string{
-						constants.NamespaceExcludeAnnotationKey: "true",
+						constants.NamespaceExcludeAnnotationKey: annotationValueTrue,
 					},
 				},
 			}
@@ -376,7 +378,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 			if ns.Annotations == nil {
 				ns.Annotations = make(map[string]string)
 			}
-			ns.Annotations[constants.NamespaceExcludeAnnotationKey] = "true"
+			ns.Annotations[constants.NamespaceExcludeAnnotationKey] = annotationValueTrue
 			Expect(k8sClient.Update(ctx, ns)).To(Succeed())
 
 			By("Checking if watched namespace is still watched despite exclusion")
@@ -404,7 +406,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "non-watched-excluded",
 					Annotations: map[string]string{
-						constants.NamespaceExcludeAnnotationKey: "true",
+						constants.NamespaceExcludeAnnotationKey: annotationValueTrue,
 					},
 				},
 			}
@@ -422,7 +424,7 @@ var _ = Describe("ConfigMapReconciler", func() {
 			if ns.Annotations == nil {
 				ns.Annotations = make(map[string]string)
 			}
-			ns.Annotations[constants.NamespaceExcludeAnnotationKey] = "true"
+			ns.Annotations[constants.NamespaceExcludeAnnotationKey] = annotationValueTrue
 			Expect(k8sClient.Update(ctx, ns)).To(Succeed())
 
 			By("Creating namespace-local saturation ConfigMap in watched namespace")

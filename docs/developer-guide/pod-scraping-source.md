@@ -128,7 +128,7 @@ config := pod.PodScrapingSourceConfig{
     ServiceName:                  "epp-service",
     ServiceNamespace:             "default",
     MetricsPort:                  9090,
-    MetricsReaderSecretName:      "epp-metrics-token",
+    MetricsReaderSecretName:      "wva-epp-metrics-token",
     MetricsReaderSecretNamespace: "workload-variant-autoscaler-system", // Secret in controller namespace
     MetricsReaderSecretKey:       "token",
 }

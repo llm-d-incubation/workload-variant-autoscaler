@@ -228,6 +228,14 @@ func buildBurstLoadJob(namespace, name, targetServiceURL string, loadCfg LoadCon
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					// Override ndots to avoid musl libc DNS resolution failures on hosts with
+					// many corporate search domains and ndots:5 (e.g. IBM workstations).
+					// The Alpine-based curl image uses musl which mishandles ndots>=5.
+					DNSConfig: &corev1.PodDNSConfig{
+						Options: []corev1.PodDNSConfigOption{
+							{Name: "ndots", Value: ptr.To("2")},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "load-generator",

@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+  name: variantautoscaling-editor-role
+rules:
+- apiGroups:
+  - llmd.ai
+  resources:
+  - variantautoscalings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - llmd.ai
+  resources:
+  - variantautoscalings/status
+  verbs:
+  - get

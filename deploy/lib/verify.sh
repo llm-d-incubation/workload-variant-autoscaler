@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Shared verification and deployment summary helpers for deploy/install.sh.
-# Covers WVA / Prometheus / scaler backend only — llm-d is installed separately (install-llmd-infra.sh).
+# Covers WVA / Prometheus / scaler backend only — llm-d is installed separately via llm-d project guides.
 # Requires funcs: log_info/log_warning/log_success, containsElement().
 # Uses constants: DEFAULT_VERIFY_STARTUP_SLEEP_SECONDS and shared selectors.
 #
@@ -28,6 +28,15 @@ verify_deployment() {
             log_success "Prometheus is running"
         else
             log_warning "Prometheus may still be starting"
+        fi
+    fi
+
+    if [ "$DEPLOY_OPERATIONAL_DASHBOARD" = "true" ]; then
+        log_info "Checking Grafana..."
+        if kubectl get pods -n "$MONITORING_NAMESPACE" -l app.kubernetes.io/name=grafana 2>/dev/null | grep -q Running; then
+            log_success "Grafana is running"
+        else
+            log_warning "Grafana may still be starting"
         fi
     fi
 
@@ -72,10 +81,13 @@ print_summary() {
     echo "Deployed Components:"
     echo "===================="
     if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
-        echo "✓ kube-prometheus-stack (Prometheus + Grafana)"
+        echo "✓ kube-prometheus-stack (Prometheus)"
+    fi
+    if [ "$DEPLOY_OPERATIONAL_DASHBOARD" = "true" ]; then
+        echo "✓ kube-prometheus-stack-grafana (Grafana)"
     fi
     if [ "$DEPLOY_WVA" = "true" ]; then
-        echo "✓ WVA Controller (via Helm chart)"
+        echo "✓ WVA Controller (via Kustomize)"
     fi
     if [ "$SCALER_BACKEND" = "keda" ]; then
         echo "✓ KEDA (scaler backend, external metrics API)"
@@ -89,7 +101,7 @@ print_summary() {
     echo "==========="
     echo ""
     echo "1. Deploy llm-d (EPP, gateway, ModelService) when needed:"
-    echo "     ./deploy/install-llmd-infra.sh -e $ENVIRONMENT"
+    echo "     See llm-d project guides at https://github.com/llm-d/llm-d"
     echo ""
     echo "2. Create VariantAutoscaling / HPA via tests, operators, or helm with chart toggles."
     echo ""

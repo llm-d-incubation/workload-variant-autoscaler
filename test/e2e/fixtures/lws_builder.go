@@ -16,9 +16,12 @@ import (
 )
 
 // EnsureModelServiceLWS creates or replaces a LeaderWorkerSet for model service (idempotent for test setup).
-func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, groupSize int32) error {
+// vaName is the name of the VariantAutoscaling resource that will monitor this LWS;
+// it is stamped as the llm-d.ai/variant label on both leader and worker pod templates so
+// Prometheus metrics can be attributed to the correct VA. Pass "" if no VA monitors this LWS.
+func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, groupSize int32) error {
 	lwsName := name + decodeNameSuffix
-	desiredLWS := buildModelServiceLWS(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, groupSize)
+	desiredLWS := buildModelServiceLWS(namespace, name, poolName, modelID, vaName, useSimulator, maxNumSeqs, groupSize)
 
 	// Check if LWS already exists
 	existingLWS := &lwsv1.LeaderWorkerSet{}
@@ -101,13 +104,13 @@ func DeleteModelServiceLWS(ctx context.Context, crClient client.Client, namespac
 	return nil
 }
 
-func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, groupSize int32) *lwsv1.LeaderWorkerSet {
+func buildModelServiceLWS(namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, groupSize int32) *lwsv1.LeaderWorkerSet {
 	appLabel := name + decodeNameSuffix
 	image := defaultModelServiceSimulatorImage
 	if !useSimulator {
 		image = defaultModelServiceRuntimeImage
 	}
-	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
+	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs, nil)
 	labels := map[string]string{
 		"app":                          appLabel,
 		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
@@ -117,6 +120,9 @@ func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulato
 		"llm-d.ai/guide":               defaultGuideLabelValue,
 		"llm-d.ai/inference-serving":   defaultLabelValueTrue,
 		"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
+	}
+	if vaName != "" {
+		labels["llm-d.ai/variant"] = vaName
 	}
 
 	envVars := []corev1.EnvVar{

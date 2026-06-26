@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 )
 
 const (
@@ -23,6 +25,19 @@ const (
 
 // HPAOption is a functional option for configuring HPA resources.
 type HPAOption func(*autoscalingv2.HorizontalPodAutoscaler)
+
+// WithWVAAnnotations adds the WVA annotation-based discovery annotations to the HPA.
+// The HPA then serves as both the WVA discovery source and the scaler for the deployment.
+func WithWVAAnnotations(modelID, cost string) HPAOption {
+	return func(hpa *autoscalingv2.HorizontalPodAutoscaler) {
+		if hpa.Annotations == nil {
+			hpa.Annotations = make(map[string]string)
+		}
+		hpa.Annotations[annotations.Managed] = "true"
+		hpa.Annotations[annotations.ModelID] = modelID
+		hpa.Annotations[annotations.VariantCost] = cost
+	}
+}
 
 // WithScaleTargetRefKind sets the Kind and APIVersion on the HPA's ScaleTargetRef.
 func WithScaleTargetRefKind(kind string) HPAOption {

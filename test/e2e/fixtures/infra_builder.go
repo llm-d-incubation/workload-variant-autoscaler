@@ -142,7 +142,21 @@ func buildServiceMonitor(monitoringNamespace, targetNamespace, baseName, appLabe
 		Spec: promoperator.ServiceMonitorSpec{
 			Selector: metav1.LabelSelector{MatchLabels: map[string]string{"app": appLabel}},
 			Endpoints: []promoperator.Endpoint{
-				{Port: defaultServicePortName, Path: defaultServiceMonitorMetricsPath, Interval: promoperator.Duration("15s")},
+				{
+					Port:     defaultServicePortName,
+					Path:     defaultServiceMonitorMetricsPath,
+					Interval: promoperator.Duration("15s"),
+					// Propagate the llm-d.ai/variant pod label into scraped metrics.
+					// __meta_* labels are only available during target relabeling, so this
+					// must live under RelabelConfigs (not MetricRelabelConfigs).
+					RelabelConfigs: []promoperator.RelabelConfig{
+						{
+							SourceLabels: []promoperator.LabelName{"__meta_kubernetes_pod_label_llm_d_ai_variant"},
+							TargetLabel:  "llm_d_ai_variant",
+							Action:       "replace",
+						},
+					},
+				},
 			},
 			NamespaceSelector: promoperator.NamespaceSelector{MatchNames: []string{targetNamespace}},
 		},
