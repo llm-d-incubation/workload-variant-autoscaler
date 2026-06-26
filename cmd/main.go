@@ -138,8 +138,6 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.String("metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.String("metrics-cert-key", "tls.key", "The name of the metrics key file.")
-	flag.Bool("enable-http2", false,
-		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.String("watch-namespace", "",
 		"Namespace to watch for updates. If unspecified, all namespaces are watched.")
 
@@ -223,20 +221,10 @@ func main() {
 	// the saturation engine goroutine constructs its locator.
 	locator.SetKEDAEnabled(kedaEnabled)
 
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities. More specifically, disabling http/2 will
-	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
-	}
-
-	var tlsOpts []func(*tls.Config)
-	if !cfg.EnableHTTP2() {
-		tlsOpts = append(tlsOpts, disableHTTP2)
+	tlsOpts := []func(*tls.Config){
+		func(c *tls.Config) {
+			c.NextProtos = []string{"h2", "http/1.1"}
+		},
 	}
 
 	// Create watchers for metrics and webhooks certificates

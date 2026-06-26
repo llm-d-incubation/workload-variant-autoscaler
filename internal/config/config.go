@@ -53,7 +53,6 @@ type infrastructureConfig struct {
 	retryPeriod          time.Duration
 	restTimeout          time.Duration
 	secureMetrics        bool
-	enableHTTP2          bool
 	watchNamespace       string
 	loggerVerbosity      int
 	optimizationInterval time.Duration
@@ -197,14 +196,6 @@ func (c *Config) SecureMetrics() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.infrastructure.secureMetrics
-}
-
-// EnableHTTP2 returns whether HTTP/2 is enabled.
-// Thread-safe.
-func (c *Config) EnableHTTP2() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.infrastructure.enableHTTP2
 }
 
 // WatchNamespace returns the namespace to watch (empty = all namespaces).
@@ -674,7 +665,6 @@ func NewTestConfig() *Config {
 			retryPeriod:          10 * time.Second,
 			restTimeout:          60 * time.Second,
 			secureMetrics:        false,
-			enableHTTP2:          false,
 			watchNamespace:       "",
 			loggerVerbosity:      0,
 			optimizationInterval: 15 * time.Second,

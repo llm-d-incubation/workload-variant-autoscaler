@@ -20,7 +20,6 @@ var flagBindings = map[string]string{
 	"LEADER_ELECTION_RETRY_PERIOD":   "leader-election-retry-period",
 	"REST_CLIENT_TIMEOUT":            "rest-client-timeout",
 	"METRICS_SECURE":                 "metrics-secure",
-	"ENABLE_HTTP2":                   "enable-http2",
 	"WATCH_NAMESPACE":                "watch-namespace",
 	"V":                              "v",
 	"WEBHOOK_CERT_PATH":              "webhook-cert-path",
@@ -72,7 +71,6 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("LEADER_ELECTION_RETRY_PERIOD", 10*time.Second)
 	v.SetDefault("REST_CLIENT_TIMEOUT", 60*time.Second)
 	v.SetDefault("METRICS_SECURE", true)
-	v.SetDefault("ENABLE_HTTP2", false)
 	v.SetDefault("WATCH_NAMESPACE", "")
 	v.SetDefault("V", 0)
 	v.SetDefault("WEBHOOK_CERT_PATH", "")
@@ -120,7 +118,6 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 		retryPeriod:          v.GetDuration("LEADER_ELECTION_RETRY_PERIOD"),
 		restTimeout:          v.GetDuration("REST_CLIENT_TIMEOUT"),
 		secureMetrics:        v.GetBool("METRICS_SECURE"),
-		enableHTTP2:          v.GetBool("ENABLE_HTTP2"),
 		watchNamespace:       v.GetString("WATCH_NAMESPACE"),
 		loggerVerbosity:      v.GetInt("V"),
 		optimizationInterval: v.GetDuration("GLOBAL_OPT_INTERVAL"),
