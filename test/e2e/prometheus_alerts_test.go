@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"os"
 	"regexp"
 	"strings"
 
@@ -107,16 +106,11 @@ func isValidWVAMetric(metricName string, validMetrics map[string]bool) bool {
 	return false
 }
 
-// PrometheusAlerts test suite validates the PrometheusRule resource deployed via DEPLOY_ALERTING_RULES.
+// PrometheusAlerts test suite validates the deployed PrometheusRule resource.
 // This test:
-// - Verifies PrometheusRule exists (deployed via install.sh when DEPLOY_ALERTING_RULES=true)
+// - Verifies PrometheusRule exists (deployed via install.sh)
 // - Validates all expected alert rules are present with correct structure
 // - Validates alert expressions reference only known WVA metrics
-//
-// To run this test, deploy with:
-//
-//	DEPLOY_ALERTING_RULES=true make deploy-e2e-infra
-//	make test-e2e-smoke
 //
 // This test does NOT:
 // - Create or delete PrometheusRule resources (expects them to be deployed)
@@ -126,18 +120,10 @@ var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"),
 		// Check if PrometheusRule CRD is available
 		By("Checking if PrometheusRule CRD is available")
 		_, err := k8sClient.Discovery().ServerResourcesForGroupVersion("monitoring.coreos.com/v1")
-		if err != nil {
-			Skip("PrometheusRule CRD not available - skipping Prometheus alerts tests")
-		}
+		Expect(err).NotTo(HaveOccurred(),
+			"PrometheusRule CRD must be available. "+
+				"Ensure Prometheus Operator is installed in the cluster.")
 		GinkgoWriter.Println("✓ PrometheusRule CRD is available")
-
-		// Check if DEPLOY_ALERTING_RULES was set
-		deployAlertingRules := os.Getenv("DEPLOY_ALERTING_RULES")
-		if deployAlertingRules != "true" {
-			Skip("DEPLOY_ALERTING_RULES not set to 'true' - skipping Prometheus alerts tests. " +
-				"Set DEPLOY_ALERTING_RULES=true when running 'make deploy-e2e-infra' to enable these tests.")
-		}
-		GinkgoWriter.Println("✓ DEPLOY_ALERTING_RULES is set - testing deployed PrometheusRule")
 	})
 
 	It("should have PrometheusRule deployed", func() {
@@ -148,7 +134,7 @@ var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"),
 			Namespace: cfg.WVANamespace,
 		}, prometheusRule)
 		Expect(err).NotTo(HaveOccurred(),
-			"PrometheusRule should exist when DEPLOY_ALERTING_RULES=true. "+
+			"PrometheusRule must be deployed. "+
 				"Ensure 'make deploy-e2e-infra' was run with DEPLOY_ALERTING_RULES=true.")
 
 		GinkgoWriter.Printf("✓ PrometheusRule '%s' exists in namespace '%s'\n",
