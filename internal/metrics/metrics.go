@@ -253,14 +253,14 @@ func InitMetrics(registry prometheus.Registerer) error {
 	configKvSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigKvSpareThreshold,
-			Help: "Default KV cache spare threshold configuration value",
+			Help: "Global default (not per-model override) KV cache spare threshold configuration value",
 		},
 		configLabels,
 	)
 	configQueueSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigQueueSpareThreshold,
-			Help: "Default queue spare threshold configuration value",
+			Help: "Global default (not per-model override) queue spare threshold configuration value",
 		},
 		configLabels,
 	)
