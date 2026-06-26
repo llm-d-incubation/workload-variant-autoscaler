@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"os"
 	"regexp"
 	"strings"
 
@@ -117,6 +118,14 @@ func isValidWVAMetric(metricName string, validMetrics map[string]bool) bool {
 // - Validate that alerts actually fire when conditions are met (would require metric injection)
 var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"), Ordered, func() {
 	BeforeAll(func() {
+		// Skip if DEPLOY_ALERTING_RULES is not set to true
+		deployAlertingRules := os.Getenv("DEPLOY_ALERTING_RULES")
+		if deployAlertingRules != "true" {
+			Skip("DEPLOY_ALERTING_RULES not set to 'true' - skipping Prometheus alerts tests. " +
+				"Set DEPLOY_ALERTING_RULES=true when running 'make deploy-e2e-infra' to enable these tests.")
+		}
+		GinkgoWriter.Println("✓ DEPLOY_ALERTING_RULES is set to 'true'")
+
 		// Check if PrometheusRule CRD is available
 		By("Checking if PrometheusRule CRD is available")
 		_, err := k8sClient.Discovery().ServerResourcesForGroupVersion("monitoring.coreos.com/v1")
