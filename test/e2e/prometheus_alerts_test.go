@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	prometheusRuleName     = "controller-manager-alerts"
-	prometheusRuleYAMLPath = "config/components/prometheus-alerts/prometheusrule.yaml"
+	prometheusRuleName = "controller-manager-alerts"
 )
 
 // wvaMetricNames contains all WVA output metrics that should be referenced in alerts.
@@ -115,8 +114,9 @@ func isValidWVAMetric(metricName string, validMetrics map[string]bool) bool {
 // - Validates alert expressions reference only known WVA metrics
 //
 // To run this test, deploy with:
-//   DEPLOY_ALERTING_RULES=true make deploy-e2e-infra
-//   make test-e2e-smoke
+//
+//	DEPLOY_ALERTING_RULES=true make deploy-e2e-infra
+//	make test-e2e-smoke
 //
 // This test does NOT:
 // - Create or delete PrometheusRule resources (expects them to be deployed)
