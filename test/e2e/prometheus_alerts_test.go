@@ -2,18 +2,13 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
@@ -113,38 +108,20 @@ func isValidWVAMetric(metricName string, validMetrics map[string]bool) bool {
 	return false
 }
 
-// createWVAPrometheusRule loads PrometheusRule from the actual config YAML file
-func createWVAPrometheusRule(namespace string) *promoperator.PrometheusRule {
-	// Get the path to the YAML file (relative to the project root)
-	yamlPath := filepath.Join("..", "..", prometheusRuleYAMLPath)
-
-	// Read the YAML file
-	yamlBytes, err := os.ReadFile(yamlPath)
-	Expect(err).NotTo(HaveOccurred(), "Should be able to read PrometheusRule YAML file")
-
-	// Unmarshal into PrometheusRule
-	prometheusRule := &promoperator.PrometheusRule{}
-	err = yaml.Unmarshal(yamlBytes, prometheusRule)
-	Expect(err).NotTo(HaveOccurred(), "Should be able to unmarshal PrometheusRule YAML")
-
-	// Override the namespace to use the test namespace
-	prometheusRule.Namespace = namespace
-
-	return prometheusRule
-}
-
-// PrometheusAlerts test suite validates the PrometheusRule resource structure and alert definitions.
+// PrometheusAlerts test suite validates the PrometheusRule resource deployed via DEPLOY_ALERTING_RULES.
 // This test:
-// - Validates PrometheusRule can be created from the config YAML
-// - Verifies all expected alert rules are present with correct structure
+// - Verifies PrometheusRule exists (deployed via install.sh when DEPLOY_ALERTING_RULES=true)
+// - Validates all expected alert rules are present with correct structure
 // - Validates alert expressions reference only known WVA metrics
 //
+// To run this test, deploy with:
+//   DEPLOY_ALERTING_RULES=true make deploy-e2e-infra
+//   make test-e2e-smoke
+//
 // This test does NOT:
-// - Test the DEPLOY_ALERTING_RULES install path (install.sh / infra_wva.sh kustomize deployment)
+// - Create or delete PrometheusRule resources (expects them to be deployed)
 // - Validate that alerts actually fire when conditions are met (would require metric injection)
-var _ = Describe("PrometheusAlerts", Label("full"), Label("prometheus-alerts"), Ordered, func() {
-	var prometheusRuleCreated bool
-
+var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"), Ordered, func() {
 	BeforeAll(func() {
 		// Check if PrometheusRule CRD is available
 		By("Checking if PrometheusRule CRD is available")
@@ -153,78 +130,35 @@ var _ = Describe("PrometheusAlerts", Label("full"), Label("prometheus-alerts"), 
 			Skip("PrometheusRule CRD not available - skipping Prometheus alerts tests")
 		}
 		GinkgoWriter.Println("✓ PrometheusRule CRD is available")
-	})
 
-	AfterAll(func() {
-		if prometheusRuleCreated {
-			By("Cleaning up PrometheusRule")
-			prometheusRule := &promoperator.PrometheusRule{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      prometheusRuleName,
-					Namespace: cfg.WVANamespace,
-				},
-			}
-			err := crClient.Delete(ctx, prometheusRule)
-			if err != nil && !errors.IsNotFound(err) {
-				GinkgoWriter.Printf("Warning: Failed to delete PrometheusRule: %v\n", err)
-			} else {
-				GinkgoWriter.Println("✓ PrometheusRule cleaned up")
-			}
+		// Check if DEPLOY_ALERTING_RULES was set
+		deployAlertingRules := os.Getenv("DEPLOY_ALERTING_RULES")
+		if deployAlertingRules != "true" {
+			Skip("DEPLOY_ALERTING_RULES not set to 'true' - skipping Prometheus alerts tests. " +
+				"Set DEPLOY_ALERTING_RULES=true when running 'make deploy-e2e-infra' to enable these tests.")
 		}
+		GinkgoWriter.Println("✓ DEPLOY_ALERTING_RULES is set - testing deployed PrometheusRule")
 	})
 
-	It("should create PrometheusRule with WVA alert rules", func() {
-		By("Checking if PrometheusRule already exists")
-		existingRule := &promoperator.PrometheusRule{}
+	It("should have PrometheusRule deployed", func() {
+		By("Verifying PrometheusRule exists")
+		prometheusRule := &promoperator.PrometheusRule{}
 		err := crClient.Get(ctx, client.ObjectKey{
 			Name:      prometheusRuleName,
 			Namespace: cfg.WVANamespace,
-		}, existingRule)
+		}, prometheusRule)
+		Expect(err).NotTo(HaveOccurred(),
+			"PrometheusRule should exist when DEPLOY_ALERTING_RULES=true. "+
+				"Ensure 'make deploy-e2e-infra' was run with DEPLOY_ALERTING_RULES=true.")
 
-		if err == nil {
-			By("Deleting existing PrometheusRule from previous deployment")
-			err = crClient.Delete(ctx, existingRule)
-			Expect(err).NotTo(HaveOccurred(), "Should be able to delete existing PrometheusRule")
-			GinkgoWriter.Printf("✓ Deleted existing PrometheusRule '%s'\n", prometheusRuleName)
+		GinkgoWriter.Printf("✓ PrometheusRule '%s' exists in namespace '%s'\n",
+			prometheusRuleName, cfg.WVANamespace)
 
-			// Wait for deletion to complete
-			Eventually(func(g Gomega) {
-				checkRule := &promoperator.PrometheusRule{}
-				err := crClient.Get(ctx, client.ObjectKey{
-					Name:      prometheusRuleName,
-					Namespace: cfg.WVANamespace,
-				}, checkRule)
-				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "PrometheusRule should be deleted")
-			}, time.Duration(cfg.EventuallyShortSec)*time.Second,
-				time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-			GinkgoWriter.Println("✓ PrometheusRule deletion confirmed")
-		} else if !errors.IsNotFound(err) {
-			Expect(err).NotTo(HaveOccurred(), "Unexpected error checking for existing PrometheusRule")
-		}
-
-		By("Creating PrometheusRule")
-		prometheusRule := createWVAPrometheusRule(cfg.WVANamespace)
-
-		err = crClient.Create(ctx, prometheusRule)
-		Expect(err).NotTo(HaveOccurred(), "Should be able to create PrometheusRule")
-		prometheusRuleCreated = true
-		GinkgoWriter.Printf("✓ Created PrometheusRule '%s' in namespace '%s'\n", prometheusRuleName, cfg.WVANamespace)
-
-		By("Verifying PrometheusRule was created successfully")
-		Eventually(func(g Gomega) {
-			createdRule := &promoperator.PrometheusRule{}
-			err := crClient.Get(ctx, client.ObjectKey{
-				Name:      prometheusRuleName,
-				Namespace: cfg.WVANamespace,
-			}, createdRule)
-			g.Expect(err).NotTo(HaveOccurred(), "PrometheusRule should exist")
-			g.Expect(createdRule.Spec.Groups).To(HaveLen(1), "Should have 1 rule group")
-			g.Expect(createdRule.Spec.Groups[0].Name).To(Equal("wva.rules"))
-			g.Expect(createdRule.Spec.Groups[0].Rules).To(HaveLen(5), "Should have 5 alert rules")
-		}, time.Duration(cfg.EventuallyShortSec)*time.Second,
-			time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
-		GinkgoWriter.Println("✓ PrometheusRule verified")
+		By("Verifying PrometheusRule has correct structure")
+		Expect(prometheusRule.Spec.Groups).To(HaveLen(1), "Should have 1 rule group")
+		Expect(prometheusRule.Spec.Groups[0].Name).To(Equal("wva.rules"))
+		Expect(prometheusRule.Spec.Groups[0].Rules).To(HaveLen(5), "Should have 5 alert rules")
+		GinkgoWriter.Println("✓ PrometheusRule structure is valid")
 	})
 
 	It("should have all expected alert rules defined", func() {
@@ -338,35 +272,4 @@ var _ = Describe("PrometheusAlerts", Label("full"), Label("prometheus-alerts"), 
 		GinkgoWriter.Println("✓ All alert expressions reference known WVA metrics")
 	})
 
-	It("should delete PrometheusRule and verify removal", func() {
-		By("Verifying PrometheusRule exists before deletion")
-		prometheusRule := &promoperator.PrometheusRule{}
-		err := crClient.Get(ctx, client.ObjectKey{
-			Name:      prometheusRuleName,
-			Namespace: cfg.WVANamespace,
-		}, prometheusRule)
-		Expect(err).NotTo(HaveOccurred(), "PrometheusRule should exist before deletion")
-		GinkgoWriter.Printf("✓ PrometheusRule '%s' exists\n", prometheusRuleName)
-
-		By("Deleting PrometheusRule")
-		err = crClient.Delete(ctx, prometheusRule)
-		Expect(err).NotTo(HaveOccurred(), "Should be able to delete PrometheusRule")
-		GinkgoWriter.Printf("✓ Deletion request sent for PrometheusRule '%s'\n", prometheusRuleName)
-
-		By("Verifying PrometheusRule has been removed")
-		Eventually(func(g Gomega) {
-			deletedRule := &promoperator.PrometheusRule{}
-			err := crClient.Get(ctx, client.ObjectKey{
-				Name:      prometheusRuleName,
-				Namespace: cfg.WVANamespace,
-			}, deletedRule)
-			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "PrometheusRule should be deleted")
-		}, time.Duration(cfg.EventuallyShortSec)*time.Second,
-			time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
-		GinkgoWriter.Printf("✓ PrometheusRule '%s' successfully removed\n", prometheusRuleName)
-
-		// Mark as not created so AfterAll doesn't try to delete again
-		prometheusRuleCreated = false
-	})
 })

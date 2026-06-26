@@ -1034,4 +1034,10 @@ E2E tests for alerting rules are in `test/e2e/prometheus_alerts_test.go`. The te
 - should have all expected alert rules defined
 - should have valid alert rule structure 
 - should only reference known WVA metrics in alert expressions
-- should delete PrometheusRule and verify removal
+
+How to execute E2e Test:
+```bash
+export DEPLOY_ALERTING_RULES=true
+make deploy-e2e-infra
+make test-e2e-smoke FOCUS="PrometheusAlerts"
+```
