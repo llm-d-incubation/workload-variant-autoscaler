@@ -16,17 +16,17 @@ spec:
       labels:
         severity: warning
       annotations:
-        summary: "WVA error rate elevated (>0.1 errors/sec)"
-        description: "Error rate exceeds threshold (>30 errors over 5 minutes). Check controller logs for error patterns."
+        summary: "WVA error rate elevated"
+        description: "WVA error rate has exceeded 6/min over a 5-minute window for at least 5 minutes. Check controller logs for error patterns."
 
     - alert: WVAOptimizationLoopStalled
-      expr: rate(wva_models_processed_total[10m]) == 0
+      expr: max_over_time(wva_models_processed[10m]) == 0 or absent_over_time(wva_models_processed[10m])
       for: 15m
       labels:
         severity: critical
       annotations:
         summary: "WVA optimization loop has stopped processing models"
-        description: "No models have been processed (zero 10-minute rate sustained for 15 minutes). The optimization loop may be stalled or crashed. Check controller pod status and logs."
+        description: "No models have been processed over a 10-minute window for at least 15 minutes (either processing 0 models or metric is absent). The optimization loop may be stalled or crashed. Check controller pod status and logs."
 
     - alert: WVAMetricsCollectionFailing
       expr: rate(wva_metrics_collection_errors_total[5m]) > 0.5
@@ -34,8 +34,8 @@ spec:
       labels:
         severity: warning
       annotations:
-        summary: "WVA metrics collection failing frequently (>0.5 errors/sec)"
-        description: "Metrics collection error rate exceeds threshold (>150 errors over 5 minutes). Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
+        summary: "WVA metrics collection failed frequently"
+        description: "Metrics collection error rate has exceeded 30/min over a 5-minute window for at least 5 minutes. Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
 
     - alert: WVAGPUResourceExhausted
       expr: wva_available_gpus == 0
@@ -47,10 +47,10 @@ spec:
         description: "No GPUs available for WVA scaling. Consider adding GPU nodes."
 
     - alert: WVAReplicaScalingThrashing
-      expr: rate(wva_replica_scaling_total[10m]) > 2
+      expr: sum by (namespace, variant_name) (rate(wva_replica_scaling_total[10m])) > 0.033
       for: 10m
       labels:
         severity: warning
       annotations:
-        summary: "WVA scaling decisions changing rapidly (>2 scales/sec)"
-        description: "Replica scaling rate exceeds threshold, indicating possible thrashing (>1200 scaling operations over 10 minutes). Review scaling thresholds and consider increasing stabilization windows."
+        summary: "WVA scaling decisions changed rapidly for a variant"
+        description: "Variant has sustained a scaling rate exceeding 2/min over a 10-minute window for at least 10 minutes, indicating possible thrashing. Review scaling thresholds for the variant and consider adjusting them."

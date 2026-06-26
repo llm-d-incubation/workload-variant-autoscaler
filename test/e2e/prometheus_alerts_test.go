@@ -3,6 +3,8 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -12,12 +14,104 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 )
 
 const (
 	prometheusRuleName     = "controller-manager-alerts"
 	prometheusRuleYAMLPath = "config/components/prometheus-alerts/prometheusrule.yaml"
 )
+
+// wvaMetricNames contains all WVA output metrics that should be referenced in alerts.
+// This list is derived from internal/constants/metrics.go (WVA Output Metrics section).
+var wvaMetricNames = []string{
+	constants.WVAReplicaScalingTotal,
+	constants.WVADesiredReplicas,
+	constants.WVACurrentReplicas,
+	constants.WVADesiredRatio,
+	constants.WVAOptimizationDurationSeconds,
+	constants.WVAModelsProcessed,
+	constants.WVADecisionsLimitedTotal,
+	constants.WVAAvailableGpus,
+	constants.WVAEnforcerModificationsTotal,
+	constants.WVAOptimizerActive,
+	constants.WVAErrorsTotal,
+	constants.WVAConfigInfo,
+	constants.WVAConfigKvSpareThreshold,
+	constants.WVAConfigQueueSpareThreshold,
+	constants.WVAConfigOptimizationIntervalSeconds,
+	constants.WVAMetricsCollectionDurationSeconds,
+	constants.WVAMetricsCollectionErrorsTotal,
+	constants.WVAMetricsPodsDiscovered,
+	constants.WVAMetricsFreshnessStatus,
+	constants.WVASaturationUtilization,
+	constants.WVASpareCapacity,
+	constants.WVARequiredCapacity,
+	constants.WVAKvCacheTokensUsed,
+	constants.WVAKvCacheTokensCapacity,
+	constants.WVAPodMappingMissTotal,
+}
+
+// extractMetricNames extracts metric names from a PromQL expression.
+// It uses a simple regex to find metric identifiers (word characters, colons, underscores).
+func extractMetricNames(expr string) []string {
+	// Match metric names: alphanumeric, underscores, colons (for vllm:* metrics if any)
+	// This pattern matches Prometheus metric naming conventions
+	metricPattern := regexp.MustCompile(`\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b`)
+	matches := metricPattern.FindAllString(expr, -1)
+
+	// Filter out PromQL keywords, functions, and common label names
+	promqlKeywords := map[string]bool{
+		// Functions
+		"rate": true, "irate": true, "sum": true, "avg": true, "min": true, "max": true,
+		"count": true, "stddev": true, "stdvar": true,
+		"max_over_time": true, "min_over_time": true, "avg_over_time": true,
+		"absent": true, "absent_over_time": true,
+		// Keywords
+		"by": true, "without": true, "and": true, "or": true, "unless": true,
+		"on": true, "ignoring": true, "group_left": true, "group_right": true,
+		"bool": true, "offset": true,
+		// Common label names (not metrics)
+		"namespace": true, "variant_name": true, "model_name": true,
+		"component": true, "error_type": true, "status": true,
+	}
+
+	var metrics []string
+	seen := make(map[string]bool)
+	for _, match := range matches {
+		lower := strings.ToLower(match)
+		if !promqlKeywords[lower] && !seen[match] {
+			metrics = append(metrics, match)
+			seen[match] = true
+		}
+	}
+	return metrics
+}
+
+// isValidWVAMetric checks if a metric name is a valid WVA metric, accounting for
+// Prometheus auto-generated suffixes (_total, _count, _sum, _bucket).
+func isValidWVAMetric(metricName string, validMetrics map[string]bool) bool {
+	// Check exact match first
+	if validMetrics[metricName] {
+		return true
+	}
+
+	// Check with common Prometheus suffixes removed
+	// Counters: _total (auto-added by client library)
+	// Histograms: _count, _sum, _bucket
+	// Summaries: _count, _sum
+	suffixes := []string{"_total", "_count", "_sum", "_bucket"}
+	for _, suffix := range suffixes {
+		if baseMetric, found := strings.CutSuffix(metricName, suffix); found {
+			if validMetrics[baseMetric] {
+				return true
+			}
+		}
+	}
+
+	return false
+}
 
 // createWVAPrometheusRule loads PrometheusRule from the actual config YAML file
 func createWVAPrometheusRule(namespace string) *promoperator.PrometheusRule {
@@ -39,6 +133,15 @@ func createWVAPrometheusRule(namespace string) *promoperator.PrometheusRule {
 	return prometheusRule
 }
 
+// PrometheusAlerts test suite validates the PrometheusRule resource structure and alert definitions.
+// This test:
+// - Validates PrometheusRule can be created from the config YAML
+// - Verifies all expected alert rules are present with correct structure
+// - Validates alert expressions reference only known WVA metrics
+//
+// This test does NOT:
+// - Test the DEPLOY_ALERTING_RULES install path (install.sh / infra_wva.sh kustomize deployment)
+// - Validate that alerts actually fire when conditions are met (would require metric injection)
 var _ = Describe("PrometheusAlerts", Label("full"), Label("prometheus-alerts"), Ordered, func() {
 	var prometheusRuleCreated bool
 
@@ -190,6 +293,49 @@ var _ = Describe("PrometheusAlerts", Label("full"), Label("prometheus-alerts"), 
 			GinkgoWriter.Printf("  ✓ Alert '%s' has valid structure\n", rule.Alert)
 		}
 		GinkgoWriter.Println("✓ All alert rules have valid structure")
+	})
+
+	It("should only reference known WVA metrics in alert expressions", func() {
+		By("Retrieving PrometheusRule")
+		prometheusRule := &promoperator.PrometheusRule{}
+		err := crClient.Get(ctx, client.ObjectKey{
+			Name:      prometheusRuleName,
+			Namespace: cfg.WVANamespace,
+		}, prometheusRule)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Building a map of valid WVA metric names")
+		validMetrics := make(map[string]bool)
+		for _, metric := range wvaMetricNames {
+			validMetrics[metric] = true
+		}
+
+		By("Validating each alert expression references only known metrics")
+		rules := prometheusRule.Spec.Groups[0].Rules
+		for _, rule := range rules {
+			if rule.Alert == "" {
+				continue
+			}
+
+			expr := rule.Expr.String()
+			referencedMetrics := extractMetricNames(expr)
+
+			GinkgoWriter.Printf("  Checking alert '%s':\n", rule.Alert)
+			GinkgoWriter.Printf("    Expression: %s\n", expr)
+			GinkgoWriter.Printf("    Referenced metrics: %v\n", referencedMetrics)
+
+			for _, metric := range referencedMetrics {
+				Expect(isValidWVAMetric(metric, validMetrics)).To(BeTrue(),
+					"Alert '%s' references unknown metric '%s'. "+
+						"If this is a new WVA metric, add it to internal/constants/metrics.go and wvaMetricNames in this test. "+
+						"If this is a typo or renamed metric, update the alert expression. "+
+						"Note: Prometheus auto-generates _total/_count/_sum/_bucket suffixes for counters/histograms.",
+					rule.Alert, metric)
+			}
+
+			GinkgoWriter.Printf("  ✓ Alert '%s' references only known metrics\n", rule.Alert)
+		}
+		GinkgoWriter.Println("✓ All alert expressions reference known WVA metrics")
 	})
 
 	It("should delete PrometheusRule and verify removal", func() {

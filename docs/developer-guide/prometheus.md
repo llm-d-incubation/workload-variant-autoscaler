@@ -1025,9 +1025,13 @@ Once installed, you can verify as follows:
   - You should see `wva.rules`: ![wva.rules](./wva.rules.png)
   - Here's an example of a triggered rule: ![wva.rules-firing](./wva.rules-firing.png)
 
+### Alerting Rules Notes
+- For `WVAGPUResourceExhausted` rule with `wva_available_gpus` metric, as described in [wva_available_gpus](#wva_available_gpus) this metric is not always available in which case this rule will not trigger. In other words, if there's no alert for this rule, it does not mean GPUs are available.
+  
 ### Alerting Rules E2E Test
 E2E tests for alerting rules are in `test/e2e/prometheus_alerts_test.go`. The tests cover basic install and validation. Here are some scenarios:
 - should create PrometheusRule with WVA alert rules
 - should have all expected alert rules defined
 - should have valid alert rule structure 
+- should only reference known WVA metrics in alert expressions
 - should delete PrometheusRule and verify removal
