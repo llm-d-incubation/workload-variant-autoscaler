@@ -144,7 +144,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 }
 
 // variantTestScheme builds a scheme with WVA, core Kubernetes (incl. HPA), and KEDA types.
-func variantTestScheme(t *testing.T) *runtime.Scheme {
+func variantTestScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
