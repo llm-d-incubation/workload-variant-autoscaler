@@ -21,15 +21,21 @@ import (
 	"math"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	epp_saturation "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/epp_saturation"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
+
+// eppSignalUnavailableMessage is the MetricsAvailable=False message used when the
+// EPP latency detector's pool saturation signal cannot be queried.
+const eppSignalUnavailableMessage = "EPP saturation signal unavailable (latency detector or predictor sidecar may be down)"
 
 // optimizeEPPSaturation runs the EPP saturation analyzer path.
 // Unlike V1/V2, this does not collect per-replica metrics from vLLM pods.
@@ -112,7 +118,12 @@ func (e *Engine) optimizeEPPSaturation(
 		result, err := e.eppSaturationAnalyzer.Analyze(ctx, input)
 		if err != nil {
 			logger.Error(err, "EPP saturation analysis failed", "modelID", modelID)
+			// Preserve the last desired replica count via the safety net, and
+			// explicitly mark metrics unavailable so the VA surfaces an
+			// EPP-specific MetricsAvailable=False condition rather than relying
+			// on the implicit (no-decision) fallthrough (RFC #1018 proposal #4).
 			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, scaleTargets)
+			e.markEPPSignalUnavailable(modelVAs)
 			continue
 		}
 
@@ -245,4 +256,25 @@ func (e *Engine) optimizeEPPSaturation(
 	}
 
 	return allDecisions
+}
+
+// markEPPSignalUnavailable pushes a MetricsAvailable=False decision into the
+// shared cache for each non-synthetic VA in the model and triggers a reconcile,
+// so the EPP signal-unavailable state is surfaced as a status condition with an
+// EPP-specific reason. Mirrors the no-accelerator safety path in applySaturationDecisions.
+func (e *Engine) markEPPSignalUnavailable(modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling) {
+	for i := range modelVAs {
+		va := &modelVAs[i]
+		if utils.IsSynthetic(va) {
+			continue
+		}
+		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
+			VariantName:      va.Name,
+			Namespace:        va.Namespace,
+			MetricsAvailable: false,
+			MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonPrometheusError,
+			MetricsMessage:   eppSignalUnavailableMessage,
+		})
+		common.DecisionTrigger <- event.GenericEvent{Object: va}
+	}
 }
