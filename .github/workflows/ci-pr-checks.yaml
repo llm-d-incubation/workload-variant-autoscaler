@@ -77,7 +77,7 @@ jobs:
             core.setOutput('pr_head_repo', headRepo);
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # For issue_comment on a fork PR: checkout from head repo so the commit exists
           repository: ${{ steps.pr-info.outputs.pr_head_repo || github.repository }}
@@ -90,8 +90,10 @@ jobs:
         id: filter
         continue-on-error: true  # Don't fail if paths-filter can't determine changes (e.g., issue_comment without PR context)
         with:
+          predicate-quantifier: 'every'
           filters: |
             code:
+              - '**'
               - '!docs/**'
               - '!README.md'
               - '!CONTRIBUTING.md'
@@ -120,7 +122,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Sanity check repo contents
         run: ls -la
@@ -153,6 +155,25 @@ jobs:
         run: |
           make test
 
+  kustomize-build:
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Install kustomize
+        run: make kustomize
+
+      - name: Build kubernetes overlay
+        run: bin/kustomize build config/overlays/cluster-scoped/kubernetes > /dev/null
+
+      - name: Build openshift overlay
+        run: bin/kustomize build config/overlays/namespace-scoped/openshift > /dev/null
+
+      - name: Build namespace-scoped kubernetes overlay
+        run: bin/kustomize build config/overlays/namespace-scoped/kubernetes > /dev/null
+
   # Check if full e2e tests should run (via workflow_dispatch or comment trigger)
   check-full-tests:
     runs-on: ubuntu-latest
@@ -181,6 +202,14 @@ jobs:
                 console.log(`Could not get permissions for ${username}: ${e.message}`);
                 return false;
               }
+            }
+
+            // Same-repo pull_request: always run full tests
+            if (context.eventName === 'pull_request') {
+              const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
+              const headRepo = context.payload.pull_request.head.repo?.full_name ?? baseRepo;
+              core.setOutput('run_full', headRepo === baseRepo ? 'true' : 'false');
+              return;
             }
 
             // Check workflow_dispatch input
@@ -264,7 +293,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract Go version from go.mod
         run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
@@ -279,41 +308,16 @@ jobs:
         run: go mod download
 
       - name: Install Kind
-        run: |
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64)  KIND_ARCH="amd64" ;;
-            aarch64) KIND_ARCH="arm64" ;;
-            *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-          esac
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-${KIND_ARCH}"
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
+        run: deploy/ci-pr-checks/install-kind.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build WVA image locally
         id: build-image
         env:
           CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
-        run: |
-          # Generate unique image tag for this PR run (local image, no registry needed)
-          IMAGE_NAME="llm-d-workload-variant-autoscaler"
-          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
-          # Use localhost prefix for local-only image (Kind will load it directly)
-          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
-
-          echo "Building local image: $FULL_IMAGE"
-          echo "Image will be loaded into Kind cluster (no push needed)"
-
-          # Build image locally (no push needed for Kind)
-          make docker-build IMG="$FULL_IMAGE"
-
-          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "Image built locally: $FULL_IMAGE"
+        run: deploy/ci-pr-checks/build-wva-image-local.sh
 
       - name: Run e2e tests (smoke)
         shell: bash
@@ -322,8 +326,11 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "false"
           CREATE_CLUSTER: "true"
-          INSTALL_GATEWAY_CTRLPLANE: "true"
-          E2E_TESTS_ENABLED: "true"
+          # Emulated Kind: llm-d model serving is deployed by install-epp.sh (GAIE standalone chart + simulator).
+          # Pin llm-d release for deterministic CI behavior
+          LLM_D_RELEASE: "v0.7.0"
+          # Dual-controller smoke installs a secondary controller via Kustomize; overlay path must be explicit in CI.
+          WVA_E2E_SECONDARY_OVERLAY_PATH: ${{ github.workspace }}/test/e2e/testdata/secondary-controller
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"
@@ -338,7 +345,7 @@ jobs:
         run: |
           make test-e2e-smoke-with-setup
 
-  # Full Kind E2E - runs only when triggered (/ok-to-test or workflow_dispatch with run_full_tests).
+  # Full Kind E2E - runs on same-repo pull_request events, /ok-to-test comments, or workflow_dispatch.
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
   # and must run and pass before merge (shows as "Expected" until triggered).
   e2e-tests-full:
@@ -346,7 +353,9 @@ jobs:
     needs: [lint-and-test, check-code-changes, check-full-tests]
     if: >-
       always() && needs.check-full-tests.outputs.run_full == 'true' && needs.check-code-changes.result == 'success'
-      && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch')
+      && needs.lint-and-test.result != 'failure'
+      && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
+          || github.event_name == 'pull_request')
     timeout-minutes: 60
     permissions:
       contents: read
@@ -378,7 +387,7 @@ jobs:
           echo "PR head repo: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}"
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}
           ref: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
@@ -397,33 +406,16 @@ jobs:
         run: go mod download
 
       - name: Install Kind
-        run: |
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64)  KIND_ARCH="amd64" ;;
-            aarch64) KIND_ARCH="arm64" ;;
-            *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-          esac
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-${KIND_ARCH}"
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
+        run: deploy/ci-pr-checks/install-kind.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build WVA image locally
         id: build-image
         env:
           CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
-        run: |
-          IMAGE_NAME="llm-d-workload-variant-autoscaler"
-          IMAGE_TAG="pr-${GITHUB_RUN_ID}-${CHECKOUT_SHA:0:7}"
-          FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
-          echo "Building local image: $FULL_IMAGE"
-          make docker-build IMG="$FULL_IMAGE"
-          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        run: deploy/ci-pr-checks/build-wva-image-local.sh
 
       - name: Run e2e tests (full)
         shell: bash
@@ -432,12 +424,13 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
           CREATE_CLUSTER: "true"
-          INSTALL_GATEWAY_CTRLPLANE: "true"
-          E2E_TESTS_ENABLED: "true"
+          LLM_D_RELEASE: "v0.7.0"
+          DEPLOY_LWS: "true"
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
           PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: "false"
+          # Same simulator saturation tuning as smoke — defaults are too high for reliable scale-up signals.
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |

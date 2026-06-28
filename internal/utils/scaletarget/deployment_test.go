@@ -165,7 +165,7 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 		expected   int
 	}{
 		{
-			name: "single container with nvidia GPU",
+			name: "single container with NVIDIA GPUs",
 			deployment: &appsv1.Deployment{
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
@@ -187,7 +187,7 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			expected: 2,
 		},
 		{
-			name: "single container with amd GPU",
+			name: "single container with AMD GPUs",
 			deployment: &appsv1.Deployment{
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
@@ -209,7 +209,7 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			expected: 4,
 		},
 		{
-			name: "single container with intel GPU",
+			name: "single container with Intel GPUs",
 			deployment: &appsv1.Deployment{
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
@@ -219,7 +219,7 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 									Name: "main",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
-											"intel.com/gpu": resource.MustParse("1"),
+											"gpu.intel.com/xe": resource.MustParse("3"),
 										},
 									},
 								},
@@ -228,7 +228,7 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
+			expected: 3,
 		},
 		{
 			name: "multiple containers with GPUs",
@@ -283,12 +283,20 @@ func TestDeploymentAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 										},
 									},
 								},
+								{
+									Name: "intel-container",
+									Resources: corev1.ResourceRequirements{
+										Requests: corev1.ResourceList{
+											"gpu.intel.com/xe": resource.MustParse("1"),
+										},
+									},
+								},
 							},
 						},
 					},
 				},
 			},
-			expected: 3,
+			expected: 4,
 		},
 		{
 			name: "no GPU resources defaults to 1",

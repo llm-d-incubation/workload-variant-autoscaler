@@ -6,24 +6,33 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
 // EnsureModelServiceLWS creates or replaces a LeaderWorkerSet for model service (idempotent for test setup).
-func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, groupSize int32) error {
-	lwsName := name + "-decode"
+// vaName is the name of the VariantAutoscaling resource that will monitor this LWS;
+// it is stamped as the llm-d.ai/variant label on both leader and worker pod templates so
+// Prometheus metrics can be attributed to the correct VA. Pass "" if no VA monitors this LWS.
+func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, groupSize int32) error {
+	lwsName := name + decodeNameSuffix
+	desiredLWS := buildModelServiceLWS(namespace, name, poolName, modelID, vaName, useSimulator, maxNumSeqs, groupSize)
 
 	// Check if LWS already exists
 	existingLWS := &lwsv1.LeaderWorkerSet{}
 	err := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, existingLWS)
-	if err == nil {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing LWS %s: %w", lwsName, err)
+		}
+	} else {
 		// LWS exists, check if it's ready
-		if existingLWS.Status.ReadyReplicas > 0 {
+		if existingLWS.Status.ReadyReplicas > 0 && modelServiceLWSMatchesDesired(*existingLWS, *desiredLWS) {
 			return nil
 		}
 		// Not ready, delete and recreate
@@ -31,44 +40,57 @@ func EnsureModelServiceLWS(ctx context.Context, crClient client.Client, k8sClien
 		deleteErr := crClient.Delete(ctx, existingLWS, &client.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			if !errors.IsConflict(deleteErr) {
-				return fmt.Errorf("delete existing LWS %s: %w", lwsName, deleteErr)
-			}
+		if deleteErr != nil && !errors.IsNotFound(deleteErr) && !errors.IsConflict(deleteErr) {
+			return fmt.Errorf("delete existing LWS %s: %w", lwsName, deleteErr)
 		}
-		// Wait for deletion
-		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		for {
-			checkErr := crClient.Get(waitCtx, client.ObjectKey{Name: lwsName, Namespace: namespace}, &lwsv1.LeaderWorkerSet{})
+		waitErr := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			checkErr := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, &lwsv1.LeaderWorkerSet{})
 			if errors.IsNotFound(checkErr) {
-				break
+				return true, nil
 			}
-			if waitCtx.Err() != nil {
-				return fmt.Errorf("timeout waiting for LWS %s to be deleted", lwsName)
+			if checkErr != nil {
+				return false, checkErr
 			}
-			time.Sleep(2 * time.Second)
+			return false, nil
+		})
+		if waitErr != nil {
+			return fmt.Errorf("timeout waiting for LWS %s to be deleted: %w", lwsName, waitErr)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing LWS %s: %w", lwsName, err)
 	}
 
-	lws := buildModelServiceLWS(namespace, name, poolName, modelID, useSimulator, maxNumSeqs, groupSize)
-	err = crClient.Create(ctx, lws)
+	err = crClient.Create(ctx, desiredLWS)
 	if err != nil && errors.IsAlreadyExists(err) {
 		propagationPolicy := metav1.DeletePropagationForeground
-		_ = crClient.Delete(ctx, lws, &client.DeleteOptions{
+		_ = crClient.Delete(ctx, desiredLWS, &client.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		time.Sleep(2 * time.Second)
-		err = crClient.Create(ctx, lws)
+		waitErr := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			checkErr := crClient.Get(ctx, client.ObjectKey{Name: lwsName, Namespace: namespace}, &lwsv1.LeaderWorkerSet{})
+			if errors.IsNotFound(checkErr) {
+				return true, nil
+			}
+			if checkErr != nil {
+				return false, checkErr
+			}
+			return false, nil
+		})
+		if waitErr != nil {
+			return fmt.Errorf("timeout waiting for LWS %s to be deleted before recreate: %w", lwsName, waitErr)
+		}
+		err = crClient.Create(ctx, desiredLWS)
 	}
 	return err
 }
 
+func modelServiceLWSMatchesDesired(existing, desired lwsv1.LeaderWorkerSet) bool {
+	return apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) &&
+		apiequality.Semantic.DeepEqual(existing.Labels, desired.Labels) &&
+		apiequality.Semantic.DeepEqual(existing.Annotations, desired.Annotations)
+}
+
 // DeleteModelServiceLWS deletes the LeaderWorkerSet for model service. Idempotent; ignores NotFound.
 func DeleteModelServiceLWS(ctx context.Context, crClient client.Client, namespace, name string) error {
-	lwsName := name + "-decode"
+	lwsName := name + decodeNameSuffix
 	lws := &lwsv1.LeaderWorkerSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      lwsName,
@@ -82,19 +104,25 @@ func DeleteModelServiceLWS(ctx context.Context, crClient client.Client, namespac
 	return nil
 }
 
-func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int, groupSize int32) *lwsv1.LeaderWorkerSet {
-	appLabel := name + "-decode"
-	image := "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
+func buildModelServiceLWS(namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, groupSize int32) *lwsv1.LeaderWorkerSet {
+	appLabel := name + decodeNameSuffix
+	image := defaultModelServiceSimulatorImage
 	if !useSimulator {
-		image = "ghcr.io/llm-d/llm-d-cuda-dev:latest"
+		image = defaultModelServiceRuntimeImage
 	}
-	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
+	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs, nil)
 	labels := map[string]string{
-		"app":                       appLabel,
-		"llm-d.ai/inferenceServing": "true",
-		"llm-d.ai/model":            "ms-sim-llm-d-modelservice",
-		"llm-d.ai/model-pool":       poolName,
-		"test-resource":             "true",
+		"app":                          appLabel,
+		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
+		"llm-d.ai/model":               defaultModelServiceLabelValue,
+		"llm-d.ai/model-pool":          poolName,
+		"test-resource":                defaultTestResourceLabelValue,
+		"llm-d.ai/guide":               defaultGuideLabelValue,
+		"llm-d.ai/inference-serving":   defaultLabelValueTrue,
+		"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
+	}
+	if vaName != "" {
+		labels["llm-d.ai/variant"] = vaName
 	}
 
 	envVars := []corev1.EnvVar{
@@ -110,8 +138,8 @@ func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulato
 			corev1.EnvVar{Name: "HF_HOME", Value: "/model-cache"},
 			corev1.EnvVar{Name: "HF_TOKEN", ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "llm-d-hf-token"},
-					Key:                  "HF_TOKEN",
+					LocalObjectReference: corev1.LocalObjectReference{Name: defaultHFTokenSecretName},
+					Key:                  defaultHFTokenSecretKey,
 				},
 			}},
 		)
@@ -140,7 +168,7 @@ func buildModelServiceLWS(namespace, name, poolName, modelID string, useSimulato
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Args:            args,
 					Ports: []corev1.ContainerPort{
-						{Name: "http", ContainerPort: 8000, Protocol: corev1.ProtocolTCP},
+						{Name: defaultServicePortName, ContainerPort: defaultModelServiceContainerPort, Protocol: corev1.ProtocolTCP},
 					},
 					Env:          envVars,
 					Resources:    buildModelServiceResources(useSimulator),

@@ -6,6 +6,7 @@ import (
 
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,41 +55,60 @@ func (a *Actuator) GetCurrentScaleTargetReplicasFromScaleTarget(va *llmdOptv1alp
 	return 1, nil
 }
 
-func (a *Actuator) EmitMetrics(ctx context.Context, VariantAutoscaling *llmdOptv1alpha1.VariantAutoscaling) error {
+func (a *Actuator) EmitMetrics(ctx context.Context, variantAutoscaling *llmdOptv1alpha1.VariantAutoscaling) error {
 	logger := log.FromContext(ctx)
-	if VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas == nil {
+	if variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas == nil {
 		logger.Info("Skipping EmitReplicaMetrics - no optimization decision yet",
-			"variantName", VariantAutoscaling.Name)
+			"variantName", variantAutoscaling.Name)
 		return nil
 	}
 
-	desiredReplicas := *VariantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
+	desiredReplicas := *variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas
 
-	// Get real current replicas from Deployment (not stale VariantAutoscaling status)
-	currentReplicas, err := a.GetCurrentScaleTargetReplicasFromVA(ctx, VariantAutoscaling)
+	// Get real current replicas from Deployment (not stale variantAutoscaling status)
+	currentReplicas, err := a.GetCurrentScaleTargetReplicasFromVA(ctx, variantAutoscaling)
 	if err != nil {
-		logger.Error(err, "Could not get current scale target replicas, using VariantAutoscaling status",
-			"variantName", VariantAutoscaling.Name)
+		logger.Error(err, "Could not get current scale target replicas, using variantAutoscaling status",
+			"variantName", variantAutoscaling.Name)
 		currentReplicas = 0 // Fallback to 0 since CurrentAlloc is removed
 	}
 
 	if err := a.MetricsEmitter.EmitReplicaMetrics(
 		ctx,
-		VariantAutoscaling,
+		variantAutoscaling,
 		currentReplicas,
 		desiredReplicas, // Inferno's optimization target
-		VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
+		variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator,
 	); err != nil {
 		logger.Error(err, "Failed to emit optimization signals for variantAutoscaling",
-			"variantName", VariantAutoscaling.Name)
+			"variantName", variantAutoscaling.Name)
 		// Don't fail the reconciliation for metric emission errors
 		// Metrics are critical for HPA, but emission failures shouldn't break core functionality
 		return nil
 	}
 	logger.Info("EmitReplicaMetrics completed",
-		"variantName", VariantAutoscaling.Name,
+		"variantName", variantAutoscaling.Name,
 		"currentReplicas", currentReplicas,
 		"desiredReplicas", desiredReplicas,
-		"accelerator", VariantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
+		"accelerator", variantAutoscaling.Status.DesiredOptimizedAlloc.Accelerator)
 	return nil
+}
+
+// RecordSaturationMetrics records saturation analysis and KV cache capacity
+// metrics from a decision. The controller does not actively push metrics —
+// Prometheus scrapes them — so the verb is "Record", not "Emit".
+func (a *Actuator) RecordSaturationMetrics(ctx context.Context, decision interfaces.VariantDecision) {
+	a.MetricsEmitter.RecordSaturationMetrics(
+		ctx,
+		decision.VariantName,
+		decision.Namespace,
+		decision.ModelID,
+		decision.AcceleratorName,
+		decision.RequiredCapacityUnit,
+		decision.Utilization,
+		decision.SpareCapacity,
+		decision.RequiredCapacity,
+		decision.KvCacheTokensUsed,
+		decision.KvCacheTokensCapacity,
+	)
 }

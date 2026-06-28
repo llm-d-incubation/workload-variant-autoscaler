@@ -127,9 +127,17 @@ func (e *Engine) optimizeEPPSaturation(
 			"spareCapacity", result.SpareCapacity)
 
 		requests = append(requests, pipeline.ModelScalingRequest{
-			ModelID:       modelID,
-			Namespace:     namespace,
-			Result:        result,
+			ModelID:   modelID,
+			Namespace: namespace,
+			AnalyzerResults: []pipeline.NamedAnalyzerResult{{
+				// Optimizer's saturationEntry keys on SaturationAnalyzerName,
+				// so the EPP saturation result occupies the saturation slot.
+				Name:      interfaces.SaturationAnalyzerName,
+				Result:    result,
+				Score:     1.0, // EPP path: single analyzer, no per-entry score config
+				Remaining: result.RequiredCapacity,
+				Spare:     result.SpareCapacity,
+			}},
 			VariantStates: variantStates,
 			Priority:      saturationConfig.Priority,
 		})
@@ -180,4 +188,3 @@ func (e *Engine) optimizeEPPSaturation(
 
 	return allDecisions
 }
-

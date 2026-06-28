@@ -2,67 +2,18 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
-
-// normalizeAcceleratorName converts a full GPU model name to a short name.
-// This enables matching between VA labels (e.g., "A100") and discovery results
-// (e.g., "NVIDIA-A100-PCIE-80GB").
-//
-// Examples:
-//   - "NVIDIA-A100-PCIE-80GB" -> "A100"
-//   - "NVIDIA-H100-SXM5-80GB" -> "H100"
-//   - "AMD-MI300X-192G" -> "MI300X"
-//   - "Intel-Gaudi-2-96GB" -> "Gaudi-2"
-//   - "A100" -> "A100" (already short)
-func normalizeAcceleratorName(fullName string) string {
-	// If already a short name (no hyphens or known pattern), return as-is
-	if !strings.Contains(fullName, "-") {
-		return fullName
-	}
-
-	// Common patterns for GPU model names:
-	// NVIDIA-{model}-{variant} -> extract {model}
-	// AMD-{model}-{memory} -> extract {model}
-	// Intel-{model}-{memory} -> extract {model}
-
-	parts := strings.Split(fullName, "-")
-	if len(parts) < 2 {
-		return fullName
-	}
-
-	// Check for known vendor prefixes
-	vendor := strings.ToUpper(parts[0])
-	switch vendor {
-	case "NVIDIA":
-		// NVIDIA-A100-PCIE-80GB -> A100
-		// NVIDIA-H100-SXM5-80GB -> H100
-		if len(parts) >= 2 {
-			return parts[1]
-		}
-	case "AMD":
-		// AMD-MI300X-192G -> MI300X
-		if len(parts) >= 2 {
-			return parts[1]
-		}
-	case "INTEL":
-		// Intel-Gaudi-2-96GB -> Gaudi-2
-		if len(parts) >= 3 {
-			return parts[1] + "-" + parts[2]
-		}
-		if len(parts) >= 2 {
-			return parts[1]
-		}
-	}
-
-	// Fallback: return the second part (after vendor)
-	return parts[1]
-}
 
 // TypeInventory tracks GPU capacity, usage, and availability per accelerator type (H100, A100, etc.).
 //
@@ -142,7 +93,7 @@ func (i *TypeInventory) Name() string {
 // Returns an error if usage discovery is not configured (use Refresh + SetUsed instead).
 func (i *TypeInventory) RefreshAll(ctx context.Context) error {
 	if i.usageDiscovery == nil {
-		return fmt.Errorf("usage discovery not configured; use SetUsed() or NewTypeInventoryWithUsage()")
+		return errors.New("usage discovery not configured; use SetUsed() or NewTypeInventoryWithUsage()")
 	}
 
 	// Refresh limits first
@@ -184,7 +135,7 @@ func (i *TypeInventory) Refresh(ctx context.Context) error {
 	for _, accelerators := range nodeInventory {
 		for fullModelName, info := range accelerators {
 			// Normalize "NVIDIA-A100-PCIE-80GB" -> "A100"
-			shortName := normalizeAcceleratorName(fullModelName)
+			shortName := utils.NormalizeAcceleratorName(fullModelName)
 			byType[shortName] += info.Count
 			total += info.Count
 		}
@@ -339,15 +290,36 @@ type typeAllocator struct {
 // The accelerator type is determined from the decision's AcceleratorName field.
 // Returns the actual GPUs allocated (may be less than requested if the type's
 // pool is exhausted).
-func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (a *typeAllocator) TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}
 
 	accType := decision.AcceleratorName
-	if accType == "" {
-		return 0, fmt.Errorf("decision for %s/%s has no AcceleratorName specified",
-			decision.Namespace, decision.VariantName)
+	if !constants.IsAcceleratorResolved(accType) {
+		// Normally resolved by DefaultLimiter.resolveUnknownAccelerators before
+		// reaching here. This is a safety net for direct callers.
+		if len(a.remainingByType) == 1 {
+			for resolvedType := range a.remainingByType {
+				decision.AcceleratorName = resolvedType
+				accType = resolvedType
+			}
+		} else {
+			// Heterogeneous cluster — can't determine which pool to debit.
+			// Note: #995 proposed "treat as unlimited (return all requested GPUs)"
+			// but that allows the same physical GPUs to be double-allocated: once
+			// here for the unresolved decision, and again from a typed pool for a
+			// subsequent known-type decision. Returning 0 is safer — the variant
+			// keeps its current replicas without over-allocating. Operator must
+			// set nodeSelector or the VA label for scaling in mixed-GPU clusters.
+			ctrl.LoggerFrom(ctx).WithName("typeAllocator").V(logging.DEBUG).Info(
+				"Skipping allocation: accelerator unresolved in heterogeneous cluster — operator must set nodeSelector or VA label",
+				"variant", decision.VariantName,
+				"namespace", decision.Namespace,
+				"availableTypes", len(a.remainingByType),
+				"gpusRequested", gpusRequested)
+			return 0, nil
+		}
 	}
 
 	available := a.remainingByType[accType]

@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -69,7 +70,7 @@ type AnalysisMetrics struct {
 type TargetPerf struct {
 	TargetTTFT float32 // target time to first token (queueing + prefill) (msec)
 	TargetITL  float32 // target inter-token latency (msec)
-	TargetTPS  float32 // target token generation throughtput (tokens/sec)
+	TargetTPS  float32 // target token generation throughput (tokens/sec)
 }
 
 // queue max request rates to achieve performance targets
@@ -135,7 +136,7 @@ func (qa *QueueAnalyzer) Analyze(requestRate float32) (metrics *AnalysisMetrics,
 		return nil, err
 	}
 
-	//solve model
+	// solve model
 	model.Solve(requestRate/1000, 1)
 	if !model.IsValid() {
 		err = fmt.Errorf("invalid model %s", model)
@@ -203,7 +204,7 @@ func (qa *QueueAnalyzer) Size(targetPerf *TargetPerf) (targetRate *TargetRate, m
 		})
 		lambdaStarTTFT, ind, err = BinarySearch(lambdaMin, lambdaMax, targetTTFT, evalTTF)
 		if ind < 0 {
-			err = fmt.Errorf("target is below the bounded region")
+			err = errors.New("target is below the bounded region")
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to calculate lambdaStarTTFT, targetTTFT=%v, range=%s, ind=%d, err=%v",
@@ -222,7 +223,7 @@ func (qa *QueueAnalyzer) Size(targetPerf *TargetPerf) (targetRate *TargetRate, m
 		})
 		lambdaStarITL, ind, err = BinarySearch(lambdaMin, lambdaMax, targetITL, evalITL)
 		if ind < 0 {
-			err = fmt.Errorf("target is below the bounded region")
+			err = errors.New("target is below the bounded region")
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to calculate lambdaStarITL, targetITL=%v, range=%s, ind=%d, err=%v",

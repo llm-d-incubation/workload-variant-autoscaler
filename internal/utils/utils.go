@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,7 +50,7 @@ func UpdateStatusWithBackoff[T client.Object](ctx context.Context, c client.Clie
 		err := c.Status().Update(ctx, obj)
 		if err != nil {
 			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
-				ctrl.LoggerFrom(ctx).V(logging.VERBOSE).Error(err, "permanent error updating status for resource ", resourceType, ", name: ", obj.GetName())
+				ctrl.LoggerFrom(ctx).V(logging.VERBOSE).Error(err, "permanent error updating status for resource", "resourceType", resourceType, "name", obj.GetName())
 				return false, err // Don't retry on permanent errors
 			}
 			if apierrors.IsConflict(err) {
@@ -56,7 +58,7 @@ func UpdateStatusWithBackoff[T client.Object](ctx context.Context, c client.Clie
 				ctrl.LoggerFrom(ctx).V(logging.TRACE).Info("conflict updating status (resource version mismatch), retrying", "resource", resourceType, "name", obj.GetName())
 				return false, nil // Retry on conflict
 			}
-			ctrl.LoggerFrom(ctx).V(logging.TRACE).Error(err, "transient error updating status, retrying for resource ", resourceType, ", name: ", obj.GetName())
+			ctrl.LoggerFrom(ctx).V(logging.TRACE).Error(err, "transient error updating status, retrying for resource", "resourceType", resourceType, "name", obj.GetName())
 			return false, nil // Retry on transient errors
 		}
 		return true, nil
@@ -360,33 +362,45 @@ func ValidatePrometheusAPI(ctx context.Context, promAPI promv1.API) error {
 	return ValidatePrometheusAPIWithBackoff(ctx, promAPI, constants.PrometheusValidationBackoff)
 }
 
+// GetProductKeys returns unique vendor product (node label) keys, in stable (sorted) order
+func GetProductKeys() []string {
+	labels := make(map[string]bool, len(constants.VendorResources))
+	for _, res := range constants.VendorResources {
+		labels[res.ProductLabel] = true
+		for _, label := range res.ProductLabelAliases {
+			labels[label] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(labels))
+}
+
 // GetAcceleratorNameFromScaleTarget extracts GPU product information from a scale target's nodeSelector or nodeAffinity.
-// It checks for the following keys in order:
-// - nvidia.com/gpu.product
-// - amd.com/gpu.product-name
-// - cloud.google.com/gke-accelerator
+// GPU product information is checked against keys listed in constants.VendorResources.
 // If not found in nodeSelector or nodeAffinity, falls back to the AcceleratorNameLabel on the VariantAutoscaling.
-// Returns the first matching value found, or an empty string if none are found.
+// Returns the first matching value found, or constants.DefaultAcceleratorName ("unknown") if none are found.
+// The sentinel allows callers to proceed without hard-stopping; the GPU limiter resolves
+// it to the real type in homogeneous clusters before it reaches status or metrics.
 func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, scaleTarget scaletarget.ScaleTargetAccessor) string {
 	// Check scaleTarget for accelerator name if it's not nil
 	if scaleTarget != nil {
 		podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
-		if podTemplateSpec == nil {
-			return ""
-		}
-		// Check nodeSelector first
-		if podTemplateSpec.Spec.NodeSelector != nil {
-			for _, key := range constants.GpuProductKeys {
-				if val, ok := podTemplateSpec.Spec.NodeSelector[key]; ok {
-					return val
+		if podTemplateSpec != nil {
+			prodKeys := GetProductKeys()
+
+			// Check nodeSelector first
+			if podTemplateSpec.Spec.NodeSelector != nil {
+				for _, key := range prodKeys {
+					if val, ok := podTemplateSpec.Spec.NodeSelector[key]; ok {
+						return val
+					}
 				}
 			}
-		}
 
-		// Check nodeAffinity
-		if podTemplateSpec.Spec.Affinity != nil && podTemplateSpec.Spec.Affinity.NodeAffinity != nil {
-			if val := extractGPUFromNodeAffinity(podTemplateSpec.Spec.Affinity.NodeAffinity, constants.GpuProductKeys); val != "" {
-				return val
+			// Check nodeAffinity
+			if podTemplateSpec.Spec.Affinity != nil && podTemplateSpec.Spec.Affinity.NodeAffinity != nil {
+				if val := extractGPUFromNodeAffinity(podTemplateSpec.Spec.Affinity.NodeAffinity, prodKeys); val != "" {
+					return val
+				}
 			}
 		}
 	}
@@ -397,7 +411,7 @@ func GetAcceleratorNameFromScaleTarget(va *llmdVariantAutoscalingV1alpha1.Varian
 			return accName
 		}
 	}
-	return ""
+	return constants.DefaultAcceleratorName
 }
 
 // extractGPUFromNodeAffinity extracts GPU product information from NodeAffinity.

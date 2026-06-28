@@ -1,6 +1,11 @@
 # workload-variant-autoscaler
 
-![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.1](https://img.shields.io/badge/AppVersion-v0.5.1-informational?style=flat-square)
+> **DEPRECATED**: This Helm chart is deprecated. Kustomize is now the recommended install method.
+> Use `kubectl apply -k config/default/` (Kubernetes) or `kubectl apply -k config/openshift/` (OpenShift).
+> See the [Deployment Guide](../../deploy/README.md) for details.
+> This chart will be removed in the next minor release.
+
+![Version: 0.7.0](https://img.shields.io/badge/Version-0.7.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.7.0](https://img.shields.io/badge/AppVersion-v0.7.0-informational?style=flat-square)
 
 Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM inference workloads
 
@@ -9,7 +14,7 @@ Helm chart for Workload-Variant-Autoscaler (WVA) - GPU-aware autoscaler for LLM 
 The chart is published to GitHub Container Registry under the **llm-d** org (not llm-d-incubation). Use this OCI URL in Helm or Helmfile:
 
 - **OCI URL:** `oci://ghcr.io/llm-d/workload-variant-autoscaler`
-- **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.5.1`
+- **Example:** `helm pull oci://ghcr.io/llm-d/workload-variant-autoscaler --version 0.7.0`
 
 ## Installation (OpenShift)
 Helm is the recommended installation method. Before running, be sure to delete all previous helm installations for `workload-variant-autoscaler` and `prometheus-adapter`. To list all helm charts installed in the cluster run `helm ls -A`.
@@ -18,7 +23,7 @@ Helm is the recommended installation method. Before running, be sure to delete a
 ```
 export OWNER="llm-d"
 export WVA_PROJECT="llm-d-workload-variant-autoscaler"
-export WVA_RELEASE="v0.5.1"
+export WVA_RELEASE="v0.7.0"
 export WVA_NS="workload-variant-autoscaler-system"
 export MON_NS="openshift-user-workload-monitoring"
 
@@ -115,7 +120,7 @@ helm install wva-model-b ./workload-variant-autoscaler \
 | hpa.maxReplicas | int | `10` |  |
 | hpa.targetAverageValue | string | `"1"` |  |
 | llmd.modelID | string | `"unsloth/Meta-Llama-3.1-8B"` |  |
-| llmd.modelName | string | `"ms-inference-scheduling-llm-d-modelservice"` |  |
+| llmd.modelName | string | `"ms-inference-scheduling-llm-d-modelservice"` | Example matches older llm-d guide basenames; llm-d main uses [guides/optimized-baseline](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) — align with your cluster’s ModelService name. |
 | llmd.namespace | string | `"llm-d-autoscaler"` |  |
 | va.accelerator | string | `"H100"` |  |
 | va.enabled | bool | `true` |  |
@@ -229,15 +234,6 @@ helm install workload-variant-autoscaler ./workload-variant-autoscaler \
   --set hpa.behavior.scaleDown.stabilizationWindowSeconds=30
 ```
 
-**Configuration via install.sh:**
-```bash
-# Set stabilization window via environment variable
-HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
-
-# Production default (240s)
-./deploy/install.sh
-```
-
 **Key Parameters:**
 - **stabilizationWindowSeconds**: Time to wait before applying scaling decisions (prevents flapping)
 - **selectPolicy**: How to choose from multiple policies (`Max`, `Min`, `Disabled`)
@@ -248,7 +244,7 @@ HPA_STABILIZATION_SECONDS=120 ./deploy/install.sh
 - **Development**: Use 30-60 seconds for faster iteration
 - **E2E Tests**: Use 30 seconds for rapid validation
 
-See [HPA Integration Guide](../../docs/integrations/hpa-integration.md) for detailed information.
+See [HPA Integration Guide](../../docs/user-guide/hpa-integration.md) for detailed information.
 
 ### Usage Examples
 
@@ -311,7 +307,7 @@ When running multiple WVA controllers in the same cluster (e.g., for parallel e2
 For parallel e2e tests, each test run can use a unique controller instance:
 ```bash
 # Each PR/run uses its namespace as the controller instance
-CONTROLLER_INSTANCE="llm-d-autoscaler-pr-123" ./deploy/install.sh
+CONTROLLER_INSTANCE="llm-d-autoscaler-pr-123" ./deploy/install.sh -e kubernetes
 ```
 
 This ensures that:

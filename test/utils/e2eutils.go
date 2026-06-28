@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -44,7 +45,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -205,7 +206,7 @@ func generateTLSCertificates() error {
 }
 
 // createTLSCertificateSecret creates a Kubernetes secret for TLS certificates
-func createTLSCertificateSecret() error {
+func createTLSCertificateSecret() error { //nolint:unparam // error return kept for interface consistency
 	certFile := "hack/tls-certs/prometheus-cert.pem"
 	keyFile := "hack/tls-certs/prometheus-key.pem"
 
@@ -312,7 +313,7 @@ func CheckIfClusterExistsOrCreate(maxGPUs int, gpuType string) (string, error) {
 	// Create the kind cluster if it doesn't exist
 	expectedVersion := os.Getenv("K8S_EXPECTED_VERSION")
 	if !clusterExists {
-		scriptCmd := exec.Command("bash", "deploy/kind-emulator/setup.sh", "-g", fmt.Sprintf("%d", maxGPUs), "-t", gpuType, "K8S_VERSION="+expectedVersion)
+		scriptCmd := exec.Command("bash", "deploy/kind-emulator/setup.sh", "-g", strconv.Itoa(maxGPUs), "-t", gpuType, "K8S_VERSION="+expectedVersion)
 		if _, err := Run(scriptCmd); err != nil {
 			return "", fmt.Errorf("failed to create kind cluster: %v", err)
 		}
@@ -336,7 +337,7 @@ func checkKubernetesVersion(expectedVersion string) {
 	}
 
 	// Extract server version
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(output, "\n")
 	var serverVersion string
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Server Version: v") {
@@ -474,10 +475,10 @@ func startPortForwarding(service *corev1.Service, namespace string, localPort, s
 	}
 
 	portForwardCmd := exec.Command("kubectl", "port-forward",
-		fmt.Sprintf("service/%s", service.Name),
+		"service/"+service.Name,
 		fmt.Sprintf("%d:%d", localPort, servicePort), "-n", namespace)
 	err := portForwardCmd.Start()
-	gom.Expect(err).NotTo(gom.HaveOccurred(), fmt.Sprintf("Port-forward command should start successfully for service: %s", service.Name))
+	gom.Expect(err).NotTo(gom.HaveOccurred(), "Port-forward command should start successfully for service: "+service.Name)
 
 	// Check if the port-forward process is still running
 	gom.Eventually(func() error {
@@ -545,7 +546,7 @@ func CreateLoadGeneratorJob(namespace, targetURL, modelName string, rate, maxSec
 func WaitForJobPodRunning(ctx context.Context, job *batchv1.Job, k8sClient *kubernetes.Clientset, timeout time.Duration, w io.Writer) error {
 	return wait.PollUntilContextTimeout(ctx, 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		pods, err := k8sClient.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("job-name=%s", job.Name),
+			LabelSelector: "job-name=" + job.Name,
 		})
 		if err != nil {
 			_, _ = fmt.Fprintf(w, "Warning: failed to list pods for job %s: %v\n", job.Name, err)
@@ -656,7 +657,7 @@ func StopJob(namespace string, job *batchv1.Job, k8sClient *kubernetes.Clientset
 // StopCmd attempts to gracefully stop the provided command, handling early exits and timeouts.
 func StopCmd(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
-		return fmt.Errorf("command or process is nil")
+		return errors.New("command or process is nil")
 	}
 
 	// Check if process has already exited
@@ -754,7 +755,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any pods exist with the specified app label
 	podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing pods for label uniqueness: %v", err))
@@ -762,7 +763,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any deployments exist with the specified app label
 	deploymentList, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing deployments for label uniqueness: %v", err))
@@ -770,7 +771,7 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	// Check if any services exist with the specified app label
 	serviceList, err := k8sClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appLabel),
+		LabelSelector: "app=" + appLabel,
 	})
 	if err != nil {
 		gink.Fail(fmt.Sprintf("Failed to check existing services for label uniqueness: %v", err))
@@ -788,25 +789,25 @@ func ValidateAppLabelUniqueness(namespace, appLabel string, k8sClient *kubernete
 
 	if len(podList.Items) > 0 {
 		for _, pod := range podList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Pod: %s", pod.Name))
+			conflicting = append(conflicting, "Pod: "+pod.Name)
 		}
 	}
 
 	if len(deploymentList.Items) > 0 {
 		for _, deployment := range deploymentList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Deployment: %s", deployment.Name))
+			conflicting = append(conflicting, "Deployment: "+deployment.Name)
 		}
 	}
 
 	if len(serviceList.Items) > 0 {
 		for _, service := range serviceList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("Service: %s", service.Name))
+			conflicting = append(conflicting, "Service: "+service.Name)
 		}
 	}
 
 	if len(serviceMonitorList.Items) > 0 {
 		for _, serviceMonitor := range serviceMonitorList.Items {
-			conflicting = append(conflicting, fmt.Sprintf("ServiceMonitor: %s", serviceMonitor.Name))
+			conflicting = append(conflicting, "ServiceMonitor: "+serviceMonitor.Name)
 		}
 	}
 
@@ -835,7 +836,7 @@ func ValidateVariantAutoscalingUniqueness(namespace, modelId, acc string, crClie
 		for _, va := range variantAutoscalingList.Items {
 			// check for same modelId
 			if va.Spec.ModelID == modelId {
-				conflicting = append(conflicting, fmt.Sprintf("VariantAutoscaling: %s", va.Name))
+				conflicting = append(conflicting, "VariantAutoscaling: "+va.Name)
 			}
 		}
 		// Fails if any conflicts are found
@@ -856,7 +857,7 @@ func LogVariantAutoscalingStatus(ctx context.Context, vaName, namespace string, 
 
 	replicas := "<nil>"
 	if nr := variantAutoscaling.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
-		replicas = fmt.Sprintf("%d", *nr)
+		replicas = strconv.Itoa(int(*nr))
 	}
 	_, err = fmt.Fprintf(writer, "Desired Optimized Allocation for VA: %s - Replicas: %s, Accelerator: %s\n",
 		variantAutoscaling.Name,
@@ -943,7 +944,8 @@ func CreateHPAOnDesiredReplicaMetrics(name, namespace, deploymentName, variantNa
 							Name: constants.WVADesiredReplicas,
 							Selector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{
-									"variant_name": variantName,
+									"variant_name":       variantName,
+									"exported_namespace": namespace,
 								},
 							},
 						},
@@ -970,6 +972,14 @@ type PrometheusQueryResult struct {
 	} `json:"data"`
 }
 
+// PrometheusServiceInfo contains information about the Prometheus service endpoint
+type PrometheusServiceInfo struct {
+	ServiceName string
+	Namespace   string
+	Port        int
+	Scheme      string // "http" or "https"
+}
+
 // PrometheusClient wraps the official Prometheus client
 type PrometheusClient struct {
 	client promv1.API
@@ -980,19 +990,79 @@ func (p *PrometheusClient) API() promv1.API {
 	return p.client
 }
 
-// creates a new Prometheus client for e2e tests
+type authRoundTripper struct {
+	token string
+	rt    http.RoundTripper
+}
+
+func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	return a.rt.RoundTrip(req)
+}
+
+// GetPrometheusServiceInfoFromConfigMap reads the Prometheus service info from the WVA controller configmap.
+// It reads the workload-variant-autoscaler-variantautoscaling-config configmap and extracts
+// the service name, namespace, and port from PROMETHEUS_BASE_URL.
+// Example URL: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
+func GetPrometheusServiceInfoFromConfigMap(ctx context.Context, k8sClient *kubernetes.Clientset, wvaNamespace string) (*PrometheusServiceInfo, error) {
+	configMapName := "workload-variant-autoscaler-variantautoscaling-config"
+
+	cm, err := k8sClient.CoreV1().ConfigMaps(wvaNamespace).Get(ctx, configMapName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get configmap %s/%s: %w", wvaNamespace, configMapName, err)
+	}
+
+	configYAML, ok := cm.Data["config.yaml"]
+	if !ok {
+		return nil, fmt.Errorf("config.yaml not found in configmap %s/%s", wvaNamespace, configMapName)
+	}
+
+	// Parse PROMETHEUS_BASE_URL from the YAML content
+	// Format: PROMETHEUS_BASE_URL: "https://service-name.namespace.svc.cluster.local:port"
+	re := regexp.MustCompile(`PROMETHEUS_BASE_URL:\s*"(https?://)?([^:/"]+)\.([^:/"]+)\.svc\.cluster\.local:(\d+)"`)
+	matches := re.FindStringSubmatch(configYAML)
+	if len(matches) < 5 {
+		return nil, fmt.Errorf("PROMETHEUS_BASE_URL not found or invalid format in configmap %s/%s config.yaml", wvaNamespace, configMapName)
+	}
+
+	scheme := "http"
+	if matches[1] == "https://" {
+		scheme = "https"
+	}
+
+	port, err := strconv.Atoi(matches[4])
+	if err != nil {
+		return nil, fmt.Errorf("invalid port in PROMETHEUS_BASE_URL: %w", err)
+	}
+
+	return &PrometheusServiceInfo{
+		ServiceName: matches[2],
+		Namespace:   matches[3],
+		Port:        port,
+		Scheme:      scheme,
+	}, nil
+}
+
+// NewPrometheusClient creates a new Prometheus client for e2e tests
 func NewPrometheusClient(baseURL string, insecureSkipVerify bool) (*PrometheusClient, error) {
 	config := promAPI.Config{
 		Address: baseURL,
 	}
 
-	if insecureSkipVerify {
-		roundTripper := promAPI.DefaultRoundTripper
-		if rt, ok := roundTripper.(*http.Transport); ok {
+	roundTripper := promAPI.DefaultRoundTripper
+	if rt, ok := roundTripper.(*http.Transport); ok {
+		if insecureSkipVerify {
 			rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		}
-		config.RoundTripper = roundTripper
 	}
+
+	if token := os.Getenv("PROMETHEUS_TOKEN"); token != "" {
+		roundTripper = &authRoundTripper{
+			token: token,
+			rt:    roundTripper,
+		}
+	}
+	config.RoundTripper = roundTripper
 
 	client, err := promAPI.NewClient(config)
 	if err != nil {
@@ -1030,8 +1100,6 @@ func (p *PrometheusClient) QueryWithRetry(ctx context.Context, query string) (fl
 			return false, queryErr // Stop retrying, return error
 		}
 
-		// Log retry attempt
-		fmt.Printf("Debug: Prometheus query failed, will retry: %v\n", queryErr)
 		return false, nil // Continue retrying
 	})
 
@@ -1062,7 +1130,7 @@ func extractValueFromResult(result model.Value) (float64, error) {
 	switch v := result.(type) {
 	case model.Vector:
 		if len(v) == 0 {
-			return 0, fmt.Errorf("no data returned from prometheus query")
+			return 0, errors.New("no data returned from prometheus query")
 		}
 		return float64(v[0].Value), nil
 	case *model.Scalar:
@@ -1149,13 +1217,13 @@ var namespaceRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 // validateNamespace checks if a namespace name is valid to prevent PromQL injection.
 func validateNamespace(namespace string) error {
 	if namespace == "" {
-		return fmt.Errorf("namespace cannot be empty")
+		return errors.New("namespace cannot be empty")
 	}
 	if len(namespace) > 63 {
 		return fmt.Errorf("namespace too long: %d characters (max 63)", len(namespace))
 	}
 	if !namespaceRegex.MatchString(namespace) {
-		return fmt.Errorf("invalid namespace name: must be lowercase alphanumeric with optional dashes")
+		return errors.New("invalid namespace name: must be lowercase alphanumeric with optional dashes")
 	}
 	return nil
 }
@@ -1236,25 +1304,21 @@ func SetupTestEnvironment(image string, numNodes, gpusPerNode int, gpuTypes stri
 	// Note: These use setEnvIfNotSet to allow CI workflow to override with different values
 	gom.Expect(os.Setenv("IMG", image)).To(gom.Succeed())
 	gom.Expect(os.Setenv("CLUSTER_NAME", clusterName)).To(gom.Succeed())
-	setEnvIfNotSet("CLUSTER_NODES", fmt.Sprintf("%d", numNodes))
-	setEnvIfNotSet("CLUSTER_GPUS", fmt.Sprintf("%d", gpusPerNode))
+	setEnvIfNotSet("CLUSTER_NODES", strconv.Itoa(numNodes))
+	setEnvIfNotSet("CLUSTER_GPUS", strconv.Itoa(gpusPerNode))
 	setEnvIfNotSet("CLUSTER_GPU_TYPE", gpuTypes)                                     // Use CLUSTER_GPU_TYPE to match Makefile
 	gom.Expect(os.Setenv("WVA_IMAGE_PULL_POLICY", "IfNotPresent")).To(gom.Succeed()) // The image is built locally by the tests
 	gom.Expect(os.Setenv("CREATE_CLUSTER", "true")).To(gom.Succeed())                // Always create a new cluster for E2E tests
 
-	// Enable components needed for the tests
-	gom.Expect(os.Setenv("DEPLOY_LLM_D", "true")).To(gom.Succeed())
+	// EPP is deployed by ./deploy/install-epp.sh (via deploy-e2e-infra Makefile target); install.sh deploys WVA only.
+	// Tests apply their own VariantAutoscaling / HPA / model workloads.
 	gom.Expect(os.Setenv("DEPLOY_WVA", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("DEPLOY_PROMETHEUS", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("DEPLOY_PROMETHEUS_ADAPTER", "true")).To(gom.Succeed())
-	gom.Expect(os.Setenv("E2E_TESTS_ENABLED", "true")).To(gom.Succeed())
 	gom.Expect(os.Setenv("WVA_RECONCILE_INTERVAL", "30s")).To(gom.Succeed())
 
-	// Disable components not needed to be deployed by the script
-	gom.Expect(os.Setenv("DEPLOY_LLM_D_INFERENCE_SIM", "false")).To(gom.Succeed()) // tests deploy their own llm-d-sim deployments
-	gom.Expect(os.Setenv("DEPLOY_VA", "false")).To(gom.Succeed())                  // tests create their own VariantAutoscaling resources
-	gom.Expect(os.Setenv("DEPLOY_HPA", "false")).To(gom.Succeed())                 // tests create their own HPAs if needed
-	gom.Expect(os.Setenv("VLLM_SVC_ENABLED", "false")).To(gom.Succeed())           // tests deploy their own Service
+	// Tests deploy their own workloads — skip any model server pre-deploy.
+	gom.Expect(os.Setenv("VLLM_SVC_ENABLED", "false")).To(gom.Succeed()) // tests deploy their own Service
 }
 
 // DeleteAllVariantAutoscalings deletes all VariantAutoscaling objects in a namespace
@@ -1274,7 +1338,7 @@ func DeleteAllVariantAutoscalings(ctx context.Context, crClient client.Client, n
 	for i := range vaList.Items {
 		va := &vaList.Items[i]
 		if err := crClient.Delete(ctx, va); err != nil {
-			if errors.IsNotFound(err) {
+			if k8serrors.IsNotFound(err) {
 				continue // Already deleted
 			}
 			return deletedCount, fmt.Errorf("failed to delete VA %s: %w", va.Name, err)

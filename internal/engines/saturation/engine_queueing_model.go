@@ -35,7 +35,7 @@ func (e *Engine) optimizeQueueingModel(
 	e.queueingModelAnalyzer.Update(currentModelKeys)
 
 	// Stage 1: Collect ModelScalingRequests for all models
-	var requests []pipeline.ModelScalingRequest
+	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -69,9 +69,15 @@ func (e *Engine) optimizeQueueingModel(
 		}
 
 		requests = append(requests, pipeline.ModelScalingRequest{
-			ModelID:       modelID,
-			Namespace:     namespace,
-			Result:        result,
+			ModelID:   modelID,
+			Namespace: namespace,
+			AnalyzerResults: []pipeline.NamedAnalyzerResult{{
+				Name:      interfaces.SaturationAnalyzerName,
+				Result:    result,
+				Score:     1.0, // QM path: single analyzer, no per-entry score config
+				Remaining: result.RequiredCapacity,
+				Spare:     result.SpareCapacity,
+			}},
 			VariantStates: data.variantStates,
 		})
 	}

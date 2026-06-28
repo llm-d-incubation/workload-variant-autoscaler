@@ -146,14 +146,15 @@ func allocate(entries []*serverEntry,
 		} else {
 			// otherwise, move to next candidate allocation
 			top.curIndex++
-			if top.curIndex+1 < len(top.allocations) {
+			switch {
+			case top.curIndex+1 < len(top.allocations):
 				// not last allocation, calculate delta
 				top.delta = top.allocations[top.curIndex+1].Value() - top.allocations[top.curIndex].Value()
-			} else if top.curIndex == len(top.allocations) {
+			case top.curIndex == len(top.allocations):
 				// no more allocations, could not satisfy any, add server to unallocated list
 				unallocatedEntries = append(unallocatedEntries, top)
 				continue
-			} else {
+			default:
 				// last allocation, set large delta value
 				top.delta = math.MaxFloat32
 			}

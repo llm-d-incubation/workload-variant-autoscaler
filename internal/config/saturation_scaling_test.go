@@ -215,14 +215,32 @@ var _ = Describe("SaturationScalingConfig", func() {
 			Expect(config.ScaleDownBoundary).To(Equal(0.60))
 		})
 
-		It("should be no-op when not V2", func() {
+		It("should apply V1 defaults when not V2", func() {
 			config := SaturationScalingConfig{
 				AnalyzerName: "",
 			}
 			config.ApplyDefaults()
+			Expect(config.KvCacheThreshold).To(Equal(DefaultKvCacheThreshold))
+			Expect(config.QueueLengthThreshold).To(Equal(DefaultQueueLengthThreshold))
+			Expect(config.KvSpareTrigger).To(Equal(DefaultKvSpareTrigger))
+			Expect(config.QueueSpareTrigger).To(Equal(DefaultQueueSpareTrigger))
 			Expect(config.ScaleUpThreshold).To(Equal(0.0))
 			Expect(config.ScaleDownBoundary).To(Equal(0.0))
 			Expect(config.Analyzers).To(BeEmpty())
+		})
+
+		It("should not overwrite explicit V1 values", func() {
+			config := SaturationScalingConfig{
+				KvCacheThreshold:     0.75,
+				QueueLengthThreshold: 10,
+				KvSpareTrigger:       0.15,
+				QueueSpareTrigger:    5,
+			}
+			config.ApplyDefaults()
+			Expect(config.KvCacheThreshold).To(Equal(0.75))
+			Expect(config.QueueLengthThreshold).To(Equal(10.0))
+			Expect(config.KvSpareTrigger).To(Equal(0.15))
+			Expect(config.QueueSpareTrigger).To(Equal(5.0))
 		})
 
 		It("should apply default priority when zero", func() {
@@ -275,6 +293,109 @@ var _ = Describe("SaturationScalingConfig", func() {
 			}
 			config.ApplyDefaults()
 			Expect(config.Validate()).To(Succeed())
+		})
+	})
+
+	Context("Merge", func() {
+
+		It("should overlay non-zero fields from override", func() {
+			base := SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+			}
+			override := SaturationScalingConfig{
+				KvCacheThreshold: 0.85,
+				KvSpareTrigger:   0.15,
+			}
+			base.Merge(override)
+			Expect(base.KvCacheThreshold).To(Equal(0.85))
+			Expect(base.KvSpareTrigger).To(Equal(0.15))
+			// Unset fields in override should not change base
+			Expect(base.QueueLengthThreshold).To(Equal(5.0))
+			Expect(base.QueueSpareTrigger).To(Equal(3.0))
+		})
+
+		It("should overlay all fields when all are set", func() {
+			base := SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				Priority:             1.0,
+			}
+			override := SaturationScalingConfig{
+				KvCacheThreshold:     0.90,
+				QueueLengthThreshold: 15,
+				KvSpareTrigger:       0.05,
+				QueueSpareTrigger:    2,
+				Priority:             5.0,
+			}
+			base.Merge(override)
+			Expect(base.KvCacheThreshold).To(Equal(0.90))
+			Expect(base.QueueLengthThreshold).To(Equal(15.0))
+			Expect(base.KvSpareTrigger).To(Equal(0.05))
+			Expect(base.QueueSpareTrigger).To(Equal(2.0))
+			Expect(base.Priority).To(Equal(5.0))
+		})
+
+		It("should not change base when override is empty", func() {
+			base := SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+			}
+			override := SaturationScalingConfig{}
+			base.Merge(override)
+			Expect(base.KvCacheThreshold).To(Equal(0.80))
+			Expect(base.QueueLengthThreshold).To(Equal(5.0))
+			Expect(base.KvSpareTrigger).To(Equal(0.10))
+			Expect(base.QueueSpareTrigger).To(Equal(3.0))
+		})
+
+		It("should overlay V2 fields", func() {
+			base := SaturationScalingConfig{
+				AnalyzerName:      "saturation",
+				ScaleUpThreshold:  0.85,
+				ScaleDownBoundary: 0.70,
+			}
+			override := SaturationScalingConfig{
+				ScaleUpThreshold: 0.90,
+			}
+			base.Merge(override)
+			Expect(base.ScaleUpThreshold).To(Equal(0.90))
+			Expect(base.ScaleDownBoundary).To(Equal(0.70))
+			Expect(base.AnalyzerName).To(Equal("saturation"))
+		})
+
+		It("should overlay analyzers list", func() {
+			enabled := true
+			base := SaturationScalingConfig{
+				Analyzers: []AnalyzerScoreConfig{
+					{Name: "saturation", Score: 1.0, Enabled: &enabled},
+				},
+			}
+			override := SaturationScalingConfig{
+				Analyzers: []AnalyzerScoreConfig{
+					{Name: "custom", Score: 0.5},
+				},
+			}
+			base.Merge(override)
+			Expect(base.Analyzers).To(HaveLen(1))
+			Expect(base.Analyzers[0].Name).To(Equal("custom"))
+		})
+
+		It("should overlay ModelID and Namespace", func() {
+			base := SaturationScalingConfig{}
+			override := SaturationScalingConfig{
+				ModelID:   "llama-70b",
+				Namespace: "production",
+			}
+			base.Merge(override)
+			Expect(base.ModelID).To(Equal("llama-70b"))
+			Expect(base.Namespace).To(Equal("production"))
 		})
 	})
 

@@ -6,6 +6,7 @@ package pod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,9 @@ import (
 	"github.com/prometheus/common/model"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // PodScrapingSource implements MetricsSource for direct pod scraping.
@@ -44,10 +47,10 @@ func NewPodScrapingSource(
 ) (*PodScrapingSource, error) {
 	// Validate required fields
 	if config.ServiceName == "" {
-		return nil, fmt.Errorf("ServiceName is required")
+		return nil, errors.New("ServiceName is required")
 	}
 	if config.ServiceNamespace == "" {
-		return nil, fmt.Errorf("ServiceNamespace is required")
+		return nil, errors.New("ServiceNamespace is required")
 	}
 
 	// Set defaults
@@ -230,8 +233,10 @@ func (p *PodScrapingSource) scrapeAllPods(ctx context.Context, pods []*corev1.Po
 
 			result, err := p.scrapePodMetrics(ctx, pod)
 			if err != nil {
-				logger.V(logging.VERBOSE).Error(err, "Failed to scrape pod",
+				errorType := "Failed to scrape pod"
+				logger.V(logging.VERBOSE).Error(err, errorType,
 					"pod", pod.Name)
+				metrics.RecordError(constants.ComponentCollector, errorType)
 				return
 			}
 
@@ -274,7 +279,7 @@ func (p *PodScrapingSource) scrapePodMetrics(ctx context.Context, pod *corev1.Po
 		return nil, fmt.Errorf("failed to get auth token: %w", err)
 	}
 	if useAuth {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	// Execute request
@@ -297,7 +302,7 @@ func (p *PodScrapingSource) scrapePodMetrics(ctx context.Context, pod *corev1.Po
 // getAuthToken retrieves the authentication token.
 // Returns (token, useAuth, error) where useAuth indicates if authentication should be used.
 // Authentication is optional - if no token is configured or secret doesn't exist, useAuth will be false.
-func (p *PodScrapingSource) getAuthToken(ctx context.Context) (string, bool, error) {
+func (p *PodScrapingSource) getAuthToken(ctx context.Context) (string, bool, error) { //nolint:unparam // error return kept for future use
 	// If explicit token provided, use it
 	if p.config.BearerToken != "" {
 		return p.config.BearerToken, true, nil

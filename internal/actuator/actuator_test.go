@@ -19,8 +19,10 @@ package actuator
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	ctrlutils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -36,11 +38,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const testAcceleratorA100 = "A100"
+
 func fmtNumReplicas(nr *int32) string {
 	if nr == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("%d", *nr)
+	return strconv.Itoa(int(*nr))
 }
 
 var _ = Describe("Actuator", func() {
@@ -336,7 +340,7 @@ var _ = Describe("Actuator", func() {
 					Name:      contextResourceName,
 					Namespace: namespace,
 					Labels: map[string]string{
-						ctrlutils.AcceleratorNameLabel: "A100",
+						ctrlutils.AcceleratorNameLabel: testAcceleratorA100,
 					},
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
@@ -350,7 +354,7 @@ var _ = Describe("Actuator", func() {
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 						NumReplicas: ctrlutils.Ptr(int32(4)),
-						Accelerator: "A100",
+						Accelerator: testAcceleratorA100,
 					},
 				},
 			}
@@ -358,7 +362,7 @@ var _ = Describe("Actuator", func() {
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
 			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(4))
-			va.Status.DesiredOptimizedAlloc.Accelerator = "A100"
+			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 		})
 
 		AfterEach(func() {
@@ -469,7 +473,7 @@ var _ = Describe("Actuator", func() {
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 						NumReplicas: ctrlutils.Ptr(int32(3)),
-						Accelerator: "A100",
+						Accelerator: testAcceleratorA100,
 					},
 				},
 			}
@@ -477,7 +481,7 @@ var _ = Describe("Actuator", func() {
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
 			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(3))
-			va.Status.DesiredOptimizedAlloc.Accelerator = "A100"
+			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 
 		})
 
@@ -489,13 +493,13 @@ var _ = Describe("Actuator", func() {
 
 		It("should verify that metrics emitter can emit scaling metrics", func() {
 			fmt.Printf("Emitting scaling metrics for variantAutoscaling - name: %s\n numReplicas: %s\n", va.Name, fmtNumReplicas(va.Status.DesiredOptimizedAlloc.NumReplicas))
-			err := actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, "up", "optimization")
+			err := actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should verify that metrics emitter can emit replica metrics", func() {
 			fmt.Printf("Emitting replica metrics for variantAutoscaling - name: %s\n numReplicas: %s\n", va.Name, fmtNumReplicas(va.Status.DesiredOptimizedAlloc.NumReplicas))
-			err := actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 1, 3, "A100")
+			err := actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 1, 3, testAcceleratorA100)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -506,7 +510,7 @@ var _ = Describe("Actuator", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Additional scaling metrics
-			err = actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, "up", "load_increase")
+			err = actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -531,7 +535,7 @@ var _ = Describe("Actuator", func() {
 					// DesiredOptimizedAlloc.NumReplicas is nil (no decision yet)
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 						NumReplicas: nil, // This should cause EmitMetrics to skip
-						Accelerator: "A100",
+						Accelerator: testAcceleratorA100,
 					},
 				},
 			}
@@ -600,7 +604,7 @@ var _ = Describe("Actuator", func() {
 				Status: llmdVariantAutoscalingV1alpha1.VariantAutoscalingStatus{
 					DesiredOptimizedAlloc: llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 						NumReplicas: ctrlutils.Ptr(int32(5)),
-						Accelerator: "A100",
+						Accelerator: testAcceleratorA100,
 					},
 				},
 			}
@@ -608,7 +612,7 @@ var _ = Describe("Actuator", func() {
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
 			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(5))
-			va.Status.DesiredOptimizedAlloc.Accelerator = "A100"
+			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 
 		})
 
@@ -624,19 +628,19 @@ var _ = Describe("Actuator", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Test normal case: current = 2, desired = 5, ratio = 2.5
-			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 2, 5, "A100")
+			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 2, 5, testAcceleratorA100)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Test scale-to-zero case: current = 0, desired = 3, ratio = 3
-			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 0, 3, "A100")
+			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 0, 3, testAcceleratorA100)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Test no-change case: current = 4, desired = 4, ratio = 1
-			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 4, 4, "A100")
+			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 4, 4, testAcceleratorA100)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Test scale-down case: current = 6, desired = 2, ratio = 0.33
-			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 6, 2, "A100")
+			err = actuator.MetricsEmitter.EmitReplicaMetrics(ctx, va, 6, 2, testAcceleratorA100)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})

@@ -94,7 +94,7 @@ func (s *CapacityKnowledgeStore) LoadFromScaleTarget(namespace, modelID, variant
 	key := storeKey(namespace, modelID, variantName)
 
 	// Don't overwrite live data
-	if existing, ok := s.records[key]; ok && existing.LearnedFrom == "live" {
+	if existing, ok := s.records[key]; ok && existing.LearnedFrom == learnedFromLive {
 		return
 	}
 
@@ -178,7 +178,7 @@ func (s *CapacityKnowledgeStore) FindCompatible(modelID, accelerator string, gpu
 		}
 
 		// Prefer live data over deployment/lws-derived
-		if best == nil || (best.LearnedFrom != "live" && rec.LearnedFrom == "live") {
+		if best == nil || (best.LearnedFrom != "live" && rec.LearnedFrom == learnedFromLive) {
 			best = rec
 		}
 	}

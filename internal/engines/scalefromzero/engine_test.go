@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 
 	vav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	poolreconciler "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
@@ -153,10 +154,12 @@ func TestSingleInactiveVariant(t *testing.T) {
 
 			// (2) Create scalefromzero engine loop
 			mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+			fakeRecorder := record.NewFakeRecorder(100)
 
 			engine := &Engine{
 				client:         fakeClient,
 				executor:       nil,
+				recorder:       fakeRecorder,
 				Datastore:      ds,
 				DynamicClient:  fakeDynamicClient,
 				Mapper:         mapper,
@@ -235,10 +238,12 @@ func TestMultipleInactiveVariants(t *testing.T) {
 	}
 
 	mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+	fakeRecorder := record.NewFakeRecorder(100)
 
 	engine := &Engine{
 		client:         fakeClient,
 		executor:       nil,
+		recorder:       fakeRecorder,
 		Datastore:      ds,
 		DynamicClient:  fakeDynamicClient,
 		Mapper:         mapper,
@@ -332,10 +337,12 @@ func TestEmptyInactiveVariants(t *testing.T) {
 	}
 
 	mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+	fakeRecorder := record.NewFakeRecorder(100)
 
 	engine := &Engine{
 		client:         fakeClient,
 		executor:       nil,
+		recorder:       fakeRecorder,
 		Datastore:      ds,
 		DynamicClient:  fakeDynamicClient,
 		Mapper:         mapper,
@@ -463,10 +470,12 @@ func TestNamespacedMetricsSourceLookup(t *testing.T) {
 			}
 
 			mapper := testrestmapper.TestOnlyStaticRESTMapper(scheme, schema.GroupVersion{Group: "apps", Version: "v1"})
+			fakeRecorder := record.NewFakeRecorder(100)
 
 			engine := &Engine{
 				client:         fakeClient,
 				executor:       nil,
+				recorder:       fakeRecorder,
 				Datastore:      ds,
 				DynamicClient:  fakeDynamicClient,
 				Mapper:         mapper,
@@ -483,13 +492,11 @@ func TestNamespacedMetricsSourceLookup(t *testing.T) {
 			if tt.expectSkip {
 				// When pool is not found (different namespace), we expect nil error (skip)
 				assert.NoError(t, err, "Expected no error (skip) for: %s, but got: %v", tt.skipReason, err)
-			} else {
+			} else if err != nil && errors.Is(err, datastore.ErrPoolNotSynced) {
 				// When pool is found, we expect it to proceed
 				// It may error on EPP metrics refresh (which is expected in test environment)
 				// but it should NOT error on "pool not found"
-				if err != nil && errors.Is(err, datastore.ErrPoolNotSynced) {
-					t.Errorf("Should have found pool in same namespace, but got: %v", err)
-				}
+				t.Errorf("Should have found pool in same namespace, but got: %v", err)
 			}
 		})
 	}

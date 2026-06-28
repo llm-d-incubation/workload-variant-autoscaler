@@ -3,10 +3,12 @@ package fixtures
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,15 +19,32 @@ import (
 // CreateModelService creates the model-server Deployment only (name + "-decode").
 // It does not create a Kubernetes Service; callers must use CreateService or EnsureService
 // (typically naming the Service name + "-service") to expose the deployment.
-func CreateModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
-	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
+// vaName is the name of the VariantAutoscaling resource that will monitor this deployment;
+// it is stamped as the llm-d.ai/variant label on the pod template so Prometheus metrics
+// can be attributed to the correct VA. Pass "" if no VA monitors this deployment.
+func CreateModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int) error {
+	return CreateModelServiceWithExtraArgs(ctx, k8sClient, namespace, name, poolName, modelID, vaName, useSimulator, maxNumSeqs, nil)
+}
+
+// CreateModelServiceWithExtraArgs is like CreateModelService but appends additional
+// CLI args to the model-server (simulator or vLLM) container. Used by tests that
+// need to inject engine-specific configuration such as --fake-metrics.
+//
+// The caller is responsible for ensuring extraArgs are valid for the chosen
+// runtime — this function performs no flag validation. Engine-specific flags
+// (e.g., --fake-metrics, which exists only on llm-d-inference-sim) will cause
+// the container to crash-loop if passed to the wrong runtime. Tests that use
+// simulator-only flags should gate their suite on `cfg.UseSimulator` and Skip
+// otherwise.
+func CreateModelServiceWithExtraArgs(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, extraArgs []string) error {
+	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, vaName, useSimulator, maxNumSeqs, extraArgs)
 	_, err := k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	return err
 }
 
 // DeleteModelService deletes the model service deployment. Idempotent; ignores NotFound.
 func DeleteModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name string) error {
-	deploymentName := name + "-decode"
+	deploymentName := name + decodeNameSuffix
 	err := k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("delete model service deployment %s: %w", deploymentName, err)
@@ -35,33 +54,36 @@ func DeleteModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 
 // EnsureModelService creates or replaces the model-server Deployment only (name + "-decode").
 // It does not create a Kubernetes Service; pair with EnsureService for a ClusterIP Service.
-func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) error {
-	appLabel := name + "-decode"
+// vaName is the name of the VariantAutoscaling resource that will monitor this deployment;
+// it is stamped as the llm-d.ai/variant label on the pod template so Prometheus metrics
+// can be attributed to the correct VA. Pass "" if no VA monitors this deployment.
+func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int) error {
+	appLabel := name + decodeNameSuffix
 	deploymentName := appLabel
+	desiredDeployment := buildModelServiceDeployment(namespace, name, poolName, modelID, vaName, useSimulator, maxNumSeqs, nil)
 
 	existingDeployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
-	if err == nil {
-		if existingDeployment.Status.ReadyReplicas > 0 {
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
+		}
+	} else {
+		if existingDeployment.Status.ReadyReplicas > 0 && modelServiceDeploymentMatchesDesired(*existingDeployment, *desiredDeployment) {
 			return nil
 		}
 		propagationPolicy := metav1.DeletePropagationForeground
 		deleteErr := k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{
 			PropagationPolicy: &propagationPolicy,
 		})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			if !errors.IsConflict(deleteErr) {
-				return fmt.Errorf("delete existing deployment %s: %w", deploymentName, deleteErr)
-			}
+		if deleteErr != nil && !errors.IsNotFound(deleteErr) && !errors.IsConflict(deleteErr) {
+			return fmt.Errorf("delete existing deployment %s: %w", deploymentName, deleteErr)
 		}
 		if err := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); err != nil {
 			return fmt.Errorf("timeout waiting for deployment %s to be deleted: %w", deploymentName, err)
 		}
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing deployment %s: %w", deploymentName, err)
 	}
 
-	deployment := buildModelServiceDeployment(namespace, name, poolName, modelID, useSimulator, maxNumSeqs)
-	_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, desiredDeployment, metav1.CreateOptions{})
 	if err != nil && errors.IsAlreadyExists(err) {
 		propagationPolicy := metav1.DeletePropagationForeground
 		_ = k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, metav1.DeleteOptions{
@@ -70,26 +92,36 @@ func EnsureModelService(ctx context.Context, k8sClient *kubernetes.Clientset, na
 		if waitErr := WaitUntilDeploymentDeleted(ctx, k8sClient, namespace, deploymentName, 2*time.Minute); waitErr != nil {
 			return fmt.Errorf("timeout waiting for deployment %s to be deleted before recreate: %w", deploymentName, waitErr)
 		}
-		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
+		_, err = k8sClient.AppsV1().Deployments(namespace).Create(ctx, desiredDeployment, metav1.CreateOptions{})
 	}
 	return err
 }
 
-func buildModelServiceDeployment(namespace, name, poolName, modelID string, useSimulator bool, maxNumSeqs int) *appsv1.Deployment {
-	appLabel := name + "-decode"
-	image := "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
+func modelServiceDeploymentMatchesDesired(existing, desired appsv1.Deployment) bool {
+	return apiequality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) &&
+		apiequality.Semantic.DeepEqual(existing.Spec.Template.Labels, desired.Spec.Template.Labels) &&
+		apiequality.Semantic.DeepEqual(existing.Spec.Template.Spec, desired.Spec.Template.Spec)
+}
+
+func buildModelServiceDeployment(namespace, name, poolName, modelID, vaName string, useSimulator bool, maxNumSeqs int, extraArgs []string) *appsv1.Deployment {
+	appLabel := name + decodeNameSuffix
+	image := defaultModelServiceSimulatorImage
 	if !useSimulator {
-		image = "ghcr.io/llm-d/llm-d-cuda-dev:latest"
+		image = defaultModelServiceRuntimeImage
 	}
-	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs)
+	args := buildModelServerArgs(modelID, useSimulator, maxNumSeqs, extraArgs)
 	labels := map[string]string{
-		"app":                        appLabel,
-		"llm-d.ai/inferenceServing":  "true",
-		"llm-d.ai/model":             "ms-sim-llm-d-modelservice",
-		"llm-d.ai/model-pool":        poolName,
-		"test-resource":              "true",
-		"llm-d.ai/guide":             "workload-autoscaling",
-		"llm-d.ai/inference-serving": "true",
+		"app":                          appLabel,
+		"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
+		"llm-d.ai/model":               defaultModelServiceLabelValue,
+		"llm-d.ai/model-pool":          poolName,
+		"test-resource":                defaultTestResourceLabelValue,
+		"llm-d.ai/guide":               defaultGuideLabelValue,
+		"llm-d.ai/inference-serving":   defaultLabelValueTrue,
+		"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
+	}
+	if vaName != "" {
+		labels["llm-d.ai/variant"] = vaName
 	}
 
 	envVars := []corev1.EnvVar{
@@ -105,8 +137,8 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 			corev1.EnvVar{Name: "HF_HOME", Value: "/model-cache"},
 			corev1.EnvVar{Name: "HF_TOKEN", ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "llm-d-hf-token"},
-					Key:                  "HF_TOKEN",
+					LocalObjectReference: corev1.LocalObjectReference{Name: defaultHFTokenSecretName},
+					Key:                  defaultHFTokenSecretKey,
 				},
 			}},
 		)
@@ -133,12 +165,13 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app":                        appLabel,
-					"llm-d.ai/inferenceServing":  "true",
-					"llm-d.ai/model":             "ms-sim-llm-d-modelservice",
-					"llm-d.ai/model-pool":        poolName,
-					"llm-d.ai/guide":             "workload-autoscaling",
-					"llm-d.ai/inference-serving": "true",
+					"app":                          appLabel,
+					"llm-d.ai/inferenceServing":    defaultLabelValueTrue,
+					"llm-d.ai/model":               defaultModelServiceLabelValue,
+					"llm-d.ai/model-pool":          poolName,
+					"llm-d.ai/guide":               defaultGuideLabelValue,
+					"llm-d.ai/inference-serving":   defaultLabelValueTrue,
+					"llm-d.ai/accelerator-variant": defaultAcceleratorVariantValue,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -151,7 +184,7 @@ func buildModelServiceDeployment(namespace, name, poolName, modelID string, useS
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Args:            args,
 							Ports: []corev1.ContainerPort{
-								{Name: "http", ContainerPort: 8000, Protocol: corev1.ProtocolTCP},
+								{Name: defaultServicePortName, ContainerPort: defaultModelServiceContainerPort, Protocol: corev1.ProtocolTCP},
 							},
 							Env:          envVars,
 							Resources:    buildModelServiceResources(useSimulator),
@@ -194,7 +227,11 @@ func buildModelServiceResources(useSimulator bool) corev1.ResourceRequirements {
 	}
 }
 
-func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int) []string {
+func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int, extraArgs []string) []string {
+	return append(buildModelServerBaseArgs(modelID, useSimulator, maxNumSeqs), extraArgs...)
+}
+
+func buildModelServerBaseArgs(modelID string, useSimulator bool, maxNumSeqs int) []string {
 	if useSimulator {
 		// Simulator is configured to be deliberately slow so that Prometheus
 		// can observe non-zero KV-cache and queue metrics between scrapes (every 15s).
@@ -221,20 +258,19 @@ func buildModelServerArgs(modelID string, useSimulator bool, maxNumSeqs int) []s
 		return []string{
 			"--model", modelID,
 			"--port", "8000",
-			fmt.Sprintf("--time-to-first-token=%s", simulatorTTFT),
-			fmt.Sprintf("--inter-token-latency=%s", simulatorITL),
+			"--time-to-first-token=" + simulatorTTFT,
+			"--inter-token-latency=" + simulatorITL,
 			"--mode=random",
 			"--enable-kvcache",
 			fmt.Sprintf("--kv-cache-size=%d", simulatorKVCacheSize),
 			fmt.Sprintf("--block-size=%d", simulatorBlockSize),
-			"--tokenizers-cache-dir=/tmp",
-			"--max-num-seqs", fmt.Sprintf("%d", maxNumSeqs),
-			"--max-model-len", fmt.Sprintf("%d", simulatorMaxModelLen),
+			"--max-num-seqs", strconv.Itoa(maxNumSeqs),
+			"--max-model-len", strconv.Itoa(simulatorMaxModelLen),
 		}
 	}
 	return []string{
 		"--model", modelID,
-		"--max-num-seqs", fmt.Sprintf("%d", maxNumSeqs),
+		"--max-num-seqs", strconv.Itoa(maxNumSeqs),
 		"--max-model-len", "1024",
 		"--served-model-name", modelID,
 		"--disable-log-requests",

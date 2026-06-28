@@ -1,0 +1,26 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: controller-manager-metrics-monitor
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: workload-variant-autoscaler
+    release: kube-prometheus-stack
+spec:
+  endpoints:
+    - interval: 10s
+      path: /metrics
+      port: https
+      scheme: https
+      # Use the Prometheus pod's auto-mounted ServiceAccount token.
+      # Pair this with a (Cluster)RoleBinding that grants Prometheus the
+      # metrics-reader role (see metrics-reader-clusterrolebinding.yaml).
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # WVA metrics endpoint uses self-signed certificates, so Prometheus must skip verification
+        # This is separate from WVA->Prometheus TLS verification
+        insecureSkipVerify: true
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: workload-variant-autoscaler

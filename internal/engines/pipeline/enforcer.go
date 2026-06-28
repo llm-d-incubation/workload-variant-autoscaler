@@ -8,8 +8,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 )
 
@@ -23,12 +25,14 @@ type Enforcer struct {
 	// requestCountFunc is a function that returns the total request count for a model.
 	// Injected for testability.
 	requestCountFunc RequestCountFuncType
+	metricsEmitter   *metrics.MetricsEmitter
 }
 
 // NewEnforcer creates a new scale-to-zero enforcer.
 func NewEnforcer(requestCountFunc RequestCountFuncType) *Enforcer {
 	return &Enforcer{
 		requestCountFunc: requestCountFunc,
+		metricsEmitter:   metrics.NewMetricsEmitter(),
 	}
 }
 
@@ -84,9 +88,11 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 
 	requestCount, err := e.requestCountFunc(ctx, modelID, namespace, retentionPeriod)
 	if err != nil {
-		logger.Error(err, "Failed to get request count, keeping current decisions",
+		errorType := "Failed to get request count, keeping current decisions"
+		logger.Error(err, errorType,
 			"modelID", modelID,
 			"namespace", namespace)
+		metrics.RecordError(constants.ComponentEnforcer, errorType)
 		return false
 	}
 
@@ -110,7 +116,7 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 			continue
 		}
 		d.TargetReplicas = 0
-		updateDecisionAction(d, optimizerName)
+		updateDecisionAction(d, optimizerName, constants.EnforcerPolicyTypeScaleToZero, e.metricsEmitter)
 	}
 
 	return true
@@ -161,7 +167,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 
 	if cheapestIdx >= 0 {
 		decisions[cheapestIdx].TargetReplicas = 1
-		updateDecisionAction(&decisions[cheapestIdx], optimizerName)
+		updateDecisionAction(&decisions[cheapestIdx], optimizerName, constants.EnforcerPolicyTypeMinimumReplicas, e.metricsEmitter)
 		logger.Info("Preserving minimum replica on cheapest variant (scale-to-zero disabled)",
 			"modelID", modelID,
 			"variant", decisions[cheapestIdx].VariantName,
@@ -172,17 +178,28 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 	return false
 }
 
-// updateDecisionAction updates a decision's Action and Reason fields based on
-// the current TargetReplicas vs CurrentReplicas after enforcement.
-func updateDecisionAction(d *interfaces.VariantDecision, optimizerName string) {
+// updateDecisionAction recomputes a decision's Action from TargetReplicas vs
+// CurrentReplicas after enforcement and refreshes its reason. SetDecisionReason
+// is the single place that writes d.Action.
+func updateDecisionAction(d *interfaces.VariantDecision, optimizerName, policyType string, metricsEmitter *metrics.MetricsEmitter) {
+	var action interfaces.SaturationAction
 	switch {
 	case d.TargetReplicas > d.CurrentReplicas:
-		d.Action = interfaces.ActionScaleUp
+		action = interfaces.ActionScaleUp
 	case d.TargetReplicas < d.CurrentReplicas:
-		d.Action = interfaces.ActionScaleDown
+		action = interfaces.ActionScaleDown
 	default:
-		d.Action = interfaces.ActionNoChange
+		action = interfaces.ActionNoChange
 	}
-	d.Reason = fmt.Sprintf("V2 %s (optimizer: %s, enforced)", d.Action, optimizerName)
-}
+	// Preserve the decision's original reason category (e.g. saturation-only on
+	// the V1 path) instead of hardcoding V2, so an enforced decision is not
+	// mis-attributed in the reason metric label. Fall back to V2 if it was unset.
+	category := d.ReasonCategory()
+	if category == "" {
+		category = interfaces.DecisionReasonV2
+	}
+	d.SetDecisionReason(action, category, fmt.Sprintf("%s %s (optimizer: %s, enforced)", category, action, optimizerName))
 
+	// finally record metric
+	metricsEmitter.RecordEnforcerMetric(policyType)
+}

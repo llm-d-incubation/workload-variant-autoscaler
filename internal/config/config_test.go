@@ -66,7 +66,7 @@ func TestConfig_ThreadSafeUpdates(t *testing.T) {
 	// Spawn writer goroutines that continuously update DynamicConfig
 	for i := 0; i < numWriters; i++ {
 		wg.Add(1)
-		go func(writerID int) {
+		go func(_ int) {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
 

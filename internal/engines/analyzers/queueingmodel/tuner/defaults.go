@@ -1,8 +1,6 @@
 package tuner
 
-/**
- * Default filter parameters
- */
+// Default filter parameters
 
 // infinitesimal value to check float equality
 const DefaultEpsilon = 1e-6

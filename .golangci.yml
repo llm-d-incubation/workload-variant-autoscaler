@@ -1,0 +1,47 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - dupword
+    - durationcheck
+    - errcheck
+    - fatcontext
+    - ginkgolinter
+    - goconst
+    - gocritic
+    - govet
+    - ineffassign
+    - loggercheck
+    - makezero
+    - misspell
+    - nakedret
+    - perfsprint
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+  settings:
+    revive:
+      rules:
+        - name: comment-spacings
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters: [staticcheck]
+        text: "SA1019:.*Accelerator.*is deprecated"
+    paths:
+      - bin
+formatters:
+  enable:
+    - gofmt
+    - goimports

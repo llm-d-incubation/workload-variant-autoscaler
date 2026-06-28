@@ -1,0 +1,37 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sample-deployment-hpa
+  namespace: llm-d-sim
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-deployment
+  # minReplicas: 0  # scale to zero - alpha feature
+  maxReplicas: 2
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Pods
+        value: 10
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Pods
+        value: 10
+        periodSeconds: 15
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: wva_desired_replicas
+        selector:
+          matchLabels:
+            variant_name: sample-deployment
+            exported_namespace: llm-d-sim
+      target:
+        type: AverageValue
+        averageValue: "1"

@@ -20,7 +20,7 @@ type SharedConfig struct {
 
 	// Infrastructure mode
 	UseSimulator bool   // true for emulated GPUs, false for real vLLM
-	GPUType      string // "nvidia-mix", "amd-mix", "real"
+	GPUType      string // "nvidia-mix", "amd-mix", "real"...
 
 	// Scaler backend: "prometheus-adapter" (HPA) or "keda" (ScaledObject)
 	ScalerBackend string
@@ -31,10 +31,10 @@ type SharedConfig struct {
 	EPPMode          string            // "poolName" or "endpointSelector"
 	PoolName         string            // InferencePool name (if using poolName mode)
 	EndpointSelector map[string]string // Pod selector (if using endpointSelector)
-	EPPServiceName   string            // EPP service name (e.g., "gaie-inference-scheduling-epp")
+	EPPServiceName   string            // EPP service name (e.g. optimized-baseline-epp; matches GAIE chart release name + "-epp")
 
 	// Model configuration
-	ModelID         string // e.g., "unsloth/Meta-Llama-3.1-8B"
+	ModelID         string // e.g., "e2ewva/dummy-model" (dummy name avoids vLLM Render sidecar requirement in v0.9.0+)
 	AcceleratorType string // e.g., "H100", "A100" (must be valid Kubernetes label value)
 	MaxNumSeqs      int    // vLLM batch size (lower = easier to saturate)
 
@@ -52,10 +52,7 @@ type SharedConfig struct {
 // LoadSharedConfig reads the shared test configuration from environment variables.
 func LoadSharedConfig() SharedConfig {
 	env := GetEnv("ENVIRONMENT", "kind-emulator")
-	eppServiceDefault := "gaie-inference-scheduling-epp"
-	if env == "kind-emulator" {
-		eppServiceDefault = "gaie-sim-epp"
-	}
+	eppServiceDefault := "optimized-baseline-epp"
 
 	return SharedConfig{
 		Environment: env,
@@ -76,7 +73,7 @@ func LoadSharedConfig() SharedConfig {
 		EndpointSelector: ParseEndpointSelector(GetEnv("ENDPOINT_SELECTOR", "")),
 		EPPServiceName:   GetEnv("EPP_SERVICE_NAME", eppServiceDefault),
 
-		ModelID:         GetEnv("MODEL_ID", "unsloth/Meta-Llama-3.1-8B"),
+		ModelID:         GetEnv("MODEL_ID", "e2ewva/dummy-model"),
 		AcceleratorType: GetEnv("ACCELERATOR_TYPE", "H100"),
 		MaxNumSeqs:      GetEnvInt("MAX_NUM_SEQS", 5),
 

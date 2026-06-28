@@ -37,10 +37,12 @@ import (
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
@@ -83,13 +85,14 @@ func NewVariantAutoscalingReconciler(
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets/scale,verbs=get;update
 // +kubebuilder:rbac:groups="apps",resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;update;list;watch
 // Note: The broad ConfigMap permission above is required for namespace-local ConfigMap overrides.
-// The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config)
+// The controller filters by well-known names (wva-saturation-scaling-config, wva-model-scale-to-zero-config — deployed names include the wva- namePrefix)
 // in its predicate logic, providing effective access control.
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Note: Namespace watch permission is required for label-based namespace opt-in for namespace-local ConfigMaps.
@@ -100,7 +103,7 @@ func NewVariantAutoscalingReconciler(
 
 const (
 	// ServiceMonitor constants for watching controller's own metrics ServiceMonitor
-	defaultServiceMonitorName = "workload-variant-autoscaler-controller-manager-metrics-monitor"
+	defaultServiceMonitorName = "wva-controller-manager-metrics-monitor"
 )
 
 var (
@@ -129,9 +132,11 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				"namespace", req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Unable to fetch VariantAutoscaling",
+		errorType := "Unable to fetch VariantAutoscaling"
+		logger.Error(err, errorType,
 			"name", req.Name,
 			"namespace", req.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -146,6 +151,32 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// Untrack namespace when VA is deleted
 		r.Datastore.NamespaceUntrack("VariantAutoscaling", va.Name, va.Namespace)
 		return ctrl.Result{}, nil
+	}
+
+	// Emit a once-per-VA deprecation notice. The annotation persists across
+	// controller restarts, ensuring the warning fires exactly once per VA object.
+	if va.Annotations == nil || va.Annotations["llm-d.ai/deprecation-warned"] != "true" {
+		logger.Info("VariantAutoscaling is deprecated; migrate to the annotation-based path",
+			"name", va.Name,
+			"namespace", va.Namespace,
+			"migration", "docs/developer-guide/migrating-from-va-crd.md")
+		patch := client.MergeFrom(va.DeepCopy())
+		if va.Annotations == nil {
+			va.Annotations = map[string]string{}
+		}
+		va.Annotations["llm-d.ai/deprecation-warned"] = "true"
+		if err := r.Patch(ctx, &va, patch); err != nil {
+			logger.Error(err, "Failed to patch deprecation-warned annotation",
+				"name", va.Name, "namespace", va.Namespace)
+			return ctrl.Result{}, err
+		}
+		if r.Recorder != nil {
+			r.Recorder.Event(&va, corev1.EventTypeWarning, "Deprecated",
+				"VariantAutoscaling is deprecated and will be removed in a future release. "+
+					"Migrate to the annotation-based path (add llm-d.ai/managed=true to your HPA or ScaledObject). "+
+					"See docs/developer-guide/migrating-from-va-crd.md.")
+		}
+		originalVA = va.DeepCopy()
 	}
 
 	// Track namespace for namespace-local ConfigMap watching
@@ -173,7 +204,9 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 				fmt.Sprintf("Scale target %s %s not found", va.Spec.ScaleTargetRef.Kind, scaleTargetName))
 
 			if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-				logger.Error(err, "Failed to update VariantAutoscaling status")
+				errorType := "Failed to update VariantAutoscaling status"
+				logger.Error(err, errorType)
+				metrics.RecordError(constants.ComponentController, errorType)
 				return ctrl.Result{}, err
 			}
 
@@ -181,9 +214,12 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			// when the scale target is created
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, fmt.Sprintf("Failed to get scale target %s", va.Spec.ScaleTargetRef.Kind),
+		errorType := "Failed to get scale target"
+		logger.Error(err, errorType,
 			"name", scaleTargetName,
-			"namespace", va.Namespace)
+			"namespace", va.Namespace,
+			"scale target", va.Spec.ScaleTargetRef.Kind)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -209,7 +245,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			"metricsAvailable", decision.MetricsAvailable,
 			"metricsReason", decision.MetricsReason,
 			"metricsMessage", decision.MetricsMessage,
-			"reason", decision.Reason)
+			"reason", decision.Reason())
 		// Only apply if the decision is fresher than the last one applied or if we haven't applied it
 		// Note: We blindly apply for now, assuming the Engine acts as the source of truth for "Desired" state
 		numReplicas, accelerator, lastRunTime := common.DecisionToOptimizedAlloc(decision)
@@ -217,7 +253,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// Only update DesiredOptimizedAlloc if we have a valid accelerator (required by CRD).
 		// Note: numReplicas may legitimately be 0 for scale-to-zero scenarios.
 		// Replace the entire struct to ensure all required fields are included in the patch.
-		if accelerator != "" {
+		// IsAcceleratorResolved (rather than a bare empty-string check) also rejects the
+		// internal sentinel value, providing defense in depth against the engine cache
+		// ever propagating it here.
+		if constants.IsAcceleratorResolved(accelerator) {
 			va.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
 				NumReplicas: numReplicas,
 				Accelerator: accelerator,
@@ -253,8 +292,10 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// and the CRD validates the partial patch — rejecting it when required
 	// fields (numReplicas, accelerator) are absent. See: #731
 	if err := r.Status().Patch(ctx, &va, client.MergeFrom(fullDesiredAllocPatchBase(originalVA, &va))); err != nil {
-		logger.Error(err, "Failed to update VariantAutoscaling status",
+		errorType := "Failed to update VariantAutoscaling status"
+		logger.Error(err, errorType,
 			"name", va.Name)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return ctrl.Result{}, err
 	}
 
@@ -272,7 +313,7 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 // the base is left unchanged so the zero-valued struct is not included.
 func fullDesiredAllocPatchBase(originalVA *llmdVariantAutoscalingV1alpha1.VariantAutoscaling, va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling) *llmdVariantAutoscalingV1alpha1.VariantAutoscaling {
 	base := originalVA.DeepCopy()
-	if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+	if constants.IsAcceleratorResolved(va.Status.DesiredOptimizedAlloc.Accelerator) {
 		// Zero out the base so the entire modified desiredOptimizedAlloc
 		// appears as a change and is fully included in the merge patch.
 		base.Status.DesiredOptimizedAlloc = llmdVariantAutoscalingV1alpha1.OptimizedAlloc{}
@@ -295,9 +336,11 @@ func (r *VariantAutoscalingReconciler) handleDeploymentEvent(ctx context.Context
 	// Use indexed lookup for VA targeting this Deployment
 	va, err := indexers.FindVAForDeployment(ctx, r.Client, deploy.Name, deploy.Namespace)
 	if err != nil {
-		logger.Error(err, "Failed to find VA for deployment event using index",
+		errorType := "Failed to find VA for deployment event using index"
+		logger.Error(err, errorType,
 			"deployment", deploy.Name,
 			"namespace", deploy.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return nil
 	}
 
@@ -333,9 +376,11 @@ func (r *VariantAutoscalingReconciler) handleLeaderWorkerSetEvent(ctx context.Co
 	// Use indexed lookup for VA targeting this LeaderWorkerSet
 	va, err := indexers.FindVAForLeaderWorkerSet(ctx, r.Client, lws.Name, lws.Namespace)
 	if err != nil {
-		logger.Error(err, "Failed to find VA for leaderWorkerSet event using index",
+		errorType := "Failed to find VA for leaderWorkerSet event using index"
+		logger.Error(err, errorType,
 			"leaderWorkerSet", lws.Name,
 			"namespace", lws.Namespace)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return nil
 	}
 

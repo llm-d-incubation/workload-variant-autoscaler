@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -84,6 +85,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("WVA_LIMITED_MODE", false)
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
+	v.SetDefault("EXPERIMENTAL_COORDINATOR_ENABLED", false)
+	v.SetDefault("COORDINATOR_INTERVAL", "15s")
 
 	// Load from config file (mounted in the container) — sits between env and defaults in precedence
 	if configFilePath != "" {
@@ -148,13 +151,18 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 		namespaceConfigs: make(map[string]ScaleToZeroConfigData),
 	}
 
+	cfg.coordinator = coordinatorConfig{
+		enabled:  v.GetBool("EXPERIMENTAL_COORDINATOR_ENABLED"),
+		interval: v.GetDuration("COORDINATOR_INTERVAL"),
+	}
+
 	// Prometheus cache config from config file / env / defaults
 	cfg.prometheus.cache = parsePrometheusCacheConfigFromViper(v)
 
 	// Prometheus connection config from config file / env
 	promBaseURL := v.GetString("PROMETHEUS_BASE_URL")
 	if promBaseURL == "" {
-		return fmt.Errorf("prometheus configuration is required but not found. " +
+		return errors.New("prometheus configuration is required but not found. " +
 			"set PROMETHEUS_BASE_URL in config file or environment variable")
 	}
 	cfg.prometheus.baseURL = promBaseURL

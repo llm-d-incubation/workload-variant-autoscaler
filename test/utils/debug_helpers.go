@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,7 +64,7 @@ func DumpVAStatus(ctx context.Context, crClient client.Client, w io.Writer) {
 		_, _ = fmt.Fprintf(w, "    Accelerator: %s\n", va.Status.DesiredOptimizedAlloc.Accelerator)
 		replicas := "<nil>"
 		if nr := va.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
-			replicas = fmt.Sprintf("%d", *nr)
+			replicas = strconv.Itoa(int(*nr))
 		}
 		_, _ = fmt.Fprintf(w, "    NumReplicas: %s\n", replicas)
 		_, _ = fmt.Fprintf(w, "    LastRunTime: %v\n", va.Status.DesiredOptimizedAlloc.LastRunTime)

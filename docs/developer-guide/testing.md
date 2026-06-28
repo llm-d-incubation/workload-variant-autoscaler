@@ -144,31 +144,35 @@ WVA provides a **single consolidated E2E suite** that runs on multiple environme
 
 E2E is intended to be a **deterministic correctness signal**: resource wiring, reconciliation, and stable invariants (e.g., CRs reconcile, status conditions are set, scalers are created and point at the right targets/metrics). Traffic generation and performance/benchmarking scenarios should live outside `test/e2e/`.
 
-### Infra-Only Setup (Required Before Running Tests)
+### E2E shared fixtures
 
-Tests expect **only** the WVA controller and llm-d infrastructure to be deployed; they create VariantAutoscaling resources, HPAs, and model services themselves. Use the install script in **infra-only** mode:
+Code lives under `test/e2e/fixtures`. The `fixtures` package holds reusable helpers to create, ensure (idempotent setup), and delete Kubernetes objects used by the e2e suite (VariantAutoscaling, HPA, KEDA ScaledObject, model services, Services, ServiceMonitors, InferenceObjective, etc.). Package-level documentation and naming conventions (`Create*` / `Ensure*` / `Delete*`, `baseName` vs full resource names) live in the package doc:
 
 ```bash
-# From repository root: deploy only WVA + llm-d infrastructure (no VA/HPA/model services)
-cd deploy
-export ENVIRONMENT="kind-emulator"   # or "openshift", "kubernetes"
-export INFRA_ONLY=true
-./install.sh
-# Or: ./install.sh --infra-only
+go doc ./test/e2e/fixtures
 ```
 
-This deploys:
-- WVA controller
-- llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
-- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
-- **No** VariantAutoscaling, HPA, or model services (tests create these)
+After changing fixture APIs or generated object shape, compile e2e without running specs:
 
-When `E2E_TESTS_ENABLED=true` (or `ENABLE_SCALE_TO_ZERO=true`), the deploy script enables **GIE queuing** by patching the EPP with `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER=true`. For **e2e**, the **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by `install.sh`. For non-e2e scale-to-zero (`ENABLE_SCALE_TO_ZERO=true` without e2e), `install.sh` still applies `deploy/inference-objective-e2e.yaml`. Queuing helps populate `inference_extension_flow_control_queue_size` when requests hit the gateway.
+```bash
+go test ./test/e2e/... -run TestDoesNotExist
+```
+
+### Infra-Only Setup (Required Before Running Tests)
+
+Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; they create VariantAutoscaling resources, HPAs, and model workloads themselves. Use **`make deploy-e2e-infra`** (runs `deploy/install.sh` then `deploy/install-epp.sh`) or invoke those scripts with the same environment variables the Makefile sets.
+
+This deploys:
+- WVA controller (via Kustomize)
+- llm-d EPP (GAIE standalone chart) via `deploy/install-epp.sh`
+- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
+- **No** VariantAutoscaling or HPA (tests create these)
+
+When `ENABLE_SCALE_TO_ZERO=true` (set by `make deploy-e2e-infra` when `SCALE_TO_ZERO_ENABLED=true`), **`install-epp.sh`** enables the **flowControl feature gate** on the EPP so it exposes `inference_extension_flow_control_queue_size`. The **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts.
 
 **Install script tuning (optional, same variables as `deploy/install.sh`):**
 
 - **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.
-- **`E2E_DEPLOY_WAIT_TIMEOUT`**: For infra-only e2e deploys (`INFRA_ONLY=true` with `E2E_TESTS_ENABLED=true`), caps the `kubectl wait` for the EPP and inference-gateway deployments (default **`120s`**). Raise it if image pulls rollouts routinely exceed that window.
 
 Alternatively, use the Makefile to deploy infra and run tests in one go:
 
@@ -221,7 +225,7 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
 | `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
 
-Deploy-time knobs (passed through when you run `./deploy/install.sh` or `make deploy-e2e-infra`): `SKIP_HELM_REPO_UPDATE`, `E2E_DEPLOY_WAIT_TIMEOUT` — see **Install script tuning** above.
+Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile patches the `wva-saturation-scaling-config` ConfigMap when set) — see **Install script tuning** above.
 
 For running multiple test runs in parallel, use [multi-controller isolation](../user-guide/multi-controller-isolation.md) (`CONTROLLER_INSTANCE`).
 
@@ -268,7 +272,6 @@ Infrastructure is deployed in **infra-only** mode (WVA + llm-d only); tests crea
 Runs OpenShift E2E tests on dedicated cluster:
 - Triggered manually or on specific labels
 - Deploys PR-specific namespaces
-- Runs multi-model tests
 - On failure: automatically scales down GPU workloads while preserving debugging resources (VA, HPA, logs)
 - Smart resource management frees GPUs for other PRs without manual intervention
 
@@ -463,11 +466,11 @@ go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="full && !flaky" -timeout 
 # For Kind E2E tests (default cluster name: kind-wva-gpu-cluster or from CLUSTER_NAME)
 export KUBECONFIG=~/.kube/config   # or path from kind get kubeconfig
 kubectl get pods -A
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 
 # For OpenShift E2E tests
 oc get pods -A
-oc logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+oc logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Keep Cluster Alive After Failure
@@ -496,7 +499,7 @@ make test-e2e-smoke-with-setup
 ```bash
 kubectl get events -A --sort-by='.lastTimestamp'
 kubectl describe va -n <namespace>
-kubectl logs -n workload-variant-autoscaler-system deployment/workload-variant-autoscaler-controller-manager
+kubectl logs -n workload-variant-autoscaler-system deployment/controller-manager
 ```
 
 #### Metrics Not Available

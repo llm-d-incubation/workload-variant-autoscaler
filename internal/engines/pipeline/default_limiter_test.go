@@ -5,9 +5,19 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
+
+func init() {
+	// Initialize metrics for all limiter tests
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		panic("failed to initialize metrics: " + err.Error())
+	}
+}
 
 // mockInventory implements Inventory for testing
 type mockInventory struct {
@@ -80,7 +90,7 @@ type mockTypeAllocator struct {
 	availableByType map[string]int
 }
 
-func (m *mockTypeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (m *mockTypeAllocator) TryAllocate(_ context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	accelType := decision.AcceleratorName
 	if accelType == "" {
 		accelType = "default"
@@ -166,7 +176,7 @@ var _ = Describe("DefaultLimiter", func() {
 						for _, d := range decisions {
 							if d.TargetReplicas > d.CurrentReplicas {
 								gpusNeeded := (d.TargetReplicas - d.CurrentReplicas) * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								d.GPUsAllocated = allocated
 							}
 						}
@@ -206,7 +216,7 @@ var _ = Describe("DefaultLimiter", func() {
 				err := limiter.Limit(ctx, decisions)
 				Expect(err).NotTo(HaveOccurred())
 
-				Expect(len(decisions[0].DecisionSteps)).To(BeNumerically(">=", 1))
+				Expect(decisions[0].DecisionSteps).ToNot(BeEmpty())
 				lastStep := decisions[0].DecisionSteps[len(decisions[0].DecisionSteps)-1]
 				Expect(lastStep.Name).To(Equal("gpu-limiter"))
 			})
@@ -223,7 +233,7 @@ var _ = Describe("DefaultLimiter", func() {
 							if d.TargetReplicas > d.CurrentReplicas {
 								replicasNeeded := d.TargetReplicas - d.CurrentReplicas
 								gpusNeeded := replicasNeeded * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								// Calculate how many replicas we can actually add
 								replicasCanAdd := 0
 								if d.GPUsPerReplica > 0 {
@@ -283,7 +293,7 @@ var _ = Describe("DefaultLimiter", func() {
 						for _, d := range decisions {
 							if d.TargetReplicas > d.CurrentReplicas {
 								gpusNeeded := (d.TargetReplicas - d.CurrentReplicas) * d.GPUsPerReplica
-								allocated, _ := allocator.TryAllocate(d, gpusNeeded)
+								allocated, _ := allocator.TryAllocate(ctx, d, gpusNeeded)
 								d.GPUsAllocated = allocated
 							}
 						}
@@ -327,6 +337,55 @@ var _ = Describe("DefaultLimiter", func() {
 				// H100: 4 - 2 = 2 available, needs 2, gets 2
 				Expect(decisions[1].GPUsAllocated).To(Equal(2))
 			})
+		})
+	})
+
+	Describe("resolveUnknownAccelerators", func() {
+		It("should resolve empty accelerator in homogeneous cluster", func() {
+			inventory = newMockInventory("inv", map[string]int{"H100": 8})
+			algorithm = &mockAlgorithm{name: "algo"}
+			limiter = NewDefaultLimiter("limiter", inventory, algorithm)
+
+			decisions = []*interfaces.VariantDecision{
+				{VariantName: "v1", AcceleratorName: ""},
+				{VariantName: "v2", AcceleratorName: "unknown"},
+				{VariantName: "v3", AcceleratorName: "H100"},
+			}
+			limiter.resolveUnknownAccelerators(decisions)
+
+			Expect(decisions[0].AcceleratorName).To(Equal("H100"))
+			Expect(decisions[1].AcceleratorName).To(Equal("H100"))
+			Expect(decisions[2].AcceleratorName).To(Equal("H100"))
+		})
+
+		It("should not resolve in heterogeneous cluster", func() {
+			inventory = newMockInventory("inv", map[string]int{"H100": 8, "A100": 4})
+			algorithm = &mockAlgorithm{name: "algo"}
+			limiter = NewDefaultLimiter("limiter", inventory, algorithm)
+
+			decisions = []*interfaces.VariantDecision{
+				{VariantName: "v1", AcceleratorName: ""},
+				{VariantName: "v2", AcceleratorName: "unknown"},
+				{VariantName: "v3", AcceleratorName: "A100"},
+			}
+			limiter.resolveUnknownAccelerators(decisions)
+
+			Expect(decisions[0].AcceleratorName).To(Equal(""))
+			Expect(decisions[1].AcceleratorName).To(Equal("unknown"))
+			Expect(decisions[2].AcceleratorName).To(Equal("A100"))
+		})
+
+		It("should not resolve when inventory is empty", func() {
+			inventory = newMockInventory("inv", map[string]int{})
+			algorithm = &mockAlgorithm{name: "algo"}
+			limiter = NewDefaultLimiter("limiter", inventory, algorithm)
+
+			decisions = []*interfaces.VariantDecision{
+				{VariantName: "v1", AcceleratorName: "unknown"},
+			}
+			limiter.resolveUnknownAccelerators(decisions)
+
+			Expect(decisions[0].AcceleratorName).To(Equal("unknown"))
 		})
 	})
 })

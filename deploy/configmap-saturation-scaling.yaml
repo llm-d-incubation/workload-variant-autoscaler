@@ -17,6 +17,9 @@ kind: ConfigMap
 metadata:
   name: wva-saturation-scaling-config
   namespace: workload-variant-autoscaler-system
+  labels:
+    app.kubernetes.io/name: workload-variant-autoscaler
+    app.kubernetes.io/managed-by: kustomize
 data:
   # Global defaults applied to all variants unless overridden
   default: |

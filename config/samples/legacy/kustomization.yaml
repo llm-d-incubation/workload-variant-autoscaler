@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+metadata:
+  name: legacy-va-samples
+# DEPRECATED: VariantAutoscaling CRD is deprecated and will be removed.
+# These samples are kept as a migration reference only.
+# For the annotation-based approach (no CRD needed), use:
+#   config/samples/hpa/annotations/
+#   config/samples/keda/annotations/
+resources:
+- hpa-va.yaml
+- keda-va.yaml

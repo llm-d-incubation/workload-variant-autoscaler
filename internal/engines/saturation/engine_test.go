@@ -28,6 +28,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
@@ -49,23 +50,18 @@ var _ = Describe("Saturation Engine", func() {
 		data := map[string]string{}
 
 		// Build premium.yaml with all models
-		premiumModels := ""
-		freemiumModels := ""
+		var premiumBuilder, freemiumBuilder strings.Builder
 
 		for _, model := range models {
-			premiumModels += fmt.Sprintf("  - model: %s\n    slo-tpot: 24\n    slo-ttft: 500\n", model)
-			freemiumModels += fmt.Sprintf("  - model: %s\n    slo-tpot: 200\n    slo-ttft: 2000\n", model)
+			fmt.Fprintf(&premiumBuilder, "  - model: %s\n    slo-tpot: 24\n    slo-ttft: 500\n", model)
+			fmt.Fprintf(&freemiumBuilder, "  - model: %s\n    slo-tpot: 200\n    slo-ttft: 2000\n", model)
 		}
+		premiumModels := premiumBuilder.String()
+		freemiumModels := freemiumBuilder.String()
 
-		data["premium.yaml"] = fmt.Sprintf(`name: Premium
-priority: 1
-data:
-%s`, premiumModels)
+		data["premium.yaml"] = "name: Premium\npriority: 1\ndata:\n" + premiumModels
 
-		data["freemium.yaml"] = fmt.Sprintf(`name: Freemium
-priority: 10
-data:
-%s`, freemiumModels)
+		data["freemium.yaml"] = "name: Freemium\npriority: 10\ndata:\n" + freemiumModels
 
 		return &v1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -78,7 +74,7 @@ data:
 
 	Context("When handling multiple VariantAutoscalings", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 
 		BeforeEach(func() {
@@ -93,7 +89,7 @@ data:
 
 			By("creating the required configmaps")
 			// Use custom configmap creation function
-			var modelNames []string
+			modelNames := make([]string, 0, totalVAs)
 			for i := range totalVAs {
 				modelNames = append(modelNames, fmt.Sprintf("model-%d-model-%d", i, i))
 			}
@@ -219,7 +215,8 @@ data:
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -238,7 +235,7 @@ data:
 					if metricsCondition != nil && metricsCondition.Status == metav1.ConditionTrue {
 						optimizationCondition := llmdVariantAutoscalingV1alpha1.GetCondition(&va, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
 						Expect(optimizationCondition).NotTo(BeNil(),
-							fmt.Sprintf("OptimizationReady condition should be set for %s", va.Name))
+							"OptimizationReady condition should be set for "+va.Name)
 					}
 				}
 			}
@@ -268,10 +265,12 @@ data:
 				},
 			}
 
+			// Populate Role to verify it propagates to VariantDecision in the
+			// P/D-aware path (empty, prefill, decode cover the common cases).
 			variantStates := []interfaces.VariantReplicaState{
-				{VariantName: "variant-a", CurrentReplicas: 3, DesiredReplicas: 3},
-				{VariantName: "variant-b", CurrentReplicas: 3, DesiredReplicas: 3},
-				{VariantName: "variant-c", CurrentReplicas: 2, DesiredReplicas: 2},
+				{VariantName: "variant-a", CurrentReplicas: 3, DesiredReplicas: 3, Role: ""},
+				{VariantName: "variant-b", CurrentReplicas: 3, DesiredReplicas: 3, Role: "prefill"},
+				{VariantName: "variant-c", CurrentReplicas: 2, DesiredReplicas: 2, Role: "decode"},
 			}
 
 			By("Converting saturation targets to decisions")
@@ -279,11 +278,12 @@ data:
 			sourceRegistry.Register("prometheus", source.NewNoOpSource()) // nolint:errcheck
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
-			Expect(len(decisions)).To(Equal(3), "All 3 variants should have decisions including ActionNoChange")
+			Expect(decisions).To(HaveLen(3), "All 3 variants should have decisions including ActionNoChange")
 
 			By("Verifying ActionNoChange decisions are present")
 			decisionMap := make(map[string]interfaces.VariantDecision)
@@ -295,12 +295,17 @@ data:
 			Expect(decisionMap["variant-a"].Action).To(Equal(interfaces.ActionNoChange))
 			Expect(decisionMap["variant-b"].Action).To(Equal(interfaces.ActionScaleUp))
 			Expect(decisionMap["variant-c"].Action).To(Equal(interfaces.ActionNoChange))
+
+			By("Verifying Role propagates from VariantReplicaState to VariantDecision")
+			Expect(decisionMap["variant-a"].Role).To(Equal(""), "empty role must pass through unchanged")
+			Expect(decisionMap["variant-b"].Role).To(Equal("prefill"))
+			Expect(decisionMap["variant-c"].Role).To(Equal("decode"))
 		})
 	})
 
 	Context("Source Infrastructure Optimization Tests", func() {
 		const totalVAs = 3
-		const configMapName = "wva-variantautoscaling-config"
+		const configMapName = "wva-manager-config"
 		var configMapNamespace = config.SystemNamespace()
 		var sourceRegistry *source.SourceRegistry
 		var mockPromAPI *testutils.MockPromAPI
@@ -330,7 +335,7 @@ data:
 
 			By("creating the required configmaps")
 			// Use custom configmap creation function
-			var modelNames []string
+			modelNames := make([]string, 0, totalVAs)
 			for i := range totalVAs {
 				modelNames = append(modelNames, fmt.Sprintf("v2-model-%d-model-%d", i, i))
 			}
@@ -450,7 +455,8 @@ data:
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			engine := NewEngine(k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -471,6 +477,137 @@ data:
 			Expect(testVAs).To(Equal(totalVAs), "Expected all test VAs to be present")
 		})
 
+	})
+
+	Context("Optimizer selection based on EnableLimiter", func() {
+		const testName = "optimizer-toggle-test"
+		const modelID = "test-model"
+
+		BeforeEach(func() {
+			logging.NewTestLogger()
+
+			By("Creating test deployment and VA")
+			d := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: utils.Ptr(int32(1)),
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": testName},
+					},
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{"app": testName},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:  "test-container",
+									Image: "registry.k8s.io/pause:3.9",
+								},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, d)).To(Succeed())
+
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+					Labels: map[string]string{
+						utils.AcceleratorNameLabel: "A100",
+					},
+				},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						Kind: "Deployment",
+						Name: testName,
+					},
+					ModelID:     modelID,
+					MaxReplicas: 2,
+				},
+			}
+			Expect(k8sClient.Create(ctx, va)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			By("Cleaning up test resources")
+			d := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+			}
+			err := k8sClient.Delete(ctx, d)
+			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
+
+			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testName,
+					Namespace: "default",
+				},
+			}
+			err = k8sClient.Delete(ctx, va)
+			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
+		})
+
+		It("should update e.optimizer when EnableLimiter toggles", func() {
+			By("Creating engine with EnableLimiter=false")
+			mockPromAPI := &testutils.MockPromAPI{
+				QueryResults: map[string]model.Value{},
+				QueryErrors:  map[string]error{},
+			}
+			sourceRegistry := source.NewSourceRegistry()
+			promSource := prometheus.NewPrometheusSource(ctx, mockPromAPI, prometheus.DefaultPrometheusSourceConfig())
+			sourceRegistry.Register("prometheus", promSource) // nolint:errcheck
+
+			testConfig := config.NewTestConfig()
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: false,
+				},
+			})
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+
+			By("Running optimize() with EnableLimiter=false")
+			err := engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal("cost-aware"),
+				"Expected CostAwareOptimizer when EnableLimiter=false")
+
+			By("Updating config to EnableLimiter=true")
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: true,
+				},
+			})
+
+			By("Running optimize() with EnableLimiter=true")
+			err = engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal("greedy-by-score"),
+				"Expected GreedyByScoreOptimizer when EnableLimiter=true")
+
+			By("Updating config back to EnableLimiter=false")
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {
+					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					EnableLimiter: false,
+				},
+			})
+
+			By("Running optimize() with EnableLimiter=false again")
+			err = engine.optimize(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.optimizer.Name()).To(Equal("cost-aware"),
+				"Expected CostAwareOptimizer when EnableLimiter=false (second toggle)")
+		})
 	})
 
 })

@@ -45,6 +45,15 @@ func (m *mockFullDiscovery) DiscoverUsage(ctx context.Context) (map[string]int, 
 	return m.usage, nil
 }
 
+// DiscoverNodes is required by FullDiscovery. TypeInventory doesn't use per-node
+// info, so this mock returns an empty map.
+func (m *mockFullDiscovery) DiscoverNodes(ctx context.Context) (map[string]discovery.NodeInfo, error) {
+	if m.discErr != nil {
+		return nil, m.discErr
+	}
+	return map[string]discovery.NodeInfo{}, nil
+}
+
 var _ = Describe("TypeInventory", func() {
 	var ctx context.Context
 
@@ -251,7 +260,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(16)) // H100: 16-4=12, A100: 8-4=4
 
 			// Allocate from H100 pool
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -283,7 +292,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(2))
 
 			// Request more than available - should get partial allocation
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -300,7 +309,6 @@ var _ = Describe("TypeAllocator", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		_ = ctx // silence unused variable warning
 	})
 
 	Describe("TryAllocate", func() {
@@ -317,7 +325,7 @@ var _ = Describe("TypeAllocator", func() {
 					totalRemaining:  total,
 				}
 
-				allocated, err := allocator.TryAllocate(decision, gpusRequested)
+				allocated, err := allocator.TryAllocate(ctx, decision, gpusRequested)
 
 				if expectError {
 					Expect(err).To(HaveOccurred())
@@ -359,12 +367,19 @@ var _ = Describe("TypeAllocator", func() {
 				map[string]int{"A100": 8},
 				false,
 			),
-			Entry("error when accelerator name not specified",
+			Entry("resolve empty accelerator in homogeneous cluster",
 				map[string]int{"H100": 8},
 				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default"},
+				4, 4,
+				map[string]int{"H100": 4},
+				false,
+			),
+			Entry("return zero for empty accelerator in heterogeneous cluster",
+				map[string]int{"H100": 8, "A100": 8},
+				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default"},
 				4, 0,
-				nil,
-				true,
+				map[string]int{"H100": 8, "A100": 8},
+				false,
 			),
 			Entry("zero request returns zero",
 				map[string]int{"H100": 8},
@@ -390,8 +405,10 @@ var _ = Describe("TypeAllocator", func() {
 				totalRemaining:  24,
 			}
 
+			ctx := context.Background()
+
 			// First allocation: 4 H100 GPUs
-			allocated, err := allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -403,7 +420,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(20))
 
 			// Second allocation: 6 A100 GPUs
-			allocated, err = allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-b",
 				Namespace:       "default",
 				AcceleratorName: "A100",
@@ -415,7 +432,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(14))
 
 			// Third allocation: more H100 than available
-			allocated, err = allocator.TryAllocate(&interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
 				VariantName:     "model-c",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -438,23 +455,8 @@ func copyMap(m map[string]int) map[string]int {
 	return result
 }
 
-var _ = Describe("normalizeAcceleratorName", func() {
-	DescribeTable("should normalize GPU model names to short names",
-		func(fullName, expectedShortName string) {
-			Expect(normalizeAcceleratorName(fullName)).To(Equal(expectedShortName))
-		},
-		Entry("NVIDIA A100", "NVIDIA-A100-PCIE-80GB", "A100"),
-		Entry("NVIDIA H100", "NVIDIA-H100-SXM5-80GB", "H100"),
-		Entry("NVIDIA L40S", "NVIDIA-L40S-48GB", "L40S"),
-		Entry("AMD MI300X", "AMD-MI300X-192G", "MI300X"),
-		Entry("Intel Gaudi 2", "Intel-Gaudi-2-96GB", "Gaudi-2"),
-		Entry("already short - A100", "A100", "A100"),
-		Entry("already short - H100", "H100", "H100"),
-		Entry("lowercase nvidia", "nvidia-A100-PCIE-80GB", "A100"),
-		Entry("unknown vendor fallback", "Unknown-GPU-Model-123", "GPU"),
-	)
-
-	Context("with TypeInventory integration", func() {
+var _ = Describe("TypeInventory normalization", func() {
+	Context("with accelerator name normalization", func() {
 		It("should normalize discovered GPU types", func() {
 			ctx := context.Background()
 			disc := &mockDiscovery{

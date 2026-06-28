@@ -21,14 +21,12 @@ MONITORING_NAMESPACE="openshift-user-workload-monitoring"
 PROMETHEUS_SECRET_NAME="thanos-querier-tls"
 PROMETHEUS_SECRET_NS="openshift-monitoring"
 DEPLOY_PROMETHEUS=false  # OpenShift uses built-in monitoring stack
-INSTALL_GATEWAY_CTRLPLANE=false  # OpenShift uses its own Gateway control plane stack
 
 # OpenShift-specific prerequisites
 REQUIRED_TOOLS=("oc")
 
 # TLS verification enabled by default on OpenShift
 SKIP_TLS_VERIFY=false
-VALUES_FILE="${WVA_PROJECT}/charts/workload-variant-autoscaler/values.yaml"
 
 #### REQUIRED FUNCTION used by deploy/install.sh ####
 check_specific_prerequisites() {
@@ -123,13 +121,20 @@ deploy_wva_prerequisites() {
     log_info "Deploying Workload-Variant-Autoscaler..."
     extract_openshift_prometheus_ca
 
-    CHART_VERSION=0.8.0
-    log_info "Installing LeaderWorkerSet version $CHART_VERSION into lws-system namespace"
-    helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
-        --version=$CHART_VERSION \
-        --namespace lws-system \
-        --create-namespace \
-        --wait --timeout 300s
+    if [ "${DEPLOY_LWS:-true}" = "true" ]; then
+        if kubectl get crd leaderworkersets.leaderworkerset.x-k8s.io &> /dev/null; then
+            log_info "LeaderWorkerSet CRD already installed, skipping LWS deployment"
+        else
+            log_info "Installing LeaderWorkerSet version ${LWS_CHART_VERSION} into ${LWS_NAMESPACE} namespace"
+            helm upgrade -i lws oci://registry.k8s.io/lws/charts/lws \
+                --version="${LWS_CHART_VERSION}" \
+                --namespace "${LWS_NAMESPACE}" \
+                --create-namespace \
+                --wait --timeout 300s
+        fi
+    else
+        log_info "Skipping LeaderWorkerSet installation (DEPLOY_LWS=false)"
+    fi
 
     log_success "WVA prerequisites deployed"
 }

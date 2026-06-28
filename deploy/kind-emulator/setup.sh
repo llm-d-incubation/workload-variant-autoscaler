@@ -44,7 +44,7 @@ Options:
     -c CLUSTER_NAME    Cluster name (default: $DEFAULT_CLUSTER_NAME)
     -n NODES           Number of nodes (default: $DEFAULT_NODES)
     -g GPUS            GPUs per node (default: $DEFAULT_GPUS_PER_NODE)
-    -t TYPE            GPU type: nvidia, amd, intel, mix, nvidia-mix, amd-mix (default: $DEFAULT_GPU_TYPE)
+    -t TYPE            GPU type: nvidia, amd, intel-gaudi, intel-i915, intel-xe, mix, nvidia-mix, amd-mix (default: $DEFAULT_GPU_TYPE)
                        - nvidia-mix: H100, A100, MI300X heterogeneous (for limiter tests)
                        - amd-mix: MI300X, MI250, A100 heterogeneous (for limiter tests)
     -d MODEL           GPU model (default: $DEFAULT_GPU_MODEL)
@@ -59,9 +59,9 @@ EOF
 
 validate_gpu_type() {
     case "$1" in
-        nvidia|amd|intel|mix|nvidia-mix|amd-mix) return 0 ;;
+        nvidia|amd|intel-gaudi|intel-i915|intel-xe|mix|nvidia-mix|amd-mix) return 0 ;;
         *)
-            echo "Error: Invalid GPU type '$1'. Valid: nvidia, amd, intel, mix, nvidia-mix, amd-mix"
+            echo "Error: Invalid GPU type '$1'. Valid: nvidia, amd, intel-gaudi, intel-i915, intel-xe, mix, nvidia-mix, amd-mix"
             exit 1
             ;;
     esac
@@ -148,13 +148,29 @@ patch_node_gpu() {
     local gpu_count="$3"
     local gpu_product="$4"
     local gpu_memory="$5"
+    # NVIDIA defaults
+    local domain="${gpu_type}.com"
+    local count_label="gpu.count"
+    local memory_label="gpu.memory"
+    local product_label="gpu.product"
+
+    case "$gpu_type" in
+        "amd")
+            product_label="gpu.product-name" ;;
+        "intel-gaudi")
+            domain="habana.ai"; count_label="device.count"; memory_label="device.memory"; product_label="product.name" ;;
+        "intel-i915"|"intel-xe")
+            domain="gpu.intel.com"; count_label="device.count"; memory_label="memory"; product_label="product" ;;
+        "nvidia"|*)
+            ;;
+    esac
 
     kubectl patch node "${node_name}" --type merge --patch "
 metadata:
   labels:
-    ${gpu_type}.com/gpu.count: \"${gpu_count}\"
-    ${gpu_type}.com/gpu.product: \"${gpu_product}\"
-    ${gpu_type}.com/gpu.memory: \"${gpu_memory}\"
+    ${domain}/${count_label}: \"${gpu_count}\"
+    ${domain}/${memory_label}: \"${gpu_memory}\"
+    ${domain}/${product_label}: \"${gpu_product}\"
 "
 }
 
@@ -167,6 +183,8 @@ patch_node_custom_label() {
 }
 
 nodes_list=$(kubectl get nodes --no-headers -o custom-columns=":metadata.name")
+# K8s node names do not contain spaces
+# shellcheck disable=SC2206
 node_array=($nodes_list)
 
 for i in "${!node_array[@]}"; do
@@ -197,11 +215,13 @@ for i in "${!node_array[@]}"; do
             esac
             ;;
         "mix")
-            # Original mixed: nvidia, amd, intel
-            case $((i % 3)) in
-                0) current_type="nvidia"; current_model="NVIDIA-A100-PCIE-80GB"; current_memory=81920 ;;
-                1) current_type="amd";    current_model="AMD-MI300X-192G";       current_memory=196608 ;;
-                2) current_type="intel";  current_model="Intel-Gaudi-2-96GB";    current_memory=98304 ;;
+            # Mix of everything supported
+            case $((i % 5)) in
+                0) current_type="nvidia"; current_model="NVIDIA-A100-PCIE-80GB";   current_memory=81920 ;;
+                1) current_type="amd";    current_model="AMD-MI300X-192G";         current_memory=196608 ;;
+                2) current_type="intel-gaudi"; current_model="Intel-Gaudi-2-96GB"; current_memory=98304 ;;
+                3) current_type="intel-i915";  current_model="Max_1100";           current_memory=49152 ;;
+                4) current_type="intel-xe";    current_model="Pro-B60-Graphics";   current_memory=24576 ;;
             esac
             ;;
         *)
@@ -241,10 +261,12 @@ for i in "${!node_array[@]}"; do
             esac
             ;;
         "mix")
-            case $((i % 3)) in
+            case $((i % 5)) in
                 0) current_type="nvidia" ;;
                 1) current_type="amd" ;;
-                2) current_type="intel" ;;
+                2) current_type="intel-gaudi" ;;
+                3) current_type="intel-i915" ;;
+                4) current_type="intel-xe" ;;
             esac
             ;;
         *)
@@ -252,13 +274,22 @@ for i in "${!node_array[@]}"; do
             ;;
     esac
 
-    resource_name="${current_type}.com~1gpu"
+    case "$current_type" in
+        "intel-gaudi")
+            resource_name="habana.ai~1gaudi" ;;
+        "intel-i915")
+            resource_name="gpu.intel.com~1i915" ;;
+        "intel-xe")
+            resource_name="gpu.intel.com~1xe" ;;
+        *)
+            resource_name="${current_type}.com~1gpu" ;;
+    esac
 
     # Use kubectl patch with --subresource=status to directly update node status
     # This avoids the need for kubectl proxy and raw curl requests
     kubectl patch node "${node_name}" --subresource=status --type=json -p '[
-        {"op":"add","path":"/status/capacity/'${resource_name}'","value":"'${gpus_per_node}'"},
-        {"op":"add","path":"/status/allocatable/'${resource_name}'","value":"'${gpus_per_node}'"}
+        {"op":"add","path":"/status/capacity/'"${resource_name}"'","value":"'"${gpus_per_node}"'"},
+        {"op":"add","path":"/status/allocatable/'"${resource_name}"'","value":"'"${gpus_per_node}"'"}
     ]'
 done
 
@@ -272,12 +303,20 @@ echo "--------------------------------------------------------------------------
 
 for node in "${node_array[@]}"; do
   node_json=$(kubectl get node "$node" -o json)
-  for resource in "nvidia.com/gpu" "amd.com/gpu" "intel.com/gpu"; do
+  for resource in "nvidia.com/gpu" "amd.com/gpu" "habana.ai/gaudi" "gpu.intel.com/i915" "gpu.intel.com/xe"; do
     cap=$(echo "$node_json" | jq -r ".status.capacity[\"$resource\"] // empty")
     alloc=$(echo "$node_json" | jq -r ".status.allocatable[\"$resource\"] // empty")
     if [[ -n "$cap" || -n "$alloc" ]]; then
-      product=$(echo "$node_json" | jq -r ".metadata.labels[\"${resource}.product\"] // \"-\"")
-      memory=$(echo "$node_json" | jq -r ".metadata.labels[\"${resource}.memory\"] // \"-\"")
+      case ${resource} in
+        "nvidia.com/gpu")   prod_label="nvidia.com/gpu.product";   mem_label="nvidia.com/gpu.memory" ;;
+        "amd.com/gpu")      prod_label="amd.com/gpu.product-name"; mem_label="amd.com/gpu.memory" ;;
+        "habana.ai/gaudi")  prod_label="habana.ai/product.name";   mem_label="habana.ai/device.memory" ;;
+        "gpu.intel.com/i915"|"gpu.intel.com/xe")
+                            prod_label="gpu.intel.com/product";    mem_label="gpu.intel.com/memory" ;;
+        *)                  echo "ERROR: resource '$resource' mismatch!"; exit 1 ;;
+      esac
+      product=$(echo "$node_json" | jq -r ".metadata.labels[\"${prod_label}\"] // \"-\"")
+      memory=$(echo "$node_json" | jq -r ".metadata.labels[\"${mem_label}\"] // \"-\"")
       printf "%-40s %-20s %-10s %-10s %-30s %-10s\n" "$node" "$resource" "$cap" "$alloc" "$product" "$memory"
     fi
   done

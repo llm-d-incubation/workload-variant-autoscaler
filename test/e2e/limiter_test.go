@@ -39,7 +39,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		By("Creating two model services with different accelerator requirements")
 
 		// Pool A - NVIDIA GPUs
-		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceA, poolA, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceA, poolA, cfg.ModelID, vaA, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service A")
 
 		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceA, modelServiceA+"-decode", 8000)
@@ -68,7 +68,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		})
 
 		// Pool B - AMD GPUs
-		err = fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, poolB, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err = fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, poolB, cfg.ModelID, vaB, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service B")
 
 		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, modelServiceB+"-decode", 8000)
@@ -126,7 +126,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to create VA B")
 
 		By("Creating scalers for both deployments (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaA+"-hpa", metav1.DeleteOptions{})
 			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaB+"-hpa", metav1.DeleteOptions{})
 			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10, cfg.MonitoringNS)
@@ -149,7 +149,7 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 		// Delete in reverse dependency order: scaler -> VA -> Service -> Deployment
 		// ServiceMonitor cleanup is handled by DeferCleanup registered in BeforeAll
 
-		if cfg.ScalerBackend == "keda" {
+		if cfg.ScalerBackend == scalerBackendKeda {
 			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA)
 			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaB)
 		} else {

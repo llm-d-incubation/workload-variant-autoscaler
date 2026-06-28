@@ -8,6 +8,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// DecisionReason categorizes the reason for a scaling decision.
+// It is the typed category passed to SetDecisionReason (read back via
+// ReasonCategory) and is paired there with a human-readable detail string
+// (read back via Reason).
+type DecisionReason string
+
+// Defined DecisionReason values for the built-in scaling categories.
+const (
+	// DecisionReasonV2 indicates a V2 pipeline decision.
+	DecisionReasonV2 DecisionReason = "V2"
+	// DecisionReasonSaturationOnly indicates decision from saturation-only mode.
+	DecisionReasonSaturationOnly DecisionReason = "saturation-only mode"
+	// DecisionReasonScaleFromZero indicates scale-up from zero replicas.
+	DecisionReasonScaleFromZero DecisionReason = "scale-from-zero"
+	// DecisionReasonTest is used for test scenarios.
+	DecisionReasonTest DecisionReason = "test"
+)
+
+// SaturationAnalyzerName is the canonical name for the saturation analyzer.
+const SaturationAnalyzerName = "saturation"
+
+// RoleBoth represents the default role when a variant serves both prefill and decode.
+const RoleBoth = "both"
+
+// RolePrefill represents the prefill-only role in a P/D disaggregated deployment.
+const RolePrefill = "prefill"
+
 // ReplicaMetrics holds per-replica metrics used by both the saturation analyzer
 // and the queueing model analyzer. Saturation analysis uses KV cache, queue, and
 // token-capacity fields, while the queueing model analyzer uses
@@ -88,8 +115,33 @@ type ReplicaMetrics struct {
 	// AvgITL is the average inter-token latency on this replica in seconds.
 	// Derived from rate(vllm:time_per_output_token_seconds_sum[5m]) / rate(..._count[5m]).
 	// Used by queueing model tuner as observed ITL for Kalman filter parameter learning.
+	// TA notation: ITL_obs — the (k*, ITL_obs) pair drives OLS calibration of ITL(k) = A·k + B.
 	// Zero when metrics are unavailable.
 	AvgITL float64
+
+	// --- Fields for Throughput Analyzer ---
+
+	// GenerationTokenRate is the observed decode token generation rate on this replica (tokens/sec).
+	// Derived from rate(vllm:request_generation_tokens_sum[1m]) per pod.
+	// TA notation: μ_dec^obs — directly observable supply proxy; also used as a sanity check
+	// against the demand estimate (μ_dec^obs ≈ λ_dec at steady state with no queueing).
+	// Zero when metrics are unavailable.
+	GenerationTokenRate float64
+
+	// KvUsageInstant is the instantaneous KV cache utilization fraction on this replica (0.0–1.0).
+	// Derived from vllm:kv_cache_usage_perc (no max_over_time window).
+	// TA notation: k* — the current operating point in the ITL model ITL(k) = A·k + B.
+	// Differs from KvCacheUsage which uses max_over_time[1m] for the saturation analyzer.
+	// Zero when metrics are unavailable.
+	KvUsageInstant float64
+
+	// VLLMRequestRate is the vLLM-side request completion rate on this replica (req/s).
+	// Derived from rate(vllm:request_generation_tokens_count[1m]) per pod.
+	// TA notation: fallback λ_req — used when ArrivalRate == 0 (EPP not deployed).
+	// λ_dec_fallback = sum(VLLMRequestRate) × avg(AvgOutputTokens).
+	// Measures completed requests only; undercounts when requests queue in the scheduler.
+	// Zero when metrics are unavailable.
+	VLLMRequestRate float64
 }
 
 // ReplicaMetricsMetadata contains freshness information for replica metrics
@@ -186,7 +238,35 @@ type VariantDecision struct {
 	// SpareCapacity indicates how much spare capacity this variant has.
 	// 0.0 = fully saturated, 1.0 = completely idle.
 	// Used by allocation algorithms to prioritize saturated variants.
+	// V1: threshold-relative spare KV capacity (AvgSpareKvCapacity).
+	// V2: 1.0 - Utilization (absolute spare).
 	SpareCapacity float64
+	// Utilization is the variant-level utilization ratio (0.0-1.0) reported for
+	// observability. The exact formula differs by analyzer because V1 and V2
+	// reason about saturation differently:
+	//   V1: mean of per-replica KvCacheUsage fractions (matches what V1's
+	//       per-replica threshold check operates on).
+	//   V2: TotalDemand / TotalCapacity from AnalyzerResult (token-demand-based).
+	// For uniform-capacity replicas the two are numerically equivalent; for
+	// mixed-capacity replicas V2's value is capacity-weighted.
+	Utilization float64
+	// KvCacheTokensUsed is the sum of TokensInUse across this variant's replicas.
+	KvCacheTokensUsed int64
+	// KvCacheTokensCapacity is the sum of TotalKvCapacityTokens across this variant's replicas.
+	KvCacheTokensCapacity int64
+	// RequiredCapacity is the model-level required capacity (>0 means scale-up needed).
+	// Same value for all variants of a model.
+	// V1: binary (1.0 if shouldScaleUp, else 0.0).
+	// V2: continuous token-based demand from AnalyzerResult.
+	// Use RequiredCapacityUnit to disambiguate the units when consuming this field
+	// (or its corresponding Prometheus metric).
+	RequiredCapacity float64
+	// RequiredCapacityUnit describes the unit of RequiredCapacity ("binary" or "continuous").
+	// Exposed as the `unit` Prometheus label on wva_required_capacity so dashboards
+	// can filter by semantics rather than by which analyzer produced the value.
+	//   "binary":     V1 path, value is 0.0 or 1.0
+	//   "continuous": V2 path, value is a token-demand magnitude
+	RequiredCapacityUnit string
 	// ScaleTargetRef references the Deployment/StatefulSet for scheduling constraints
 	ScaleTargetRef *autoscalingv2.CrossVersionObjectReference
 
@@ -194,8 +274,15 @@ type VariantDecision struct {
 	// DecisionSteps records each pipeline stage's contribution to the final decision.
 	// This replaces the single Reason field with structured multi-step tracking.
 	DecisionSteps []DecisionStep
-	// Reason is kept for backward compatibility and contains the final/summary reason
-	Reason string
+
+	// decisionReason is the categorized reason used for Prometheus metric labels.
+	// Set via SetDecisionReason along with the detailed reason string.
+	decisionReason DecisionReason
+
+	// reason contains the detailed human-readable reason for this decision.
+	// Used in logs, events, and status updates.
+	// Set via SetDecisionReason along with the categorized decisionReason.
+	reason string
 
 	// --- Saturation-specific flags ---
 	SaturationBased    bool        // True if decision is primarily saturation-driven
@@ -254,6 +341,25 @@ func (d *VariantDecision) LastStep() *DecisionStep {
 		return nil
 	}
 	return &d.DecisionSteps[len(d.DecisionSteps)-1]
+}
+
+// SetDecisionReason sets both the typed reason category and detailed reason string.
+// The decisionReason should be one of the DecisionReason* constants.
+// The detailedReason provides human-readable context for logs, events, and status.
+func (d *VariantDecision) SetDecisionReason(action SaturationAction, decisionReason DecisionReason, detailedReason string) {
+	d.Action = action
+	d.decisionReason = decisionReason
+	d.reason = detailedReason
+}
+
+// ReasonCategory returns the categorized reason used for Prometheus metric labels.
+func (d *VariantDecision) ReasonCategory() DecisionReason {
+	return d.decisionReason
+}
+
+// Reason returns the detailed human-readable reason for this decision.
+func (d *VariantDecision) Reason() string {
+	return d.reason
 }
 
 // SaturationAction represents the scaling action

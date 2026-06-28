@@ -2,10 +2,12 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,8 +20,10 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 	logger := log.FromContext(ctx)
 
 	if r.Config == nil {
-		err := fmt.Errorf("config is nil")
-		logger.Error(err, "Config is nil in ConfigMapReconciler bootstrap")
+		err := errors.New("config is nil")
+		errorType := "Config is nil in ConfigMapReconciler bootstrap"
+		logger.Error(err, errorType)
+		metrics.RecordError(constants.ComponentController, errorType)
 		return err
 	}
 
@@ -50,7 +54,9 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 		// All-namespaces mode: list and scan all namespaces
 		namespaceList := &corev1.NamespaceList{}
 		if err := r.List(ctx, namespaceList, &client.ListOptions{}); err != nil {
-			logger.Error(err, "Failed to list namespaces during bootstrap")
+			errorType := "Failed to list namespaces during bootstrap"
+			logger.Error(err, errorType)
+			metrics.RecordError(constants.ComponentController, errorType)
 			r.Config.MarkConfigMapsBootstrapFailed(err)
 			return fmt.Errorf("failed to list namespaces: %w", err)
 		}
@@ -60,7 +66,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 			if ns.Name != systemNamespace {
 				if ns.Annotations != nil {
 					if value, ok := ns.Annotations[constants.NamespaceExcludeAnnotationKey]; ok {
-						if value == "true" {
+						if value == constants.AnnotationValueTrue {
 							continue // Skip excluded namespaces. Only for all-namespaces mode.
 						}
 					}
@@ -68,7 +74,7 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 				}
 				if ns.Labels != nil {
 					if value, ok := ns.Labels[constants.NamespaceConfigEnabledLabelKey]; ok {
-						if value == "true" {
+						if value == constants.AnnotationValueTrue {
 							namespacesToScan = append(namespacesToScan, ns.Name)
 						}
 					}

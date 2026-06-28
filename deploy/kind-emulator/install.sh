@@ -20,43 +20,22 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
+# Configuration (Kind emulator). EPP deploy is via deploy/install-epp.sh — set LLM_D_RELEASE / GAIE_VERSION / LLMD_NS there or in Makefile.
 WVA_PROJECT=${WVA_PROJECT:-$PWD}
-WELL_LIT_PATH_NAME="simulated-accelerators"
 NAMESPACE_SUFFIX="sim"
-EXAMPLE_DIR="$WVA_PROJECT/$LLM_D_PROJECT/guides/$WELL_LIT_PATH_NAME"
-DEPLOY_LLM_D_INFERENCE_SIM=true
 
 # Namespaces
 LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
 MONITORING_NAMESPACE="workload-variant-autoscaler-monitoring"
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 
+# Simulator image — must match defaultModelServiceSimulatorImage in test/e2e/fixtures/model_service_conventions.go
+SIM_IMAGE=${SIM_IMAGE:-"ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"}
+
 # WVA Configuration
 WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconcile interval - tests set 30s interval
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
-# Initial WVA pool group; install.sh auto-detects the actual InferencePool API group after llm-d deploy and upgrades WVA (scale-from-zero).
-POOL_GROUP=${POOL_GROUP:-"inference.networking.k8s.io"}
-
-# llm-d Configuration
-LLM_D_INFERENCE_SIM_IMG_REPO=${LLM_D_INFERENCE_SIM_IMG_REPO:-"ghcr.io/llm-d/llm-d-inference-sim"}
-LLM_D_INFERENCE_SIM_IMG_TAG=${LLM_D_INFERENCE_SIM_IMG_TAG:-"latest"}
-
-LLM_D_MODELSERVICE_NAME="ms-$NAMESPACE_SUFFIX-llm-d-modelservice"
-LLM_D_MODELSERVICE_VALUES="ms-$NAMESPACE_SUFFIX/values.yaml"
-LLM_D_EPP_NAME="gaie-$NAMESPACE_SUFFIX-epp"
-
-# Model and SLO Configuration
-MODEL_ID=${MODEL_ID:-"unsloth/Meta-Llama-3.1-8B"}
-DEFAULT_MODEL_ID="random"
-ACCELERATOR_TYPE="A100"
-SLO_TPOT=24     # Target time-per-output-token SLO (in ms)
-SLO_TTFT=500  # Target time-to-first-token SLO (in ms)
-
-# Gateway Configuration
-INSTALL_GATEWAY_CTRLPLANE="true" # if true, installs gateway control plane providers - defaults to true for emulated clusters
-
 # Prometheus Configuration
 PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
 PROMETHEUS_BASE_URL="https://$PROMETHEUS_SVC_NAME.$MONITORING_NAMESPACE.svc.cluster.local"
@@ -72,8 +51,6 @@ CLUSTER_GPU_TYPE=${CLUSTER_GPU_TYPE:-"mix"}
 
 # Flags for deployment steps
 CREATE_CLUSTER=${CREATE_CLUSTER:-false}
-DEPLOY_LLM_D_INFERENCE_SIM=${DEPLOY_LLM_D_INFERENCE_SIM:-true}
-E2E_TESTS_ENABLED=${E2E_TESTS_ENABLED:-false}
 
 # Undeployment flags
 DELETE_CLUSTER=${DELETE_CLUSTER:-false}
@@ -129,6 +106,9 @@ check_specific_prerequisites() {
 
     # Load WVA image into KIND cluster
     load_image
+
+    # Pre-load the simulator image so tests don't pull it cold (avoids PodReadyTimeout).
+    load_sim_image
 
     log_success "All Kind emulated deployment prerequisites met"
 }
@@ -201,9 +181,65 @@ load_image() {
         fi
     fi
     
-    # Load the image into the KIND cluster
-    kind load docker-image "$WVA_IMAGE_REPO:$WVA_IMAGE_TAG" --name "$CLUSTER_NAME"
-    log_success "Image '$WVA_IMAGE_REPO:$WVA_IMAGE_TAG' loaded into KIND cluster '$CLUSTER_NAME'"
+    # Load the image into the KIND cluster via the shared helper.
+    # Tries `kind load docker-image` first, falls back to crictl-per-node for the
+    # containerd image store issue (kubernetes-sigs/kind#3795).
+    local full_image="$WVA_IMAGE_REPO:$WVA_IMAGE_TAG"
+    if ! _load_into_kind "$full_image"; then
+        log_error "Failed to load WVA image '$full_image' into KIND cluster '$CLUSTER_NAME'"
+        exit 1
+    fi
+}
+
+# _load_into_kind FULL_IMAGE
+# Loads a pre-pulled image into the KIND cluster: tries `kind load docker-image` first,
+# then falls back to crictl-per-node for the containerd image store issue
+# (kubernetes-sigs/kind#3795). Returns 0 on success, 1 on failure.
+_load_into_kind() {
+    local full_image="$1"
+    local load_stderr
+    if load_stderr="$(kind load docker-image "$full_image" --name "$CLUSTER_NAME" 2>&1)"; then
+        log_success "Image '$full_image' loaded into KIND cluster '$CLUSTER_NAME'"
+        return 0
+    fi
+
+    if ! echo "$load_stderr" | grep -qiE "docker save|multi-?platform|manifest|content digest|no such image|not found"; then
+        log_warning "'kind load docker-image' failed for '$full_image': $load_stderr"
+        return 1
+    fi
+
+    log_warning "'kind load docker-image' failed (containerd image store issue) — falling back to pulling directly into KIND nodes"
+    local nodes
+    nodes="$(kind get nodes --name "$CLUSTER_NAME")" || return 1
+    for node in $nodes; do
+        if ! docker exec "$node" crictl pull "$full_image" 2>&1; then
+            log_warning "Failed to pre-pull '$full_image' on node '$node'"
+            return 1
+        fi
+    done
+    log_success "Image '$full_image' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
+    return 0
+}
+
+# Pre-loads the llm-d-inference-sim image into the KIND cluster so tests that create
+# model service Deployments don't pull it cold and hit PodReadyTimeout.
+load_sim_image() {
+    log_info "Pre-loading simulator image '$SIM_IMAGE' into KIND cluster..."
+
+    local platform="${KIND_IMAGE_PLATFORM:-}"
+    if [ -z "$platform" ]; then
+        case "$(uname -m)" in
+            aarch64|arm64) platform="linux/arm64" ;;
+            *) platform="linux/amd64" ;;
+        esac
+    fi
+
+    if ! docker pull --platform "$platform" "$SIM_IMAGE"; then
+        log_warning "Failed to pull simulator image '$SIM_IMAGE' — tests may be slow on first run"
+        return
+    fi
+
+    _load_into_kind "$SIM_IMAGE" || log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
 }
 
 KUBE_LIKE_VALUES_DEV_IF_PRESENT=true
@@ -213,32 +249,6 @@ _wva_deploy_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib"
 source "${_wva_deploy_lib}/deploy_prometheus_kube_stack.sh"
 # shellcheck source=kube_like_adapter.sh
 source "${_wva_deploy_lib}/kube_like_adapter.sh"
-
-# REQUIRED FUNCTION - only for emulated environments ####
-# Apply llm-d infrastructure fixes for Kind emulated clusters - e.g., remove prefill deployments, remove decode deployments if tests are enabled
-apply_llm_d_infrastructure_fixes() {
-    log_info "Applying llm-d infrastructure fixes for KIND emulator..."
-    # Skip cleanup when modelservice release is not installed (e.g., e2e infra-only
-    # path now excludes it via helmfile selector).
-    if ! helm list -n "$LLMD_NS" --short 2>/dev/null | grep -q '^ms-'; then
-        log_info "No llm-d modelservice release detected in $LLMD_NS; skipping prefill/decode cleanup"
-        return
-    fi
-
-    # Delete prefill deployment
-    # TODO: remove once WVA supports both prefill and decode
-    log_info "Deleting prefill deployments..."
-    kubectl delete deployments.apps \
-        $LLM_D_MODELSERVICE_NAME-prefill \
-        --ignore-not-found -n "$LLMD_NS"
-        
-    if [ "$E2E_TESTS_ENABLED" = "true" ]; then
-        log_info "Deleting decode deployments for tests..."
-        kubectl delete deployments.apps \
-            $LLM_D_MODELSERVICE_NAME-decode \
-            --ignore-not-found -n "$LLMD_NS"
-    fi
-}
 
 #### REQUIRED FUNCTION used by deploy/install.sh ####
 delete_namespaces() {

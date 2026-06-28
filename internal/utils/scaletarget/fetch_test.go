@@ -18,7 +18,7 @@ package scaletarget
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
@@ -453,7 +453,7 @@ func (m *MockErrorClient) Get(ctx context.Context, key client.ObjectKey, obj cli
 	m.callCount++
 	if m.callCount <= m.failTimes {
 		// Return a transient error that should trigger retry
-		return fmt.Errorf("transient error: temporary failure")
+		return errors.New("transient error: temporary failure")
 	}
 	if m.finalError != nil {
 		return m.finalError
@@ -486,7 +486,7 @@ func TestGetContainersGPUs(t *testing.T) {
 		expected   int
 	}{
 		{
-			name: "single container with nvidia GPUs",
+			name: "single container with NVIDIA GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
@@ -500,7 +500,7 @@ func TestGetContainersGPUs(t *testing.T) {
 			expected: 4,
 		},
 		{
-			name: "single container with amd GPUs",
+			name: "single container with AMD GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
@@ -514,13 +514,13 @@ func TestGetContainersGPUs(t *testing.T) {
 			expected: 2,
 		},
 		{
-			name: "single container with intel GPUs",
+			name: "single container with Intel GPUs",
 			containers: []corev1.Container{
 				{
 					Name: "main",
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							"intel.com/gpu": resource.MustParse("1"),
+							"gpu.intel.com/xe": resource.MustParse("1"),
 						},
 					},
 				},
@@ -572,7 +572,7 @@ func TestGetContainersGPUs(t *testing.T) {
 					Name: "intel-container",
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							"intel.com/gpu": resource.MustParse("1"),
+							"gpu.intel.com/xe": resource.MustParse("1"),
 						},
 					},
 				},
@@ -833,8 +833,7 @@ func TestFetchScaleTarget_LeaderWorkerSet(t *testing.T) {
 			if tt.expectedError {
 				require.Error(t, err)
 				require.Nil(t, accessor)
-				switch tt.errorType {
-				case "NotFound":
+				if tt.errorType == "NotFound" {
 					assert.True(t, apierrors.IsNotFound(err), "expected NotFound error")
 				}
 			} else {

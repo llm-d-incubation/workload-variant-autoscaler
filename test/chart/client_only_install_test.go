@@ -29,7 +29,8 @@ const chartPath = "../../charts/workload-variant-autoscaler"
 func helmTemplate(t *testing.T, releaseName string, setValues map[string]string) string {
 	t.Helper()
 
-	args := []string{"template", releaseName, chartPath}
+	args := make([]string, 0, 3+2*len(setValues))
+	args = append(args, "template", releaseName, chartPath)
 	for k, v := range setValues {
 		args = append(args, "--set", k+"="+v)
 	}

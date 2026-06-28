@@ -12,9 +12,9 @@ type MM1ModelStateDependent struct {
 	avgNumInServers float32
 }
 
-func NewMM1ModelStateDependent(K int, servRate []float32) *MM1ModelStateDependent {
+func NewMM1ModelStateDependent(k int, servRate []float32) *MM1ModelStateDependent {
 	m := MM1ModelStateDependent{
-		MM1KModel:       *NewMM1KModel(K),
+		MM1KModel:       *NewMM1KModel(k),
 		servRate:        servRate,
 		avgNumInServers: 0,
 	}

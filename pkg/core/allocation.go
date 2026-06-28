@@ -266,7 +266,7 @@ func zeroLoadAllocation(server *Server, model *Model, acc *Accelerator, perf *co
 	totalNumInstances := model.NumInstances(gName) * numReplicas
 	cost := acc.Cost() * float32(totalNumInstances)
 
-	//TODO: maxArrvRatePerReplica seems to be meaningless
+	// TODO: maxArrvRatePerReplica seems to be meaningless
 	decodeTime := perf.ServiceParms.Alpha + perf.ServiceParms.Beta
 	maxDecodeTime := perf.ServiceParms.Alpha + perf.ServiceParms.Beta*float32(maxBatchSize)
 	prefillTime := perf.ServiceParms.Alpha + perf.ServiceParms.Beta

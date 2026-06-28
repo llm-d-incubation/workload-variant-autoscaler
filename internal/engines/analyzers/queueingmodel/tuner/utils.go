@@ -91,11 +91,11 @@ func CreateTunerConfigFromData(filterDataFromConfig *FilterData, env *Environmen
 
 	// Expected observations [TTFT, ITL] in milliseconds
 	// Use actual observations from environment if valid, otherwise use typical values
-	var expextedObservations []float64
+	var expectedObservations []float64
 	if env != nil && env.Valid() {
-		expextedObservations = []float64{float64(env.AvgTTFT), float64(env.AvgITL)}
+		expectedObservations = []float64{float64(env.AvgTTFT), float64(env.AvgITL)}
 	} else {
-		expextedObservations = []float64{DefaultExpectedTTFT, DefaultExpectedITL}
+		expectedObservations = []float64{DefaultExpectedTTFT, DefaultExpectedITL}
 	}
 
 	return &TunerConfigData{
@@ -107,7 +107,7 @@ func CreateTunerConfigFromData(filterDataFromConfig *FilterData, env *Environmen
 			BoundedState:         true,
 			MinState:             minState,
 			MaxState:             maxState,
-			ExpectedObservations: expextedObservations,
+			ExpectedObservations: expectedObservations,
 		},
 	}
 }

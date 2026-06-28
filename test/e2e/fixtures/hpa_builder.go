@@ -12,10 +12,32 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
+)
+
+const (
+	kindLeaderWorkerSet = "LeaderWorkerSet"
+	kindDeployment      = "Deployment"
+	apiVersionLWS       = "leaderworkerset.x-k8s.io/v1"
+	apiVersionAppsV1    = "apps/v1"
 )
 
 // HPAOption is a functional option for configuring HPA resources.
 type HPAOption func(*autoscalingv2.HorizontalPodAutoscaler)
+
+// WithWVAAnnotations adds the WVA annotation-based discovery annotations to the HPA.
+// The HPA then serves as both the WVA discovery source and the scaler for the deployment.
+func WithWVAAnnotations(modelID, cost string) HPAOption {
+	return func(hpa *autoscalingv2.HorizontalPodAutoscaler) {
+		if hpa.Annotations == nil {
+			hpa.Annotations = make(map[string]string)
+		}
+		hpa.Annotations[annotations.Managed] = "true"
+		hpa.Annotations[annotations.ModelID] = modelID
+		hpa.Annotations[annotations.VariantCost] = cost
+	}
+}
 
 // WithScaleTargetRefKind sets the Kind and APIVersion on the HPA's ScaleTargetRef.
 func WithScaleTargetRefKind(kind string) HPAOption {
@@ -23,10 +45,10 @@ func WithScaleTargetRefKind(kind string) HPAOption {
 		hpa.Spec.ScaleTargetRef.Kind = kind
 		// Set appropriate APIVersion based on kind
 		switch kind {
-		case "LeaderWorkerSet":
-			hpa.Spec.ScaleTargetRef.APIVersion = "leaderworkerset.x-k8s.io/v1"
-		case "Deployment":
-			hpa.Spec.ScaleTargetRef.APIVersion = "apps/v1"
+		case kindLeaderWorkerSet:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionLWS
+		case kindDeployment:
+			hpa.Spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
 		default:
 			// Keep existing APIVersion for unknown kinds
 		}
@@ -65,8 +87,12 @@ func EnsureHPA(
 	opts ...HPAOption,
 ) error {
 	hpa := buildHPA(namespace, name, deploymentName, vaName, minReplicas, maxReplicas, opts...)
-	existing, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
-	if err == nil && existing != nil {
+	_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing HPA %s: %w", hpa.Name, err)
+		}
+	} else {
 		deleteErr := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
 		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
 			return fmt.Errorf("delete existing HPA %s: %w", hpa.Name, deleteErr)
@@ -78,8 +104,6 @@ func EnsureHPA(
 		if waitErr != nil {
 			return fmt.Errorf("timeout waiting for HPA %s deletion: %w", hpa.Name, waitErr)
 		}
-	} else if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("check existing HPA %s: %w", hpa.Name, err)
 	}
 	_, err = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Create(ctx, hpa, metav1.CreateOptions{})
 	return err
@@ -90,11 +114,11 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-hpa",
 			Namespace: namespace,
-			Labels:    map[string]string{"test-resource": "true"},
+			Labels:    map[string]string{"test-resource": defaultTestResourceLabelValue},
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-				APIVersion: "apps/v1",
+				APIVersion: apiVersionAppsV1,
 				Kind:       "Deployment",
 				Name:       deploymentName,
 			},
@@ -107,7 +131,10 @@ func buildHPA(namespace, name, deploymentName, vaName string, minReplicas, maxRe
 						Metric: autoscalingv2.MetricIdentifier{
 							Name: "wva_desired_replicas",
 							Selector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{"variant_name": vaName},
+								MatchLabels: map[string]string{
+									"variant_name":       vaName,
+									"exported_namespace": namespace,
+								},
 							},
 						},
 						Target: autoscalingv2.MetricTarget{

@@ -148,8 +148,8 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	//     replicas = floor(0.40 * 40) = 16  (remove 16 of 40 → 24 left, sat→0.50)
 	//
 	perReplicaCapacity := 1.0 / float64(totalReplicas)
-	totalSupply := 1.0                // normalized pool capacity
-	totalDemand := saturationScore    // saturation = demand/capacity
+	totalSupply := 1.0             // normalized pool capacity
+	totalDemand := saturationScore // saturation = demand/capacity
 
 	utilization := saturationScore
 	if utilization > 1.0 {

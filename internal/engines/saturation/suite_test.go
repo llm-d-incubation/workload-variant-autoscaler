@@ -56,7 +56,7 @@ func TestSaturationEngine(t *testing.T) {
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
-	ctx, cancel = context.WithCancel(context.TODO())
+	ctx, cancel = context.WithCancel(context.TODO()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
 
 	var err error
 	err = llmdv1alpha1.AddToScheme(scheme.Scheme)
@@ -66,7 +66,7 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "base", "crd")},
 		ErrorIfCRDPathMissing: true,
 	}
 

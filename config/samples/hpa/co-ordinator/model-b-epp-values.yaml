@@ -1,0 +1,68 @@
+inferencePool:
+  modelServers:
+    matchLabels:
+      llm-d.ai/model-id: model-b
+
+inferenceExtension:
+  image:
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
+    tag: v0.8.0
+  replicas: 1
+  failureMode: FailOpen
+  flags:
+    v: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  extraServicePorts:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8081
+  monitoring:
+    prometheus:
+      enabled: true
+      auth:
+        enabled: false
+  pluginsConfigFile: model-b-plugins.yaml
+  pluginsCustomConfig:
+    model-b-plugins.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      featureGates:
+      - flowControl
+      plugins:
+      - type: queue-scorer
+      - type: kv-cache-utilization-scorer
+      - type: prefix-cache-scorer
+      - type: no-hit-lru-scorer
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: queue-scorer
+          weight: 2
+        - pluginRef: kv-cache-utilization-scorer
+          weight: 2
+        - pluginRef: prefix-cache-scorer
+          weight: 3
+        - pluginRef: no-hit-lru-scorer
+          weight: 2
+  sidecar:
+    args:
+    - --service-node
+    - envoy-sidecar
+    - --log-level
+    - warn
+    - --concurrency
+    - "8"
+    - --drain-strategy
+    - immediate
+    - --drain-time-s
+    - "60"
+    - -c
+    - /etc/envoy/envoy.yaml

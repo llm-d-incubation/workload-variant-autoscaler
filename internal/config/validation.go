@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -11,7 +12,7 @@ import (
 func Validate(cfg *Config) error {
 	// Prometheus config is required
 	if cfg.PrometheusBaseURL() == "" {
-		return fmt.Errorf("prometheus BaseURL is required")
+		return errors.New("prometheus BaseURL is required")
 	}
 
 	// Optimization interval must be positive
@@ -138,7 +139,7 @@ func DetectImmutableParameterChanges(cfg *Config, configMapData map[string]strin
 
 	// If any immutable changes detected, return error
 	if len(changes) > 0 {
-		var changeList []string
+		changeList := make([]string, 0, len(changes))
 		for _, change := range changes {
 			changeList = append(changeList, fmt.Sprintf("%s (old: %q, new: %q)", change.Parameter, change.OldValue, change.NewValue))
 		}
