@@ -280,6 +280,24 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 			decision.MetricsReason,
 			decision.MetricsMessage)
 
+		// Surface whether the scaling recommendation was clamped to maxReplicas,
+		// carrying the uncapped recommendation in the message so operators can
+		// tell "fine at the cap" from "wanted more but blocked" (RFC #1018 #2).
+		cappedStatus := metav1.ConditionFalse
+		cappedReason := llmdVariantAutoscalingV1alpha1.ReasonNotCapped
+		cappedMessage := "Scaling recommendation is within maxReplicas"
+		if decision.ScalingCapped {
+			cappedStatus = metav1.ConditionTrue
+			cappedReason = llmdVariantAutoscalingV1alpha1.ReasonCappedByMaxReplicas
+			cappedMessage = fmt.Sprintf("Scaling recommendation %d capped to maxReplicas %d",
+				decision.UncappedReplicas, decision.TargetReplicas)
+		}
+		llmdVariantAutoscalingV1alpha1.SetCondition(&va,
+			llmdVariantAutoscalingV1alpha1.TypeScalingCapped,
+			cappedStatus,
+			cappedReason,
+			cappedMessage)
+
 		// Note: CurrentAlloc is removed from Status.
 		// Internal allocation state is managed by the Engine and Actuator.
 	} else {

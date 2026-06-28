@@ -18,6 +18,7 @@ package saturation
 
 import (
 	"context"
+	"math"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -42,6 +43,10 @@ func (e *Engine) optimizeEPPSaturation(
 	logger := ctrl.LoggerFrom(ctx)
 
 	var requests []pipeline.ModelScalingRequest
+	// uncappedByModel holds the recommendation the EPP formula would make absent
+	// the maxReplicas clamp, keyed by "namespace/modelID". Used post-optimize to
+	// flag decisions that were capped (see RFC #1018 proposal #2).
+	uncappedByModel := make(map[string]int)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -135,6 +140,30 @@ func (e *Engine) optimizeEPPSaturation(
 				result.RawSignal, result.SmoothedSignal)
 		}
 
+		// Record what the EPP formula would recommend absent the maxReplicas clamp,
+		// so we can flag capped decisions after the optimizer runs. Uses the same
+		// closed form as the analyzer's scaling math: desired = ceil(S * N / T_up).
+		//
+		// This is a pool-level total. We only attribute it for single-variant model
+		// groups, where the variant target equals the pool total; with multiple
+		// variants the optimizer splits the total across them and a per-variant
+		// maxReplicas comparison would misfire, so cap detection is skipped (the
+		// gauge is still emitted as 0 below).
+		if len(modelVAs) == 1 && saturationConfig.ScaleUpThreshold > 0 {
+			totalReplicas := 0
+			for _, vs := range variantStates {
+				totalReplicas += vs.CurrentReplicas
+			}
+			if totalReplicas == 0 {
+				totalReplicas = 1 // match the analyzer's floor so scale-up-from-zero is still flaggable
+			}
+			uncapped := int(math.Ceil(result.SmoothedSignal * float64(totalReplicas) / saturationConfig.ScaleUpThreshold))
+			uncappedByModel[utils.GetNamespacedKey(namespace, modelID)] = uncapped
+		} else if len(modelVAs) > 1 {
+			logger.V(logging.DEBUG).Info("Skipping cap detection for multi-variant model group (pool total not attributable per variant)",
+				"modelID", modelID, "variantCount", len(modelVAs))
+		}
+
 		requests = append(requests, pipeline.ModelScalingRequest{
 			ModelID:   modelID,
 			Namespace: namespace,
@@ -193,6 +222,26 @@ func (e *Engine) optimizeEPPSaturation(
 			logger.Info("Scale-to-zero enforcement applied (EPP saturation)",
 				"modelID", req.ModelID)
 		}
+	}
+
+	// Flag decisions whose recommendation was clamped to maxReplicas and emit the
+	// wva_scale_capped gauge so operators can distinguish "fine at the cap" from
+	// "wanted more but was blocked" (RFC #1018 proposal #2). A decision is capped
+	// when the uncapped formula recommendation exceeds maxReplicas and the final
+	// target is pinned at the cap.
+	for i := range allDecisions {
+		d := &allDecisions[i]
+		uncapped, ok := uncappedByModel[utils.GetNamespacedKey(d.Namespace, d.ModelID)]
+		capped := ok && d.MaxReplicas != nil && *d.MaxReplicas > 0 &&
+			uncapped > *d.MaxReplicas && d.TargetReplicas >= *d.MaxReplicas
+		if capped {
+			d.ScalingCapped = true
+			d.UncappedReplicas = uncapped
+			logger.Info("Scaling recommendation capped by maxReplicas (EPP saturation)",
+				"variant", d.VariantName, "modelID", d.ModelID,
+				"uncappedReplicas", uncapped, "maxReplicas", *d.MaxReplicas)
+		}
+		e.metricsEmitter.RecordScaleCappedMetric(ctx, d.VariantName, d.Namespace, d.ModelID, capped)
 	}
 
 	return allDecisions

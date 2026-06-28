@@ -136,6 +136,8 @@ const (
 	TypeMetricsAvailable = "MetricsAvailable"
 	// TypeOptimizationReady indicates whether the optimization engine can run successfully
 	TypeOptimizationReady = "OptimizationReady"
+	// TypeScalingCapped indicates whether the scaling recommendation was clamped to maxReplicas
+	TypeScalingCapped = "ScalingCapped"
 )
 
 // Condition Reasons for MetricsAvailable
@@ -175,6 +177,14 @@ const (
 	ReasonTargetFound = "TargetFound"
 	// ReasonTargetNotFound indicates the scale target could not be found
 	ReasonTargetNotFound = "TargetNotFound"
+)
+
+// Condition Reasons for ScalingCapped
+const (
+	// ReasonCappedByMaxReplicas indicates the recommendation was clamped to maxReplicas
+	ReasonCappedByMaxReplicas = "CappedByMaxReplicas"
+	// ReasonNotCapped indicates the recommendation was within maxReplicas
+	ReasonNotCapped = "NotCapped"
 )
 
 // GetScaleTargetAPI returns the API of the scale target resource.

@@ -548,6 +548,108 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 
 	// ConfigMap-related tests have been moved to configmap_handler_test.go
 
+	Context("When surfacing scaling-cap status from cache", func() {
+		const resourceName = "test-scaling-capped"
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+		reconcileOnce := func() {
+			controllerReconciler := &VariantAutoscalingReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Recorder:  record.NewFakeRecorder(100),
+				Config:    config.NewTestConfig(),
+				Datastore: datastore.NewDatastore(config.NewTestConfig()),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		BeforeEach(func() {
+			logging.NewTestLogger()
+			ns := &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "workload-variant-autoscaler-system"}}
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).NotTo(HaveOccurred())
+
+			deployment := resources.CreateLlmdSimDeployment("default", resourceName, "test-model", "default", "8000", 0, 0, 1)
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, deployment))).NotTo(HaveOccurred())
+
+			configMap := testutils.CreateServiceClassConfigMap(ns.Name)
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, configMap))).NotTo(HaveOccurred())
+			configMap = testutils.CreateVariantAutoscalingConfigMap(config.DefaultConfigMapName, ns.Name)
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, configMap))).NotTo(HaveOccurred())
+
+			resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
+				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: resourceName},
+					ModelID:        "test-model",
+					MaxReplicas:    2,
+				},
+			}
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, resource))).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"}}
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, resource))).NotTo(HaveOccurred())
+			deployment := resources.CreateLlmdSimDeployment("default", resourceName, "test-model", "default", "8000", 0, 0, 1)
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).NotTo(HaveOccurred())
+		})
+
+		It("should set ScalingCapped=True with the uncapped recommendation when clamped", func() {
+			By("Storing a capped decision in cache")
+			common.DecisionCache.Set(resourceName, "default", interfaces.VariantDecision{
+				VariantName:      resourceName,
+				Namespace:        "default",
+				TargetReplicas:   20,
+				ScalingCapped:    true,
+				UncappedReplicas: 45,
+				MetricsAvailable: false,
+				MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
+				MetricsMessage:   "n/a",
+			})
+
+			reconcileOnce()
+
+			By("Verifying ScalingCapped condition is True with the uncapped count in the message")
+			Eventually(func(g Gomega) {
+				resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+				condition := llmdVariantAutoscalingV1alpha1.GetCondition(resource, llmdVariantAutoscalingV1alpha1.TypeScalingCapped)
+				g.Expect(condition).NotTo(BeNil(), "ScalingCapped condition should be set")
+				g.Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(condition.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonCappedByMaxReplicas))
+				g.Expect(condition.Message).To(ContainSubstring("45"))
+				g.Expect(condition.Message).To(ContainSubstring("20"))
+			}, 5*time.Second, 500*time.Millisecond).Should(Succeed())
+		})
+
+		It("should set ScalingCapped=False when the recommendation is within maxReplicas", func() {
+			By("Storing an uncapped decision in cache")
+			common.DecisionCache.Set(resourceName, "default", interfaces.VariantDecision{
+				VariantName:      resourceName,
+				Namespace:        "default",
+				TargetReplicas:   5,
+				ScalingCapped:    false,
+				MetricsAvailable: false,
+				MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
+				MetricsMessage:   "n/a",
+			})
+
+			reconcileOnce()
+
+			By("Verifying ScalingCapped condition is False")
+			Eventually(func(g Gomega) {
+				resource := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+				condition := llmdVariantAutoscalingV1alpha1.GetCondition(resource, llmdVariantAutoscalingV1alpha1.TypeScalingCapped)
+				g.Expect(condition).NotTo(BeNil(), "ScalingCapped condition should be set")
+				g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(condition.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonNotCapped))
+			}, 5*time.Second, 500*time.Millisecond).Should(Succeed())
+		})
+	})
+
 	Context("Metrics Recording", func() {
 		const resourceName = "metrics-test-resource"
 		ctx := context.Background()

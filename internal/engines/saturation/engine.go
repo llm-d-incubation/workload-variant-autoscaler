@@ -1630,6 +1630,8 @@ func (e *Engine) applySaturationDecisions(
 				MetricsAvailable:  metricsAvailable,
 				MetricsReason:     metricsReason,
 				MetricsMessage:    metricsMessage,
+				ScalingCapped:     decision.ScalingCapped,
+				UncappedReplicas:  decision.UncappedReplicas,
 			})
 
 			// 2. Trigger Reconciler

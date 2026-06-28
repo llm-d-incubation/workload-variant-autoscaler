@@ -312,6 +312,14 @@ type VariantDecision struct {
 	// nil means not set (no cap).
 	MaxReplicas *int
 
+	// --- Cap visibility ---
+	// ScalingCapped is true when TargetReplicas was clamped down to MaxReplicas,
+	// i.e. the analyzer wanted more replicas than the cap allows.
+	ScalingCapped bool
+	// UncappedReplicas is the recommended target replica count before the
+	// MaxReplicas clamp. Only meaningful when ScalingCapped is true.
+	UncappedReplicas int
+
 	// --- Metrics availability ---
 	// MetricsAvailable indicates whether saturation metrics were available for this decision
 	MetricsAvailable bool
