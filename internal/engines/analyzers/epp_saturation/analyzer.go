@@ -198,6 +198,10 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		Utilization:       utilization,
 		RequiredCapacity:  requiredCapacity,
 		SpareCapacity:     spareCapacity,
+		// Observability: preserve the uncapped raw vs smoothed signal so the
+		// engine can emit them as metrics (Utilization above is capped at 1.0).
+		RawSignal:      rawSaturation,
+		SmoothedSignal: saturationScore,
 	}, nil
 }
 

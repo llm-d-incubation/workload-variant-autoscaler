@@ -191,6 +191,24 @@ const (
 	// pod locator resolved them). Makes the otherwise-silent skip visible.
 	// Labels: namespace, reason
 	WVAPodMappingMissTotal = "wva_pod_mapping_miss_total"
+
+	// WVAEppSaturationRaw is a gauge that tracks the raw (pre-EMA) EPP pool
+	// saturation signal feeding the epp-saturation analyzer. Emitted alongside
+	// WVAEppSaturationSmoothed so operators can tune smoothingAlpha against their
+	// workload.
+	// Labels: variant_name, namespace, model_name
+	WVAEppSaturationRaw = "wva_epp_saturation_raw"
+
+	// WVAEppSaturationSmoothed is a gauge that tracks the EMA-smoothed EPP pool
+	// saturation signal actually used in the scaling math.
+	// Labels: variant_name, namespace, model_name
+	WVAEppSaturationSmoothed = "wva_epp_saturation_smoothed"
+
+	// WVAScaleCapped is a gauge that is 1 when the scaling recommendation for a
+	// variant was clamped down to maxReplicas, 0 otherwise. Lets operators
+	// distinguish "system is fine at the cap" from "wanted more but was blocked".
+	// Labels: variant_name, namespace, model_name
+	WVAScaleCapped = "wva_scale_capped"
 )
 
 // Pod-mapping miss reasons (values for the `reason` label of WVAPodMappingMissTotal).

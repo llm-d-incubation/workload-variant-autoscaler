@@ -120,6 +120,15 @@ type AnalyzerResult struct {
 	// RoleCapacities holds per-role capacity aggregation for P/D disaggregated models.
 	// nil when no disaggregation is active (all variants are role "both").
 	RoleCapacities map[string]RoleCapacity
+
+	// RawSignal and SmoothedSignal are optional observability values for analyzers
+	// that derive their utilization from a single smoothed signal (the
+	// epp-saturation analyzer). RawSignal is the value before smoothing,
+	// SmoothedSignal the value after. Unlike Utilization (capped to 0.0-1.0),
+	// these preserve the uncapped magnitude. Analyzers that don't smooth leave
+	// both zero.
+	RawSignal      float64
+	SmoothedSignal float64
 }
 
 // VariantCapacity holds per-variant capacity data in analyzer-specific units.

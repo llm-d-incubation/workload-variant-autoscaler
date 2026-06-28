@@ -126,6 +126,15 @@ func (e *Engine) optimizeEPPSaturation(
 			"requiredCapacity", result.RequiredCapacity,
 			"spareCapacity", result.SpareCapacity)
 
+		// Emit raw vs smoothed saturation per variant so operators can observe the
+		// EMA and tune smoothingAlpha. The pool-level signal applies to every
+		// variant in the model.
+		for i := range modelVAs {
+			va := &modelVAs[i]
+			e.metricsEmitter.RecordEPPSaturationMetrics(ctx, va.Name, va.Namespace, modelID,
+				result.RawSignal, result.SmoothedSignal)
+		}
+
 		requests = append(requests, pipeline.ModelScalingRequest{
 			ModelID:   modelID,
 			Namespace: namespace,

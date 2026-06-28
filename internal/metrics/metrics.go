@@ -72,6 +72,11 @@ var (
 	kvCacheTokensUsed     *prometheus.GaugeVec
 	kvCacheTokensCapacity *prometheus.GaugeVec
 
+	// EPP saturation analyzer observability metrics
+	eppSaturationRaw      *prometheus.GaugeVec
+	eppSaturationSmoothed *prometheus.GaugeVec
+	scaleCapped           *prometheus.GaugeVec
+
 	// controllerInstance stores the optional controller instance identifier.
 	// When set, it's added as a label to all emitted metrics.
 	controllerInstance string
@@ -188,6 +193,27 @@ func InitMetrics(registry prometheus.Registerer) error {
 		prometheus.GaugeOpts{
 			Name: constants.WVAKvCacheTokensCapacity,
 			Help: "Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).",
+		},
+		satModelLabels,
+	)
+	eppSaturationRaw = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAEppSaturationRaw,
+			Help: "Raw (pre-EMA) EPP pool saturation signal feeding the epp-saturation analyzer.",
+		},
+		satModelLabels,
+	)
+	eppSaturationSmoothed = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAEppSaturationSmoothed,
+			Help: "EMA-smoothed EPP pool saturation signal used in the epp-saturation scaling math.",
+		},
+		satModelLabels,
+	)
+	scaleCapped = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAScaleCapped,
+			Help: "1 when the scaling recommendation for a variant was clamped to maxReplicas, 0 otherwise.",
 		},
 		satModelLabels,
 	)
@@ -440,6 +466,15 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(kvCacheTokensCapacity); err != nil {
 		return fmt.Errorf("failed to register kvCacheTokensCapacity metric: %w", err)
+	}
+	if err := registry.Register(eppSaturationRaw); err != nil {
+		return fmt.Errorf("failed to register eppSaturationRaw metric: %w", err)
+	}
+	if err := registry.Register(eppSaturationSmoothed); err != nil {
+		return fmt.Errorf("failed to register eppSaturationSmoothed metric: %w", err)
+	}
+	if err := registry.Register(scaleCapped); err != nil {
+		return fmt.Errorf("failed to register scaleCapped metric: %w", err)
 	}
 
 	return nil
@@ -852,4 +887,52 @@ func (m *MetricsEmitter) RecordSaturationMetrics(
 	requiredCapacity.With(requiredLabels).Set(required)
 	kvCacheTokensUsed.With(modelLabels).Set(float64(kvTokensUsed))
 	kvCacheTokensCapacity.With(modelLabels).Set(float64(kvTokensCapacity))
+}
+
+// eppSaturationLabels builds the model-level label set shared by the
+// epp-saturation observability gauges, applying the optional controller_instance
+// label when configured.
+func eppSaturationLabels(variantName, namespace, modelID string) prometheus.Labels {
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelNamespace:   namespace,
+		constants.LabelModelName:   modelID,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	return labels
+}
+
+// RecordEPPSaturationMetrics records the raw (pre-EMA) and smoothed EPP pool
+// saturation signals for a variant so operators can observe the smoothing and
+// tune smoothingAlpha. No-op if InitMetrics has not been called.
+func (m *MetricsEmitter) RecordEPPSaturationMetrics(
+	ctx context.Context,
+	variantName, namespace, modelID string,
+	raw, smoothed float64,
+) {
+	if eppSaturationRaw == nil || eppSaturationSmoothed == nil {
+		return
+	}
+	labels := eppSaturationLabels(variantName, namespace, modelID)
+	eppSaturationRaw.With(labels).Set(raw)
+	eppSaturationSmoothed.With(labels).Set(smoothed)
+}
+
+// RecordScaleCappedMetric records whether a variant's scaling recommendation was
+// clamped to maxReplicas (1) or not (0). No-op if InitMetrics has not been called.
+func (m *MetricsEmitter) RecordScaleCappedMetric(
+	ctx context.Context,
+	variantName, namespace, modelID string,
+	capped bool,
+) {
+	if scaleCapped == nil {
+		return
+	}
+	value := 0.0
+	if capped {
+		value = 1.0
+	}
+	scaleCapped.With(eppSaturationLabels(variantName, namespace, modelID)).Set(value)
 }
