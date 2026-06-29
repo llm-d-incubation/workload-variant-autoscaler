@@ -19,6 +19,7 @@ package scaletarget
 import (
 	"testing"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -535,6 +536,8 @@ func TestLWSAccessor_GetTotalGPUsPerReplica_SupportedGPUResources(t *testing.T) 
 		},
 	}
 
+	assert.Len(t, tests, len(constants.VendorResources), "add a row when constants.VendorResources changes")
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lws := lwsWithGPURequests(tt.size, tt.resourceName, tt.leaderGPUs, tt.workerGPUs)
@@ -548,6 +551,8 @@ func TestLWSAccessor_GetTotalGPUsPerReplica_SupportedGPUResources(t *testing.T) 
 }
 
 func TestLWSAccessor_GetTotalGPUsPerReplica_MixedSupportedGPUResources(t *testing.T) {
+	// Synthetic case: verify summation across recognized GPU resource names,
+	// not a recommended production topology.
 	lws := &lwsv1.LeaderWorkerSet{
 		Spec: lwsv1.LeaderWorkerSetSpec{
 			LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
