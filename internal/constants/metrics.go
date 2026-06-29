@@ -120,7 +120,12 @@ const (
 	// Labels: variant_name, namespace, limiter_name
 	WVADecisionsLimitedTotal = "wva_decisions_limited_total"
 
-	// WVAAvailableGpus is a gauge that tracks the number of currently available GPUs.
+	// WVAGpuDiscoveryUp is a gauge that indicates whether GPU discovery is on or off.
+	WVAGpuDiscoveryUp = "wva_gpu_discovery_up"
+
+	// WVAAvailableGpus is a gauge that tracks the number of currently available GPUs. If wva_gpu_discovery_up is 1, it shows
+	// the number of currently available GPUs. If wva_gpu_discovery_up is 0, it shows the number
+	// of GPUs that were available at the last successful discovery.
 	// Labels: accelerator_type
 	WVAAvailableGpus = "wva_available_gpus"
 

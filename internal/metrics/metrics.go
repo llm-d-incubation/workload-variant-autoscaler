@@ -53,6 +53,7 @@ var (
 	// pipeline stage visibility metrics
 	decisionsLimitedTotal               *prometheus.CounterVec
 	availableGpus                       *prometheus.GaugeVec
+	gpuDiscoveryUp                      *prometheus.GaugeVec
 	enforcerModificationsTotal          *prometheus.CounterVec
 	optimizerActive                     *prometheus.GaugeVec
 	configInfoGauge                     *prometheus.GaugeVec
@@ -235,9 +236,21 @@ func InitMetrics(registry prometheus.Registerer) error {
 	availableGpus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAAvailableGpus,
-			Help: "Number of GPUs currently available",
+			Help: "Number of currently available GPUs when wva_gpu_discovery_up is 1. When wva_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery.",
 		},
 		availableGpusLabels,
+	)
+
+	gpuDiscoveryUpLabels := []string{}
+	if controllerInstance != "" {
+		gpuDiscoveryUpLabels = append(gpuDiscoveryUpLabels, constants.LabelControllerInstance)
+	}
+	gpuDiscoveryUp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAGpuDiscoveryUp,
+			Help: "Indicates whether GPU discovery is on or off",
+		},
+		gpuDiscoveryUpLabels,
 	)
 
 	enforcerModificationsLabels := []string{constants.LabelPolicyType}
@@ -392,6 +405,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(availableGpus); err != nil {
 		return fmt.Errorf("failed to register availableGpus metric: %w", err)
+	}
+	if err := registry.Register(gpuDiscoveryUp); err != nil {
+		return fmt.Errorf("failed to register gpuDiscoveryUp metric: %w", err)
 	}
 	if err := registry.Register(enforcerModificationsTotal); err != nil {
 		return fmt.Errorf("failed to register enforcerModificationsTotal metric: %w", err)
@@ -638,13 +654,17 @@ func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
 	enforcerModificationsTotal.With(labels).Inc()
 }
 
-// ResetAvailableGPUsMetric clears all previously recorded GPU metrics.
-// This should be called once before recording a new set of GPU discoveries to remove stale data.
-func (m *MetricsEmitter) ResetAvailableGPUsMetric() {
-	if availableGpus == nil {
+// SetGpuDiscoveryUp sets the GPU discovery status metric.
+// status should be 1 when GPU discovery is enabled, 0 when it is disabled.
+func SetGpuDiscoveryUp(status float64) {
+	if gpuDiscoveryUp == nil {
 		return
 	}
-	availableGpus.Reset()
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	gpuDiscoveryUp.With(labels).Set(status)
 }
 
 // RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type. acceleratorModel is

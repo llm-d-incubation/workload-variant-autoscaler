@@ -661,9 +661,34 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   }
   ```
 
+### `wva_gpu_discovery_up`
+- **Type**: Gauge
+- **Description**: Indicates whether GPU discovery is on (1) or off (0). GPU discovery is enabled when the limiter configuration is active (e.g., `enableLimiter` is `true`). This metric helps operators understand whether WVA is actively discovering GPU resources.
+- **Labels**: None (global metric, optional `controller_instance` label when multi-instance deployment is used)
+- **Use Case**: Monitor GPU discovery status to ensure resource discovery is functioning when expected
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_gpu_discovery_up",
+      "container": "manager",
+      "endpoint": "https",
+      "instance": "10.244.2.55:8443",
+      "job": "workload-variant-autoscaler-metrics",
+      "namespace": "workload-variant-autoscaler-system",
+      "pod": "workload-variant-autoscaler-controller-manager-6ddfbddf57-l5ptf",
+      "service": "workload-variant-autoscaler-metrics"
+    },
+    "value": [
+      1778846184.925,
+      "1"
+    ]
+  }
+  ```
+
 ### `wva_available_gpus`
 - **Type**: Gauge
-- **Description**: Number of currently available GPUs grouped by accelerator type (e.g., "H100", "A100"). Only available in clusters such as OpenShift where WVA can iterate over node objects. In addition, WVA only iterates over node objects when configuration such as `enableLimiter` is `true`. There is no exclusions such as tained nodes or GPUs operating in different modes such as MIG.
+- **Description**: Number of currently available GPUs grouped by accelerator type (e.g., "H100", "A100"). When `wva_gpu_discovery_up` is 1, this shows the number of currently available GPUs. When `wva_gpu_discovery_up` is 0, this metric shows the number of GPUs that were available at the last successful discovery. Only available in clusters such as OpenShift where WVA can iterate over node objects. There are no exclusions such as tainted nodes or GPUs operating in different modes such as MIG.
 - **Labels**:
   - `accelerator_vendor`: Name of the GPU vendor
   - `accelerator_model`: Full name of the accelerator
@@ -968,6 +993,12 @@ rate(wva_decisions_limited_total[5m]) by (variant_name)
 
 # Decisions limited by limiter type
 rate(wva_decisions_limited_total[5m]) by (limiter_name)
+
+# GPU discovery status
+wva_gpu_discovery_up
+
+# Check if GPU discovery is enabled
+wva_gpu_discovery_up == 1
 
 # Available GPUs by accelerator type
 wva_available_gpus
