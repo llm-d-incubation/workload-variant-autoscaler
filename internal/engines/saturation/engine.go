@@ -321,7 +321,6 @@ func (e *Engine) recordDefaultConfigMetrics() {
 	globalSatCfgMap := e.Config.SaturationConfig()
 	// record global default config
 	if cfg, ok := globalSatCfgMap["default"]; ok {
-		cfg.ApplyDefaults()
 		metrics.SetConfigKvSpareThreshold(cfg.KvSpareTrigger)
 		metrics.SetConfigQueueSpareThreshold(cfg.QueueSpareTrigger)
 		metrics.SetConfigInfo(cfg.GetAnalyzerName(), cfg.EnableLimiter, e.Config.ScaleToZeroEnabled())
