@@ -178,18 +178,27 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 	return false
 }
 
-// updateDecisionAction updates a decision's Action and Reason fields based on
-// the current TargetReplicas vs CurrentReplicas after enforcement.
+// updateDecisionAction recomputes a decision's Action from TargetReplicas vs
+// CurrentReplicas after enforcement and refreshes its reason. SetDecisionReason
+// is the single place that writes d.Action.
 func updateDecisionAction(d *interfaces.VariantDecision, optimizerName, policyType string, metricsEmitter *metrics.MetricsEmitter) {
+	var action interfaces.SaturationAction
 	switch {
 	case d.TargetReplicas > d.CurrentReplicas:
-		d.Action = interfaces.ActionScaleUp
+		action = interfaces.ActionScaleUp
 	case d.TargetReplicas < d.CurrentReplicas:
-		d.Action = interfaces.ActionScaleDown
+		action = interfaces.ActionScaleDown
 	default:
-		d.Action = interfaces.ActionNoChange
+		action = interfaces.ActionNoChange
 	}
-	d.Reason = fmt.Sprintf("V2 %s (optimizer: %s, enforced)", d.Action, optimizerName)
+	// Preserve the decision's original reason category (e.g. saturation-only on
+	// the V1 path) instead of hardcoding V2, so an enforced decision is not
+	// mis-attributed in the reason metric label. Fall back to V2 if it was unset.
+	category := d.ReasonCategory()
+	if category == "" {
+		category = interfaces.DecisionReasonV2
+	}
+	d.SetDecisionReason(action, category, fmt.Sprintf("%s %s (optimizer: %s, enforced)", category, action, optimizerName))
 
 	// finally record metric
 	metricsEmitter.RecordEnforcerMetric(policyType)

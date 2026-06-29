@@ -11,30 +11,45 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 )
 
 const (
 	scaledObjectSuffix = "-so"
 )
 
-// ScaledObjectOption configures a KEDA ScaledObject spec before it is applied.
-type ScaledObjectOption func(*kedav1alpha1.ScaledObjectSpec)
+// ScaledObjectOption configures a KEDA ScaledObject before it is applied.
+type ScaledObjectOption func(*kedav1alpha1.ScaledObject)
 
 // WithScaledObjectScaleTargetKind sets the Kind and APIVersion on the ScaledObject's ScaleTargetRef.
 func WithScaledObjectScaleTargetKind(kind string) ScaledObjectOption {
-	return func(spec *kedav1alpha1.ScaledObjectSpec) {
-		if spec.ScaleTargetRef == nil {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Spec.ScaleTargetRef == nil {
 			return
 		}
-		spec.ScaleTargetRef.Kind = kind
+		so.Spec.ScaleTargetRef.Kind = kind
 		switch kind {
 		case kindLeaderWorkerSet:
-			spec.ScaleTargetRef.APIVersion = apiVersionLWS
+			so.Spec.ScaleTargetRef.APIVersion = apiVersionLWS
 		case kindDeployment:
-			spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
+			so.Spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
 		default:
 			// Keep existing APIVersion for unknown kinds
 		}
+	}
+}
+
+// WithScaledObjectWVAAnnotations adds the WVA annotation-based discovery annotations to the
+// ScaledObject. The ScaledObject then serves as both the WVA discovery source and the KEDA scaler.
+func WithScaledObjectWVAAnnotations(modelID, cost string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[annotations.Managed] = "true"
+		so.Annotations[annotations.ModelID] = modelID
+		so.Annotations[annotations.VariantCost] = cost
 	}
 }
 
@@ -136,9 +151,6 @@ func buildScaledObject(namespace, name, scaleTargetName, vaName string, minRepli
 			},
 		},
 	}
-	for _, opt := range opts {
-		opt(&spec)
-	}
 	so := &kedav1alpha1.ScaledObject{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      objName,
@@ -146,6 +158,9 @@ func buildScaledObject(namespace, name, scaleTargetName, vaName string, minRepli
 			Labels:    map[string]string{"test-resource": defaultTestResourceLabelValue},
 		},
 		Spec: spec,
+	}
+	for _, opt := range opts {
+		opt(so)
 	}
 	return so
 }

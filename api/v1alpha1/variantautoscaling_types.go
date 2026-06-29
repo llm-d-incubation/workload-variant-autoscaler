@@ -89,6 +89,7 @@ type ActuationStatus struct {
 	Applied bool `json:"applied"`
 }
 
+// +kubebuilder:deprecatedversion:warning="VariantAutoscaling is deprecated and will be removed in a future release. Migrate to the annotation-based path (add llm-d.ai/managed=true to your HPA or ScaledObject). See docs/developer-guide/migrating-from-va-crd.md for migration steps."
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=va

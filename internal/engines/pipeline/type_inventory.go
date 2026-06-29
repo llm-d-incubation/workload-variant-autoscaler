@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"sync"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
@@ -286,15 +290,36 @@ type typeAllocator struct {
 // The accelerator type is determined from the decision's AcceleratorName field.
 // Returns the actual GPUs allocated (may be less than requested if the type's
 // pool is exhausted).
-func (a *typeAllocator) TryAllocate(decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (a *typeAllocator) TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}
 
 	accType := decision.AcceleratorName
-	if accType == "" {
-		return 0, fmt.Errorf("decision for %s/%s has no AcceleratorName specified",
-			decision.Namespace, decision.VariantName)
+	if !constants.IsAcceleratorResolved(accType) {
+		// Normally resolved by DefaultLimiter.resolveUnknownAccelerators before
+		// reaching here. This is a safety net for direct callers.
+		if len(a.remainingByType) == 1 {
+			for resolvedType := range a.remainingByType {
+				decision.AcceleratorName = resolvedType
+				accType = resolvedType
+			}
+		} else {
+			// Heterogeneous cluster — can't determine which pool to debit.
+			// Note: #995 proposed "treat as unlimited (return all requested GPUs)"
+			// but that allows the same physical GPUs to be double-allocated: once
+			// here for the unresolved decision, and again from a typed pool for a
+			// subsequent known-type decision. Returning 0 is safer — the variant
+			// keeps its current replicas without over-allocating. Operator must
+			// set nodeSelector or the VA label for scaling in mixed-GPU clusters.
+			ctrl.LoggerFrom(ctx).WithName("typeAllocator").V(logging.DEBUG).Info(
+				"Skipping allocation: accelerator unresolved in heterogeneous cluster — operator must set nodeSelector or VA label",
+				"variant", decision.VariantName,
+				"namespace", decision.Namespace,
+				"availableTypes", len(a.remainingByType),
+				"gpusRequested", gpusRequested)
+			return 0, nil
+		}
 	}
 
 	available := a.remainingByType[accType]

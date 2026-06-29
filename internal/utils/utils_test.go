@@ -149,6 +149,38 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 			expected: "nvidia-tesla-v100",
 		},
 		{
+			name: "intel_gaudi_from_nodeSelector",
+			va:   &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
+			deployment: &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							NodeSelector: map[string]string{
+								"habana.ai/product.name": "Intel-Gaudi-2-96GB",
+							},
+						},
+					},
+				},
+			},
+			expected: "Intel-Gaudi-2-96GB",
+		},
+		{
+			name: "intel_gpu_from_nodeSelector",
+			va:   &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
+			deployment: &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							NodeSelector: map[string]string{
+								"gpu.intel.com/product": "Max_1100",
+							},
+						},
+					},
+				},
+			},
+			expected: "Max_1100",
+		},
+		{
 			name: "nvidia_gpu_from_required_nodeAffinity",
 			va:   &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
 			deployment: &appsv1.Deployment{
@@ -298,13 +330,13 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 			expected:   "T4",
 		},
 		{
-			name:       "nil_va_and_deployment_returns_empty",
+			name:       "nil_va_and_deployment_returns_default",
 			va:         nil,
 			deployment: nil,
-			expected:   "",
+			expected:   constants.DefaultAcceleratorName,
 		},
 		{
-			name: "no_gpu_info_returns_empty",
+			name: "no_gpu_info_returns_default",
 			va:   &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{},
 			deployment: &appsv1.Deployment{
 				Spec: appsv1.DeploymentSpec{
@@ -313,7 +345,7 @@ func TestGetAcceleratorNameFromScaleTarget(t *testing.T) {
 					},
 				},
 			},
-			expected: "",
+			expected: constants.DefaultAcceleratorName,
 		},
 	}
 

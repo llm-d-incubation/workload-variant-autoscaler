@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/prometheus/client_golang/prometheus"
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -49,7 +50,7 @@ import (
 )
 
 var _ = Describe("VariantAutoscalings Controller", func() {
-	Context("When reconciling a resource", func() {
+	Context("When reconciling a resource", Ordered, func() {
 		const resourceName = "test-resource"
 
 		ctx := context.Background()
@@ -111,6 +112,16 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			By("Cleanup the specific resource instance VariantAutoscalings")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 
+			By("Deleting the scale target ref deployment")
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+			}
+			err = k8sClient.Delete(ctx, deployment)
+			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
+
 			By("Deleting the configmap resources")
 			configMap := &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
@@ -146,6 +157,44 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
+		})
+
+		It("should emit a Deprecation warning event and annotate the VA on first reconcile", func() {
+			By("Setting up reconciler with a fake recorder")
+			fakeRecorder := record.NewFakeRecorder(10)
+			controllerReconciler := &VariantAutoscalingReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Recorder:  fakeRecorder,
+				Datastore: datastore.NewDatastore(config.NewTestConfig()),
+			}
+
+			By("Reconciling the created resource (first time)")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Deprecated warning event was emitted")
+			select {
+			case event := <-fakeRecorder.Events:
+				Expect(event).To(ContainSubstring("Warning"))
+				Expect(event).To(ContainSubstring("Deprecated"))
+			case <-time.After(2 * time.Second):
+				Fail("Expected Deprecated event but none received")
+			}
+
+			By("Verifying the deprecation-warned annotation was set on the VA")
+			updated := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue("llm-d.ai/deprecation-warned", "true"))
+
+			By("Reconciling a second time — no new event should be emitted")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Consistently(fakeRecorder.Events, 1*time.Second).ShouldNot(Receive(ContainSubstring("Deprecated")))
 		})
 	})
 

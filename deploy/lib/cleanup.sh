@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 #
 # Undeploy and cleanup helpers for deploy/install.sh.
-# Requires vars: KEDA_NAMESPACE, MONITORING_NAMESPACE, LLMD_NS, WVA_NS,
-# EXAMPLE_DIR, WVA_PROJECT, LLM_D_PROJECT, GATEWAY_PROVIDER.
+# Requires vars: KEDA_NAMESPACE, MONITORING_NAMESPACE, LLMD_NS, WVA_NS, WVA_PROJECT.
 # Requires funcs: stop_apiservice_guard(), containsElement(),
-# undeploy_prometheus_stack(), delete_namespaces(), log_*().
+# undeploy_prometheus_stack(), delete_namespaces(), undeploy_epp(), log_*().
 #
 
 undeploy_keda() {
@@ -38,62 +37,35 @@ undeploy_prometheus_adapter() {
     log_success "Prometheus Adapter uninstalled"
 }
 
-undeploy_llm_d_infrastructure() {
-    log_info "Undeploying the llm-d infrastructure..."
-
-    # Determine release name based on environment
-    local RELEASE=""
-    if ! containsElement "$ENVIRONMENT" "${NON_EMULATED_ENV_LIST[@]}" ; then
-        RELEASE="$NAMESPACE_SUFFIX"
-    else
-        RELEASE="$WELL_LIT_PATH_NAME"
-    fi
-
-    # Helm uninstall only needs the release name and namespace — it does not
-    # require the local llm-d clone directory. Always attempt to remove the
-    # releases so cluster resources are cleaned up even when the local repo
-    # has already been deleted or was never cloned.
-    log_info "Removing llm-d core components..."
-
-    helm uninstall "infra-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d infra components not found or already uninstalled"
-    helm uninstall "gaie-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d inference-scheduler components not found or already uninstalled"
-    helm uninstall "ms-$RELEASE" -n "${LLMD_NS}" 2>/dev/null || \
-        log_warning "llm-d ModelService components not found or already uninstalled"
-
-    if [ ! -d "$EXAMPLE_DIR" ]; then
-        log_warning "llm-d example directory not found, skipping local cleanup"
-    fi
-
-    # Remove HF token secret
-    kubectl delete secret llm-d-hf-token -n "${LLMD_NS}" --ignore-not-found
-
-    # Remove Gateway provider if installed by the script
-    if [[ "$INSTALL_GATEWAY_CTRLPLANE" == true ]]; then
-        log_info "Removing Gateway provider..."
-        helmfile destroy -f "$GATEWAY_PREREQ_DIR/$GATEWAY_PROVIDER.helmfile.yaml" 2>/dev/null || \
-            log_warning "Gateway provider cleanup incomplete"
-        kubectl delete namespace "${GATEWAY_PROVIDER}-system" --ignore-not-found 2>/dev/null || true
-
-    fi
-
-    log_info "Deleting llm-d cloned repository..."
-    if [ ! -d "$WVA_PROJECT/$LLM_D_PROJECT" ]; then
-        log_warning "llm-d repository directory not found, skipping deletion"
-    else
-        rm -rf "$WVA_PROJECT/$LLM_D_PROJECT" 2>/dev/null || \
-            log_warning "Failed to delete llm-d repository directory"
-    fi
-
-    log_success "llm-d infrastructure removed"
-}
 
 undeploy_wva_controller() {
-    log_info "Uninstalling Workload-Variant-Autoscaler (release: $WVA_RELEASE_NAME)..."
+    log_info "Uninstalling Workload-Variant-Autoscaler..."
 
-    helm uninstall "$WVA_RELEASE_NAME" -n "$WVA_NS" 2>/dev/null || \
-        log_warning "Workload-Variant-Autoscaler not found or already uninstalled"
+    local kustomize_overlay
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/namespace-scoped/openshift" && pwd)"
+    else
+        kustomize_overlay="$(cd "$WVA_PROJECT/config/overlays/cluster-scoped/kubernetes" && pwd)"
+    fi
+
+    local tmp_overlay
+    tmp_overlay=$(mktemp -d)
+    ln -s "$kustomize_overlay" "$tmp_overlay/base"
+    cat > "$tmp_overlay/kustomization.yaml" <<EOF
+namespace: $WVA_NS
+resources:
+- ./base
+EOF
+
+    kubectl delete -k "$tmp_overlay" --ignore-not-found 2>/dev/null || \
+        log_warning "Workload-Variant-Autoscaler resources not found or already removed"
+    rm -rf "$tmp_overlay"
+
+    # Remove the per-deployment ClusterRoleBindings created for shared-cluster isolation.
+    kubectl delete clusterrolebinding "workload-variant-autoscaler-manager-${WVA_NS}" \
+        --ignore-not-found 2>/dev/null || true
+    kubectl delete clusterrolebinding "workload-variant-autoscaler-cluster-monitoring-view-${WVA_NS}" \
+        --ignore-not-found 2>/dev/null || true
 
     rm -f "$PROM_CA_CERT_PATH"
 
@@ -120,7 +92,8 @@ cleanup() {
         undeploy_prometheus_adapter
     fi
 
-    # llm-d is not torn down here: use deploy/install-llmd-infra.sh --undeploy (releases + optional gateway helmfile).
+    # EPP (GAIE standalone chart) is torn down via undeploy_epp() from infra_epp.sh.
+    undeploy_epp
 
     if [ "$DEPLOY_WVA" = "true" ]; then
         undeploy_wva_controller
@@ -131,11 +104,6 @@ cleanup() {
         delete_namespaces
     else
         log_info "Keeping namespaces (use --delete-namespaces or set DELETE_NAMESPACES=true to remove)"
-    fi
-
-    # Remove llm-d repository
-    if [ -d "$(dirname "$WVA_PROJECT")/$LLM_D_PROJECT" ]; then
-        log_info "llm-d repository at $(dirname "$WVA_PROJECT")/$LLM_D_PROJECT preserved (manual cleanup if needed)"
     fi
 
     echo ""

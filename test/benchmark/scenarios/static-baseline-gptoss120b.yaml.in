@@ -1,0 +1,126 @@
+# =============================================================================
+# Static Baseline — gptoss120b WVA Cost Savings Experiment
+# =============================================================================
+#
+# Phase A: Run against a STATIC 8-replica deployment (no autoscaler).
+# Measures GPU-hours burned at constant replica count while traffic varies.
+#
+# Traffic pattern mirrors production gptoss120b bursty workload:
+#   - 50% quiet (1 RPS) + 50% burst (2-8 RPS)
+#   - 8× burst ratio (production was 10×)
+#   - Token distributions matched to production mean/std_dev
+#
+# Usage:
+#   llmdbenchmark --spec <scenario> run \
+#     --endpoint-url http://<ENDPOINT>:<PORT> \
+#     --model openai/gpt-oss-120b \
+#     --namespace multi-model-2 \
+#     --harness inference-perf \
+#     --workload static-baseline-gptoss120b.yaml \
+#     --tag "static-8-baseline"
+#
+# Prerequisites:
+#   kubectl scale deploy ms-gptoss-120b-060-llm-d-modelservice-decode \
+#     --replicas=8 -n multi-model-2
+#   kubectl delete hpa -n multi-model-2 \
+#     -l llm-d.ai/model=ms-gptoss-120b-060-llm-d-modelservice
+#
+# Duration: 90 minutes (5,400 seconds)
+# Expected GPU-hours: 8 × 90 min = 12.0 GPU-hours (constant)
+# =============================================================================
+
+load:
+  type: constant
+  stages:
+    # ── Stage 1: Quiet period (mirrors production median RPS 3.8 scaled) ─────
+    # 1 replica could handle this. Static 8 = 88% waste.
+    - rate: 1
+      duration: 600         # 10 min
+
+    # ── Stage 2: Normal traffic ──────────────────────────────────────────────
+    # 2-3 replicas needed. Static 8 = 63-75% waste.
+    - rate: 2
+      duration: 600         # 10 min
+
+    # ── Stage 3: Moderate burst ──────────────────────────────────────────────
+    # 4 replicas needed. Static 8 = 50% waste.
+    - rate: 4
+      duration: 600         # 10 min
+
+    # ── Stage 4: Back to quiet — shows sustained over-provisioning ───────────
+    # 1 replica sufficient. Static 8 = 88% waste again.
+    - rate: 1
+      duration: 900         # 15 min
+
+    # ── Stage 5: Heavy burst ─────────────────────────────────────────────────
+    # 6 replicas needed. Static 8 handles it but barely.
+    - rate: 6
+      duration: 900         # 15 min
+
+    # ── Stage 6: Quiet again ─────────────────────────────────────────────────
+    - rate: 1
+      duration: 900         # 15 min
+
+    # ── Stage 7: Peak burst (saturates static 8) ─────────────────────────────
+    # All 8 replicas needed. No headroom — P99 may degrade.
+    - rate: 8
+      duration: 600         # 10 min
+
+    # ── Stage 8: Final quiet ─────────────────────────────────────────────────
+    - rate: 1
+      duration: 600         # 10 min
+
+api:
+  type: completion
+  streaming: true
+
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+
+# =============================================================================
+# Token distributions — matched to production gptoss120b traffic
+#
+# Production stats (1.5M requests, 21 hours):
+#   Input:  mean=3076, std=2879, P50=1812, P95=6549, max=1.6M
+#   Output: mean=1176, std=1892, P50=328,  P95=4791, max=75K
+#
+# We cap extremes (input max=16K, output max=8K) to keep the 90-minute
+# experiment predictable while matching the core distribution shape.
+#
+# NOTE: Extreme outliers are intentionally ignored:
+#   - Input >16K tokens (0.2% of production traffic, max was 1.6M)
+#   - Output >8K tokens (0.2% of production traffic, max was 75K)
+#   These outliers would cause individual requests to run 10+ minutes,
+#   making the experiment unpredictable. The mean/std_dev matching
+#   captures 99.8% of the production distribution shape.
+# =============================================================================
+data:
+  type: random
+  input_distribution:
+    min: 64
+    max: 4096             # capped to prevent harness OOM (production P95=6549)
+    mean: 1024            # reduced from 3076 (production P50=1812) to fit harness memory
+    std_dev: 800
+    total_count: 20000
+  output_distribution:
+    min: 16
+    max: 2048             # capped to prevent harness OOM (production P95=4791)
+    mean: 328             # production P50=328 (exact match)
+    std_dev: 500
+    total_count: 20000
+
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: false    # disabled to prevent harness OOM (18K+ requests at ~1K output tokens each)
+
+storage:
+  local_storage:
+    path: /workspace

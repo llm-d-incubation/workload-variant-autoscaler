@@ -13,6 +13,13 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	SimulatorImage = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
+
+	// gpuResourceDefault is the extended K8s resource type requested when none is specified.
+	gpuResourceDefault = "nvidia.com/gpu"
+)
+
 // creates a llm-d-sim deployment with the specified configuration
 func CreateLlmdSimDeployment(namespace, deployName, modelName, appLabel, port string, avgTTFT, avgITL int, replicas int32) *appsv1.Deployment {
 	return &appsv1.Deployment{
@@ -41,20 +48,19 @@ func CreateLlmdSimDeployment(namespace, deployName, modelName, appLabel, port st
 					Containers: []corev1.Container{
 						{
 							Name:            appLabel,
-							Image:           "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1",
+							Image:           SimulatorImage,
 							ImagePullPolicy: corev1.PullAlways,
 							Args: []string{
 								"--model",
 								modelName,
 								"--port",
 								port,
-								fmt.Sprintf("--time-to-first-token=%d", avgTTFT),
-								fmt.Sprintf("--inter-token-latency=%d", avgITL),
+								fmt.Sprintf("--time-to-first-token=%dms", avgTTFT),
+								fmt.Sprintf("--inter-token-latency=%dms", avgITL),
 								"--mode=random",
 								"--enable-kvcache",
 								"--kv-cache-size=1024",
 								"--block-size=16",
-								"--tokenizers-cache-dir=/tmp",
 							},
 							Env: []corev1.EnvVar{
 								{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{
@@ -90,30 +96,29 @@ func CreateLlmdSimDeployment(namespace, deployName, modelName, appLabel, port st
 
 // CreateLlmdSimDeploymentWithGPU creates a llm-d-sim deployment with GPU resource requests.
 // gpusPerReplica specifies the number of GPUs to request per replica.
-// gpuType specifies the GPU vendor: "nvidia", "amd", or "intel" (defaults to "nvidia" if empty).
+// gpuResource specifies the GPU (vendor specific) extended K8s resource type to request.
 // If gpusPerReplica is 0, no GPU resources are requested (same as CreateLlmdSimDeployment).
-func CreateLlmdSimDeploymentWithGPU(namespace, deployName, modelName, appLabel, port string, avgTTFT, avgITL int, replicas int32, gpusPerReplica int, gpuType string) *appsv1.Deployment {
-	if gpuType == "" {
-		gpuType = "nvidia"
+func CreateLlmdSimDeploymentWithGPU(namespace, deployName, modelName, appLabel, port string, avgTTFT, avgITL int, replicas int32, gpusPerReplica int, gpuResource string) *appsv1.Deployment {
+	if gpuResource == "" {
+		gpuResource = gpuResourceDefault
 	}
-	gpuResourceName := corev1.ResourceName(gpuType + ".com/gpu")
+	gpuResourceName := corev1.ResourceName(gpuResource)
 
 	container := corev1.Container{
 		Name:            appLabel,
-		Image:           "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1",
+		Image:           SimulatorImage,
 		ImagePullPolicy: corev1.PullAlways,
 		Args: []string{
 			"--model",
 			modelName,
 			"--port",
 			port,
-			fmt.Sprintf("--time-to-first-token=%d", avgTTFT),
-			fmt.Sprintf("--inter-token-latency=%d", avgITL),
+			fmt.Sprintf("--time-to-first-token=%dms", avgTTFT),
+			fmt.Sprintf("--inter-token-latency=%dms", avgITL),
 			"--mode=random",
 			"--enable-kvcache",
 			"--kv-cache-size=1024",
 			"--block-size=16",
-			"--tokenizers-cache-dir=/tmp",
 		},
 		Env: []corev1.EnvVar{
 			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{
@@ -190,12 +195,12 @@ func CreateLlmdSimDeploymentWithGPU(namespace, deployName, modelName, appLabel, 
 func CreateLlmdSimDeploymentWithGPUAndNodeSelector(
 	namespace, deployName, modelName, appLabel, port string,
 	avgTTFT, avgITL int, replicas int32,
-	gpusPerReplica int, gpuType string,
+	gpusPerReplica int, gpuResource string,
 	nodeSelector map[string]string,
 ) *appsv1.Deployment {
 	deployment := CreateLlmdSimDeploymentWithGPU(
 		namespace, deployName, modelName, appLabel, port,
-		avgTTFT, avgITL, replicas, gpusPerReplica, gpuType,
+		avgTTFT, avgITL, replicas, gpusPerReplica, gpuResource,
 	)
 
 	if len(nodeSelector) > 0 {
@@ -224,13 +229,13 @@ func CreateLlmdSimDeploymentWithGPUAndNodeSelector(
 func CreateLlmdSimDeploymentWithGPUAndLabels(
 	namespace, deployName, modelName, appLabel, port string,
 	avgTTFT, avgITL int, replicas int32,
-	gpusPerReplica int, gpuType string,
+	gpusPerReplica int, gpuResource string,
 	nodeSelector map[string]string,
 	extraLabels map[string]string,
 ) *appsv1.Deployment {
 	deployment := CreateLlmdSimDeploymentWithGPUAndNodeSelector(
 		namespace, deployName, modelName, appLabel, port,
-		avgTTFT, avgITL, replicas, gpusPerReplica, gpuType,
+		avgTTFT, avgITL, replicas, gpusPerReplica, gpuResource,
 		nodeSelector,
 	)
 
@@ -297,6 +302,16 @@ func CreateLlmdSimServiceMonitor(name, namespace, targetNamespace, appLabel stri
 					Port:     "http",
 					Path:     "/metrics",
 					Interval: promoperator.Duration("15s"),
+					// Propagate the llm-d.ai/variant pod label into scraped metrics.
+					// __meta_* labels are only available during target relabeling, so this
+					// must live under RelabelConfigs (not MetricRelabelConfigs).
+					RelabelConfigs: []promoperator.RelabelConfig{
+						{
+							SourceLabels: []promoperator.LabelName{"__meta_kubernetes_pod_label_llm_d_ai_variant"},
+							TargetLabel:  "llm_d_ai_variant",
+							Action:       "replace",
+						},
+					},
 				},
 			},
 			NamespaceSelector: promoperator.NamespaceSelector{

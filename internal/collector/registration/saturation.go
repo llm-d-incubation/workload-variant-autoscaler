@@ -27,22 +27,22 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 
 	// KV cache usage per instance (peak over last minute)
 	// Uses max_over_time to catch saturation events between scrapes
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryKvCacheUsage,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod) (max_over_time(vllm:kv_cache_usage_perc{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (max_over_time(vllm:kv_cache_usage_perc{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Peak KV cache utilization per instance (0.0-1.0) over last minute",
 	})
 
 	// Queue length per instance (peak over last minute)
 	// Uses max_over_time to catch burst traffic
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryQueueLength,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod) (max_over_time(vllm:num_requests_waiting{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (max_over_time(vllm:num_requests_waiting{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Peak queue length per instance over last minute",
 	})
@@ -52,33 +52,42 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	// Cache config info per instance (static labels with block size and GPU blocks count)
 	// Uses max to deduplicate when multiple series exist per instance with different label combinations
 	// Used by Saturation Analyzer V2 for token capacity computation
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), llm_d_ai_variant (for direct pod-to-VA mapping), and config labels
+	//
+	// NOTE: vllm:cache_config_info is an info-style metric. Unlike vLLM's regular
+	// gauges/counters, it is NOT labeled with model_name — its label set is derived
+	// from CacheConfig fields (num_gpu_blocks, block_size, cache_dtype, ...) plus
+	// "engine". Filtering it by model_name would match nothing, so it is queried
+	// namespace-wide and the collector correlates the results to this model's pods
+	// by instance key (see CollectReplicaMetrics, which attaches cache config only
+	// to instances already discovered by the model-scoped KV/queue queries).
+	// Do not add a model_name matcher here.
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryCacheConfigInfo,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod, num_gpu_blocks, block_size) (vllm:cache_config_info{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
+		Template:    `max by (instance, pod, llm_d_ai_variant, num_gpu_blocks, block_size) (vllm:cache_config_info{namespace="{{.namespace}}"})`,
+		Params:      []string{source.ParamNamespace},
 		Description: "KV cache configuration info per instance (num_gpu_blocks and block_size as labels)",
 	})
 
 	// Average output (generation) tokens per completed request
 	// Used for output-length-dependent k2 estimation
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryAvgOutputTokens,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod) (rate(vllm:request_generation_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Average output tokens per completed request (5m rate)",
 	})
 
 	// Average input (prompt) tokens per completed request
 	// Used in k2 derivation formula: k2 = N_max × (I + O/2)
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryAvgInputTokens,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod) (rate(vllm:request_prompt_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:request_prompt_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (rate(vllm:request_prompt_tokens_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:request_prompt_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Average input tokens per completed request (5m rate)",
 	})
@@ -86,11 +95,11 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	// Prefix cache hit rate per instance (5m rate)
 	// Used to reduce estimated input token demand for scheduler-queued requests.
 	// Returns 0..1 where 1 means all prefix lookups were cache hits.
-	// Preserves both instance (IP:port for multi-vLLM pods) and pod (for pod lookup)
+	// Preserves instance (IP:port for multi-vLLM pods), pod (for pod lookup), and llm_d_ai_variant (for direct pod-to-VA mapping)
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryPrefixCacheHitRate,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod) (rate(vllm:prefix_cache_hits{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:prefix_cache_queries{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (rate(vllm:prefix_cache_hits{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:prefix_cache_queries{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Prefix cache hit rate per instance (0.0-1.0, 5m rate)",
 	})

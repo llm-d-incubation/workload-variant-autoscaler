@@ -1,0 +1,64 @@
+name: CI - Doc-Only Status
+
+# pull_request_target runs in the base repo context so the token has statuses: write
+# even for fork PRs. We never checkout or execute PR code here — safe to use.
+on:
+  pull_request_target:
+    branches:
+      - main
+      - dev
+
+permissions:
+  statuses: write
+  pull-requests: read
+
+jobs:
+  doc-only-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base repo (not PR code) for paths-filter
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Check for code changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!README.md'
+              - '!CONTRIBUTING.md'
+              - '!LICENSE'
+              - '!OWNERS'
+              - '!PROJECT'
+
+      - name: Post success status for doc-only PR
+        if: steps.filter.outputs.code != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.payload.pull_request.head.sha;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const contexts = [
+              'CI - PR Checks / e2e (comment trigger)',
+              'CI - OpenShift E2E Tests / e2e (comment trigger)'
+            ];
+            for (const ctx of contexts) {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha,
+                state: 'success',
+                target_url: runUrl,
+                description: 'Skipped — doc-only PR',
+                context: ctx
+              });
+            }
+            console.log('Doc-only status posted successfully');

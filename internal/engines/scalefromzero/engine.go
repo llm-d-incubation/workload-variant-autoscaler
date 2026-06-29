@@ -24,10 +24,12 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -53,7 +55,7 @@ import (
 const (
 	MetricsReasonAvailable  = "ScaleFromZero"
 	MetricsMessageAvailable = "Scaled from zero due to pending requests"
-	reason                  = "scalefromzero mode: pending request - scale-up"
+	reasonDetails           = ": pending request - scale-up"
 	targetEPPMetricName     = "inference_extension_flow_control_queue_size"
 	targetEPPMetricLabel    = "target_model_name"
 )
@@ -61,6 +63,7 @@ const (
 type Engine struct {
 	client         client.Client
 	executor       executor.Executor
+	recorder       record.EventRecorder
 	Datastore      datastore.Datastore
 	DynamicClient  dynamic.Interface
 	Actuator       *actuator.DirectActuator
@@ -71,7 +74,7 @@ type Engine struct {
 
 // NewEngine creates a new instance of the scale-from-zero engine.
 // cfg must be non-nil (validated in main.go before engine creation).
-func NewEngine(client client.Client, mapper meta.RESTMapper, restConfig *rest.Config, ds datastore.Datastore, cfg *config.Config) (*Engine, error) {
+func NewEngine(client client.Client, recorder record.EventRecorder, mapper meta.RESTMapper, restConfig *rest.Config, ds datastore.Datastore, cfg *config.Config) (*Engine, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil in NewEngine - this should not happen")
 	}
@@ -93,6 +96,7 @@ func NewEngine(client client.Client, mapper meta.RESTMapper, restConfig *rest.Co
 
 	engine := Engine{
 		client:         client,
+		recorder:       recorder,
 		Datastore:      ds,
 		DynamicClient:  dynamicClient,
 		Actuator:       actuator,
@@ -340,7 +344,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		if err != nil {
 			return err
 		}
-		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
+		d := interfaces.VariantDecision{
 			VariantName:        va.Name,
 			Namespace:          va.Namespace,
 			ModelID:            va.Spec.ModelID,
@@ -353,11 +357,12 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			SafetyOverride:     false,
 			ModelBasedDecision: false,
 			AcceleratorName:    accelerator,
-			Reason:             reason, // Reason for scaling up
 			MetricsAvailable:   true,
 			MetricsReason:      MetricsReasonAvailable,
 			MetricsMessage:     MetricsMessageAvailable,
-		})
+		}
+		d.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		common.DecisionCache.Set(va.Name, va.Namespace, d)
 	} else {
 		if decision.CurrentReplicas == 0 {
 			decision.TargetReplicas = targetWorkloadReplicas
@@ -367,7 +372,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			decision.SaturationBased = false
 			decision.SafetyOverride = false
 			decision.ModelBasedDecision = false
-			decision.Reason = reason
+			decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 			decision.AcceleratorName = accelerator
 			decision.MetricsAvailable = true
 			decision.MetricsReason = MetricsReasonAvailable
@@ -391,8 +396,12 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		wvav1alpha1.TypeOptimizationReady,
 		metav1.ConditionTrue,
 		"ScaleFromZeroMode",
-		"scalefromzero decision: "+reason)
+		"scalefromzero decision: "+string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 
+	// Record event just before Actuation.Applied = true
+	if hasDecision && targetWorkloadReplicas > 0 {
+		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+	}
 	va.Status.Actuation.Applied = true
 
 	// 4. Trigger Reconciler
@@ -405,7 +414,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		"va", va.Name,
 		"namespace", va.Namespace,
 		"targetReplicas", targetWorkloadReplicas,
-		"reason", reason)
+		"reason", string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
 
 	return nil
 }

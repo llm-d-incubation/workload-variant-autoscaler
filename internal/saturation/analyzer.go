@@ -282,12 +282,14 @@ func (a *Analyzer) isScaleDownSafe(
 
 // CalculateSaturationTargets determines target replicas per variant based on saturation analysis.
 // Step 1: Pure saturation-based target calculation
-// Uses replica count from Saturation metrics (ready replicas) to avoid excessive scale-up.
+// Replica counts come from the scale-target status (CurrentReplicas / PendingReplicas),
+// which are group-consistent for LeaderWorkerSet; they are not derived from the number
+// of metric-reporting pods, which would be in pod units for LWS group size > 1.
 // Rules:
-// - If ANY variant is transitioning (desired ≠ current OR metrics ≠ current): block all scaling for the model
-// - Else if Saturation needs scale-up: cheapest variant (without pending replicas) gets readyReplicas+1
-// - Else if Saturation allows scale-down: most expensive variant gets readyReplicas-1
-// - Else: target = readyReplicas (replicas with metrics)
+// - If ANY variant is transitioning (desired ≠ current OR pending > 0): block all scaling for the model
+// - Else if Saturation needs scale-up: cheapest variant (without pending replicas) gets currentReplicas+1
+// - Else if Saturation allows scale-down: most expensive variant gets currentReplicas-1
+// - Else: target = currentReplicas
 func (a *Analyzer) CalculateSaturationTargets(
 	ctx context.Context,
 	saturationAnalysis *interfaces.ModelSaturationAnalysis,
@@ -329,12 +331,19 @@ func (a *Analyzer) CalculateSaturationTargets(
 				fmt.Sprintf("%s: desired(%d)!=current(%d)", va.VariantName, state.DesiredReplicas, state.CurrentReplicas))
 		}
 
-		// Check 2: Metrics vs Current mismatch (pods not yet ready/reporting)
-		metricsCurrentMismatch := va.ReplicaCount != state.CurrentReplicas
-		if metricsCurrentMismatch {
+		// Check 2: Pods not yet ready (scale-up in progress / cold start)
+		// Use PendingReplicas (CurrentReplicas - ReadyReplicas, from scale-target
+		// status) rather than comparing va.ReplicaCount (count of metric-reporting
+		// pod instances) against state.CurrentReplicas. Those two are in different
+		// units for LeaderWorkerSet: CurrentReplicas counts groups while
+		// va.ReplicaCount counts pods, so for a group size > 1 the equality check
+		// was permanently true and blocked all scaling ("model in transition"
+		// forever). PendingReplicas is group-consistent and is already the signal
+		// used for per-variant pending-skip below.
+		if state.PendingReplicas > 0 {
 			modelInTransition = true
 			transitionReasons = append(transitionReasons,
-				fmt.Sprintf("%s: metrics(%d)!=current(%d)", va.VariantName, va.ReplicaCount, state.CurrentReplicas))
+				fmt.Sprintf("%s: pending(%d)", va.VariantName, state.PendingReplicas))
 		}
 	}
 
@@ -356,10 +365,17 @@ func (a *Analyzer) CalculateSaturationTargets(
 					"variant", va.VariantName, "current", state.CurrentReplicas)
 			}
 		} else {
-			// Model stable: use metrics count
-			targets[va.VariantName] = va.ReplicaCount
-			logger.V(logging.DEBUG).Info("Target initialized to metrics count (stable)",
-				"variant", va.VariantName, "count", va.ReplicaCount)
+			// Model stable: base the target on current replicas (scale-target
+			// status), not va.ReplicaCount. va.ReplicaCount is the number of
+			// metric-reporting pod instances, which for a LeaderWorkerSet group
+			// size > 1 exceeds the replica (group) count and would over-scale.
+			// The model only reaches this branch when not in transition, so
+			// PendingReplicas == 0 and CurrentReplicas == ReadyReplicas; using
+			// CurrentReplicas preserves the prior "ready replicas" base for
+			// Deployments while staying group-consistent for LWS.
+			targets[va.VariantName] = state.CurrentReplicas
+			logger.V(logging.DEBUG).Info("Target initialized to current replicas (stable)",
+				"variant", va.VariantName, "count", state.CurrentReplicas)
 		}
 	}
 
