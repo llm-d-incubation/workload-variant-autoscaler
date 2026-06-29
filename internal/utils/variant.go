@@ -187,7 +187,11 @@ func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) ([]w
 	// List VAs using the informer cache with optional label selector
 	var vaList wvav1alpha1.VariantAutoscalingList
 	if err := k8sClient.List(ctx, &vaList, listOpts...); err != nil {
-		return nil, err
+		if !apimeta.IsNoMatchError(err) {
+			return nil, err
+		}
+		// The deprecated VA CRD is optional in annotation mode; treat its
+		// absence as an empty CRD-sourced list and continue with HPA/SO discovery.
 	}
 
 	// Filter out VAs being deleted

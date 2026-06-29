@@ -2,6 +2,7 @@ package crd
 
 import (
 	"github.com/go-logr/logr"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
@@ -16,23 +17,40 @@ type serverGroupsAndResourcesIface interface {
 // registered in the cluster. It is called once at startup; dynamic CRD installation
 // after the controller starts is not yet handled.
 func CheckCRDInstalled(restConfig *rest.Config, groupVersion, kind string, logger logr.Logger) bool {
+	installed, err := DetectCRDInstalled(restConfig, groupVersion, kind, logger)
+	if err != nil {
+		logger.Error(err, "failed to discover API resources",
+			"groupVersion", groupVersion, "kind", kind)
+	}
+	return installed
+}
+
+// DetectCRDInstalled reports whether a CRD with the given groupVersion and kind
+// is registered in the cluster, returning an error when discovery could not
+// determine API resources at all.
+func DetectCRDInstalled(restConfig *rest.Config, groupVersion, kind string, logger logr.Logger) (bool, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
 	if err != nil {
-		logger.Error(err, "failed to create discovery client for CRD detection",
-			"groupVersion", groupVersion, "kind", kind)
-		return false
+		return false, err
 	}
-	return checkCRDInstalled(discoveryClient, groupVersion, kind, logger)
+	return detectCRDInstalled(discoveryClient, groupVersion, kind, logger)
 }
 
 func checkCRDInstalled(disc serverGroupsAndResourcesIface, groupVersion, kind string, logger logr.Logger) bool {
+	installed, err := detectCRDInstalled(disc, groupVersion, kind, logger)
+	if err != nil {
+		logger.Error(err, "failed to discover API resources",
+			"groupVersion", groupVersion, "kind", kind)
+	}
+	return installed
+}
+
+func detectCRDInstalled(disc serverGroupsAndResourcesIface, groupVersion, kind string, logger logr.Logger) (bool, error) {
 	_, apiLists, err := disc.ServerGroupsAndResources()
 	if err != nil {
 		// Partial errors are common (e.g. unavailable API services); continue if we got results.
 		if apiLists == nil {
-			logger.Error(err, "failed to discover API resources",
-				"groupVersion", groupVersion, "kind", kind)
-			return false
+			return false, err
 		}
 		logger.V(1).Info("partial error discovering API resources (this is usually fine)", "error", err)
 	}
@@ -41,13 +59,13 @@ func checkCRDInstalled(disc serverGroupsAndResourcesIface, groupVersion, kind st
 		if apiList.GroupVersion == groupVersion {
 			for _, resource := range apiList.APIResources {
 				if resource.Kind == kind {
-					return true
+					return true, nil
 				}
 			}
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // CheckKEDACRD reports whether the KEDA ScaledObject CRD is installed.
@@ -60,4 +78,10 @@ func CheckKEDACRD(restConfig *rest.Config, logger logr.Logger) bool {
 // TODO: checked once at startup; handle LWS installed after controller starts.
 func CheckLeaderWorkerSetCRD(restConfig *rest.Config, logger logr.Logger) bool {
 	return CheckCRDInstalled(restConfig, "leaderworkerset.x-k8s.io/v1", "LeaderWorkerSet", logger)
+}
+
+// CheckVariantAutoscalingCRD reports whether the deprecated VA CRD is installed.
+// Annotation-only deployments should continue when this returns false with no error.
+func CheckVariantAutoscalingCRD(restConfig *rest.Config, logger logr.Logger) (bool, error) {
+	return DetectCRDInstalled(restConfig, llmdVariantAutoscalingV1alpha1.GroupVersion.String(), "VariantAutoscaling", logger)
 }

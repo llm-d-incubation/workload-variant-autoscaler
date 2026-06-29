@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -81,6 +82,31 @@ func TestCheckCRDInstalled(t *testing.T) {
 		}
 		if checkCRDInstalled(disc, "keda.sh/v1alpha1", "ScaledObject", log) {
 			t.Error("want false when discovery returns no results at all")
+		}
+	})
+
+	t.Run("detect total failure returns error", func(t *testing.T) {
+		disc := &fakeDiscovery{
+			apiLists: nil,
+			err:      errors.New("discovery completely failed"),
+		}
+		installed, err := detectCRDInstalled(disc, "keda.sh/v1alpha1", "ScaledObject", log)
+		if err == nil {
+			t.Fatal("want error when discovery returns no results at all")
+		}
+		if installed {
+			t.Error("want false when discovery cannot determine CRD availability")
+		}
+	})
+
+	t.Run("VariantAutoscaling uses canonical llmd.ai group version", func(t *testing.T) {
+		disc := &fakeDiscovery{
+			apiLists: []*metav1.APIResourceList{
+				apiList(wvav1alpha1.GroupVersion.String(), "VariantAutoscaling"),
+			},
+		}
+		if !checkCRDInstalled(disc, wvav1alpha1.GroupVersion.String(), "VariantAutoscaling", log) {
+			t.Error("want true for VariantAutoscaling in the canonical API group")
 		}
 	})
 }
