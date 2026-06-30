@@ -23,10 +23,10 @@ spec:
       expr: max_over_time(wva_models_processed[10m]) == 0 or absent_over_time(wva_models_processed[10m])
       for: 15m
       labels:
-        severity: critical
+        severity: warning
       annotations:
         summary: "WVA optimization loop has stopped processing models"
-        description: "No models have been processed over a 10-minute window for at least 15 minutes (either processing 0 models or metric is absent). The optimization loop may be stalled or crashed. Check controller pod status and logs."
+        description: "No models have been processed over a 10-minute window for at least 15 minutes. This can indicate the controller is healthy but there's no models to process, or there are models to process but the optimization loop may be stalled or crashed, or there are issues with metric collection.  Check controller pod status and logs, or verify Prometheus endpoint connectivity."
 
     - alert: WVAMetricsCollectionFailing
       expr: rate(wva_metrics_collection_errors_total[5m]) > 0.5
