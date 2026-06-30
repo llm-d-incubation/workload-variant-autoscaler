@@ -74,6 +74,12 @@ type PodLocator interface {
 	// fallback in the collector (buildInstanceKey). Remove it when the
 	// VariantAutoscaling CRD is removed.
 	ResolveScaleTarget(ctx context.Context, namespace, podName string) (ref autoscalingv2.CrossVersionObjectReference, ok bool, err error)
+
+	// GetPodLabels returns the labels for the specified pod. This reuses the
+	// same pod fetch that Locate performs, so calling both methods for the
+	// same pod results in only one API read (the pod→target resolution is cached).
+	// Returns nil if the pod does not exist or on error.
+	GetPodLabels(ctx context.Context, namespace, podName string) map[string]string
 }
 
 // New constructs a PodLocator.
@@ -145,7 +151,7 @@ func (l *podLocator) ResolveScaleTarget(ctx context.Context, namespace, podName 
 // (with nil error) when the pod has no scaler-eligible ancestor or does not
 // exist. Shared by Locate and ResolveScaleTarget.
 func (l *podLocator) resolveTarget(ctx context.Context, namespace, podName string) (chainNode, error) {
-	if target, hit := l.cache.get(podKey{Namespace: namespace, Name: podName}); hit {
+	if target, hit := l.cache.getTarget(podKey{Namespace: namespace, Name: podName}); hit {
 		return target, nil
 	}
 	pod := &corev1.Pod{}
@@ -159,7 +165,7 @@ func (l *podLocator) resolveTarget(ctx context.Context, namespace, podName strin
 	if err != nil {
 		return chainNode{}, err
 	}
-	l.cache.add(podKey{Namespace: namespace, Name: podName}, target)
+	l.cache.add(podKey{Namespace: namespace, Name: podName}, target, pod.Labels)
 	return target, nil
 }
 
@@ -189,6 +195,30 @@ func (l *podLocator) LocateByVariant(ctx context.Context, namespace, variantName
 		return &ManagedScaler{ScaledObject: so}, nil
 	}
 	return nil, nil
+}
+
+func (l *podLocator) GetPodLabels(ctx context.Context, namespace, podName string) map[string]string {
+	if podName == "" {
+		return nil
+	}
+
+	// Check cache first
+	key := podKey{Namespace: namespace, Name: podName}
+	if labels, hit := l.cache.getLabels(key); hit {
+		return labels
+	}
+
+	// Not in cache, fetch the pod
+	pod := &corev1.Pod{}
+	if err := l.apiReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: podName}, pod); err != nil {
+		return nil
+	}
+
+	// Resolve the target to populate the cache (so subsequent Locate calls don't refetch)
+	target, _ := l.resolveScaleTarget(ctx, pod, namespace)
+	l.cache.add(key, target, pod.Labels)
+
+	return pod.Labels
 }
 
 // resolveScaleTarget walks the pod's ownerReferences and returns the first

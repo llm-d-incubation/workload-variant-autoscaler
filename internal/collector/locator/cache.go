@@ -19,6 +19,12 @@ type podKey struct {
 	Namespace, Name string
 }
 
+// cacheEntry holds both the scale target and pod labels for a cached pod.
+type cacheEntry struct {
+	target chainNode
+	labels map[string]string
+}
+
 // resolutionCache memoizes pod → top-level scale-target resolution. The
 // scale-target → managed scaler step is NOT cached; it always runs through
 // the field index so annotation toggles and scaleTargetRef edits take
@@ -29,27 +35,37 @@ type podKey struct {
 // rules (controllers cannot be changed after creation), so cached entries
 // are correct for the lifetime of the cached pod.
 type resolutionCache struct {
-	c *lru.Cache[podKey, chainNode]
+	c *lru.Cache[podKey, cacheEntry]
 }
 
 func newResolutionCache(size int) (*resolutionCache, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("cache size must be > 0, got %d", size)
 	}
-	c, err := lru.New[podKey, chainNode](size)
+	c, err := lru.New[podKey, cacheEntry](size)
 	if err != nil {
 		return nil, err
 	}
 	return &resolutionCache{c: c}, nil
 }
 
-// get returns the cached top-level scale-target for the pod. The hit boolean
+// getTarget returns the cached top-level scale-target for the pod. The hit boolean
 // is true even for negative entries (target == zero chainNode means the pod
 // has no scaler-eligible ancestor).
-func (r *resolutionCache) get(k podKey) (chainNode, bool) {
-	return r.c.Get(k)
+func (r *resolutionCache) getTarget(k podKey) (chainNode, bool) {
+	entry, ok := r.c.Get(k)
+	return entry.target, ok
 }
 
-func (r *resolutionCache) add(k podKey, target chainNode) {
-	r.c.Add(k, target)
+// getLabels returns the cached pod labels. Returns nil if not found.
+func (r *resolutionCache) getLabels(k podKey) (map[string]string, bool) {
+	entry, ok := r.c.Get(k)
+	return entry.labels, ok
+}
+
+func (r *resolutionCache) add(k podKey, target chainNode, labels map[string]string) {
+	r.c.Add(k, cacheEntry{
+		target: target,
+		labels: labels,
+	})
 }

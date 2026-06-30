@@ -102,6 +102,9 @@ const (
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
 
+	// LeaderWorkerSet labels
+	LWSWorkerIndexLabel = "leaderworkerset.sigs.k8s.io/worker-index"
+
 	// K8s Events
 	K8SEventScaledUp                  = "ScaledUp"
 	K8SEventScaledDown                = "ScaledDown"

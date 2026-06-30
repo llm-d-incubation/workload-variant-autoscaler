@@ -167,28 +167,39 @@ func TestBuildInstanceKey_VANameExtraction(t *testing.T) {
 
 // mockLocator implements locator.PodLocator for testing.
 type mockLocator struct {
-	locateFunc  func(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error)
-	resolveFunc func(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error)
+	locateFunc       func(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error)
+	resolveFunc      func(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error)
+	getPodLabelsFunc func(ctx context.Context, namespace, podName string) map[string]string
 }
 
 func (m *mockLocator) Locate(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error) {
-	if m.locateFunc != nil {
-		return m.locateFunc(ctx, namespace, podName)
+	if m == nil || m.locateFunc == nil {
+		return nil, nil
 	}
-	return nil, nil
+	return m.locateFunc(ctx, namespace, podName)
 }
 
 func (m *mockLocator) LocateByVariant(_ context.Context, _, _ string) (*locator.ManagedScaler, error) {
+	if m == nil {
+		return nil, nil
+	}
 	return nil, nil
 }
 
 // TODO(va-removal): remove ResolveScaleTarget from the mock when the CRD-based
 // dual-mode fallback (and the interface method) are removed.
 func (m *mockLocator) ResolveScaleTarget(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error) {
-	if m.resolveFunc != nil {
-		return m.resolveFunc(ctx, namespace, podName)
+	if m == nil || m.resolveFunc == nil {
+		return autoscalingv2.CrossVersionObjectReference{}, false, nil
 	}
-	return autoscalingv2.CrossVersionObjectReference{}, false, nil
+	return m.resolveFunc(ctx, namespace, podName)
+}
+
+func (m *mockLocator) GetPodLabels(ctx context.Context, namespace, podName string) map[string]string {
+	if m == nil || m.getPodLabelsFunc == nil {
+		return nil
+	}
+	return m.getPodLabelsFunc(ctx, namespace, podName)
 }
 
 // TestBuildInstanceKey_VACRDNameDiffersFromHPAName is the regression test for

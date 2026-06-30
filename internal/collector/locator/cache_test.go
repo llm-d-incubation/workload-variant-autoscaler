@@ -12,18 +12,18 @@ func TestResolutionCache_HitMissEvict(t *testing.T) {
 	b := podKey{Namespace: "ns", Name: "b"}
 	x := podKey{Namespace: "ns", Name: "x"}
 
-	c.add(a, chainNode{Namespace: "ns", Kind: "Deployment", Name: "da"})
-	c.add(b, chainNode{Namespace: "ns", Kind: "Deployment", Name: "db"})
+	c.add(a, chainNode{Namespace: "ns", Kind: "Deployment", Name: "da"}, map[string]string{"app": "a"})
+	c.add(b, chainNode{Namespace: "ns", Kind: "Deployment", Name: "db"}, map[string]string{"app": "b"})
 
-	if got, hit := c.get(a); !hit || got.Name != "da" {
+	if got, hit := c.getTarget(a); !hit || got.Name != "da" {
 		t.Fatalf("a: hit=%v got=%v", hit, got)
 	}
 	// Adding x evicts the least-recently-used entry; a was just used so b should evict.
-	c.add(x, chainNode{Namespace: "ns", Kind: "Deployment", Name: "dx"})
-	if _, hit := c.get(b); hit {
+	c.add(x, chainNode{Namespace: "ns", Kind: "Deployment", Name: "dx"}, map[string]string{"app": "x"})
+	if _, hit := c.getTarget(b); hit {
 		t.Errorf("b should have been evicted")
 	}
-	if _, hit := c.get(a); !hit {
+	if _, hit := c.getTarget(a); !hit {
 		t.Errorf("a should still be present")
 	}
 }
@@ -34,9 +34,9 @@ func TestResolutionCache_NegativeEntry(t *testing.T) {
 		t.Fatalf("newResolutionCache: %v", err)
 	}
 	k := podKey{Namespace: "ns", Name: "p"}
-	c.add(k, chainNode{}) // negative entry (zero value)
+	c.add(k, chainNode{}, nil) // negative entry (zero value)
 
-	got, hit := c.get(k)
+	got, hit := c.getTarget(k)
 	if !hit {
 		t.Fatalf("expected hit")
 	}

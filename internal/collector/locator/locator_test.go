@@ -428,3 +428,148 @@ func TestResolveScaleTarget_ReusesLocateCache(t *testing.T) {
 		t.Errorf("cache miss: ok=%v ref=%+v, want ok=true Deployment d", ok, ref)
 	}
 }
+
+func TestGetPodLabels(t *testing.T) {
+	const (
+		ns      = "test-ns"
+		podName = "test-pod"
+	)
+
+	tests := []struct {
+		name      string
+		pod       *corev1.Pod
+		namespace string
+		podName   string
+		want      map[string]string
+		wantNil   bool
+	}{
+		{
+			name:      "pod with labels",
+			namespace: ns,
+			podName:   podName,
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      podName,
+					Namespace: ns,
+					Labels: map[string]string{
+						"app": "test",
+						"leaderworkerset.sigs.k8s.io/worker-index": "0",
+						"leaderworkerset.x-k8s.io/name":            "lws-test",
+					},
+				},
+			},
+			want: map[string]string{
+				"app": "test",
+				"leaderworkerset.sigs.k8s.io/worker-index": "0",
+				"leaderworkerset.x-k8s.io/name":            "lws-test",
+			},
+		},
+		{
+			name:      "pod without labels",
+			namespace: ns,
+			podName:   "pod-no-labels",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pod-no-labels",
+					Namespace: ns,
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name:      "pod does not exist",
+			namespace: ns,
+			podName:   "nonexistent",
+			wantNil:   true,
+		},
+		{
+			name:      "empty pod name",
+			namespace: ns,
+			podName:   "",
+			wantNil:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objs []runtime.Object
+			if tt.pod != nil {
+				objs = append(objs, tt.pod)
+			}
+			cached, apiReader := newClients(t, objs...)
+
+			loc, err := locator.New(cached, apiReader)
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			got := loc.GetPodLabels(context.Background(), tt.namespace, tt.podName)
+
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("GetPodLabels() = %v, want nil", got)
+				}
+				return
+			}
+
+			if len(got) != len(tt.want) {
+				t.Errorf("GetPodLabels() label count = %v, want %v", len(got), len(tt.want))
+				return
+			}
+
+			for k, v := range tt.want {
+				if gotV, ok := got[k]; !ok || gotV != v {
+					t.Errorf("GetPodLabels()[%q] = %v, want %v", k, gotV, v)
+				}
+			}
+		})
+	}
+}
+
+func TestGetPodLabels_CacheReuse(t *testing.T) {
+	const (
+		ns      = "test-ns"
+		podName = "test-pod"
+	)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app": "test",
+				"leaderworkerset.sigs.k8s.io/worker-index": "0",
+			},
+		},
+	}
+
+	cached, apiReader := newClients(t, pod)
+
+	loc, err := locator.New(cached, apiReader)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// First call should fetch from API
+	labels1 := loc.GetPodLabels(context.Background(), ns, podName)
+	if labels1 == nil {
+		t.Fatal("GetPodLabels() first call returned nil")
+	}
+
+	// Second call should use cache (same pod)
+	labels2 := loc.GetPodLabels(context.Background(), ns, podName)
+	if labels2 == nil {
+		t.Fatal("GetPodLabels() second call returned nil")
+	}
+
+	// Verify both calls return the same labels
+	if len(labels1) != len(labels2) {
+		t.Errorf("Cache returned different labels: %v vs %v", labels1, labels2)
+	}
+
+	for k, v := range labels1 {
+		if labels2[k] != v {
+			t.Errorf("Cache returned different value for %q: %v vs %v", k, v, labels2[k])
+		}
+	}
+}

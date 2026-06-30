@@ -324,6 +324,32 @@ func (c *ReplicaMetricsCollector) buildInstanceKey(ctx context.Context, namespac
 	return instanceKey, podName, vaName
 }
 
+// isLWSWorker checks if a pod is part of an LWS and is a worker (non-leader).
+// Returns true if the pod has the leaderworkerset.sigs.k8s.io/worker-index label
+// with a value other than "0" (leader pods have worker-index="0").
+// Returns false for non-LWS pods or LWS leader pods.
+// Uses the locator's GetPodLabels which reuses the same pod fetch that Locate performs.
+func (c *ReplicaMetricsCollector) isLWSWorker(ctx context.Context, namespace, podName string) bool {
+	if podName == "" || c.locator == nil {
+		return false
+	}
+
+	labels := c.locator.GetPodLabels(ctx, namespace, podName)
+	if labels == nil {
+		return false
+	}
+
+	workerIndex, hasLabel := labels[constants.LWSWorkerIndexLabel]
+	if !hasLabel {
+		// Not an LWS pod
+		return false
+	}
+
+	// LWS workers have worker-index != "0"
+	// LWS leaders have worker-index == "0"
+	return workerIndex != "0"
+}
+
 // collectReplicaMetrics is the internal implementation that collects per-replica metrics.
 func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	ctx context.Context,
@@ -861,6 +887,19 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 				"scale targets", getScaleTargetNames(scaleTargets))
 			continue
 		}
+
+		// Skip LWS worker pods (non-leaders). Only LWS leader pods (worker-index="0")
+		// should be included in ReplicaMetrics, as they represent the LWS replica.
+		// For LWS, each leader pod emits vLLM metrics representing the entire replica
+		// (leader + workers), so including worker pods would double-count metrics.
+		if c.isLWSWorker(ctx, namespace, podName) {
+			logger.V(logging.DEBUG).Info("Skipping LWS worker pod (non-leader)",
+				"pod", podName,
+				"instance", instanceKey,
+				"namespace", namespace)
+			continue
+		}
+
 		variantKey := utils.GetNamespacedKey(namespace, vaName)
 		// Get accelerator name from Deployment/LWS nodeSelector/nodeAffinity or VA label
 		acceleratorName := ""
