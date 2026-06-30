@@ -94,11 +94,24 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		return nil, fmt.Errorf("expected *EPPSaturationConfig, got %T", input.Config)
 	}
 
-	// Query the EPP pool saturation metric
-	rawSaturation, err := a.queryPoolSaturation(ctx)
+	// Derive saturation from the EPP's predicted latencies and the configured SLOs:
+	//   saturation = max(predictedTTFT / TTFTSLO, predictedTPOT / TPOTSLO)
+	// Each query prefers predicted latency and falls back to actual latency. A
+	// missing value (no recent traffic → NaN) is treated as 0 latency, so an idle
+	// pool reports low saturation and scales toward minReplicas. A genuine query
+	// error is propagated and handled by the engine's safety-net path.
+	ttftSeconds, err := a.queryLatencySeconds(ctx, registration.QueryEPPPredictedTTFT)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query EPP pool saturation: %w", err)
+		return nil, fmt.Errorf("failed to query EPP TTFT: %w", err)
 	}
+	tpotSeconds, err := a.queryLatencySeconds(ctx, registration.QueryEPPPredictedTPOT)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query EPP TPOT: %w", err)
+	}
+
+	ttftSaturation := ttftSeconds / (cfg.TTFTSLOMs / 1000.0)
+	tpotSaturation := tpotSeconds / (cfg.TPOTSLOMs / 1000.0)
+	rawSaturation := math.Max(ttftSaturation, tpotSaturation)
 
 	// Apply EMA smoothing to absorb single-cycle spikes/dips before the signal
 	// drives scaling decisions. First observation per (namespace, modelID) is
@@ -108,6 +121,12 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 
 	logger.Info("EPP pool saturation score",
 		"modelID", input.ModelID,
+		"ttftSeconds", ttftSeconds,
+		"tpotSeconds", tpotSeconds,
+		"ttftSLOMs", cfg.TTFTSLOMs,
+		"tpotSLOMs", cfg.TPOTSLOMs,
+		"ttftSaturation", ttftSaturation,
+		"tpotSaturation", tpotSaturation,
 		"rawSaturation", rawSaturation,
 		"smoothedSaturation", saturationScore,
 		"smoothingAlpha", cfg.SmoothingAlpha,
@@ -205,31 +224,40 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	}, nil
 }
 
-// queryPoolSaturation fetches the EPP pool saturation score from Prometheus.
-func (a *EPPSaturationAnalyzer) queryPoolSaturation(ctx context.Context) (float64, error) {
+// queryLatencySeconds fetches a pool latency (seconds) from Prometheus for the
+// named query. A query that returns no series, or a NaN value (no recent
+// traffic → 0/0 rate), is reported as 0 latency rather than an error, so an idle
+// pool yields low saturation. Only a transport/query error is returned as an
+// error (handled by the engine's safety-net path).
+func (a *EPPSaturationAnalyzer) queryLatencySeconds(ctx context.Context, queryName string) (float64, error) {
 	promSource := a.metricsRegistry.Get("prometheus")
 	if promSource == nil {
 		return 0, fmt.Errorf("prometheus source not registered")
 	}
 
 	results, err := promSource.Refresh(ctx, source.RefreshSpec{
-		Queries: []string{registration.QueryEPPPoolSaturation},
+		Queries: []string{queryName},
 		Params:  map[string]string{},
 	})
 	if err != nil {
 		return 0, fmt.Errorf("prometheus refresh failed: %w", err)
 	}
 
-	result, ok := results[registration.QueryEPPPoolSaturation]
+	result, ok := results[queryName]
 	if !ok || result == nil {
-		return 0, fmt.Errorf("no result for query %s", registration.QueryEPPPoolSaturation)
+		return 0, fmt.Errorf("no result for query %s", queryName)
 	}
 	if result.Error != nil {
-		return 0, fmt.Errorf("query %s failed: %w", registration.QueryEPPPoolSaturation, result.Error)
+		return 0, fmt.Errorf("query %s failed: %w", queryName, result.Error)
 	}
+	// No series (no recent traffic) → treat as 0 latency.
 	if len(result.Values) == 0 {
-		return 0, fmt.Errorf("query %s returned no values (EPP latency detector may not be running)", registration.QueryEPPPoolSaturation)
+		return 0, nil
 	}
-
-	return result.Values[0].Value, nil
+	v := result.Values[0].Value
+	// NaN (0/0 rate when idle) or negative → 0 latency.
+	if math.IsNaN(v) || v < 0 {
+		return 0, nil
+	}
+	return v, nil
 }

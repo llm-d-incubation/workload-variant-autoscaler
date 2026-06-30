@@ -18,6 +18,7 @@ package epp_saturation
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -33,7 +34,10 @@ import (
 // a pre-configured saturation value.
 type fakePrometheusSource struct {
 	queryList  *source.QueryList
-	saturation float64
+	saturation float64 // returned for every query unless ttftVal/tpotVal are set
+	ttftVal    *float64
+	tpotVal    *float64
+	nan        bool // when true, every query returns NaN (simulates no recent traffic)
 	err        error
 }
 
@@ -55,11 +59,20 @@ func (f *fakePrometheusSource) Refresh(_ context.Context, spec source.RefreshSpe
 	}
 	results := make(map[string]*source.MetricResult)
 	for _, q := range spec.Queries {
+		val := f.saturation
+		switch {
+		case f.nan:
+			val = math.NaN()
+		case q == registration.QueryEPPPredictedTTFT && f.ttftVal != nil:
+			val = *f.ttftVal
+		case q == registration.QueryEPPPredictedTPOT && f.tpotVal != nil:
+			val = *f.tpotVal
+		}
 		results[q] = &source.MetricResult{
 			QueryName:   q,
 			CollectedAt: time.Now(),
 			Values: []source.MetricValue{
-				{Value: f.saturation, Timestamp: time.Now()},
+				{Value: val, Timestamp: time.Now()},
 			},
 		}
 	}
@@ -84,6 +97,8 @@ func TestAnalyze_LowSaturation_ScaleDown(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -116,6 +131,8 @@ func TestAnalyze_HighSaturation_ScaleUp(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -145,6 +162,8 @@ func TestAnalyze_HighSaturation_LargePool(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -172,6 +191,8 @@ func TestAnalyze_LowSaturation_LargePool(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -198,6 +219,8 @@ func TestAnalyze_Overloaded(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -226,6 +249,8 @@ func TestAnalyze_InHysteresisZone_NoAction(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -252,6 +277,8 @@ func TestAnalyze_PendingReplicas(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing — use raw signal directly
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 
 	input := interfaces.AnalyzerInput{
@@ -305,13 +332,13 @@ func TestConfig_Validate(t *testing.T) {
 		cfg     EPPSaturationConfig
 		wantErr bool
 	}{
-		{"valid", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3}, false},
+		{"valid", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3, TTFTSLOMs: 3000, TPOTSLOMs: 100}, false},
 		{"up <= down", EPPSaturationConfig{ScaleUpThreshold: 0.50, ScaleDownBoundary: 0.85, SmoothingAlpha: 0.3}, true},
 		{"up zero", EPPSaturationConfig{ScaleUpThreshold: 0, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3}, true},
 		{"down zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0, SmoothingAlpha: 0.3}, true},
 		{"alpha zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0}, true},
 		{"alpha too high", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.5}, true},
-		{"alpha one ok", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.0}, false},
+		{"alpha one ok", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.0, TTFTSLOMs: 3000, TPOTSLOMs: 100}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -341,6 +368,8 @@ func TestAnalyze_EMASmoothing(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    0.3,
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 	input := interfaces.AnalyzerInput{
 		ModelID:   "test-model",
@@ -381,6 +410,8 @@ func TestAnalyze_NoSmoothing_AlphaOne(t *testing.T) {
 		ScaleUpThreshold:  0.85,
 		ScaleDownBoundary: 0.50,
 		SmoothingAlpha:    1.0, // no smoothing
+		TTFTSLOMs:         1000,
+		TPOTSLOMs:         10000,
 	}
 	input := interfaces.AnalyzerInput{
 		ModelID:   "test-model",
@@ -399,4 +430,67 @@ func TestAnalyze_NoSmoothing_AlphaOne(t *testing.T) {
 		// Utilization is capped at 1.0 internally, so compare the total demand instead.
 		assert.InDelta(t, raw, result.TotalDemand, 0.001, "alpha=1.0 should not smooth (raw=%v)", raw)
 	}
+}
+
+func float64Ptr(v float64) *float64 { return &v }
+
+// TestAnalyze_DerivesSaturationFromLatency verifies saturation is the max of the
+// per-target terms (predictedTTFT/TTFTSLO, predictedTPOT/TPOTSLO).
+func TestAnalyze_DerivesSaturationFromLatency(t *testing.T) {
+	analyzer, src := setupAnalyzerMutable(0)
+	cfg := &EPPSaturationConfig{
+		ScaleUpThreshold:  0.85,
+		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0, // no smoothing
+		TTFTSLOMs:         3000,
+		TPOTSLOMs:         100,
+	}
+	input := interfaces.AnalyzerInput{
+		ModelID:   "test-model",
+		Namespace: "default",
+		Config:    cfg,
+		VariantStates: []interfaces.VariantReplicaState{
+			{VariantName: "variant-a", CurrentReplicas: 10},
+		},
+	}
+
+	// TTFT binds: ttft=4.5s/3s = 1.5 ; tpot=0.05s/0.1s = 0.5 ; max = 1.5
+	src.ttftVal = float64Ptr(4.5)
+	src.tpotVal = float64Ptr(0.05)
+	result, err := analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.5, result.TotalDemand, 0.001, "TTFT term should bind (1.5)")
+
+	// TPOT binds: ttft=1.5s/3s = 0.5 ; tpot=0.08s/0.1s = 0.8 ; max = 0.8
+	src.ttftVal = float64Ptr(1.5)
+	src.tpotVal = float64Ptr(0.08)
+	result, err = analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.8, result.TotalDemand, 0.001, "TPOT term should bind (0.8)")
+}
+
+// TestAnalyze_NoTrafficIsZeroSaturation verifies a NaN latency (no recent
+// traffic) is treated as zero saturation, so an idle pool reports spare capacity.
+func TestAnalyze_NoTrafficIsZeroSaturation(t *testing.T) {
+	analyzer, src := setupAnalyzerMutable(0)
+	src.nan = true
+	cfg := &EPPSaturationConfig{
+		ScaleUpThreshold:  0.85,
+		ScaleDownBoundary: 0.50,
+		SmoothingAlpha:    1.0,
+		TTFTSLOMs:         3000,
+		TPOTSLOMs:         100,
+	}
+	input := interfaces.AnalyzerInput{
+		ModelID:   "idle-model",
+		Namespace: "default",
+		Config:    cfg,
+		VariantStates: []interfaces.VariantReplicaState{
+			{VariantName: "variant-a", CurrentReplicas: 10},
+		},
+	}
+	result, err := analyzer.Analyze(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, result.TotalDemand, "no traffic => zero saturation")
+	assert.Greater(t, result.SpareCapacity, 0.0, "idle pool should report spare capacity (scale down)")
 }

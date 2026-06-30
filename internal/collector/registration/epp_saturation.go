@@ -22,26 +22,48 @@ import (
 
 // Query name constants for EPP saturation metrics.
 const (
-	// QueryEPPPoolSaturation is the pool-level saturation score from the EPP's
-	// latency detector probe. The value is predictedLatency / SLO averaged
-	// across all endpoints: < 1.0 means headroom, >= 1.0 means at/over SLO.
-	// Source: inference_extension_latency_detector_pool_saturation (EPP)
-	QueryEPPPoolSaturation = "epp_pool_saturation"
+	// QueryEPPPredictedTTFT is the pool's recent average time-to-first-token in
+	// seconds. It prefers the EPP's *predicted* TTFT and falls back to *actual*
+	// TTFT when the predicted series is unavailable (PromQL `or`). The analyzer
+	// divides this by the configured TTFT SLO to derive saturation. Returns no
+	// value (NaN) when there is no recent traffic — the analyzer treats that as 0.
+	QueryEPPPredictedTTFT = "epp_predicted_ttft_seconds"
+
+	// QueryEPPPredictedTPOT is the pool's recent average time-per-output-token in
+	// seconds, predicted-preferred with actual fallback, analogous to
+	// QueryEPPPredictedTTFT. This EPP build does not yet emit predicted TPOT, so
+	// the fallback to actual (normalized) TPOT is what currently drives the value.
+	QueryEPPPredictedTPOT = "epp_predicted_tpot_seconds"
 )
 
+// avgRate builds a PromQL expression for the time-windowed average of a
+// histogram (sum/count rate over [1m]).
+func avgRate(metric string) string {
+	return "sum(rate(" + metric + "_sum[1m])) / sum(rate(" + metric + "_count[1m]))"
+}
+
 // RegisterEPPSaturationQueries registers queries used by the EPP saturation analyzer.
+//
+// The analyzer derives saturation itself (saturation = max(TTFT/SLO, TPOT/SLO))
+// from these latency signals rather than reading a pre-computed saturation gauge
+// from the EPP, so the SLO policy lives in WVA config. Each query prefers the
+// predicted latency and falls back to the actual latency via PromQL `or`.
 func RegisterEPPSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry := sourceRegistry.Get("prometheus").QueryList()
 
-	// Pool-level saturation from the EPP latency detector.
-	// This is a scalar gauge with no labels — it represents the aggregate
-	// predicted saturation across all endpoints in the pool.
-	// The namespace param is used only for cache key differentiation.
 	registry.MustRegister(source.QueryTemplate{
-		Name:        QueryEPPPoolSaturation,
+		Name:        QueryEPPPredictedTTFT,
 		Type:        source.QueryTypePromQL,
-		Template:    `inference_extension_latency_detector_pool_saturation`,
+		Template:    "(" + avgRate("llm_d_epp_request_predicted_ttft_seconds") + ") or (" + avgRate("llm_d_epp_request_ttft_seconds") + ")",
 		Params:      []string{},
-		Description: "Pool-level saturation score from EPP latency detector (predictedLatency / SLO, averaged across endpoints)",
+		Description: "Pool average TTFT (seconds), predicted-preferred with actual fallback; analyzer divides by the TTFT SLO",
+	})
+
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryEPPPredictedTPOT,
+		Type:        source.QueryTypePromQL,
+		Template:    "(" + avgRate("llm_d_epp_request_predicted_tpot_seconds") + ") or (" + avgRate("llm_d_epp_request_ntpot_seconds") + ")",
+		Params:      []string{},
+		Description: "Pool average TPOT (seconds), predicted-preferred with actual (normalized) fallback; analyzer divides by the TPOT SLO",
 	})
 }

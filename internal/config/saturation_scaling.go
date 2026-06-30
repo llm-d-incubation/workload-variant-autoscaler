@@ -62,6 +62,14 @@ type SaturationScalingConfig struct {
 	// Ignored by other analyzers.
 	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
 
+	// TTFTSLOMs and TPOTSLOMs are the latency SLO targets (milliseconds) the
+	// epp-saturation analyzer divides the EPP's predicted latencies by to derive
+	// the saturation signal: saturation = max(predTTFT/TTFTSLO, predTPOT/TPOTSLO).
+	// The SLO policy lives here (in WVA) rather than in the EPP. Defaults: 3000 / 100.
+	// Ignored by other analyzers.
+	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
+	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
+
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].

@@ -35,6 +35,14 @@ const (
 	// Lower values reduce reaction to transient spikes/dips at the cost of
 	// slower response to real load changes.
 	DefaultEPPSmoothingAlpha = 0.3
+
+	// DefaultEPPTTFTSLOMs is the default time-to-first-token SLO (milliseconds)
+	// the analyzer divides predicted TTFT by to derive saturation.
+	DefaultEPPTTFTSLOMs = 3000.0
+
+	// DefaultEPPTPOTSLOMs is the default time-per-output-token SLO (milliseconds)
+	// the analyzer divides predicted TPOT by to derive saturation.
+	DefaultEPPTPOTSLOMs = 100.0
 )
 
 // EPPSaturationConfig holds configuration for the EPP saturation analyzer.
@@ -62,6 +70,16 @@ type EPPSaturationConfig struct {
 	// every probeInterval based on the input-profile-tracker's percentile samples)
 	// so transient single-cycle spikes/dips don't translate directly into replica churn.
 	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
+
+	// TTFTSLOMs and TPOTSLOMs are the latency SLO targets (milliseconds) used to
+	// derive saturation from the EPP's predicted latencies:
+	//   saturation = max(predictedTTFT / TTFTSLOMs, predictedTPOT / TPOTSLOMs)
+	// The analyzer queries predicted latency (falling back to actual latency when
+	// the predicted series is unavailable) and divides by these targets, so the
+	// SLO policy lives in WVA rather than depending on the EPP to pre-compute a
+	// saturation gauge.
+	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
+	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
 }
 
 // GetAnalyzerName implements interfaces.AnalyzerConfig.
@@ -80,6 +98,12 @@ func (c *EPPSaturationConfig) ApplyDefaults() {
 	if c.SmoothingAlpha == 0 {
 		c.SmoothingAlpha = DefaultEPPSmoothingAlpha
 	}
+	if c.TTFTSLOMs == 0 {
+		c.TTFTSLOMs = DefaultEPPTTFTSLOMs
+	}
+	if c.TPOTSLOMs == 0 {
+		c.TPOTSLOMs = DefaultEPPTPOTSLOMs
+	}
 }
 
 // Validate checks for invalid threshold values.
@@ -96,6 +120,12 @@ func (c *EPPSaturationConfig) Validate() error {
 	}
 	if c.SmoothingAlpha <= 0 || c.SmoothingAlpha > 1.0 {
 		return fmt.Errorf("smoothingAlpha must be in (0, 1], got %.2f", c.SmoothingAlpha)
+	}
+	if c.TTFTSLOMs <= 0 {
+		return fmt.Errorf("ttftSLOMs must be > 0, got %.2f", c.TTFTSLOMs)
+	}
+	if c.TPOTSLOMs <= 0 {
+		return fmt.Errorf("tpotSLOMs must be > 0, got %.2f", c.TPOTSLOMs)
 	}
 	return nil
 }
