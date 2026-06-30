@@ -638,11 +638,6 @@ func (e *Engine) optimizeV1(
 			globalSaturationConfig = cfg
 		}
 	}
-	if globalSaturationConfig.EnableLimiter {
-		metrics.SetGpuDiscoveryUp(1)
-	} else {
-		metrics.SetGpuDiscoveryUp(0)
-	}
 	if globalSaturationConfig.EnableLimiter && len(allDecisions) > 0 {
 		logger.Info("Applying GPU limiter to scaling decisions",
 			"decisionCount", len(allDecisions))

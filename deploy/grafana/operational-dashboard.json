@@ -242,7 +242,7 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Number of available GPUs by accelerator type. When wva_gpu_discovery_up metric is 1, shows mumber of currently available GPUs. When wva_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery. Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tainted nodes or GPUs operating in different modes such as MIG. Metric is wva_available_gpus.",
+      "description": "Number of available GPUs by accelerator type. When wva_gpu_discovery_up metric is 1, shows number of currently available GPUs. When wva_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery. Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tainted nodes or GPUs operating in different modes such as MIG. Metric is wva_available_gpus.",
       "fieldConfig": {
         "defaults": {
           "color": {

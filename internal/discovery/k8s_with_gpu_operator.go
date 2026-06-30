@@ -37,14 +37,24 @@ func NewK8sWithGpuOperator(client client.Client) *K8sWithGpuOperator {
 // This is the single internal node-listing primitive; public methods Discover,
 // discoverNodeGPUTypes, and DiscoverNodes project from its result.
 func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeInfo, error) {
+	var err error
+	defer func() {
+		if err != nil {
+			metrics.SetGpuDiscoveryUp(0)
+		} else {
+			metrics.SetGpuDiscoveryUp(1)
+		}
+	}()
+
 	nodes := make(map[string]NodeInfo)
 
 	// Parse WVA_NODE_SELECTOR once for reuse across vendor queries
 	var userRequirements []labels.Requirement
 	if selectorStr := os.Getenv("WVA_NODE_SELECTOR"); selectorStr != "" {
-		userSelector, err := labels.Parse(selectorStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid WVA_NODE_SELECTOR: %w", err)
+		userSelector, parseErr := labels.Parse(selectorStr)
+		if parseErr != nil {
+			err = fmt.Errorf("invalid WVA_NODE_SELECTOR: %w", parseErr)
+			return nil, err
 		}
 		userRequirements, _ = userSelector.Requirements()
 	}
@@ -57,9 +67,10 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 		prodKey := res.ProductLabel
 		resName := corev1.ResourceName(res.ResourceName)
 
-		req, err := labels.NewRequirement(prodKey, selection.Exists, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create label requirement for %s: %w", vendor, err)
+		req, reqErr := labels.NewRequirement(prodKey, selection.Exists, nil)
+		if reqErr != nil {
+			err = fmt.Errorf("failed to create label requirement for %s: %w", vendor, reqErr)
+			return nil, err
 		}
 		selector := labels.NewSelector().Add(*req)
 
@@ -69,8 +80,9 @@ func (d *K8sWithGpuOperator) listGPUNodes(ctx context.Context) (map[string]NodeI
 		}
 
 		var nodeList corev1.NodeList
-		if err := d.Client.List(ctx, &nodeList, &client.ListOptions{LabelSelector: selector}); err != nil {
-			return nil, fmt.Errorf("failed to list nodes for vendor %s: %w", vendor, err)
+		if listErr := d.Client.List(ctx, &nodeList, &client.ListOptions{LabelSelector: selector}); listErr != nil {
+			err = fmt.Errorf("failed to list nodes for vendor %s: %w", vendor, listErr)
+			return nil, err
 		}
 
 		// Process nodes for this vendor
