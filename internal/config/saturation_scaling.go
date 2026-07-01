@@ -81,8 +81,12 @@ type SaturationScalingConfig struct {
 	// epp-saturation path: while replicas already requested are still warming
 	// (pending > 0), the target is held at the current replica count so the pool
 	// does not stack a new scale-up request every cycle before the in-flight pods
-	// come online (which otherwise races to maxReplicas). Scale-down is unaffected.
-	// Nil defaults to true. Ignored by other analyzers.
+	// come online. Scale-down is unaffected.
+	//
+	// Nil defaults to FALSE. The hold lowers the replica peak for step-and-hold
+	// workloads, but its one-pod-per-warmup climb falls behind a rising (ramping)
+	// load and causes sustained SLO violations, so it is opt-in for steady,
+	// cost-sensitive workloads only. Ignored by other analyzers.
 	HoldScaleUpWhileWarming *bool `yaml:"holdScaleUpWhileWarming,omitempty"`
 
 	// Analyzers configures the set of analyzers and their weights.

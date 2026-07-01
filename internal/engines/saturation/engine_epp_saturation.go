@@ -102,7 +102,11 @@ func (e *Engine) optimizeEPPSaturation(
 			continue
 		}
 		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
-		holdWarm := true
+		// Warmup hold defaults OFF: it lowers the replica peak for step-and-hold
+		// workloads but its deliberate one-pod-per-warmup climb falls behind a rising
+		// (ramping) load, causing sustained SLO violations. It is opt-in for steady,
+		// cost-sensitive workloads. See docs/developer-guide/epp-saturation-benchmark.md.
+		holdWarm := false
 		if saturationConfig.HoldScaleUpWhileWarming != nil {
 			holdWarm = *saturationConfig.HoldScaleUpWhileWarming
 		}
