@@ -1572,15 +1572,25 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		// Record saturation and capacity metrics when this cycle produced a
-		// fresh decision for the variant. These series carry the accelerator_type
-		// label, so they are emitted only when the type is resolved — otherwise
-		// the internal sentinel would leak into a label. When there is no fresh
-		// decision the existing series persist with their last-recorded values
-		// until Prometheus' staleness marker fires; surfacing freshness on the
-		// dashboard side is tracked in #1082 (an explicit "up" gauge per VA,
-		// rather than deleting series here).
+		// fresh decision for the variant. These accelerator-dimensioned series
+		// carry the accelerator_type label, so they are emitted only when the
+		// type is resolved — otherwise the internal sentinel would leak into a
+		// label. When there is no fresh decision the existing series persist with
+		// their last-recorded values until Prometheus' staleness marker fires.
 		if hasDecision && constants.IsAcceleratorResolved(acceleratorName) {
 			act.RecordSaturationMetrics(ctx, decision)
+		}
+
+		// The wva_saturation_metrics_up freshness gauge carries only
+		// {variant_name, namespace} (no accelerator_type), so it is emitted on
+		// every cycle independent of accelerator resolution: 1.0 when a fresh
+		// decision was produced for the variant, 0.0 otherwise. Dashboards gate
+		// alerts on this gauge instead of relying on Prometheus' 5-minute
+		// implicit staleness marker.
+		if hasDecision {
+			act.RecordSaturationFreshness(ctx, decision.VariantName, decision.Namespace, true)
+		} else {
+			act.RecordSaturationFreshness(ctx, va.Name, va.Namespace, false)
 		}
 
 		// Update Shared State and Trigger Reconcile via Channel.

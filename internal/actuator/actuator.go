@@ -112,3 +112,12 @@ func (a *Actuator) RecordSaturationMetrics(ctx context.Context, decision interfa
 		decision.KvCacheTokensCapacity,
 	)
 }
+
+// RecordSaturationFreshness publishes the per-VA freshness signal for the
+// saturation/capacity gauges. fresh=true is set in cycles where the optimizer
+// produced a fresh decision for the variant (i.e. RecordSaturationMetrics was
+// just called); fresh=false is set in cycles where the analyzer was aware of
+// the variant but emitted no fresh decision.
+func (a *Actuator) RecordSaturationFreshness(ctx context.Context, variantName, namespace string, fresh bool) {
+	a.MetricsEmitter.RecordSaturationFreshness(ctx, variantName, namespace, fresh)
+}

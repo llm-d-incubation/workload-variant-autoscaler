@@ -177,7 +177,72 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Number of available GPUs by accelerator type. WVA only discovers GPUs when a configuration such as \"enableLimiter\" is \"true\". Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tainted nodes or GPUs operating in different modes such as MIG. Metric is wva_available_gpus.",
+      "description": "Indicates whether GPU discovery is on or off. WVA only discovers GPUs when a configuration such as \"enableLimiter\" is \"true\". Related metric is wva_available_gpus. Metric is wva_gpu_discovery_up.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 54,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max(wva_gpu_discovery_up)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "GPU Discovery Status",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of available GPUs by accelerator type. When wva_gpu_discovery_up metric is 1, shows number of currently available GPUs. When wva_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery. Only available in clusters such as OpenShift where WVA can iterate over node objects. There is no exclusions such as tainted nodes or GPUs operating in different modes such as MIG. Metric is wva_available_gpus.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -199,7 +264,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 6,
+        "x": 12,
         "y": 0
       },
       "id": 50,
@@ -280,7 +345,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 0
       },
       "id": 10,
@@ -362,8 +427,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 18,
-        "y": 0
+        "x": 0,
+        "y": 4
       },
       "id": 49,
       "options": {
@@ -444,7 +509,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 0,
+        "x": 6,
         "y": 4
       },
       "id": 53,
@@ -526,7 +591,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 6,
+        "x": 12,
         "y": 4
       },
       "id": 24,
@@ -651,7 +716,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 4
       },
       "id": 25,
@@ -719,8 +784,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 18,
-        "y": 4
+        "x": 0,
+        "y": 8
       },
       "id": 26,
       "options": {
@@ -831,7 +896,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 12
       },
       "id": 40,
       "options": {
@@ -971,7 +1036,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 20
       },
       "id": 41,
       "options": {
@@ -1085,7 +1150,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 27
       },
       "id": 42,
       "options": {
@@ -1194,7 +1259,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 35
       },
       "id": 52,
       "options": {
@@ -1311,7 +1376,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 43
       },
       "id": 43,
       "options": {
@@ -1420,7 +1485,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 51
       },
       "id": 51,
       "options": {
@@ -1589,7 +1654,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 59
       },
       "id": 30,
       "options": {

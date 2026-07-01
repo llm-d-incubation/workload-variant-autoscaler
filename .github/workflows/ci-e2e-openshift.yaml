@@ -482,14 +482,12 @@ jobs:
           LLMD_NS: ${{ env.LLMD_NAMESPACE }}
           WVA_NS: ${{ env.WVA_NAMESPACE }}
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
-          VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           WVA_METRICS_SECURE: "false"
           ENABLE_SCALE_TO_ZERO: "true"
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
           VLLM_SVC_PORT: "8000"
-          MODEL_ID: ${{ env.MODEL_ID }}
           ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
           GAIE_VERSION: ${{ env.GAIE_VERSION }}
         run: deploy/ci-e2e-openshift/deploy-infrastructure.sh
@@ -523,7 +521,6 @@ jobs:
           # Legacy variables for backward compatibility (if needed by tests)
           CONTROLLER_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           GATEWAY_NAME: optimized-baseline-inference-gateway-istio
-          DEPLOYMENT: optimized-baseline-nvidia-gpu-vllm-decode
           # Pass WVA_RELEASE_NAME so test can filter for current run's resources
           WVA_RELEASE_NAME: ${{ env.WVA_RELEASE_NAME }}
           # Controller instance label must match what the controller was deployed with

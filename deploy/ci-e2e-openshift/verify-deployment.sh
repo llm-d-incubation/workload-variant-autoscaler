@@ -3,8 +3,7 @@ set -euo pipefail
 
 echo "=== Deployment Status ==="
 echo ""
-echo "=== Model A1 ($LLMD_NAMESPACE) ==="
-kubectl get deployment -n "$LLMD_NAMESPACE" | grep -E "decode|NAME" || true
+echo "=== llm-d namespace ($LLMD_NAMESPACE) ==="
 kubectl get hpa -n "$LLMD_NAMESPACE" || true
 kubectl get variantautoscaling -n "$LLMD_NAMESPACE" || true
 echo ""
