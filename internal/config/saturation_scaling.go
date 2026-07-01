@@ -77,6 +77,14 @@ type SaturationScalingConfig struct {
 	// 2.0. Ignored by other analyzers.
 	SaturationCap float64 `yaml:"saturationCap,omitempty"`
 
+	// HoldScaleUpWhileWarming enables warmup-aware scale-up damping for the
+	// epp-saturation path: while replicas already requested are still warming
+	// (pending > 0), the target is held at the current replica count so the pool
+	// does not stack a new scale-up request every cycle before the in-flight pods
+	// come online (which otherwise races to maxReplicas). Scale-down is unaffected.
+	// Nil defaults to true. Ignored by other analyzers.
+	HoldScaleUpWhileWarming *bool `yaml:"holdScaleUpWhileWarming,omitempty"`
+
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].
@@ -224,6 +232,9 @@ func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
 	}
 	if override.SaturationCap != 0 {
 		c.SaturationCap = override.SaturationCap
+	}
+	if override.HoldScaleUpWhileWarming != nil {
+		c.HoldScaleUpWhileWarming = override.HoldScaleUpWhileWarming
 	}
 	if len(override.Analyzers) > 0 {
 		c.Analyzers = override.Analyzers

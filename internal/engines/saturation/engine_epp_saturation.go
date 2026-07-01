@@ -53,6 +53,18 @@ func inFlightReadyFraction(readyReplicas, totalReplicas int) float64 {
 	return float64(readyReplicas) / float64(totalReplicas)
 }
 
+// applyWarmupHold implements warmup-aware scale-up damping: while replicas already
+// requested are still warming (pending > 0), a scale-up target (target > current) is
+// held at the current replica count so the pool does not stack a new scale-up before
+// the in-flight pods come online. Scale-down and no-op targets (target <= current)
+// are returned unchanged.
+func applyWarmupHold(target, current, pending int) int {
+	if pending > 0 && target > current {
+		return current
+	}
+	return target
+}
+
 // optimizeEPPSaturation runs the EPP saturation analyzer path.
 // Unlike V1/V2, this does not collect per-replica metrics from vLLM pods.
 // Instead, it queries the EPP's pre-computed pool saturation score and
@@ -69,6 +81,9 @@ func (e *Engine) optimizeEPPSaturation(
 	// the maxReplicas clamp, keyed by "namespace/modelID". Used post-optimize to
 	// flag decisions that were capped (see RFC #1018 proposal #2).
 	uncappedByModel := make(map[string]int)
+	// holdWarmByModel records the resolved warmup-hold setting per "namespace/modelID"
+	// so the post-optimizer damping can honor per-model config overrides.
+	holdWarmByModel := make(map[string]bool)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -87,6 +102,11 @@ func (e *Engine) optimizeEPPSaturation(
 			continue
 		}
 		saturationConfig := resolveSaturationConfig(saturationConfigMap, modelID, namespace)
+		holdWarm := true
+		if saturationConfig.HoldScaleUpWhileWarming != nil {
+			holdWarm = *saturationConfig.HoldScaleUpWhileWarming
+		}
+		holdWarmByModel[utils.GetNamespacedKey(namespace, modelID)] = holdWarm
 
 		// Fetch scale targets and build variant states directly — skip per-replica
 		// vLLM metrics collection since EPP saturation is a pool-level signal.
@@ -262,6 +282,40 @@ func (e *Engine) optimizeEPPSaturation(
 		if scaledToZero {
 			logger.Info("Scale-to-zero enforcement applied (EPP saturation)",
 				"modelID", req.ModelID)
+		}
+	}
+
+	// Warmup-aware scale-up damping (RFC #1018): the EPP saturation signal is
+	// measured only on Ready pods, so while replicas already requested are still
+	// warming (pending > 0) the pool keeps reporting high saturation and the
+	// optimizer would stack a new scale-up every cycle before the in-flight pods
+	// come online — racing to maxReplicas (observed live: overshoot to 11 when ~6
+	// sufficed). Hold the target at the current replica count until the requested
+	// pods become Ready. This replaces unreliable extrapolation near the queueing
+	// knee with empirical probing: add capacity, wait for it to take effect,
+	// re-measure. Scale-down (target < current) is never suppressed. Applied
+	// post-optimizer so it is independent of optimizer internals.
+	stateByVariant := make(map[string]interfaces.VariantReplicaState)
+	for _, req := range requests {
+		for _, vs := range req.VariantStates {
+			stateByVariant[vs.VariantName] = vs
+		}
+	}
+	for i := range allDecisions {
+		d := &allDecisions[i]
+		if !holdWarmByModel[utils.GetNamespacedKey(d.Namespace, d.ModelID)] {
+			continue
+		}
+		st, ok := stateByVariant[d.VariantName]
+		if !ok {
+			continue
+		}
+		if held := applyWarmupHold(d.TargetReplicas, st.CurrentReplicas, st.PendingReplicas); held != d.TargetReplicas {
+			logger.Info("EPP saturation holding scale-up while replicas warm up",
+				"variant", d.VariantName, "modelID", d.ModelID,
+				"currentReplicas", st.CurrentReplicas, "pendingReplicas", st.PendingReplicas,
+				"requestedTarget", d.TargetReplicas)
+			d.TargetReplicas = held
 		}
 	}
 

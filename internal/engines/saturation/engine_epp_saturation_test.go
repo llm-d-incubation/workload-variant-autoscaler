@@ -24,6 +24,26 @@ func drainDecisionTrigger() {
 	}
 }
 
+func TestApplyWarmupHold(t *testing.T) {
+	tests := []struct {
+		name            string
+		target, current int
+		pending         int
+		want            int
+	}{
+		{"scale-up held while warming", 8, 4, 1, 4},
+		{"scale-up allowed when all ready", 8, 4, 0, 8},
+		{"scale-down never held", 3, 6, 2, 3},
+		{"no-op unchanged while warming", 5, 5, 2, 5},
+		{"scale-up by one still held", 5, 4, 3, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, applyWarmupHold(tt.target, tt.current, tt.pending))
+		})
+	}
+}
+
 // TestMarkEPPSignalUnavailable verifies that the EPP signal-unavailable fallback
 // pushes a MetricsAvailable=False decision (with an EPP-specific reason) into the
 // shared cache for real VAs, skips synthetic VAs, and triggers a reconcile.
