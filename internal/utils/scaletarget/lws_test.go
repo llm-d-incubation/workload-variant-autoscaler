@@ -19,6 +19,7 @@ package scaletarget
 import (
 	"testing"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -481,6 +482,139 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			result := accessor.GetTotalGPUsPerReplica()
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+func TestLWSAccessor_GetTotalGPUsPerReplica_SupportedGPUResources(t *testing.T) {
+	tests := []struct {
+		name         string
+		resourceName corev1.ResourceName
+		size         int32
+		leaderGPUs   string
+		workerGPUs   string
+		expected     int
+	}{
+		{
+			name:         "NVIDIA GPUs",
+			resourceName: "nvidia.com/gpu",
+			size:         4,
+			leaderGPUs:   "2",
+			workerGPUs:   "1",
+			expected:     5,
+		},
+		{
+			name:         "AMD GPUs",
+			resourceName: "amd.com/gpu",
+			size:         3,
+			leaderGPUs:   "2",
+			workerGPUs:   "3",
+			expected:     8,
+		},
+		{
+			name:         "Intel Gaudi GPUs",
+			resourceName: "habana.ai/gaudi",
+			size:         4,
+			leaderGPUs:   "1",
+			workerGPUs:   "2",
+			expected:     7,
+		},
+		{
+			name:         "Intel i915 GPUs",
+			resourceName: "gpu.intel.com/i915",
+			size:         2,
+			leaderGPUs:   "1",
+			workerGPUs:   "2",
+			expected:     3,
+		},
+		{
+			name:         "Intel Xe GPUs",
+			resourceName: "gpu.intel.com/xe",
+			size:         5,
+			leaderGPUs:   "3",
+			workerGPUs:   "1",
+			expected:     7,
+		},
+	}
+
+	assert.Len(t, tests, len(constants.VendorResources), "add a row when constants.VendorResources changes")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lws := lwsWithGPURequests(tt.size, tt.resourceName, tt.leaderGPUs, tt.workerGPUs)
+
+			accessor := NewLWSAccessor(lws)
+			result := accessor.GetTotalGPUsPerReplica()
+
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestLWSAccessor_GetTotalGPUsPerReplica_MixedSupportedGPUResources(t *testing.T) {
+	// Synthetic case: verify summation across recognized GPU resource names,
+	// not a recommended production topology.
+	lws := &lwsv1.LeaderWorkerSet{
+		Spec: lwsv1.LeaderWorkerSetSpec{
+			LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
+				Size: int32Ptr(3), // 1 leader + 2 workers
+				LeaderTemplate: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							containerWithGPURequest("leader-nvidia", "nvidia.com/gpu", "2"),
+							containerWithGPURequest("leader-gaudi", "habana.ai/gaudi", "1"),
+						},
+					},
+				},
+				WorkerTemplate: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							containerWithGPURequest("worker-amd", "amd.com/gpu", "1"),
+							containerWithGPURequest("worker-xe", "gpu.intel.com/xe", "2"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	accessor := NewLWSAccessor(lws)
+	result := accessor.GetTotalGPUsPerReplica()
+
+	assert.Equal(t, 9, result)
+}
+
+func lwsWithGPURequests(size int32, resourceName corev1.ResourceName, leaderGPUs string, workerGPUs string) *lwsv1.LeaderWorkerSet {
+	return &lwsv1.LeaderWorkerSet{
+		Spec: lwsv1.LeaderWorkerSetSpec{
+			LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
+				Size: int32Ptr(size),
+				LeaderTemplate: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							containerWithGPURequest("leader", resourceName, leaderGPUs),
+						},
+					},
+				},
+				WorkerTemplate: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							containerWithGPURequest("worker", resourceName, workerGPUs),
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func containerWithGPURequest(name string, resourceName corev1.ResourceName, gpus string) corev1.Container {
+	return corev1.Container{
+		Name: name,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				resourceName: resource.MustParse(gpus),
+			},
+		},
 	}
 }
 

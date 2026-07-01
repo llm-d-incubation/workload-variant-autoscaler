@@ -5,6 +5,7 @@ POC_DIR      := config/samples/hpa/co-ordinator
 POC_WVA_NS  := workload-variant-autoscaler-system
 POC_MON_NS  := workload-variant-autoscaler-monitoring
 GAIE_VERSION ?= v1.5.0
+LLM_D_ROUTER_VERSION ?= v0.9.0
 
 .PHONY: poc-install
 poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Prometheus Adapter rules
@@ -26,16 +27,16 @@ poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Promet
 	@echo ""
 	@echo "--- Step 2: Install model-a EPP (flowControl enabled) ---"
 	@helm upgrade --install model-a \
-	  oci://registry.k8s.io/gateway-api-inference-extension/charts/standalone \
-	  --version $(GAIE_VERSION) \
+	  oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+	  --version $(LLM_D_ROUTER_VERSION) \
 	  --namespace $(POC_NS) \
 	  -f $(POC_DIR)/model-a-epp-values.yaml
 	@echo ""
 	@echo "--- Step 3: Install model-b EPP (flowControl enabled) ---"
 	@kubectl delete configmap envoy -n $(POC_NS) --ignore-not-found=true 2>/dev/null; true
 	@helm upgrade --install model-b \
-	  oci://registry.k8s.io/gateway-api-inference-extension/charts/standalone \
-	  --version $(GAIE_VERSION) \
+	  oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+	  --version $(LLM_D_ROUTER_VERSION) \
 	  --namespace $(POC_NS) \
 	  -f $(POC_DIR)/model-b-epp-values.yaml
 	@echo ""

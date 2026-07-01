@@ -39,5 +39,8 @@ llmd-infra/
 *.tgz
 actionlint
 
+# Generated TLS certificates (auto-created by e2e test setup)
+hack/tls-certs/
+
 # AI
 .claude/worktrees/

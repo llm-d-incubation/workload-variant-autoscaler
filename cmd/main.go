@@ -201,6 +201,17 @@ func main() {
 		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
 	}
 
+	vaCRDEnabled, err := crd.CheckVariantAutoscalingCRD(restConfig, setupLog)
+	if err != nil {
+		setupLog.Error(err, "failed to determine VariantAutoscaling CRD availability")
+		os.Exit(1)
+	}
+	if vaCRDEnabled {
+		setupLog.Info("VariantAutoscaling CRD detected - support enabled")
+	} else {
+		setupLog.Info("VariantAutoscaling CRD not found - VA reconciler disabled; annotation-based discovery remains enabled")
+	}
+
 	// Detect KEDA for annotation-based ScaledObject discovery (dual-mode, Phase 1)
 	kedaEnabled := crd.CheckKEDACRD(restConfig, setupLog)
 	if kedaEnabled {
@@ -384,7 +395,7 @@ func main() {
 
 	// Setup custom indexes for lookups on VariantAutoscalings
 	setupLog.Info("Setting up indexes")
-	if err := indexers.SetupIndexes(context.Background(), mgr, kedaEnabled); err != nil {
+	if err := indexers.SetupIndexes(context.Background(), mgr, vaCRDEnabled, kedaEnabled); err != nil {
 		setupLog.Error(err, "unable to setup indexes")
 		os.Exit(1)
 	}
@@ -512,20 +523,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create the reconciler with unified Config and datastore
-	reconciler := controller.NewVariantAutoscalingReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
-		cfg,
-		ds,
-		lwsEnabled,
-	)
+	if vaCRDEnabled {
+		// Create the reconciler with unified Config and datastore
+		reconciler := controller.NewVariantAutoscalingReconciler(
+			mgr.GetClient(),
+			mgr.GetScheme(),
+			mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
+			cfg,
+			ds,
+			lwsEnabled,
+		)
 
-	// Setup the controller with the manager
-	if err = reconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller")
-		os.Exit(1)
+		// Setup the controller with the manager
+		if err = reconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller")
+			os.Exit(1)
+		}
 	}
 
 	// HPAReconciler: tracks namespaces for annotation-based discovery (always registered).

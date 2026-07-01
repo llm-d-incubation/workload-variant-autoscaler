@@ -285,14 +285,14 @@ func InitMetrics(registry prometheus.Registerer) error {
 	configKvSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigKvSpareThreshold,
-			Help: "KV cache spare threshold configuration value",
+			Help: "Global default (not per-model override) KV cache spare threshold configuration value",
 		},
 		configLabels,
 	)
 	configQueueSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigQueueSpareThreshold,
-			Help: "Queue spare threshold configuration value",
+			Help: "Global default (not per-model override) queue spare threshold configuration value",
 		},
 		configLabels,
 	)
@@ -685,6 +685,7 @@ func SetConfigInfo(analyzerName string, limiterEnabled, scaleToZeroEnabled bool)
 	if configInfoGauge == nil {
 		return
 	}
+	configInfoGauge.Reset()
 	labels := prometheus.Labels{
 		constants.LabelAnalyzerName:       analyzerName,
 		constants.LabelLimiterEnabled:     strconv.FormatBool(limiterEnabled),
@@ -701,6 +702,7 @@ func SetConfigKvSpareThreshold(threshold float64) {
 	if configKvSpareThresholdGauge == nil {
 		return
 	}
+	configKvSpareThresholdGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
@@ -713,6 +715,7 @@ func SetConfigQueueSpareThreshold(threshold float64) {
 	if configQueueSpareThresholdGauge == nil {
 		return
 	}
+	configQueueSpareThresholdGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
@@ -725,6 +728,7 @@ func SetConfigOptimizationInterval(intervalSeconds float64) {
 	if configOptimizationIntervalSecsGauge == nil {
 		return
 	}
+	configOptimizationIntervalSecsGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
