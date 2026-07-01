@@ -133,13 +133,36 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		"scaleUpThreshold", cfg.ScaleUpThreshold,
 		"scaleDownBoundary", cfg.ScaleDownBoundary)
 
-	// Compute current replica count from variant states
-	var totalReplicas int
+	// Compute current + ready replica counts from variant states.
+	var totalReplicas, readyReplicas int
 	for _, vs := range input.VariantStates {
 		totalReplicas += vs.CurrentReplicas
+		if r := vs.CurrentReplicas - vs.PendingReplicas; r > 0 {
+			readyReplicas += r
+		}
 	}
 	if totalReplicas == 0 {
 		totalReplicas = 1
+	}
+
+	// Credit in-flight (warming) replicas. The saturation signal is measured from
+	// the Ready pods; while a scale-up is in flight those Ready pods absorb more
+	// than their eventual share, so the raw signal over-states the post-warmup
+	// load. Once the pending pods become Ready the load spreads across all
+	// totalReplicas, so the demand that should drive scaling is the *anticipated*
+	// saturation: signal × ready/total. This makes scale-up ask only for the
+	// deficit beyond the pods already coming online (instead of racing to
+	// maxReplicas while pods warm), and re-converge as pending pods become Ready.
+	// readyFraction = 1.0 in steady state (no pending), so behavior is unchanged.
+	readyFraction := 1.0
+	if readyReplicas > 0 && readyReplicas < totalReplicas {
+		readyFraction = float64(readyReplicas) / float64(totalReplicas)
+	}
+	effectiveDemand := saturationScore * readyFraction
+	if readyFraction < 1.0 {
+		logger.Info("EPP saturation crediting in-flight replicas",
+			"modelID", input.ModelID, "readyReplicas", readyReplicas, "totalReplicas", totalReplicas,
+			"readyFraction", readyFraction, "smoothedSaturation", saturationScore, "effectiveDemand", effectiveDemand)
 	}
 
 	// Normalized capacity model for proportional scaling.
@@ -168,7 +191,7 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	//
 	perReplicaCapacity := 1.0 / float64(totalReplicas)
 	totalSupply := 1.0             // normalized pool capacity
-	totalDemand := saturationScore // saturation = demand/capacity
+	totalDemand := effectiveDemand // in-flight-credited saturation drives scaling
 
 	utilization := saturationScore
 	if utilization > 1.0 {

@@ -37,6 +37,22 @@ import (
 // EPP latency detector's pool saturation signal cannot be queried.
 const eppSignalUnavailableMessage = "EPP saturation signal unavailable (latency detector or predictor sidecar may be down)"
 
+// inFlightReadyFraction returns readyReplicas/totalReplicas — the factor used to
+// credit in-flight (warming) replicas. The saturation signal is measured from the
+// Ready pods; while a scale-up is in flight those Ready pods absorb more than
+// their eventual share, so the raw signal over-states the post-warmup load. Once
+// the pending pods become Ready the load spreads across all totalReplicas, so the
+// anticipated saturation is signal × ready/total. This makes scale-up ask only for
+// the deficit beyond the pods already coming online, instead of racing to
+// maxReplicas. Returns 1.0 (no credit) in steady state (no pending) or when there
+// are no Ready pods to measure from.
+func inFlightReadyFraction(readyReplicas, totalReplicas int) float64 {
+	if totalReplicas <= 0 || readyReplicas <= 0 || readyReplicas >= totalReplicas {
+		return 1.0
+	}
+	return float64(readyReplicas) / float64(totalReplicas)
+}
+
 // optimizeEPPSaturation runs the EPP saturation analyzer path.
 // Unlike V1/V2, this does not collect per-replica metrics from vLLM pods.
 // Instead, it queries the EPP's pre-computed pool saturation score and
@@ -166,14 +182,21 @@ func (e *Engine) optimizeEPPSaturation(
 		// maxReplicas comparison would misfire, so cap detection is skipped (the
 		// gauge is still emitted as 0 below).
 		if len(modelVAs) == 1 && saturationConfig.ScaleUpThreshold > 0 {
-			totalReplicas := 0
+			totalReplicas, readyReplicas := 0, 0
 			for _, vs := range variantStates {
 				totalReplicas += vs.CurrentReplicas
+				r := vs.CurrentReplicas - vs.PendingReplicas
+				if r > 0 {
+					readyReplicas += r
+				}
 			}
 			if totalReplicas == 0 {
 				totalReplicas = 1 // match the analyzer's floor so scale-up-from-zero is still flaggable
 			}
-			requiredCapacity := math.Max(0, result.SmoothedSignal/saturationConfig.ScaleUpThreshold-1.0)
+			// Mirror the analyzer's in-flight credit: the demand that drives scaling
+			// is the anticipated saturation once the warming pods share the load.
+			effectiveSat := result.SmoothedSignal * inFlightReadyFraction(readyReplicas, totalReplicas)
+			requiredCapacity := math.Max(0, effectiveSat/saturationConfig.ScaleUpThreshold-1.0)
 			uncapped := totalReplicas + int(math.Ceil(requiredCapacity*float64(totalReplicas)))
 			uncappedByModel[utils.GetNamespacedKey(namespace, modelID)] = uncapped
 		} else if len(modelVAs) > 1 {

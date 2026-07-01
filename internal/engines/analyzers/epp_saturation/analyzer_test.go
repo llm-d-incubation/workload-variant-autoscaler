@@ -295,7 +295,11 @@ func TestAnalyze_PendingReplicas(t *testing.T) {
 
 	// totalReplicas = 4 (current, including pending), normalized supply = 1.0
 	assert.InDelta(t, 1.0, result.TotalSupply, 0.01)
-	assert.InDelta(t, 0.95, result.TotalDemand, 0.01)
+	// In-flight credit: readyReplicas = 4 - 2 = 2, readyFraction = 2/4 = 0.5, so
+	// the demand driving scaling is the anticipated post-warmup saturation:
+	// 0.95 * 0.5 = 0.475 (the 2 warming pods are credited, so scale-up only asks
+	// for the deficit beyond what is already coming online).
+	assert.InDelta(t, 0.475, result.TotalDemand, 0.01)
 
 	// Per-variant: readyCount = 4 - 2 = 2, perReplicaCapacity = 1/4 = 0.25
 	// variant capacity = 2 * 0.25 = 0.5
