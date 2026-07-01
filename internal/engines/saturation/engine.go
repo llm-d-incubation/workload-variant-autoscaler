@@ -315,6 +315,18 @@ func (e *Engine) recordActiveOptimizer() {
 	}
 }
 
+func (e *Engine) recordDefaultConfigMetrics() {
+	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
+
+	globalSatCfgMap := e.Config.SaturationConfig()
+	// record global default config
+	if cfg, ok := globalSatCfgMap["default"]; ok {
+		metrics.SetConfigKvSpareThreshold(cfg.KvSpareTrigger)
+		metrics.SetConfigQueueSpareThreshold(cfg.QueueSpareTrigger)
+		metrics.SetConfigInfo(cfg.GetAnalyzerName(), cfg.EnableLimiter, e.Config.ScaleToZeroEnabled())
+	}
+}
+
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	start := time.Now()
@@ -329,6 +341,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	}()
 
 	logger := ctrl.LoggerFrom(ctx)
+	e.recordDefaultConfigMetrics() // record as soon as possible to reflect any changes in configuration
 
 	// Get optimization interval from Config (already a time.Duration)
 	interval := e.Config.OptimizationInterval()
@@ -534,13 +547,7 @@ func (e *Engine) resolveSaturationConfig(
 	configMap map[string]config.SaturationScalingConfig,
 	modelID, namespace string,
 ) config.SaturationScalingConfig {
-	config := resolveSaturationConfig(configMap, modelID, namespace)
-	// record config metric after resolution instead of where the configmaps are reconciled. Here we
-	// have the exact values being used by the optimize engine.
-	metrics.SetConfigKvSpareThreshold(config.KvSpareTrigger)
-	metrics.SetConfigQueueSpareThreshold(config.QueueSpareTrigger)
-	metrics.SetConfigInfo(config.AnalyzerName, config.EnableLimiter, e.Config.ScaleToZeroEnabled())
-	return config
+	return resolveSaturationConfig(configMap, modelID, namespace)
 }
 
 // optimizeV1 runs the V1 percentage-based saturation analysis path (saturation-percentage-based).

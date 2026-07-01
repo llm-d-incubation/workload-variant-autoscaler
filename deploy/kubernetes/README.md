@@ -62,7 +62,7 @@ This script automates the complete deployment process on kubernetes cluster incl
 export HF_TOKEN="your-hf-token-here"
 
 # Optional: Customize deployment (basename under llm-d guides/; llm-d main uses optimized-baseline)
-export GUIDE_NAME="optimized-baseline"                                  # Default for LLM_D_RELEASE v0.7.0+
+export GUIDE_NAME="optimized-baseline"                                  # Default guide name
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"                               # Default
 export WVA_IMAGE_REPO="ghcr.io/llm-d/llm-d-workload-variant-autoscaler"         # Default
 export WVA_IMAGE_TAG="latest"                                             # Default

@@ -75,7 +75,6 @@ main() {
     create_namespaces
 
     deploy_monitoring_stack
-    deploy_optional_benchmark_grafana
 
     # Deploy WVA prerequisites first (environment-specific).
     if [ "$DEPLOY_WVA" = "true" ]; then

@@ -386,8 +386,7 @@ jobs:
       MAX_NUM_SEQS: ${{ github.event.inputs.max_num_seqs || '5' }}
       HPA_STABILIZATION_SECONDS: ${{ github.event.inputs.hpa_stabilization_seconds || '240' }}
       SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
-      # Pin llm-d release for deterministic CI behavior
-      LLM_D_RELEASE: v0.7.0
+      LLM_D_ROUTER_VERSION: v0.9.0
       GAIE_VERSION: v1.5.0
       # PR-specific namespaces for isolation between concurrent PR tests
       LLMD_NAMESPACE: llm-d-autoscaler-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
@@ -403,13 +402,6 @@ jobs:
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
-
-      - name: Checkout llm-d/llm-d
-        uses: actions/checkout@v6
-        with:
-          repository: llm-d/llm-d
-          ref: ${{ env.LLM_D_RELEASE }}
-          path: llm-d
 
       - name: Set up Go
         uses: actions/setup-go@v6

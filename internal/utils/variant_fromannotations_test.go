@@ -205,3 +205,33 @@ func TestIsSynthetic_False(t *testing.T) {
 		t.Error("VA without synthetic annotation must not be synthetic")
 	}
 }
+
+// Regression: a ScaledObject with minReplicaCount:0 must yield MinReplicas=0 so the
+// analyzer can scale the variant to zero. Before the fix, annotation mode read
+// so.GetHPAMinReplicas() which floors at 1 (an HPA's minReplicas can't be 0), hiding the
+// real minReplicaCount:0 and pinning the variant at >=1.
+func TestVariantAutoscalingFromScaledObject_ScaleToZero(t *testing.T) {
+	so := &kedav1alpha1.ScaledObject{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "idle-variant",
+			Namespace:   "production",
+			Annotations: wvaAnnotations("ibm/granite-13b", "40.0"),
+		},
+		Spec: kedav1alpha1.ScaledObjectSpec{
+			ScaleTargetRef: &kedav1alpha1.ScaleTarget{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "granite-13b",
+			},
+			MinReplicaCount: ptr.To(int32(0)),
+			MaxReplicaCount: ptr.To(int32(5)),
+		},
+	}
+	va, err := utils.VariantAutoscalingFromScaledObject(so)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if va.Spec.MinReplicas == nil || *va.Spec.MinReplicas != 0 {
+		t.Errorf("MinReplicas = %v, want 0 (scale-to-zero must be honored, not floored to 1)", va.Spec.MinReplicas)
+	}
+}

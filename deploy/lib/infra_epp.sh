@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
 # EPP and InferencePool setup for all environments (kind-emulator, kubernetes, openshift).
-# Installs Gateway API CRDs, GAIE CRDs, and the GAIE standalone chart (EPP + InferencePool).
+# Installs Gateway API CRDs, GAIE CRDs, and the llm-d-router-standalone chart (EPP + InferencePool).
 #
-# Required vars: LLM_D_RELEASE, GAIE_VERSION, LLMD_NS
+# Required vars: LLM_D_ROUTER_VERSION, GAIE_VERSION, LLMD_NS
+#   LLM_D_ROUTER_VERSION  — chart + EPP image tag from llm-d/llm-d-router (e.g. v0.9.0)
+#   GAIE_VERSION          — kubernetes-sigs GAIE CRDs ref (e.g. v1.5.0)
 # Required funcs: log_info, log_success, log_warning
 #
 
@@ -24,20 +26,10 @@ install_inference_crds() {
 }
 
 deploy_epp() {
-    log_info "Deploying EPP infrastructure (GAIE standalone chart v${GAIE_VERSION})..."
+    log_info "Deploying EPP infrastructure (llm-d-router-standalone chart ${LLM_D_ROUTER_VERSION}, GAIE CRDs ${GAIE_VERSION})..."
 
     local _lib_dir
     _lib_dir="$(dirname "${BASH_SOURCE[0]}")"
-
-    # Download guide values files pinned to LLM_D_RELEASE — version-coupled to EPP image tag.
-    local _llmd_raw="https://raw.githubusercontent.com/llm-d/llm-d/${LLM_D_RELEASE}"
-    local _tmpdir
-    _tmpdir="$(mktemp -d)"
-    log_info "Fetching llm-d guide values (ref=${LLM_D_RELEASE})..."
-    curl -fsSL "$_llmd_raw/guides/recipes/scheduler/base.values.yaml" \
-        -o "$_tmpdir/epp-base.values.yaml"
-    curl -fsSL "$_llmd_raw/guides/optimized-baseline/scheduler/optimized-baseline.values.yaml" \
-        -o "$_tmpdir/epp-optimized-baseline.values.yaml"
 
     # CRD installation — skipped on shared clusters where CRDs are pre-installed
     # (e.g. OpenShift e2e). Set SKIP_CLUSTER_CRDS=true to skip.
@@ -67,9 +59,11 @@ deploy_epp() {
         log_info "llm-d-hf-token secret already exists in $LLMD_NS — skipping"
     fi
 
-    # GAIE standalone chart — bundles EPP + Envoy proxy; no external gateway controller needed.
-    # Override chart's production resource requests (4CPU/8Gi per container) to fit a kind cluster.
-    log_info "Installing GAIE standalone chart (release=optimized-baseline)..."
+    # llm-d-router-standalone chart — bundles EPP + Envoy proxy; no external
+    # gateway controller needed. Chart + EPP image version is LLM_D_ROUTER_VERSION.
+    # Override chart's production resource requests (4CPU/8Gi per container)
+    # to fit a kind cluster.
+    log_info "Installing llm-d-router-standalone chart (release=optimized-baseline, version=${LLM_D_ROUTER_VERSION})..."
 
     # When scale-to-zero is enabled, add flowControl feature gate to EPP config so the
     # scale-from-zero engine can read inference_extension_flow_control_queue_size metrics.
@@ -80,19 +74,19 @@ deploy_epp() {
     fi
 
     helm upgrade --install optimized-baseline \
-        oci://registry.k8s.io/gateway-api-inference-extension/charts/standalone \
-        -f "$_tmpdir/epp-base.values.yaml" \
-        -f "$_tmpdir/epp-optimized-baseline.values.yaml" \
+        oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+        -f "$_lib_dir/epp-base.values.yaml" \
+        -f "$_lib_dir/epp-optimized-baseline.values.yaml" \
         "${extra_helm_args[@]}" \
-        --set inferenceExtension.resources.requests.cpu=100m \
-        --set inferenceExtension.resources.requests.memory=256Mi \
-        --set inferenceExtension.resources.limits.cpu=500m \
-        --set inferenceExtension.resources.limits.memory=512Mi \
-        --set inferenceExtension.sidecar.resources.requests.cpu=100m \
-        --set inferenceExtension.sidecar.resources.requests.memory=128Mi \
-        --set inferenceExtension.sidecar.resources.limits.cpu=500m \
-        --set inferenceExtension.sidecar.resources.limits.memory=256Mi \
-        -n "$LLMD_NS" --version "$GAIE_VERSION" --create-namespace
+        --set router.epp.resources.requests.cpu=100m \
+        --set router.epp.resources.requests.memory=256Mi \
+        --set router.epp.resources.limits.cpu=500m \
+        --set router.epp.resources.limits.memory=512Mi \
+        --set router.proxy.resources.requests.cpu=100m \
+        --set router.proxy.resources.requests.memory=128Mi \
+        --set router.proxy.resources.limits.cpu=500m \
+        --set router.proxy.resources.limits.memory=256Mi \
+        -n "$LLMD_NS" --version "$LLM_D_ROUTER_VERSION" --create-namespace
 
     # Grant EPP SA permission to create tokenreviews/subjectaccessreviews so its
     # metrics endpoint authentication works (otherwise /metrics returns 500).
@@ -109,7 +103,7 @@ deploy_epp() {
         -n "$LLMD_NS" --timeout=120s || \
         log_warning "EPP not ready yet — check 'kubectl get pods -n $LLMD_NS'"
 
-    log_success "EPP infrastructure deployed (GAIE standalone v${GAIE_VERSION})"
+    log_success "EPP infrastructure deployed (llm-d-router-standalone ${LLM_D_ROUTER_VERSION})"
 }
 
 undeploy_epp() {

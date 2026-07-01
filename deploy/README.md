@@ -186,7 +186,7 @@ Options:
   -h, --help               Show help
 ```
 
-**llm-d stack** (gateway, EPP, ModelService): deploy using the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) directly. For EPP-only setup (GAIE standalone chart + tokenreview RBAC), use `deploy/install-epp.sh` after `install.sh`.
+**llm-d stack** (gateway, EPP, ModelService): deploy using the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) directly. For EPP-only setup (llm-d-router-standalone chart + tokenreview RBAC), use `deploy/install-epp.sh` after `install.sh`.
 
 **Environment variables** (see [Configuration Reference](#configuration-reference)):
 
@@ -214,8 +214,8 @@ export DEPLOY_OPERATIONAL_DASHBOARD=true    # Deploy Grafana and operational das
 
 ```bash
 ./deploy/install.sh -e kubernetes
-# EPP (GAIE standalone chart + RBAC):
-LLM_D_RELEASE=v0.7.0 GAIE_VERSION=v1.5.0 LLMD_NS=llm-d-optimized-baseline \
+# EPP (llm-d-router-standalone chart + RBAC):
+LLM_D_ROUTER_VERSION=v0.9.0 GAIE_VERSION=v1.5.0 LLMD_NS=llm-d-optimized-baseline \
   ./deploy/install-epp.sh
 # Model server: follow llm-d/llm-d guides/optimized-baseline
 ```
