@@ -154,8 +154,11 @@ func (e *Engine) optimizeEPPSaturation(
 		}
 
 		// Record what the EPP formula would recommend absent the maxReplicas clamp,
-		// so we can flag capped decisions after the optimizer runs. Uses the same
-		// closed form as the analyzer's scaling math: desired = ceil(S * N / T_up).
+		// so we can flag capped decisions after the optimizer runs. This mirrors the
+		// analyzer + optimizer target exactly (not the algebraically-equivalent
+		// ceil(S*N/T_up), which double-rounds and can be off by one):
+		//   requiredCapacity = max(0, S/T_up - 1)
+		//   uncappedTarget   = N + ceil(requiredCapacity * N)
 		//
 		// This is a pool-level total. We only attribute it for single-variant model
 		// groups, where the variant target equals the pool total; with multiple
@@ -170,7 +173,8 @@ func (e *Engine) optimizeEPPSaturation(
 			if totalReplicas == 0 {
 				totalReplicas = 1 // match the analyzer's floor so scale-up-from-zero is still flaggable
 			}
-			uncapped := int(math.Ceil(result.SmoothedSignal * float64(totalReplicas) / saturationConfig.ScaleUpThreshold))
+			requiredCapacity := math.Max(0, result.SmoothedSignal/saturationConfig.ScaleUpThreshold-1.0)
+			uncapped := totalReplicas + int(math.Ceil(requiredCapacity*float64(totalReplicas)))
 			uncappedByModel[utils.GetNamespacedKey(namespace, modelID)] = uncapped
 		} else if len(modelVAs) > 1 {
 			logger.V(logging.DEBUG).Info("Skipping cap detection for multi-variant model group (pool total not attributable per variant)",
