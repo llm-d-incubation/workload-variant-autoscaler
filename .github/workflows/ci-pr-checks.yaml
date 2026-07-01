@@ -391,6 +391,16 @@ jobs:
           repository: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}
           ref: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Merge main into PR branch
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.email "ci@github.com"
+          git config user.name "CI"
+          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Extract Go version from go.mod
         run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV

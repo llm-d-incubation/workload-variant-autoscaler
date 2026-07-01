@@ -354,6 +354,16 @@ jobs:
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
+          fetch-depth: 0
+
+      - name: Merge main into PR branch
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.email "ci@github.com"
+          git config user.name "CI"
+          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -402,6 +412,16 @@ jobs:
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
+          fetch-depth: 0
+
+      - name: Merge main into PR branch
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.email "ci@github.com"
+          git config user.name "CI"
+          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Set up Go
         uses: actions/setup-go@v6
