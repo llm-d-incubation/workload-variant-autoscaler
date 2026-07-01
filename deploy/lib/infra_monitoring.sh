@@ -4,7 +4,7 @@
 # Keeps install.sh main flow concise while delegating to environment/plugin functions.
 # Requires funcs: deploy_prometheus_stack(), log_info/log_warning/log_success,
 # wait_deployment_available_nonfatal().
-# Requires vars: DEPLOY_PROMETHEUS, INSTALL_GRAFANA, MONITORING_NAMESPACE, WVA_PROJECT.
+# Requires vars: DEPLOY_PROMETHEUS.
 #
 
 deploy_monitoring_stack() {
@@ -15,4 +15,3 @@ deploy_monitoring_stack() {
         log_info "Skipping Prometheus deployment (DEPLOY_PROMETHEUS=false)"
     fi
 }
-
