@@ -92,7 +92,7 @@ cleanup() {
         undeploy_prometheus_adapter
     fi
 
-    # EPP (GAIE standalone chart) is torn down via undeploy_epp() from infra_epp.sh.
+    # EPP (llm-d-router-standalone chart) is torn down via undeploy_epp() from infra_epp.sh.
     undeploy_epp
 
     if [ "$DEPLOY_WVA" = "true" ]; then

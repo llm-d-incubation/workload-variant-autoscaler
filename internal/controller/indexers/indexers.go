@@ -43,10 +43,13 @@ func scaleTargetIndexKey(namespace string, ref autoscalingv2.CrossVersionObjectR
 }
 
 // SetupIndexes registers custom field indexes with the manager's cache.
+// vaCRDEnabled controls whether the VariantAutoscaling index is registered; set to false when VariantAutoscaling CRD is not installed.
 // kedaEnabled controls whether the ScaledObject index is registered; set to false when KEDA CRDs are not installed.
-func SetupIndexes(ctx context.Context, mgr manager.Manager, kedaEnabled bool) error {
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}, VAScaleTargetKey, VAScaleTargetIndexFunc); err != nil {
-		return fmt.Errorf("failed to set up index by scale target for VariantAutoscaling: %w", err)
+func SetupIndexes(ctx context.Context, mgr manager.Manager, vaCRDEnabled bool, kedaEnabled bool) error {
+	if vaCRDEnabled {
+		if err := mgr.GetFieldIndexer().IndexField(ctx, &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}, VAScaleTargetKey, VAScaleTargetIndexFunc); err != nil {
+			return fmt.Errorf("failed to set up index by scale target for VariantAutoscaling: %w", err)
+		}
 	}
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &autoscalingv2.HorizontalPodAutoscaler{}, HPAByScaleTargetKey, HPAByScaleTargetIndexFunc); err != nil {
 		return fmt.Errorf("failed to set up index by scale target for HPA: %w", err)

@@ -104,4 +104,6 @@ Apache 2.0 - see [LICENSE](LICENSE) for details.
 
 ## References
 - [WVA paper](https://arxiv.org/abs/2603.09730)
+- [WVA use case doc](https://docs.google.com/document/d/1ZcMXO0x42qn4X5cu6efgMomYC4pKPwm6r7L79y1AQH4/edit?tab=t.0)
 - [Saturation based design discussion](https://docs.google.com/document/d/1iGHqdxRUDpiKwtJFr5tMCKM7RF6fbTfZBL7BTn6UkwA/edit?tab=t.0#heading=h.mdte0lq44ul4)
+

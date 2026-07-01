@@ -374,3 +374,10 @@ on the `enableLimiter` flag in `SaturationScalingConfig`:
 
 Both optimizers are stateless and selected per-cycle from the engine's
 `optimizer` field.
+
+## Observability
+
+The engine emits two structured INFO log lines per reconcile cycle per model —
+one per analyzer (after the threshold post-step) and one after the optimizer
+returns. See [cycle-log.md](cycle-log.md) for field schemas, grep patterns,
+and an explanation of the `reason` values set by each analyzer.

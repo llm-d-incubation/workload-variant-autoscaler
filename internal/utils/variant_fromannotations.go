@@ -56,7 +56,7 @@ func VariantAutoscalingFromScaledObject(so *kedav1alpha1.ScaledObject) (*wvav1al
 		apiVersion = "apps/v1"
 	}
 
-	minReplicas := so.GetHPAMinReplicas()
+	minReplicas := so.Spec.MinReplicaCount
 	maxReplicas := so.GetHPAMaxReplicas()
 
 	return &wvav1alpha1.VariantAutoscaling{

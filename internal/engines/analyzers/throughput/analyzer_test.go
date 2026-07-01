@@ -421,6 +421,20 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(state.TotalSupply).To(BeNumerically("~", muSat, muSat*0.10))
 			Expect(state.Demand).To(BeNumerically("~", 1000.0, 1.0))
 		})
+
+		It("sets Reason to T1-ols when tier-1 OLS fit succeeds", func() {
+			buildReadyWindow()
+
+			input := interfaces.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(5)},
+			}
+			result, err := analyzer.Analyze(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.VariantCapacities).To(HaveLen(1))
+			Expect(result.VariantCapacities[0].Reason).To(Equal(itlReasonT1OLS))
+		})
 	})
 
 	Describe("Analyze — tier-2 single-point estimation", func() {
@@ -430,7 +444,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		//   A_est  = (0.06075 - 0.006) / 0.75 = 0.073
 		//   ITL_sat ≈ 0.068  →  μ_sat ≈ 2782 tok/s (same scenario as tier-1)
 
-		tier2Replica := func(k, arrivalRate float64) interfaces.ReplicaMetrics {
+		tier2Replica := func(k, arrivalRate float64) interfaces.ReplicaMetrics { //nolint:unparam
 			return interfaces.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          k,
@@ -463,6 +477,79 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// supply/demand inequality that the engine interprets as RC>0.
 			Expect(result.TotalDemand).To(BeNumerically(">", result.TotalAnticipatedSupply))
 			Expect(result.RequiredCapacity).To(Equal(0.0))
+		})
+
+		It("sets Reason to T2-default when no prior tier-1 fit exists", func() {
+			// Single observation → window not ready; no prior fit → T2-default.
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{tier2Replica(0.75, 0)})
+
+			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []interfaces.ReplicaMetrics{tier2Replica(0.75, 5)},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.VariantCapacities).To(HaveLen(1))
+			Expect(result.VariantCapacities[0].Reason).To(Equal(itlReasonT2Default))
+		})
+
+		It("sets Reason to T2-pinned when a prior tier-1 fit has set lastFittedB", func() {
+			// Inject 10 on-line points to make the OLS window ready (same params as tier2Replica).
+			const trueA, trueB = 0.073, 0.006
+			t1kValues := []float64{0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80}
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", 5000, 200, 0.1, 1024000, trueB, t1kValues)
+			onLine := interfaces.ReplicaMetrics{
+				VariantName: "v1", KvUsageInstant: 0.75, KvCacheUsage: 0.75,
+				AvgITL: trueA*0.75 + trueB, AvgInputTokens: 5000, AvgOutputTokens: 200,
+				PrefixCacheHitRate: 0.1, TotalKvCapacityTokens: 1024000, ArrivalRate: 5,
+			}
+			_, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []interfaces.ReplicaMetrics{onLine},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			st, _ := analyzer.VariantState(modelID, namespace, "v1")
+			Expect(st.HasFittedB).To(BeTrue(), "T1 must have fired to set lastFittedB")
+
+			// Clear the window to force tier-2; lastFittedB is preserved.
+			analyzer.mu.Lock()
+			if s, ok := analyzer.variantStates[variantKey(namespace, modelID, "v1")]; ok {
+				s.observationWindow.Clear()
+			}
+			analyzer.mu.Unlock()
+
+			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []interfaces.ReplicaMetrics{tier2Replica(0.75, 5)},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.VariantCapacities).To(HaveLen(1))
+			Expect(result.VariantCapacities[0].Reason).To(Equal(itlReasonT2Pinned))
+		})
+
+		It("resolveITLModel returns T2-failed when all replicas are idle (KvUsageInstant == 0)", func() {
+			// Single Observe with idle metrics to create variant state, then Analyze
+			// with idle replicas so both tiers fail — tier-2 needs KvUsageInstant > 0.
+			idleMetrics := interfaces.ReplicaMetrics{
+				VariantName: "v1", KvUsageInstant: 0, KvCacheUsage: 0,
+				AvgITL: 0.006, AvgInputTokens: 5000, AvgOutputTokens: 200,
+				PrefixCacheHitRate: 0.1, TotalKvCapacityTokens: 1024000,
+			}
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{idleMetrics})
+
+			_, reason, ok := analyzer.resolveITLModel(ctx,
+				func() *variantState {
+					analyzer.mu.Lock()
+					defer analyzer.mu.Unlock()
+					return analyzer.variantStates[variantKey(namespace, modelID, "v1")]
+				}(),
+				[]interfaces.ReplicaMetrics{idleMetrics},
+				namespace, modelID, "v1",
+			)
+			Expect(ok).To(BeFalse())
+			Expect(reason).To(Equal(itlReasonT2Failed))
 		})
 	})
 

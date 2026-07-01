@@ -19,12 +19,14 @@ import (
 // to populate RoleSpare per role and initialize picker-local demand.
 // The original Result values are never mutated.
 type NamedAnalyzerResult struct {
-	Name      string
-	Result    *interfaces.AnalyzerResult
-	Score     float64            // per-analyzer weight from AnalyzerScoreConfig; used for fair-share priority
-	Remaining float64            // mutable remaining required capacity; P-scope for disaggregated, model-scope otherwise
-	Spare     float64            // mutable remaining spare capacity; model-scope (non-disaggregated only)
-	RoleSpare map[string]float64 // per-role mutable spare; set by initRoleState; nil for non-disaggregated
+	Name              string
+	Result            *interfaces.AnalyzerResult
+	Score             float64            // per-analyzer weight from AnalyzerScoreConfig; used for fair-share priority
+	Remaining         float64            // mutable remaining required capacity; P-scope for disaggregated, model-scope otherwise
+	Spare             float64            // mutable remaining spare capacity; model-scope (non-disaggregated only)
+	RoleSpare         map[string]float64 // per-role mutable spare; set by initRoleState; nil for non-disaggregated
+	ScaleUpThreshold  float64            // resolved scale-up threshold used to compute RC
+	ScaleDownBoundary float64            // resolved scale-down boundary used to compute SC
 }
 
 // ModelScalingRequest bundles the analyzer result with variant state for one model.

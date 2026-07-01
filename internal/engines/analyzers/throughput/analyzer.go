@@ -256,7 +256,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		// upward → systematic under-provisioning. Supply counting (computeVariantSupply,
 		// computeDemand) uses the unfiltered variantMetrics to include booting replicas.
 		healthyMetrics := filterHealthyForShape(variantMetrics)
-		model, ok := a.resolveITLModel(ctx, state, healthyMetrics, input.Namespace, input.ModelID, variantName)
+		model, reason, ok := a.resolveITLModel(ctx, state, healthyMetrics, input.Namespace, input.ModelID, variantName)
 		if !ok {
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: no ITL model available, skipping variant",
 				"namespace", input.Namespace,
@@ -337,6 +337,7 @@ func (a *ThroughputAnalyzer) Analyze(
 			TotalCapacity:      totalCapacity,
 			TotalDemand:        demand,
 			Utilization:        safeDivide(demand, totalCapacity),
+			Reason:             reason,
 		})
 	}
 
@@ -460,7 +461,7 @@ func (a *ThroughputAnalyzer) getOrCreateVariantState(key string) *variantState {
 // is extended to iterate variants with state but no current replica metrics.
 //
 // Must be called with a.mu held.
-func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []interfaces.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, bool) {
+func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []interfaces.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, string, bool) {
 	// Tier 1: OLS fit.
 	if state.observationWindow.Ready() {
 		obs := state.observationWindow.Observations()
@@ -471,7 +472,7 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 			)
 			state.lastFittedB = model.B
 			state.hasFittedB = true
-			return model, true
+			return model, itlReasonT1OLS, true
 		}
 		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-1 OLS fit failed, trying tier-2",
 			"namespace", namespace, "modelID", modelID, "variant", variantName,
@@ -485,8 +486,10 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 	// when replicas have spread k* values — it is the same least-squares criterion
 	// as tier-1 OLS but with B pinned instead of fitted.
 	baselineB := DefaultBaselineITLSec
+	tier2Label := itlReasonT2Default
 	if state.hasFittedB {
 		baselineB = state.lastFittedB
+		tier2Label = itlReasonT2Pinned
 	}
 	var numerator, sumK2 float64
 	var n float64
@@ -504,10 +507,10 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 				"namespace", namespace, "modelID", modelID, "variant", variantName,
 				"A", A, "B", baselineB, "replicas", int(n),
 			)
-			return ITLModel{A: A, B: baselineB}, true
+			return ITLModel{A: A, B: baselineB}, tier2Label, true
 		}
 	}
-	return ITLModel{}, false
+	return ITLModel{}, itlReasonT2Failed, false
 }
 
 // computeDemand aggregates λ_dec (decode token demand in tokens/sec) across replicas.

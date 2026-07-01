@@ -137,6 +137,13 @@ type VariantCapacity struct {
 	// For saturation V2: median(effectiveCapacity) in tokens across ready replicas.
 	PerReplicaCapacity float64
 
+	// Reason is a free-text string set by the analyzer to describe how the
+	// variant's per-replica capacity was computed. Empty for analyzers that
+	// do not set it. Saturation V2 uses "P0-store", "P1-obs", "P2-hist",
+	// "P3-k2", "P4-k1", "no-data", "error". Throughput uses "T1-ols",
+	// "T2-pinned", "T2-default", "T2-failed".
+	Reason string
+
 	// TotalCapacity is ReplicaCount × PerReplicaCapacity.
 	TotalCapacity float64
 

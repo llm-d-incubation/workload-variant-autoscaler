@@ -109,4 +109,11 @@ const (
 	// window is cleared (shape change or threshold reached) so it is always bound to
 	// the current window's lifetime.
 	DefaultGPSMismatchClearThreshold = 3
+
+	// itlReason* are the values set on VariantCapacity.Reason by resolveITLModel.
+	// They appear in the "analyzer-result" structured log line.
+	itlReasonT1OLS     = "T1-ols"     // tier-1: OLS fit from live observations
+	itlReasonT2Default = "T2-default" // tier-2: constrained OLS with default B baseline
+	itlReasonT2Pinned  = "T2-pinned"  // tier-2: constrained OLS with previously fitted B
+	itlReasonT2Failed  = "T2-failed"  // all paths exhausted; no model for this cycle
 )

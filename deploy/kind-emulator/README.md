@@ -36,7 +36,7 @@ This deploys:
 
 - Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
 - WVA controller
-- llm-d EPP (GAIE standalone)
+- llm-d EPP (llm-d-router-standalone chart)
 - Prometheus monitoring + Prometheus Adapter
 
 To also deploy a simulator model service for manual testing:

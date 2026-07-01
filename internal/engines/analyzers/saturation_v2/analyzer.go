@@ -168,7 +168,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	if rec := a.capacityStore.Get(namespace, modelID, rm.VariantName); rec != nil {
 		vllmParams = rec.VLLMParams
 	}
-	k2 := a.computeK2(
+	k2, k2Priority := a.computeK2(
 		modelID, rm.AcceleratorName,
 		gpuCount,
 		rm.QueueLength, rm.TokensInUse,
@@ -210,6 +210,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
 		MemoryBoundCapacity:   k1,
 		ComputeBoundCapacity:  k2,
+		K2Priority:            k2Priority,
 		EffectiveCapacity:     effectiveCapacity,
 		IsSaturated:           isSaturated,
 		ReplicaDemand:         replicaDemand,
@@ -259,6 +260,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacityFallback(
 		TotalKvCapacityTokens: effectiveCapacity, // synthetic: store-derived
 		MemoryBoundCapacity:   effectiveCapacity,
 		ComputeBoundCapacity:  effectiveCapacity,
+		K2Priority:            k2SrcFallback,
 		EffectiveCapacity:     effectiveCapacity,
 		IsSaturated:           isSaturated,
 		ReplicaDemand:         replicaDemand,
@@ -270,6 +272,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacityFallback(
 // 2. Historical → rolling average from previous observations
 // 3. Derived (from deployment args) → formula-based estimate
 // 4. Fallback → k1 (memory-bound only)
+// Returns the k2 value and the priority level (1–4) that produced it.
 func (a *SaturationAnalyzer) computeK2(
 	modelID, accelerator string,
 	gpuCount int,
@@ -278,7 +281,7 @@ func (a *SaturationAnalyzer) computeK2(
 	queueThreshold float64,
 	vllmParams *VLLMEngineParams,
 	k1 int64,
-) int64 {
+) (int64, k2Source) {
 	outputBucket := classifyOutputLength(avgOutput)
 	historyKey := fmt.Sprintf("%s|%s|%d|%s", modelID, accelerator, gpuCount, outputBucket)
 
@@ -293,7 +296,7 @@ func (a *SaturationAnalyzer) computeK2(
 		}
 		ra.Add(float64(k2Observed))
 		a.mu.Unlock()
-		return k2Observed
+		return k2Observed, k2SrcObserved
 	}
 
 	// Priority 2: Historical — lock must cover Average() since Add() mutates
@@ -305,16 +308,16 @@ func (a *SaturationAnalyzer) computeK2(
 	}
 	a.mu.Unlock()
 	if histAvg > 0 {
-		return int64(histAvg)
+		return int64(histAvg), k2SrcHistorical
 	}
 
 	// Priority 3: Derived from deployment args
 	if k2Derived := estimateCapacityFromParams(vllmParams, avgInput, avgOutput); k2Derived > 0 {
-		return k2Derived
+		return k2Derived, k2SrcDerived
 	}
 
 	// Priority 4: Fallback to k1
-	return k1
+	return k1, k2SrcFallback
 }
 
 // aggregateByVariant groups replica capacities by variant and computes
@@ -360,6 +363,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			readyCount = 0
 		}
 
+		var capacityLabel string
 		if len(replicas) > 0 {
 			// Use median effective capacity from ready pods
 			capacities := make([]int64, 0, len(replicas))
@@ -371,13 +375,18 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			if accelerator == "" {
 				accelerator = replicas[0].AcceleratorName
 			}
+			capacityLabel = k2SourceLabel(replicas)
 		} else if rec := a.capacityStore.Get(namespace, modelID, vs.VariantName); rec != nil && rec.EffectiveCapacity > 0 {
 			// No ready replicas — use stored capacity, enhanced with k2 derivation
 			// for deployment-derived records when workload data is available.
 			perReplicaCapacity = a.estimateStoredCapacity(rec, modelID, kvCacheThreshold, modelAvgInput, modelAvgOutput)
+			capacityLabel = satReasonP0Store
 		} else if rec := a.lookupCompatibleCapacity(namespace, modelID, vs.VariantName, accelerator, vs.GPUsPerReplica); rec != nil {
 			// No own record — try cross-variant estimation from a compatible variant
 			perReplicaCapacity = float64(rec.EffectiveCapacity)
+			capacityLabel = satReasonP0Store
+		} else {
+			capacityLabel = satReasonNoData
 		}
 
 		totalCapacity := float64(readyCount) * perReplicaCapacity
@@ -387,7 +396,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			utilization = totalDemand / totalCapacity
 		}
 
-		vc := interfaces.VariantCapacity{
+		result = append(result, interfaces.VariantCapacity{
 			VariantName:        vs.VariantName,
 			AcceleratorName:    accelerator,
 			Cost:               cost,
@@ -398,8 +407,8 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			TotalCapacity:      totalCapacity,
 			TotalDemand:        totalDemand,
 			Utilization:        utilization,
-		}
-		result = append(result, vc)
+			Reason:             capacityLabel,
+		})
 	}
 
 	return result
@@ -634,6 +643,27 @@ func estimateSchedulerQueueDemand(
 	}
 
 	return schedulerQueueDemand{total: total, byRole: byRole}
+}
+
+// k2SourceLabel returns the K2Priority label for the lower-median replica by
+// EffectiveCapacity. Sorts a copy and picks index (n-1)/2, which always
+// resolves to an actual replica — no average is taken, so even-length slices
+// never produce a value that matches no element.
+// Returns "" when replicas is empty.
+func k2SourceLabel(replicas []ReplicaCapacity) string {
+	if len(replicas) == 0 {
+		return ""
+	}
+	sorted := make([]ReplicaCapacity, len(replicas))
+	copy(sorted, replicas)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].EffectiveCapacity < sorted[j].EffectiveCapacity
+	})
+	medIdx := (len(sorted) - 1) / 2
+	if label, ok := k2Labels[sorted[medIdx].K2Priority]; ok {
+		return label
+	}
+	return "error"
 }
 
 // median returns the median value from a sorted slice of int64 values.
