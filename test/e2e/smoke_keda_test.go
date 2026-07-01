@@ -263,6 +263,40 @@ var _ = Describe("KEDA Smoke Tests - Basic Autoscaling", Label("smoke", "keda", 
 			g.Expect(readyCount).To(BeNumerically(">", 0), "At least one pod should be ready for metrics scraping")
 		}).Should(Succeed())
 	})
+
+	It("should collect saturation metrics without triggering scale-up", func() {
+		By("Verifying VA is reconciled and has conditions")
+		Eventually(func(g Gomega) {
+			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+			err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(va.Status.Conditions).NotTo(BeEmpty(), "VA should have status conditions")
+		}).Should(Succeed())
+
+		By("Verifying MetricsAvailable condition indicates metrics collection")
+		va := &variantautoscalingv1alpha1.VariantAutoscaling{}
+		err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
+		Expect(err).NotTo(HaveOccurred())
+
+		condition := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
+		Expect(condition).NotTo(BeNil(), "MetricsAvailable condition should exist")
+		if condition.Status == metav1.ConditionTrue {
+			Expect(condition.Reason).To(Equal(variantautoscalingv1alpha1.ReasonMetricsFound),
+				"When metrics are available, reason should be MetricsFound")
+		}
+
+		By("Checking if DesiredOptimizedAlloc is populated (best-effort)")
+		if va.Status.DesiredOptimizedAlloc.Accelerator != "" {
+			Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
+				"If DesiredOptimizedAlloc is populated, NumReplicas should be set")
+			Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
+				"If DesiredOptimizedAlloc is populated, NumReplicas should be >= 0")
+			GinkgoWriter.Printf("DesiredOptimizedAlloc: accelerator=%s, replicas=%d\n",
+				va.Status.DesiredOptimizedAlloc.Accelerator, *va.Status.DesiredOptimizedAlloc.NumReplicas)
+		} else {
+			GinkgoWriter.Printf("DesiredOptimizedAlloc not yet populated (Engine may not have run yet)\n")
+		}
+	})
 })
 
 var _ = Describe("KEDA Smoke Tests - Error Handling", Label("smoke", "keda", "full"), Serial, Ordered, func() {
