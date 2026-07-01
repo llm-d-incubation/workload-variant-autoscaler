@@ -122,6 +122,7 @@ func (e *Engine) optimizeEPPSaturation(
 			SmoothingAlpha:    saturationConfig.SmoothingAlpha,
 			TTFTSLOMs:         saturationConfig.TTFTSLOMs,
 			TPOTSLOMs:         saturationConfig.TPOTSLOMs,
+			SaturationCap:     saturationConfig.SaturationCap,
 		}
 		eppCfg.ApplyDefaults()
 

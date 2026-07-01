@@ -113,11 +113,24 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	tpotSaturation := tpotSeconds / (cfg.TPOTSLOMs / 1000.0)
 	rawSaturation := math.Max(ttftSaturation, tpotSaturation)
 
+	// Clamp the raw signal before smoothing. Near the queueing knee the predicted
+	// latency (and thus saturation) can spike to tens or hundreds × SLO; anything
+	// above the cap already means "scale up at the max per-cycle rate", so the extra
+	// magnitude carries no additional actionable information and only poisons the
+	// EMA — a single spike then decays slowly, holding replicas high long after the
+	// pool has recovered. Clamping keeps the EMA peak bounded so it recovers in a
+	// few cycles regardless of spike size. The true uncapped signal is preserved in
+	// RawSignal for observability.
+	cappedSaturation := rawSaturation
+	if cfg.SaturationCap > 0 && cappedSaturation > cfg.SaturationCap {
+		cappedSaturation = cfg.SaturationCap
+	}
+
 	// Apply EMA smoothing to absorb single-cycle spikes/dips before the signal
 	// drives scaling decisions. First observation per (namespace, modelID) is
 	// used as-is (no warmup).
 	smoothingKey := input.Namespace + "/" + input.ModelID
-	saturationScore := a.smooth(smoothingKey, rawSaturation, cfg.SmoothingAlpha)
+	saturationScore := a.smooth(smoothingKey, cappedSaturation, cfg.SmoothingAlpha)
 
 	logger.Info("EPP pool saturation score",
 		"modelID", input.ModelID,
@@ -128,6 +141,8 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		"ttftSaturation", ttftSaturation,
 		"tpotSaturation", tpotSaturation,
 		"rawSaturation", rawSaturation,
+		"cappedSaturation", cappedSaturation,
+		"saturationCap", cfg.SaturationCap,
 		"smoothedSaturation", saturationScore,
 		"smoothingAlpha", cfg.SmoothingAlpha,
 		"scaleUpThreshold", cfg.ScaleUpThreshold,

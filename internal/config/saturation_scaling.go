@@ -70,6 +70,13 @@ type SaturationScalingConfig struct {
 	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
 	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
 
+	// SaturationCap bounds the raw saturation signal the epp-saturation analyzer
+	// feeds into its EMA. Near the queueing knee the signal can spike to many × SLO;
+	// clamping it keeps the smoothed signal from staying inflated for many cycles
+	// after the pool recovers (which otherwise causes scale-up overshoot). Default:
+	// 2.0. Ignored by other analyzers.
+	SaturationCap float64 `yaml:"saturationCap,omitempty"`
+
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].
@@ -214,6 +221,9 @@ func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
 	}
 	if override.Priority != 0 {
 		c.Priority = override.Priority
+	}
+	if override.SaturationCap != 0 {
+		c.SaturationCap = override.SaturationCap
 	}
 	if len(override.Analyzers) > 0 {
 		c.Analyzers = override.Analyzers

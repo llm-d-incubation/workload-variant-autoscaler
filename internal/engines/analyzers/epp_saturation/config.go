@@ -43,6 +43,16 @@ const (
 	// DefaultEPPTPOTSLOMs is the default time-per-output-token SLO (milliseconds)
 	// the analyzer divides predicted TPOT by to derive saturation.
 	DefaultEPPTPOTSLOMs = 100.0
+
+	// DefaultEPPSaturationCap bounds the raw saturation signal before it feeds the
+	// EMA. Near the queueing knee, predicted latency (and thus saturation) can spike
+	// to tens or hundreds × SLO; any value above the cap already means "scale up at
+	// the max per-cycle rate", so the extra magnitude carries no additional
+	// actionable information and only poisons the EMA (a single spike then decays
+	// slowly, holding replicas high long after the pool recovers). Clamping the raw
+	// signal keeps the EMA peak bounded so it recovers in a few cycles regardless of
+	// spike size. 2.0 = "at most 2× SLO worth of demand pressure per cycle".
+	DefaultEPPSaturationCap = 2.0
 )
 
 // EPPSaturationConfig holds configuration for the EPP saturation analyzer.
@@ -80,6 +90,13 @@ type EPPSaturationConfig struct {
 	// saturation gauge.
 	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
 	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
+
+	// SaturationCap bounds the raw saturation signal before EMA smoothing. Values
+	// above the cap are clamped to it, so a single knee-region spike (which can be
+	// tens or hundreds × SLO) cannot dominate the smoothed signal for many cycles.
+	// The true uncapped signal is still surfaced for observability (RawSignal).
+	// Default: 2.0. Set to a very large value to effectively disable clamping.
+	SaturationCap float64 `yaml:"saturationCap,omitempty"`
 }
 
 // GetAnalyzerName implements interfaces.AnalyzerConfig.
@@ -104,6 +121,9 @@ func (c *EPPSaturationConfig) ApplyDefaults() {
 	if c.TPOTSLOMs == 0 {
 		c.TPOTSLOMs = DefaultEPPTPOTSLOMs
 	}
+	if c.SaturationCap == 0 {
+		c.SaturationCap = DefaultEPPSaturationCap
+	}
 }
 
 // Validate checks for invalid threshold values.
@@ -126,6 +146,12 @@ func (c *EPPSaturationConfig) Validate() error {
 	}
 	if c.TPOTSLOMs <= 0 {
 		return fmt.Errorf("tpotSLOMs must be > 0, got %.2f", c.TPOTSLOMs)
+	}
+	// The cap must leave room to cross the scale-up threshold, otherwise clamping
+	// would make scale-up impossible.
+	if c.SaturationCap > 0 && c.SaturationCap < c.ScaleUpThreshold {
+		return fmt.Errorf("saturationCap (%.2f) must be >= scaleUpThreshold (%.2f)",
+			c.SaturationCap, c.ScaleUpThreshold)
 	}
 	return nil
 }
