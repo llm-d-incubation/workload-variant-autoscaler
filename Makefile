@@ -434,7 +434,25 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,); \
 	rc=$$?; \
 	rm -f $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak2 $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak3; \
+	if [ $$rc -eq 0 ]; then \
+		echo ""; \
+		echo "========================================="; \
+		echo "  Generating benchmark report..."; \
+		echo "========================================="; \
+		$(MAKE) benchmark-report; \
+	fi; \
 	exit $$rc
+
+.PHONY: benchmark-report
+benchmark-report: ## Generate a markdown table from the latest benchmark results
+	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	if [ -z "$$LATEST_DIR" ]; then \
+		echo "ERROR: No benchmark results found in $(BENCHMARK_WORKSPACE)"; \
+		exit 1; \
+	fi; \
+	echo "Results directory: $$LATEST_DIR"; \
+	echo ""; \
+	python3 $(CURDIR)/hack/benchmark/postprocess.py $$LATEST_DIR
 
 BURSTY_WORKLOAD    ?= bursty.yaml
 BENCHMARK_WAIT_TIMEOUT ?= 7200
