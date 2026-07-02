@@ -1,9 +1,15 @@
 package e2e
 
 import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -14,8 +20,32 @@ import (
 )
 
 const (
-	prometheusRuleName = "controller-manager-alerts"
+	prometheusRuleName  = "controller-manager-alerts"
+	prometheusGroupName = "wva.rules"
 )
+
+// PrometheusRulesResponse represents the response from /api/v1/rules
+type PrometheusRulesResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		Groups []PrometheusRuleGroup `json:"groups"`
+	} `json:"data"`
+}
+
+// PrometheusRuleGroup represents a rule group in Prometheus
+type PrometheusRuleGroup struct {
+	Name  string           `json:"name"`
+	File  string           `json:"file"`
+	Rules []PrometheusRule `json:"rules"`
+}
+
+// PrometheusRule represents a single rule in a group
+type PrometheusRule struct {
+	Name   string `json:"name"`
+	Query  string `json:"query"`
+	Health string `json:"health"`
+	Type   string `json:"type"`
+}
 
 // wvaMetricNames contains all WVA output metrics that should be referenced in alerts.
 // This list is derived from internal/constants/metrics.go (WVA Output Metrics section).
@@ -47,6 +77,52 @@ var wvaMetricNames = []string{
 	constants.WVAPodMappingMissTotal,
 }
 
+// queryPrometheusRules queries the in-cluster Prometheus /api/v1/rules endpoint.
+// Returns the parsed response or an error.
+func queryPrometheusRules() (*PrometheusRulesResponse, error) {
+	prometheusURL := os.Getenv("PROMETHEUS_URL")
+	GinkgoWriter.Printf("DEBUG: PROMETHEUS_URL env var = '%s'\n", prometheusURL)
+	if prometheusURL == "" {
+		// Default to in-cluster service URL if not set
+		prometheusURL = fmt.Sprintf("https://kube-prometheus-stack-prometheus.%s.svc.cluster.local:9090", cfg.MonitoringNS)
+		GinkgoWriter.Printf("DEBUG: Using default in-cluster URL = '%s'\n", prometheusURL)
+	}
+
+	rulesURL := fmt.Sprintf("%s/api/v1/rules", prometheusURL)
+	GinkgoWriter.Printf("DEBUG: Final rulesURL = '%s'\n", rulesURL)
+
+	// Create HTTP client with TLS config for self-signed certs
+	// Prometheus in e2e uses self-signed certs, so we skip verification
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Get(rulesURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query Prometheus rules: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var rulesResp PrometheusRulesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rulesResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if rulesResp.Status != "success" {
+		return nil, fmt.Errorf("Prometheus API returned status: %s", rulesResp.Status)
+	}
+
+	return &rulesResp, nil
+}
+
 // extractMetricNames extracts metric names from a PromQL expression.
 // It uses a simple regex to find metric identifiers (word characters, colons, underscores).
 func extractMetricNames(expr string) []string {
@@ -69,6 +145,9 @@ func extractMetricNames(expr string) []string {
 		// Common label names (not metrics)
 		"namespace": true, "variant_name": true, "model_name": true,
 		"component": true, "error_type": true, "status": true,
+		"query_type": true, "reason": true,
+		"accelerator_type": true, "accelerator_vendor": true, "accelerator_model": true,
+		"controller_instance": true,
 	}
 
 	var metrics []string
@@ -154,6 +233,66 @@ var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"),
 		Expect(prometheusRule.Spec.Groups[0].Name).To(Equal("wva.rules"))
 		Expect(prometheusRule.Spec.Groups[0].Rules).To(HaveLen(5), "Should have 5 alert rules")
 		GinkgoWriter.Println("✓ PrometheusRule structure is valid")
+	})
+
+	It("should have rules loaded and healthy in Prometheus", func() {
+		By("Waiting for Prometheus operator to reconcile rules (~60s)")
+		var wvaGroup *PrometheusRuleGroup
+		Eventually(func() error {
+			rulesResp, err := queryPrometheusRules()
+			if err != nil {
+				return fmt.Errorf("failed to query Prometheus: %w", err)
+			}
+
+			// Find the wva.rules group
+			for i := range rulesResp.Data.Groups {
+				if rulesResp.Data.Groups[i].Name == prometheusGroupName {
+					wvaGroup = &rulesResp.Data.Groups[i]
+					break
+				}
+			}
+
+			if wvaGroup == nil {
+				return fmt.Errorf("rule group '%s' not found in Prometheus", prometheusGroupName)
+			}
+
+			return nil
+		}, 60*time.Second, 5*time.Second).Should(Succeed(),
+			"Prometheus should load the wva.rules group. "+
+				"Verify Prometheus ruleSelector/ruleNamespaceSelector matches the PrometheusRule labels.")
+
+		GinkgoWriter.Printf("✓ Rule group '%s' is loaded in Prometheus\n", prometheusGroupName)
+
+		By("Verifying all rules are healthy")
+		Expect(wvaGroup.Rules).To(HaveLen(5), "Should have 5 rules loaded")
+
+		expectedRules := []string{
+			"WVAHighErrorRate",
+			"WVAOptimizationLoopStalled",
+			"WVAMetricsCollectionFailing",
+			"WVAGPUResourceExhausted",
+			"WVAReplicaScalingThrashing",
+		}
+
+		foundRules := make(map[string]bool)
+		for _, rule := range wvaGroup.Rules {
+			foundRules[rule.Name] = true
+
+			Expect(rule.Health).To(Equal("ok"),
+				"Rule '%s' should have health=ok, got '%s'. Check for syntax errors in the PromQL expression.",
+				rule.Name, rule.Health)
+
+			GinkgoWriter.Printf("  ✓ Rule '%s' is healthy\n", rule.Name)
+		}
+
+		for _, expectedRule := range expectedRules {
+			Expect(foundRules).To(HaveKey(expectedRule),
+				"Expected rule '%s' not found in Prometheus. Verify PrometheusRule was reconciled correctly.",
+				expectedRule)
+		}
+
+		GinkgoWriter.Printf("✓ All %d rules are loaded and healthy in Prometheus\n", len(expectedRules))
+		GinkgoWriter.Println("\nNote: This test verifies rules are visible to Prometheus but does NOT validate that alerts fire when conditions are met.")
 	})
 
 	It("should have all expected alert rules defined", func() {

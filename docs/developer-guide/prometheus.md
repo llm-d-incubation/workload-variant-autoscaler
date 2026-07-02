@@ -1052,9 +1052,31 @@ Once installed, you can verify as follows:
     kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-prometheus 9090:9090
     ```
 
-  - Browse to http://localhost:9090/alerts
+  - Browse to https://localhost:9090/alerts
   - You should see `wva.rules`: ![wva.rules](./wva.rules.png)
   - Here's an example of a triggered rule: ![wva.rules-firing](./wva.rules-firing.png)
+
+- Get fired-rule details:
+    From https://localhost:9090/alerts, if there's a rule has been fired, you can get the details as follows. Here's an example:
+    ```bash
+    curl -k https://localhost:9090/api/v1/alerts | jq .
+
+    {
+        "labels": {
+          "alertname": "WVAHighErrorRate",
+          "component": "controller",
+          "error_type": "Config is nil in ConfigMapReconciler bootstrap",
+          "severity": "warning"
+        },
+        "annotations": {
+          "description": "WVA component 'controller' error_type 'Config is nil in ConfigMapReconciler bootstrap' rate is 0.03/sec (>6/min threshold) sustained for 5+ minutes. Check controller logs for error patterns.",
+          "summary": "WVA error rate elevated in controller"
+        },
+        "state": "pending",
+        "activeAt": "2026-07-02T19:35:06.642428048Z",
+        "value": "3.1034482758620693e-02"
+    }
+    ```
 
 ### Alerting Rules Notes
 - For `WVAGPUResourceExhausted` rule with `wva_available_gpus` metric, as described in [wva_available_gpus](#wva_available_gpus) this metric is not always available in which case this rule will not trigger. In other words, if there's no alert for this rule, it does not mean GPUs are available.
