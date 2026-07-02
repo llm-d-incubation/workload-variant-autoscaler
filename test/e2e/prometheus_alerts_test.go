@@ -88,7 +88,7 @@ func queryPrometheusRules() (*PrometheusRulesResponse, error) {
 		GinkgoWriter.Printf("DEBUG: Using default in-cluster URL = '%s'\n", prometheusURL)
 	}
 
-	rulesURL := fmt.Sprintf("%s/api/v1/rules", prometheusURL)
+	rulesURL := prometheusURL + "/api/v1/rules"
 	GinkgoWriter.Printf("DEBUG: Final rulesURL = '%s'\n", rulesURL)
 
 	// Create HTTP client with TLS config for self-signed certs
