@@ -396,7 +396,7 @@ benchmark-report: ## Generate a markdown table from the latest benchmark results
 	fi; \
 	echo "Results directory: $$LATEST_DIR"; \
 	echo ""; \
-	python3 $(CURDIR)/scripts/postprocess.py $$LATEST_DIR
+	python3 $(CURDIR)/hack/benchmark/postprocess.py $$LATEST_DIR
 
 BURSTY_WORKLOAD    ?= bursty.yaml
 BENCHMARK_WAIT_TIMEOUT ?= 7200

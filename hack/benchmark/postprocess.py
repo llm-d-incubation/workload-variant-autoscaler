@@ -6,15 +6,15 @@ Produces the exact table format used in docs/benchmark.md.
 
 Usage:
     # Single run:
-    python scripts/postprocess.py results/guidellm-*_1
+    python hack/benchmark/postprocess.py results/guidellm-*_1
 
     # Three runs (Run 1 | Run 2 | Run 3 | Avg):
-    python scripts/postprocess.py results/guidellm-*_1 \\
-                                   results/guidellm-*_2 \\
-                                   results/guidellm-*_3
+    python hack/benchmark/postprocess.py results/guidellm-*_1 \\
+                                          results/guidellm-*_2 \\
+                                          results/guidellm-*_3
 
     # With scenario header:
-    python scripts/postprocess.py --scenario "Prefill Heavy — Qwen/Qwen3-32B (600s)" \\
+    python hack/benchmark/postprocess.py --scenario "Prefill Heavy — Qwen/Qwen3-32B (600s)" \\
         results/guidellm-*_1 results/guidellm-*_2 results/guidellm-*_3
 """
 
