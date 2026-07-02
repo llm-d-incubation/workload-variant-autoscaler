@@ -236,6 +236,22 @@ var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"),
 	})
 
 	It("should have rules loaded and healthy in Prometheus", func() {
+		// This test requires access to Prometheus, which may not be available in all test environments.
+		// It will skip if PROMETHEUS_URL is not set or if Prometheus is not reachable.
+
+		By("Checking if Prometheus is accessible")
+		_, err := queryPrometheusRules()
+		if err != nil {
+			prometheusURL := os.Getenv("PROMETHEUS_URL")
+			if prometheusURL == "" {
+				Skip("PROMETHEUS_URL not set and in-cluster Prometheus is not accessible. " +
+					"This test requires Prometheus to be reachable. " +
+					"Set PROMETHEUS_URL to point to an accessible Prometheus instance or run tests inside the cluster.")
+			}
+			Skip(fmt.Sprintf("Prometheus not accessible at %s: %v. "+
+				"This test requires Prometheus to be reachable.", prometheusURL, err))
+		}
+
 		By("Waiting for Prometheus operator to reconcile rules (~60s)")
 		var wvaGroup *PrometheusRuleGroup
 		Eventually(func() error {
