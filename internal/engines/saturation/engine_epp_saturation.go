@@ -18,6 +18,7 @@ package saturation
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -36,22 +37,6 @@ import (
 // eppSignalUnavailableMessage is the MetricsAvailable=False message used when the
 // EPP latency detector's pool saturation signal cannot be queried.
 const eppSignalUnavailableMessage = "EPP saturation signal unavailable (latency detector or predictor sidecar may be down)"
-
-// inFlightReadyFraction returns readyReplicas/totalReplicas — the factor used to
-// credit in-flight (warming) replicas. The saturation signal is measured from the
-// Ready pods; while a scale-up is in flight those Ready pods absorb more than
-// their eventual share, so the raw signal over-states the post-warmup load. Once
-// the pending pods become Ready the load spreads across all totalReplicas, so the
-// anticipated saturation is signal × ready/total. This makes scale-up ask only for
-// the deficit beyond the pods already coming online, instead of racing to
-// maxReplicas. Returns 1.0 (no credit) in steady state (no pending) or when there
-// are no Ready pods to measure from.
-func inFlightReadyFraction(readyReplicas, totalReplicas int) float64 {
-	if totalReplicas <= 0 || readyReplicas <= 0 || readyReplicas >= totalReplicas {
-		return 1.0
-	}
-	return float64(readyReplicas) / float64(totalReplicas)
-}
 
 // applyWarmupHold implements warmup-aware scale-up damping: while replicas already
 // requested are still warming (pending > 0), a scale-up target (target > current) is
@@ -149,6 +134,15 @@ func (e *Engine) optimizeEPPSaturation(
 			SaturationCap:     saturationConfig.SaturationCap,
 		}
 		eppCfg.ApplyDefaults()
+		if err := eppCfg.Validate(); err != nil {
+			// An invalid config (e.g. saturationCap below scaleUpThreshold, which
+			// would permanently disable scale-up) must not silently drive scaling.
+			// Hold the last desired replicas and surface MetricsAvailable=False.
+			logger.Error(err, "Invalid EPP saturation config; holding last decision", "modelID", modelID)
+			e.emitSafetyNetMetrics(ctx, modelVAs, currentAllocations, scaleTargets)
+			e.markEPPSignalUnavailable(modelVAs)
+			continue
+		}
 
 		// Run the EPP saturation analyzer (queries Prometheus for pool saturation)
 		input := interfaces.AnalyzerInput{
@@ -195,37 +189,28 @@ func (e *Engine) optimizeEPPSaturation(
 		}
 
 		// Record what the EPP formula would recommend absent the maxReplicas clamp,
-		// so we can flag capped decisions after the optimizer runs. This mirrors the
-		// analyzer + optimizer target exactly (not the algebraically-equivalent
-		// ceil(S*N/T_up), which double-rounds and can be off by one):
-		//   requiredCapacity = max(0, S/T_up - 1)
-		//   uncappedTarget   = N + ceil(requiredCapacity * N)
+		// so we can flag capped decisions after the optimizer runs. The analyzer
+		// already returns the credited requiredCapacity (max(0, S_effective/T_up − 1)
+		// with normalized supply 1.0), so reuse it rather than mirroring the formula:
+		//   uncappedTarget = N + ceil(result.RequiredCapacity * N)
 		//
 		// This is a pool-level total. We only attribute it for single-variant model
 		// groups, where the variant target equals the pool total; with multiple
 		// variants the optimizer splits the total across them and a per-variant
 		// maxReplicas comparison would misfire, so cap detection is skipped (the
 		// gauge is still emitted as 0 below).
-		if len(modelVAs) == 1 && saturationConfig.ScaleUpThreshold > 0 {
-			totalReplicas, readyReplicas := 0, 0
+		if len(modelVAs) == 1 {
+			totalReplicas := 0
 			for _, vs := range variantStates {
 				totalReplicas += vs.CurrentReplicas
-				r := vs.CurrentReplicas - vs.PendingReplicas
-				if r > 0 {
-					readyReplicas += r
-				}
 			}
 			if totalReplicas == 0 {
 				totalReplicas = 1 // match the analyzer's floor so scale-up-from-zero is still flaggable
 			}
-			// Mirror the analyzer's in-flight credit: the demand that drives scaling
-			// is the anticipated saturation once the warming pods share the load.
-			effectiveSat := result.SmoothedSignal * inFlightReadyFraction(readyReplicas, totalReplicas)
-			requiredCapacity := math.Max(0, effectiveSat/saturationConfig.ScaleUpThreshold-1.0)
-			uncapped := totalReplicas + int(math.Ceil(requiredCapacity*float64(totalReplicas)))
+			uncapped := totalReplicas + int(math.Ceil(result.RequiredCapacity*float64(totalReplicas)))
 			uncappedByModel[utils.GetNamespacedKey(namespace, modelID)] = uncapped
-		} else if len(modelVAs) > 1 {
-			logger.V(logging.DEBUG).Info("Skipping cap detection for multi-variant model group (pool total not attributable per variant)",
+		} else {
+			logger.Info("Skipping cap detection for multi-variant model group (pool total not attributable per variant); ScalingCapped will read False rather than Unknown",
 				"modelID", modelID, "variantCount", len(modelVAs))
 		}
 
@@ -299,10 +284,12 @@ func (e *Engine) optimizeEPPSaturation(
 	// knee with empirical probing: add capacity, wait for it to take effect,
 	// re-measure. Scale-down (target < current) is never suppressed. Applied
 	// post-optimizer so it is independent of optimizer internals.
+	// Variant names are only unique per-namespace, so key by namespace+name
+	// (requests can span namespaces within one optimize pass).
 	stateByVariant := make(map[string]interfaces.VariantReplicaState)
 	for _, req := range requests {
 		for _, vs := range req.VariantStates {
-			stateByVariant[vs.VariantName] = vs
+			stateByVariant[utils.GetNamespacedKey(req.Namespace, vs.VariantName)] = vs
 		}
 	}
 	for i := range allDecisions {
@@ -310,7 +297,7 @@ func (e *Engine) optimizeEPPSaturation(
 		if !holdWarmByModel[utils.GetNamespacedKey(d.Namespace, d.ModelID)] {
 			continue
 		}
-		st, ok := stateByVariant[d.VariantName]
+		st, ok := stateByVariant[utils.GetNamespacedKey(d.Namespace, d.VariantName)]
 		if !ok {
 			continue
 		}
@@ -320,6 +307,15 @@ func (e *Engine) optimizeEPPSaturation(
 				"currentReplicas", st.CurrentReplicas, "pendingReplicas", st.PendingReplicas,
 				"requestedTarget", d.TargetReplicas)
 			d.TargetReplicas = held
+			// Keep Action/reason consistent with the held target so scaling-event
+			// records, metrics, and logs don't report ScaleUp on a held no-op cycle
+			// (SetDecisionReason is the single writer of d.Action).
+			category := d.ReasonCategory()
+			if category == "" {
+				category = interfaces.DecisionReasonV2
+			}
+			d.SetDecisionReason(interfaces.ActionNoChange, category,
+				fmt.Sprintf("%s no-change (scale-up held while %d replica(s) warm up)", category, st.PendingReplicas))
 		}
 	}
 
@@ -350,19 +346,25 @@ func (e *Engine) optimizeEPPSaturation(
 // shared cache for each non-synthetic VA in the model and triggers a reconcile,
 // so the EPP signal-unavailable state is surfaced as a status condition with an
 // EPP-specific reason. Mirrors the no-accelerator safety path in applySaturationDecisions.
+//
+// The existing cache entry (last good target, ScalingCapped state, accelerator)
+// is preserved and only the metrics-availability fields are rewritten — a
+// transient Prometheus blip must not flip the ScalingCapped condition to False
+// while the pool is still pinned at the cap, nor discard the last good decision.
 func (e *Engine) markEPPSignalUnavailable(modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling) {
 	for i := range modelVAs {
 		va := &modelVAs[i]
 		if utils.IsSynthetic(va) {
 			continue
 		}
-		common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-			VariantName:      va.Name,
-			Namespace:        va.Namespace,
-			MetricsAvailable: false,
-			MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonPrometheusError,
-			MetricsMessage:   eppSignalUnavailableMessage,
-		})
+		decision, ok := common.DecisionCache.Get(va.Name, va.Namespace)
+		if !ok {
+			decision = interfaces.VariantDecision{VariantName: va.Name, Namespace: va.Namespace}
+		}
+		decision.MetricsAvailable = false
+		decision.MetricsReason = llmdVariantAutoscalingV1alpha1.ReasonPrometheusError
+		decision.MetricsMessage = eppSignalUnavailableMessage
+		common.DecisionCache.Set(va.Name, va.Namespace, decision)
 		common.DecisionTrigger <- event.GenericEvent{Object: va}
 	}
 }

@@ -240,6 +240,15 @@ func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
 	if override.HoldScaleUpWhileWarming != nil {
 		c.HoldScaleUpWhileWarming = override.HoldScaleUpWhileWarming
 	}
+	if override.TTFTSLOMs != 0 {
+		c.TTFTSLOMs = override.TTFTSLOMs
+	}
+	if override.TPOTSLOMs != 0 {
+		c.TPOTSLOMs = override.TPOTSLOMs
+	}
+	if override.SmoothingAlpha != 0 {
+		c.SmoothingAlpha = override.SmoothingAlpha
+	}
 	if len(override.Analyzers) > 0 {
 		c.Analyzers = override.Analyzers
 	}
@@ -275,6 +284,32 @@ func (c *SaturationScalingConfig) Validate() error {
 	if c.KvCacheThreshold < c.KvSpareTrigger {
 		return fmt.Errorf("kvCacheThreshold (%.2f) should be >= kvSpareTrigger (%.2f)",
 			c.KvCacheThreshold, c.KvSpareTrigger)
+	}
+
+	// EPP-saturation analyzer fields. These are load-time checks on the fields the
+	// epp-saturation analyzer consumes; zero values are allowed (defaults apply).
+	if c.AnalyzerName == "epp-saturation" {
+		if c.TTFTSLOMs < 0 {
+			return fmt.Errorf("ttftSLOMs must be >= 0, got %.2f", c.TTFTSLOMs)
+		}
+		if c.TPOTSLOMs < 0 {
+			return fmt.Errorf("tpotSLOMs must be >= 0, got %.2f", c.TPOTSLOMs)
+		}
+		if c.SmoothingAlpha < 0 || c.SmoothingAlpha > 1.0 {
+			return fmt.Errorf("smoothingAlpha must be in [0, 1], got %.2f", c.SmoothingAlpha)
+		}
+		// The cap must leave room to cross the scale-up threshold, otherwise
+		// clamping makes scale-up permanently impossible. Compare against the
+		// effective (defaulted) threshold when unset.
+		if c.SaturationCap > 0 {
+			up := c.ScaleUpThreshold
+			if up == 0 {
+				up = DefaultScaleUpThreshold
+			}
+			if c.SaturationCap < up {
+				return fmt.Errorf("saturationCap (%.2f) must be >= scaleUpThreshold (%.2f)", c.SaturationCap, up)
+			}
+		}
 	}
 
 	// V2 analyzer threshold validation (global defaults)

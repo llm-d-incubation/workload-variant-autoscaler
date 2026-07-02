@@ -95,7 +95,8 @@ type EPPSaturationConfig struct {
 	// above the cap are clamped to it, so a single knee-region spike (which can be
 	// tens or hundreds × SLO) cannot dominate the smoothed signal for many cycles.
 	// The true uncapped signal is still surfaced for observability (RawSignal).
-	// Default: 2.0. Set to a very large value to effectively disable clamping.
+	// A zero value is replaced by the default (2.0) via ApplyDefaults — it does
+	// NOT disable clamping; to effectively disable, set a very large value.
 	SaturationCap float64 `yaml:"saturationCap,omitempty"`
 }
 

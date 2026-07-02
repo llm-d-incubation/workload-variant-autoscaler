@@ -377,6 +377,11 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			decision.MetricsAvailable = true
 			decision.MetricsReason = MetricsReasonAvailable
 			decision.MetricsMessage = MetricsMessageAvailable
+			// Clear any stale cap state from a previous saturation decision — a
+			// scale-from-zero target is never a maxReplicas-capped recommendation,
+			// and a stale flag would surface a bogus ScalingCapped=True condition.
+			decision.ScalingCapped = false
+			decision.UncappedReplicas = 0
 			common.DecisionCache.Set(va.Name, va.Namespace, decision)
 		} else {
 			logger.Info("Target variant decision.CurrentReplicas is not zero", "value", decision.CurrentReplicas)

@@ -9,7 +9,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// gaugeValueForName returns the value and labels of the single series of the
+// gaugeSeries returns the value and labels of the single series of the
 // named gauge metric family, or ok=false if the family is absent.
 func gaugeSeries(t *testing.T, mfs []*dto.MetricFamily, name string) (*dto.Metric, bool) {
 	t.Helper()

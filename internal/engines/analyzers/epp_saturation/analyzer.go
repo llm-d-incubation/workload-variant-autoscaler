@@ -100,13 +100,9 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	// missing value (no recent traffic → NaN) is treated as 0 latency, so an idle
 	// pool reports low saturation and scales toward minReplicas. A genuine query
 	// error is propagated and handled by the engine's safety-net path.
-	ttftSeconds, err := a.queryLatencySeconds(ctx, registration.QueryEPPPredictedTTFT)
+	ttftSeconds, tpotSeconds, err := a.queryLatenciesSeconds(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query EPP TTFT: %w", err)
-	}
-	tpotSeconds, err := a.queryLatencySeconds(ctx, registration.QueryEPPPredictedTPOT)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query EPP TPOT: %w", err)
+		return nil, fmt.Errorf("failed to query EPP latencies: %w", err)
 	}
 
 	ttftSaturation := ttftSeconds / (cfg.TTFTSLOMs / 1000.0)
@@ -216,8 +212,16 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	// Scaling signals using the same threshold logic as V2:
 	// requiredCapacity > 0 → scale-up needed
 	// spareCapacity > 0 → scale-down possible
+	//
+	// Scale-up uses the credited demand (effectiveDemand) so in-flight replicas
+	// are not double-provisioned. Scale-down deliberately uses the UNCREDITED
+	// smoothed signal: the credit discounts demand by ready/total, so during a
+	// warmup it could push a signal that is above the scale-up threshold below the
+	// scale-down boundary and shed replicas mid-scale-up (worse with pods stuck
+	// Pending, where the discount persists indefinitely). A pool may only scale
+	// down when the measured signal itself has real headroom.
 	requiredCapacity := math.Max(0, totalDemand/cfg.ScaleUpThreshold-totalSupply)
-	spareCapacity := math.Max(0, totalSupply-totalDemand/cfg.ScaleDownBoundary)
+	spareCapacity := math.Max(0, totalSupply-saturationScore/cfg.ScaleDownBoundary)
 
 	// Build per-variant capacity breakdown.
 	// Single model per pool: distribute proportionally across variants.
@@ -262,25 +266,40 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	}, nil
 }
 
-// queryLatencySeconds fetches a pool latency (seconds) from Prometheus for the
-// named query. A query that returns no series, or a NaN value (no recent
+// queryLatenciesSeconds fetches the pool TTFT and TPOT (seconds) from Prometheus
+// in a single Refresh (one round trip; the source executes the queries
+// concurrently). A query that returns no series, or a NaN value (no recent
 // traffic → 0/0 rate), is reported as 0 latency rather than an error, so an idle
 // pool yields low saturation. Only a transport/query error is returned as an
 // error (handled by the engine's safety-net path).
-func (a *EPPSaturationAnalyzer) queryLatencySeconds(ctx context.Context, queryName string) (float64, error) {
+func (a *EPPSaturationAnalyzer) queryLatenciesSeconds(ctx context.Context) (ttft, tpot float64, err error) {
 	promSource := a.metricsRegistry.Get("prometheus")
 	if promSource == nil {
-		return 0, fmt.Errorf("prometheus source not registered")
+		return 0, 0, fmt.Errorf("prometheus source not registered")
 	}
 
 	results, err := promSource.Refresh(ctx, source.RefreshSpec{
-		Queries: []string{queryName},
+		Queries: []string{registration.QueryEPPPredictedTTFT, registration.QueryEPPPredictedTPOT},
 		Params:  map[string]string{},
 	})
 	if err != nil {
-		return 0, fmt.Errorf("prometheus refresh failed: %w", err)
+		return 0, 0, fmt.Errorf("prometheus refresh failed: %w", err)
 	}
 
+	ttft, err = latencyFromResult(results, registration.QueryEPPPredictedTTFT)
+	if err != nil {
+		return 0, 0, err
+	}
+	tpot, err = latencyFromResult(results, registration.QueryEPPPredictedTPOT)
+	if err != nil {
+		return 0, 0, err
+	}
+	return ttft, tpot, nil
+}
+
+// latencyFromResult extracts one latency value from a Refresh result map,
+// applying the empty/NaN/negative → 0 mapping described on queryLatenciesSeconds.
+func latencyFromResult(results map[string]*source.MetricResult, queryName string) (float64, error) {
 	result, ok := results[queryName]
 	if !ok || result == nil {
 		return 0, fmt.Errorf("no result for query %s", queryName)

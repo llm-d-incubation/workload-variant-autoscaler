@@ -42,6 +42,18 @@ func avgRate(metric string) string {
 	return "sum(rate(" + metric + "_sum[1m])) / sum(rate(" + metric + "_count[1m]))"
 }
 
+// predictedOrActual builds the predicted-preferred / actual-fallback expression.
+// The predicted side is filtered with `>= 0` before the `or`: a predicted
+// histogram that exists but is not incrementing (stalled predictor sidecar, or a
+// build that registers the histogram without ever observing into it) yields a
+// present-but-NaN sample (0/0 rate), and PromQL `or` would return that NaN
+// instead of falling back — the analyzer would then read NaN as 0 latency and
+// scale down under real load. NaN fails every comparison, so `>= 0` drops the
+// dead predicted sample and lets `or` consult the actual-latency signal.
+func predictedOrActual(predicted, actual string) string {
+	return "((" + avgRate(predicted) + ") >= 0) or (" + avgRate(actual) + ")"
+}
+
 // RegisterEPPSaturationQueries registers queries used by the EPP saturation analyzer.
 //
 // The analyzer derives saturation itself (saturation = max(TTFT/SLO, TPOT/SLO))
@@ -54,7 +66,7 @@ func RegisterEPPSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryEPPPredictedTTFT,
 		Type:        source.QueryTypePromQL,
-		Template:    "(" + avgRate("llm_d_epp_request_predicted_ttft_seconds") + ") or (" + avgRate("llm_d_epp_request_ttft_seconds") + ")",
+		Template:    predictedOrActual("llm_d_epp_request_predicted_ttft_seconds", "llm_d_epp_request_ttft_seconds"),
 		Params:      []string{},
 		Description: "Pool average TTFT (seconds), predicted-preferred with actual fallback; analyzer divides by the TTFT SLO",
 	})
@@ -62,7 +74,7 @@ func RegisterEPPSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryEPPPredictedTPOT,
 		Type:        source.QueryTypePromQL,
-		Template:    "(" + avgRate("llm_d_epp_request_predicted_tpot_seconds") + ") or (" + avgRate("llm_d_epp_request_ntpot_seconds") + ")",
+		Template:    predictedOrActual("llm_d_epp_request_predicted_tpot_seconds", "llm_d_epp_request_ntpot_seconds"),
 		Params:      []string{},
 		Description: "Pool average TPOT (seconds), predicted-preferred with actual (normalized) fallback; analyzer divides by the TPOT SLO",
 	})

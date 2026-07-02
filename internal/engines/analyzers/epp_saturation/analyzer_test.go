@@ -276,7 +276,9 @@ func TestAnalyze_SaturationCap_ClampsRawBeforeEMA(t *testing.T) {
 	// required = 2.0/0.85 - 1.0 ≈ 1.353 (vs 4.88 uncapped)
 	assert.InDelta(t, 1.353, result.RequiredCapacity, 0.01)
 
-	// Without cap (0 disables clamping): demand is the full raw 5.0.
+	// With a very large cap (the documented way to effectively disable clamping —
+	// a zero value is replaced by the default via ApplyDefaults, it does not
+	// disable): demand is the full raw 5.0.
 	analyzerNoCap := setupAnalyzer(5.0)
 	inNoCap := input()
 	inNoCap.Config = &EPPSaturationConfig{
@@ -285,11 +287,11 @@ func TestAnalyze_SaturationCap_ClampsRawBeforeEMA(t *testing.T) {
 		SmoothingAlpha:    1.0,
 		TTFTSLOMs:         1000,
 		TPOTSLOMs:         10000,
-		SaturationCap:     0, // disabled
+		SaturationCap:     1e9, // effectively disabled
 	}
 	resultNoCap, err := analyzerNoCap.Analyze(context.Background(), inNoCap)
 	require.NoError(t, err)
-	assert.InDelta(t, 5.0, resultNoCap.TotalDemand, 0.01, "no clamp when cap disabled")
+	assert.InDelta(t, 5.0, resultNoCap.TotalDemand, 0.01, "no clamp when cap is effectively disabled")
 }
 
 func TestAnalyze_InHysteresisZone_NoAction(t *testing.T) {
@@ -349,6 +351,13 @@ func TestAnalyze_PendingReplicas(t *testing.T) {
 	// 0.95 * 0.5 = 0.475 (the 2 warming pods are credited, so scale-up only asks
 	// for the deficit beyond what is already coming online).
 	assert.InDelta(t, 0.475, result.TotalDemand, 0.01)
+	// Direction guards: the credited demand (0.475/0.85 < 1) means no further
+	// scale-up is needed, and — critically — the credit must NOT flip the pool
+	// into scale-down: spare capacity is derived from the UNCREDITED smoothed
+	// signal (0.95 > 0.50 boundary), so no replicas may be shed mid-warmup even
+	// though the credited demand (0.475) dipped below the boundary.
+	assert.Equal(t, 0.0, result.RequiredCapacity, "credited demand below threshold → no scale-up")
+	assert.Equal(t, 0.0, result.SpareCapacity, "uncredited signal above boundary → scale-down must not fire during warmup")
 
 	// Per-variant: readyCount = 4 - 2 = 2, perReplicaCapacity = 1/4 = 0.25
 	// variant capacity = 2 * 0.25 = 0.5
