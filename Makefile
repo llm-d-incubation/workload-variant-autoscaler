@@ -48,6 +48,29 @@ BENCHMARK_MONITORING ?= true
 BENCHMARK_UV         ?= false
 BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
 BENCHMARK_MODEL_ID   ?= $(MODEL_ID)
+BENCHMARK_FMA_ENABLED ?= false
+BENCHMARK_GATEWAY_CLASS ?= $(if $(filter false,$(BENCHMARK_FMA_ENABLED)),istio,)
+
+# llm-d-benchmark CLI configuration - usage examples:
+#
+# Stand up with WVA only (default):
+#   make benchmark-standup BENCHMARK_NAMESPACE=asmalvan-test-1 MODEL_ID=Qwen/Qwen3-32B
+#
+# Stand up with FMA enabled (opt-in):
+#   make benchmark-standup BENCHMARK_NAMESPACE=asmalvan-test-1 MODEL_ID=Qwen/Qwen3-32B BENCHMARK_FMA_ENABLED=true
+#
+# Run prefill heavy workload with WVA (default):
+#   make benchmark-run BENCHMARK_NAMESPACE=asmalvan-test-1 MODEL_ID=Qwen/Qwen3-32B BENCHMARK_WORKLOAD=prefill_heavy.yaml
+#
+# Run prefill heavy workload with FMA (opt-in):
+#   make benchmark-run BENCHMARK_NAMESPACE=asmalvan-test-1 MODEL_ID=Qwen/Qwen3-32B BENCHMARK_FMA_ENABLED=true BENCHMARK_WORKLOAD=prefill_heavy.yaml
+#
+# Run decode heavy workload with WVA (default):
+#   make benchmark-run BENCHMARK_NAMESPACE=asmalvan-test-1 MODEL_ID=Qwen/Qwen3-32B BENCHMARK_WORKLOAD=decode_heavy.yaml
+#
+# Note: Default is WVA-only deployment. Use BENCHMARK_FMA_ENABLED=true to opt-in to FMA.
+#       When BENCHMARK_FMA_ENABLED=false, BENCHMARK_GATEWAY_CLASS defaults to 'istio'
+#       To use a different gateway class, set BENCHMARK_GATEWAY_CLASS explicitly
 
 # Flags for deploy/install.sh (e2e / CI-style cluster infra; no chart VA/HPA).
 CREATE_CLUSTER    ?= false
@@ -348,7 +371,7 @@ benchmark-install: ## Clone llm-d-benchmark at BENCHMARK_REPO_REF (default v0.6.
 	@helm plugin install https://github.com/databus23/helm-diff --version v3.15.10 --verify=false 2>&1
 
 .PHONY: benchmark-standup
-benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, BENCHMARK_FMA_ENABLED=true/false)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-standup BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
@@ -356,6 +379,19 @@ benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPAC
 	@echo "Injecting PYTORCH_ALLOC_CONF into scenario YAML..."
 	@sed -i.bak 's/extraEnvVars: \[\]/extraEnvVars:\n        - name: PYTORCH_ALLOC_CONF\n          value: "expandable_segments:True"/' \
 		$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml
+	@echo "Setting FMA enabled to $(BENCHMARK_FMA_ENABLED)..."
+	@sed -i.bak2 '/^    fma:/,/^    [a-z]/ s/enabled: [a-z]*/enabled: $(BENCHMARK_FMA_ENABLED)/' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml
+	@if [ "$(BENCHMARK_FMA_ENABLED)" = "false" ]; then \
+		echo "FMA disabled: enabling decode replicas for WVA..."; \
+		sed -i.bak3 '/^    decode:/,/^    / s/replicas: 0/replicas: 1/' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+		if [ -n "$(BENCHMARK_GATEWAY_CLASS)" ]; then \
+			echo "Setting gateway class to $(BENCHMARK_GATEWAY_CLASS)..."; \
+			sed -i.bak4 's/className: epponly/className: $(BENCHMARK_GATEWAY_CLASS)/' \
+				$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+		fi; \
+	fi
 	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
 		-p $(BENCHMARK_NAMESPACE) \
 		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
@@ -363,13 +399,26 @@ benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPAC
 	rc=$$?; \
 	mv $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak \
 	   $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+	rm -f $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak2 $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak3 $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak4; \
 	exit $$rc
 
 .PHONY: benchmark-run
-benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, BENCHMARK_FMA_ENABLED=true/false)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
+	fi
+	@if [ "$(BENCHMARK_FMA_ENABLED)" = "false" ]; then \
+		echo "Patching scenario for FMA-disabled run..."; \
+		sed -i.bak '/^    fma:/,/^    [a-z]/ s/enabled: [a-z]*/enabled: false/' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+		sed -i.bak2 '/^    decode:/,/^    / s/replicas: 0/replicas: 1/' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+		if [ -n "$(BENCHMARK_GATEWAY_CLASS)" ]; then \
+			echo "Setting gateway class to $(BENCHMARK_GATEWAY_CLASS)..."; \
+			sed -i.bak3 's/className: epponly/className: $(BENCHMARK_GATEWAY_CLASS)/' \
+				$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+		fi; \
 	fi
 	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
 		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
@@ -380,12 +429,17 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 		-l $(BENCHMARK_HARNESS) \
 		-w $(BENCHMARK_WORKLOAD) \
 		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
-		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,)
-	@echo ""
-	@echo "========================================="
-	@echo "  Generating benchmark report..."
-	@echo "========================================="
-	@$(MAKE) benchmark-report
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,); \
+	rc=$$?; \
+	rm -f $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak2 $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak3; \
+	if [ $$rc -eq 0 ]; then \
+		echo ""; \
+		echo "========================================="; \
+		echo "  Generating benchmark report..."; \
+		echo "========================================="; \
+		$(MAKE) benchmark-report; \
+	fi; \
+	exit $$rc
 
 .PHONY: benchmark-report
 benchmark-report: ## Generate a markdown table from the latest benchmark results
