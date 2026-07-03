@@ -42,12 +42,27 @@ rate-6 crossing (stage p90 = 5.1 s); the **rate-10 peak stage ran cleaner than
 the idle stages** (p90 = 0.59 s) because capacity was in place before it
 arrived.
 
+![Headline run: TTFT vs SLO (top) and desired vs ready replicas (bottom)](assets/epp-saturation/aligned-run-overview.png)
+
+*Top: the P90 control signal rises ahead of the actual mean and crosses the
+trigger at the knee's base — the whole excursion above the 3 s SLO lasts ~2
+samples. Bottom: the pool holds 4 through the lull (boundary retention), then
+`desired` jumps 4→8 in one cycle and `ready` follows within ~2 minutes — the
+gap between the two lines is the total actuation delay.*
+
 > **Note — earlier defaults:** before the threshold band was aligned to the P90
 > signal, the analyzer's defaults (`0.85 / 0.50`, α 0.3, mean-based signal)
 > measured **84.7 % at ~5.9** on this profile — the trigger fired past the
 > queueing knee and every scale-up paid the full transient. Those runs are
 > retained in the experiment frontier below; the aligned values are now the
 > code defaults.
+
+![Aligned vs previous defaults: actual TTFT (top) and ready replicas (bottom)](assets/epp-saturation/aligned-vs-previous.png)
+
+*Same profile, same SLO. Previous defaults (gray) drain to 3 during the lull
+and pay a ~7-minute knee that peaks near 100 s TTFT; the aligned configuration
+(blue) holds 4, triggers on the pre-rise, and its transient peaks at ~5 s for
+about two minutes.*
 
 ## The aligned configuration
 
