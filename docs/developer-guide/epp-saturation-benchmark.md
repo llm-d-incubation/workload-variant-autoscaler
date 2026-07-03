@@ -31,6 +31,11 @@ WVA (default configuration, calibrated predictor) vs a peak-sized static pool:
 | Avg replicas — 42-min load window | 6.55 | 8 |
 | Cost vs static-at-peak | **~26 % fewer** GPU-replica-hours | — |
 
+Throughout this doc, **cost** is the time-averaged replica count (each replica
+= 2 H100s), i.e. a proxy for GPU-replica-hours — reported over the fixed 42-min
+load window (comparable across runs) and over the full episode including the
+post-load drain (the absolute number).
+
 WVA trades ~4 SLO points for ~26 % lower cost. Client-side per-stage
 percentiles confirm the residual violations sit in one shallow transient at the
 rate-6 crossing (stage p90 = 5.1 s); the **rate-10 peak stage ran cleaner than
@@ -103,7 +108,7 @@ persistent calibration shift as a reason to re-check the threshold band.
 
 1. One workload shape / model / GPU class (Prefill-Heavy 4000/1000, Qwen3-32B,
    H100 TP=2); the threshold band (0.55/0.40) is calibrated to this signal's
-   measured healthy floor and should be re-derived per workload.
+   measured healthy floor and may have to be re-derived per workload.
 2. The predictor-calibration sensitivity (finding above) means results depend
    on predictor training state; the headline uses a calibrated predictor.
 3. Violations scored from EPP-side counters (`llm_d_epp_request_slo_violation_total`);
