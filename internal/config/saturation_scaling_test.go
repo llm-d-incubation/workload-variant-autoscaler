@@ -175,6 +175,22 @@ var _ = Describe("SaturationScalingConfig", func() {
 					{Name: "saturation", ScaleUpThreshold: float64Ptr(0.60)},
 				},
 			}, true),
+			// epp-saturation: an unset scaleUpThreshold defaults to the
+			// analyzer's 0.55, so a cap of 0.7 is valid (regression test for
+			// the fallback wrongly using the V2 default 0.85).
+			Entry("epp-saturation valid cap above defaulted threshold", SaturationScalingConfig{
+				AnalyzerName:  "epp-saturation",
+				SaturationCap: 0.7,
+			}, false),
+			Entry("epp-saturation invalid cap below defaulted threshold", SaturationScalingConfig{
+				AnalyzerName:  "epp-saturation",
+				SaturationCap: 0.5,
+			}, true),
+			Entry("epp-saturation invalid cap below explicit threshold", SaturationScalingConfig{
+				AnalyzerName:     "epp-saturation",
+				ScaleUpThreshold: 0.85,
+				SaturationCap:    0.7,
+			}, true),
 		)
 	})
 

@@ -301,11 +301,15 @@ func (c *SaturationScalingConfig) Validate() error {
 		}
 		// The cap must leave room to cross the scale-up threshold, otherwise
 		// clamping makes scale-up permanently impossible. Compare against the
-		// effective (defaulted) threshold when unset.
+		// effective (defaulted) threshold when unset — the epp-saturation
+		// analyzer's own default (epp_saturation.DefaultEPPScaleUpThreshold =
+		// 0.55), not the V2 DefaultScaleUpThreshold, which does not apply on
+		// this path. Kept as a literal to avoid importing the analyzer package
+		// from config.
 		if c.SaturationCap > 0 {
 			up := c.ScaleUpThreshold
 			if up == 0 {
-				up = DefaultScaleUpThreshold
+				up = 0.55
 			}
 			if c.SaturationCap < up {
 				return fmt.Errorf("saturationCap (%.2f) must be >= scaleUpThreshold (%.2f)", c.SaturationCap, up)

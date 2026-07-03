@@ -13,8 +13,12 @@ platforms), see [README.md](README.md).
 
 Use the EPP saturation analyzer when:
 
-- Your EPP has the **latency detector plugin** enabled and emits
-  `inference_extension_latency_detector_pool_saturation` to Prometheus
+- Your EPP has the **predicted-latency producer plugin** enabled and emits the
+  predicted/actual latency histograms
+  (`llm_d_epp_request_predicted_ttft_seconds`, `llm_d_epp_request_ttft_seconds`,
+  `llm_d_epp_request_ntpot_seconds`) to Prometheus — WVA derives the saturation
+  signal from these vs the configured SLOs (`ttftSLOMs`/`tpotSLOMs`); requests
+  must carry `x-llm-d-slo-*-ms` headers
 - You want **predictive** autoscaling (driven by predicted latency vs SLO)
   rather than reactive autoscaling (driven by observed KV cache / queue depth)
 - Your pool has a **single model** (current simplification — no per-model
@@ -48,8 +52,11 @@ desired_replicas =
   max(ceil(S × N / scaleDownBoundary), minReplicas)   if S < scaleDownBoundary
 ```
 
-The hysteresis band between `scaleDownBoundary` (default `0.50`) and
-`scaleUpThreshold` (default `0.85`) absorbs minor signal noise.
+The hysteresis band between `scaleDownBoundary` (default `0.40`) and
+`scaleUpThreshold` (default `0.55`) absorbs minor signal noise. The defaults
+are calibrated to the P90 signal's healthy band (see
+docs/developer-guide/epp-saturation-benchmark.md); raise them if your SLO sits
+close to your base latency.
 
 ## The scripts
 
@@ -78,8 +85,8 @@ CR for your model.
 | `IMG` | (kaushikmitra registry) | WVA image to build/deploy |
 | `BUILD_IMAGE` | `true` | Skip image build with `false` (use existing) |
 | `PROMETHEUS_URL` | `https://kube-prometheus-stack-prometheus...:9090` | HTTPS URL of Prometheus with EPP metrics |
-| `SCALE_UP_THRESHOLD` | `0.85` | Saturation above which WVA recommends scale-up |
-| `SCALE_DOWN_BOUNDARY` | `0.50` | Saturation below which WVA recommends scale-down |
+| `SCALE_UP_THRESHOLD` | (analyzer default `0.55`) | Override: saturation above which WVA recommends scale-up |
+| `SCALE_DOWN_BOUNDARY` | (analyzer default `0.40`) | Override: saturation below which WVA recommends scale-down |
 | `OBSERVE_ONLY` | `false` | `true` → disable HPA, WVA just emits recommendations |
 | `HPA_MIN_REPLICAS` / `HPA_MAX_REPLICAS` | `1` / `20` | HPA bounds (ignored in observe mode) |
 | `MODEL_ID` | (none) | Model identifier for the VA CR |
@@ -132,7 +139,8 @@ Three key metrics:
 
 | Metric | Where | Meaning |
 |---|---|---|
-| `inference_extension_latency_detector_pool_saturation` | EPP → Prometheus | Raw saturation signal (predictedLatency / SLO) |
+| `llm_d_epp_request_predicted_ttft_seconds` (+ actual TTFT/TPOT histograms) | EPP → Prometheus | Latency signals WVA derives saturation from (P90 vs SLO) |
+| `wva_epp_saturation_raw` / `wva_epp_saturation_smoothed` | WVA → Prometheus | The derived saturation signal before/after clamping+EMA |
 | `wva_desired_replicas` | WVA → Prometheus | WVA's recommended replica count |
 | `wva_current_replicas` | WVA → Prometheus | Current actual replica count |
 

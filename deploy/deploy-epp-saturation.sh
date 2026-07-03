@@ -4,9 +4,13 @@
 #
 # Prerequisites:
 #   - kubectl configured for the target cluster
-#   - EPP with saturation detector plugin deployed and emitting
-#     inference_extension_latency_detector_pool_saturation to Prometheus
-#   - Prometheus scraping the EPP pods
+#   - EPP with the predicted-latency producer plugin deployed; WVA derives the
+#     saturation signal itself from the EPP's predicted/actual TTFT and TPOT
+#     histograms (llm_d_epp_request_predicted_ttft_seconds etc.) vs the
+#     configured SLOs — requests must carry x-llm-d-slo-*-ms headers
+#   - Prometheus scraping the EPP pods (bearer-auth; the EPP ServiceAccount
+#     needs system:auth-delegator — see
+#     config/samples/epp-saturation-benchmark/)
 #   - Helm 3 installed
 #
 # IMPORTANT: WVA requires HTTPS for Prometheus (hard validation in main.go).
@@ -50,8 +54,11 @@ PROMETHEUS_URL="${PROMETHEUS_URL:-https://kube-prometheus-stack-prometheus.monit
 SKIP_TLS_VERIFY="${SKIP_TLS_VERIFY:-true}"
 
 # EPP saturation analyzer thresholds
-SCALE_UP_THRESHOLD="${SCALE_UP_THRESHOLD:-0.85}"
-SCALE_DOWN_BOUNDARY="${SCALE_DOWN_BOUNDARY:-0.50}"
+# Threshold band: leave unset to use the analyzer's calibrated defaults
+# (scaleUpThreshold 0.55 / scaleDownBoundary 0.40); set the env vars only to
+# override them.
+SCALE_UP_THRESHOLD="${SCALE_UP_THRESHOLD:-}"
+SCALE_DOWN_BOUNDARY="${SCALE_DOWN_BOUNDARY:-}"
 
 # HPA (ignored when OBSERVE_ONLY=true)
 HPA_MIN_REPLICAS="${HPA_MIN_REPLICAS:-1}"
@@ -113,8 +120,17 @@ log "Deploying WVA with EPP saturation analyzer"
 log "  Namespace: ${WVA_NAMESPACE}"
 log "  Image: ${IMG}"
 log "  Prometheus: ${PROMETHEUS_URL}"
-log "  Scale-up threshold: ${SCALE_UP_THRESHOLD}"
-log "  Scale-down boundary: ${SCALE_DOWN_BOUNDARY}"
+log "  Scale-up threshold: ${SCALE_UP_THRESHOLD:-(analyzer default 0.55)}"
+log "  Scale-down boundary: ${SCALE_DOWN_BOUNDARY:-(analyzer default 0.40)}"
+# Only pass thresholds when explicitly overridden, so the analyzer's
+# calibrated code defaults (0.55/0.40) apply otherwise.
+if [[ -n "${SCALE_UP_THRESHOLD}" ]]; then
+    HELM_CMD+=(--set "wva.capacityScaling.default.scaleUpThreshold=${SCALE_UP_THRESHOLD}")
+fi
+if [[ -n "${SCALE_DOWN_BOUNDARY}" ]]; then
+    HELM_CMD+=(--set "wva.capacityScaling.default.scaleDownBoundary=${SCALE_DOWN_BOUNDARY}")
+fi
+
 if [[ "${OBSERVE_ONLY}" == "true" ]]; then
     log "  Mode: OBSERVE-ONLY (HPA disabled)"
 else
@@ -134,13 +150,20 @@ HELM_CMD=(
     --set "wva.prometheus.tls.insecureSkipVerify=${SKIP_TLS_VERIFY}"
     --set "wva.namespaceScoped=${NAMESPACE_SCOPED}"
     --set "wva.capacityScaling.default.analyzerName=epp-saturation"
-    --set "wva.capacityScaling.default.scaleUpThreshold=${SCALE_UP_THRESHOLD}"
-    --set "wva.capacityScaling.default.scaleDownBoundary=${SCALE_DOWN_BOUNDARY}"
     --set "controller.enabled=true"
     # Disable chart's sample VA/vllmService (we manage VA separately)
     --set "va.enabled=false"
     --set "vllmService.enabled=false"
 )
+
+# Only pass thresholds when explicitly overridden, so the analyzer's
+# calibrated code defaults (0.55/0.40) apply otherwise.
+if [[ -n "${SCALE_UP_THRESHOLD}" ]]; then
+    HELM_CMD+=(--set "wva.capacityScaling.default.scaleUpThreshold=${SCALE_UP_THRESHOLD}")
+fi
+if [[ -n "${SCALE_DOWN_BOUNDARY}" ]]; then
+    HELM_CMD+=(--set "wva.capacityScaling.default.scaleDownBoundary=${SCALE_DOWN_BOUNDARY}")
+fi
 
 if [[ "${OBSERVE_ONLY}" == "true" ]]; then
     HELM_CMD+=(--set "hpa.enabled=false")
@@ -207,4 +230,4 @@ echo "  kubectl port-forward -n <prom-ns> svc/<prom-svc> 19090:<port>"
 echo "  # Then:"
 echo "  #   wva_desired_replicas       - WVA's recommendation (what HPA consumes)"
 echo "  #   wva_current_replicas       - current actual replica count"
-echo "  #   inference_extension_latency_detector_pool_saturation  - EPP signal"
+echo "  #   wva_epp_saturation_raw / wva_epp_saturation_smoothed  - derived EPP signal"

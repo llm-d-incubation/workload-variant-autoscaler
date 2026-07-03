@@ -598,10 +598,15 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 
 		It("should set ScalingCapped=True with the uncapped recommendation when clamped", func() {
 			By("Storing a capped decision in cache")
+			// A real capped decision arrives already clamped: TargetReplicas
+			// equals the VA's maxReplicas (2 in this fixture) and the
+			// pre-clamp recommendation rides in UncappedReplicas.
+			maxReplicas := 2
 			common.DecisionCache.Set(resourceName, "default", interfaces.VariantDecision{
 				VariantName:      resourceName,
 				Namespace:        "default",
-				TargetReplicas:   20,
+				TargetReplicas:   2,
+				MaxReplicas:      &maxReplicas,
 				ScalingCapped:    true,
 				UncappedReplicas: 45,
 				MetricsAvailable: false,
@@ -620,7 +625,7 @@ var _ = Describe("VariantAutoscalings Controller", func() {
 				g.Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 				g.Expect(condition.Reason).To(Equal(llmdVariantAutoscalingV1alpha1.ReasonCappedByMaxReplicas))
 				g.Expect(condition.Message).To(ContainSubstring("45"))
-				g.Expect(condition.Message).To(ContainSubstring("20"))
+				g.Expect(condition.Message).To(ContainSubstring("capped to maxReplicas 2"))
 			}, 5*time.Second, 500*time.Millisecond).Should(Succeed())
 		})
 

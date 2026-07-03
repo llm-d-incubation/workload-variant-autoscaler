@@ -289,8 +289,15 @@ func (r *VariantAutoscalingReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if decision.ScalingCapped {
 			cappedStatus = metav1.ConditionTrue
 			cappedReason = llmdVariantAutoscalingV1alpha1.ReasonCappedByMaxReplicas
+			// Report the configured maxReplicas, not TargetReplicas: the target
+			// is the post-clamp value and other enforcement could move it, so
+			// only the cap itself is truthful here.
+			maxReplicas := decision.TargetReplicas
+			if decision.MaxReplicas != nil {
+				maxReplicas = *decision.MaxReplicas
+			}
 			cappedMessage = fmt.Sprintf("Scaling recommendation %d capped to maxReplicas %d",
-				decision.UncappedReplicas, decision.TargetReplicas)
+				decision.UncappedReplicas, maxReplicas)
 		}
 		llmdVariantAutoscalingV1alpha1.SetCondition(&va,
 			llmdVariantAutoscalingV1alpha1.TypeScalingCapped,
