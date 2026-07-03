@@ -9,9 +9,11 @@ service `optimized-baseline-epp` — adjust to yours.
 ## Prerequisites
 
 - A running llm-d serving stack: vLLM decode Deployment + EPP with the
-  predicted-latency producer plugin and latency-predictor sidecars. Requests
-  must carry the SLO headers (`x-llm-d-slo-ttft-ms` / `x-llm-d-slo-tpot-ms`)
-  for the EPP to emit per-request latency and violation metrics.
+  predicted-latency producer plugin and latency-predictor sidecars — the exact
+  EPP plugin configuration the benchmark ran is in
+  `epp-plugins-configmap.yaml`. Requests must carry the SLO headers
+  (`x-llm-d-slo-ttft-ms` / `x-llm-d-slo-tpot-ms`) for the EPP to emit
+  per-request latency and violation metrics.
 - Prometheus reachable by WVA (the repo's
   [`deploy/deploy-prometheus-tls-proxy.sh`](../../../deploy/deploy-prometheus-tls-proxy.sh)
   sets up prometheus + the TLS proxy WVA reads through).

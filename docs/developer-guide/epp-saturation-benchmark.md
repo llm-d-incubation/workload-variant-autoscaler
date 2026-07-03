@@ -74,7 +74,9 @@ every earlier run — the knee was caught at its base.
 
 The signal-side values are the analyzer's **code defaults**; the HPA policy and
 the warmup fixes live in operator-owned objects and are documented here as the
-reference deployment. The threshold band is calibrated to the P90 signal's
+reference deployment — they ship, with the full deploy order and the EPP plugin
+configuration, in
+[`config/samples/epp-saturation-benchmark/`](../../config/samples/epp-saturation-benchmark/). The threshold band is calibrated to the P90 signal's
 measured healthy range on this workload — a workload whose SLO sits close to
 its base latency shifts that band upward and should raise the thresholds
 accordingly.
