@@ -25,47 +25,54 @@ and the metrics in [analyzer-checklists.md](analyzer-checklists.md).
 
 ## Headline result
 
-The **aligned configuration** (see below) on a calibrated predictor:
+WVA (default configuration, calibrated predictor) vs a peak-sized static pool:
 
-| | WVA aligned | WVA conservative defaults | static-at-peak (8) |
-|---|---|---|---|
-| **TTFT attainment (≤ 3 s)** | **95.9 %** | 85.2 % | 100 % |
-| **Combined SLO attainment** | **95.8 %** | 84.7 % | 100 % |
-| TTFT violations (of 12 480 requests) | **515** | 1 844 | 0 |
-| **Avg replicas — full episode** | **5.93** | not measured | 8 |
-| Avg replicas — 42-min load window | 6.55 | 5.89 | 8 |
-| Cost vs static-at-peak | **~26 % fewer** GPU-replica-hours | ~30 % fewer | — |
+| | WVA | static-at-peak (8) |
+|---|---|---|
+| **TTFT attainment (≤ 3 s)** | **95.9 %** | 100 % |
+| **Combined SLO attainment** | **95.8 %** | 100 % |
+| TTFT violations (of 12 480 requests) | **515** | 0 |
+| **Avg replicas — full episode** | **5.93** | 8 |
+| Avg replicas — 42-min load window | 6.55 | 8 |
+| Cost vs static-at-peak | **~26 % fewer** GPU-replica-hours | — |
 
-The aligned configuration **strictly dominates** the conservative defaults on
-this profile: +11 attainment points at equal full-episode cost. Against
-static-at-peak it trades ~4 SLO points for ~26 % lower cost. Client-side
-per-stage percentiles confirm the residual violations sit in one shallow
-transient at the rate-6 crossing (stage p90 = 5.1 s); the **rate-10 peak stage
-ran cleaner than the idle stages** (p90 = 0.59 s) because capacity was in place
-before it arrived.
+WVA trades ~4 SLO points for ~26 % lower cost. Client-side per-stage
+percentiles confirm the residual violations sit in one shallow transient at the
+rate-6 crossing (stage p90 = 5.1 s); the **rate-10 peak stage ran cleaner than
+the idle stages** (p90 = 0.59 s) because capacity was in place before it
+arrived.
+
+> **Note — earlier defaults:** before the threshold band was aligned to the P90
+> signal, the analyzer's defaults (`0.85 / 0.50`, α 0.3, mean-based signal)
+> measured **84.7 % at ~5.9** on this profile — the trigger fired past the
+> queueing knee and every scale-up paid the full transient. Those runs are
+> retained in the experiment frontier below; the aligned values are now the
+> code defaults.
 
 ## The aligned configuration
 
-Every knob exists to remove one measured term of the scale-up lag. All are
-config-only:
+Every knob exists to remove one measured term of the scale-up lag:
 
 | knob | value | removes |
 |---|---|---|
-| signal = **P90** predicted latency (not mean) | built-in (this PR) | signal blindness below the knee — the mean stays flat at any healthy utilization; the tail rises as queueing variance appears |
-| `scaleUpThreshold` | **0.55** | trigger lag — fires on the P90 pre-rise instead of after the SLO budget is nearly burned (0.85 × SLO sits past the knee) |
-| `scaleDownBoundary` | **0.40** | lull drain — healthy loaded pools read P90 ≈ 0.35–0.45, so they retain replicas through lulls; idle pools (≈ 0.1) still shed |
-| `smoothingAlpha` | **0.6** | ask lag — EMA reaches the clamp in 1–2 cycles (safe because `saturationCap` bounds spikes; that is the clamp's job) |
-| HPA scaleUp | `Max(100 %, 4 pods)/60 s` | grant lag — the whole ask lands in one step; pods warm in parallel |
-| vLLM compile-cache on node-local hostPath + 5 s startupProbe | deployment | warmup — pod-ready ~100 s instead of ~2 m 15 s |
-| `saturationCap` | 2.0 (default) | EMA poisoning — knee signals reach 10–90× SLO; magnitude above ~2× carries no information and delays recovery |
+| signal = **P90** predicted latency (not mean) | built-in | signal blindness below the knee — the mean stays flat at any healthy utilization; the tail rises as queueing variance appears |
+| `scaleUpThreshold` | **0.55** (code default) | trigger lag — fires on the P90 pre-rise instead of after the SLO budget is nearly burned (0.85 × SLO sits past the knee) |
+| `scaleDownBoundary` | **0.40** (code default) | lull drain — healthy loaded pools read P90 ≈ 0.35–0.45, so they retain replicas through lulls; idle pools (≈ 0.1) still shed |
+| `smoothingAlpha` | **0.6** (code default) | ask lag — EMA reaches the clamp in 1–2 cycles (safe because `saturationCap` bounds spikes; that is the clamp's job) |
+| `saturationCap` | 2.0 (code default) | EMA poisoning — knee signals reach 10–90× SLO; magnitude above ~2× carries no information and delays recovery |
+| HPA scaleUp | `Max(100 %, 4 pods)/60 s` (operator-side) | grant lag — the whole ask lands in one step; pods warm in parallel |
+| vLLM compile-cache on node-local hostPath + 5 s startupProbe (operator-side) | deployment | warmup — pod-ready ~100 s instead of ~2 m 15 s |
 
 Measured at the knee: trigger → full capacity in **~2 minutes** (previous
 configurations: 4–6 min), and the raw signal peaked at **2.5** versus 9–36 in
 every earlier run — the knee was caught at its base.
 
-The code defaults remain the conservative values (`0.85 / 0.50 / α 0.3`); the
-aligned profile is the benchmarked recommendation to set in the scaling
-ConfigMap for latency-SLO workloads of this shape.
+The signal-side values are the analyzer's **code defaults**; the HPA policy and
+the warmup fixes live in operator-owned objects and are documented here as the
+reference deployment. The threshold band is calibrated to the P90 signal's
+measured healthy range on this workload — a workload whose SLO sits close to
+its base latency shifts that band upward and should raise the thresholds
+accordingly.
 
 ## Predictor calibration is part of the control loop
 
@@ -101,8 +108,8 @@ All runs: same profile, same SLOs, warm-start protocol unless noted.
 |---|---|---|---|
 | **aligned (P90, 0.55/0.40, α 0.6, burst, fast warmup)** | **95.8 %** | **5.93 (episode)** | headline; knee caught at its base |
 | aligned, cold predictor | 85.6 % | 6.51 | calibration is part of the loop |
-| conservative defaults (mean signal era, 0.85/0.50, α 0.3, +1 pod/min) | 84.7 % | 5.89 | best of the pre-P90 configs |
-| conservative, cold start (3) | 83.8 % | 4.92 | cheapest; pays full knee |
+| previous defaults (mean signal, 0.85/0.50, α 0.3, +1 pod/min) | 84.7 % | 5.89 | best of the pre-P90 configs |
+| previous defaults, cold start (3) | 83.8 % | 4.92 | cheapest; pays full knee |
 | P90 signal alone (0.85 threshold) | 85.1 % | ~5.9 | early trigger wasted without the rest of the pipeline |
 | composition (P90 + α 0.6 + burst, 0.85 threshold) | 81.0 % | 5.77 | pipeline fast, trigger ignored the pre-rise for 6 min |
 | burst grants alone (cap 12) | 84.2 % | 7.14 | grants aren't the bottleneck; ask is signal-gated |
@@ -170,7 +177,7 @@ All runs: same profile, same SLOs, warm-start protocol unless noted.
 ## Reproducing
 
 Raw time series: [`assets/epp-saturation/aligned-run-timeseries.csv`](assets/epp-saturation/aligned-run-timeseries.csv)
-(headline run) and [`assets/epp-saturation/conservative-run-timeseries.csv`](assets/epp-saturation/conservative-run-timeseries.csv)
+(headline run) and [`assets/epp-saturation/previous-defaults-run-timeseries.csv`](assets/epp-saturation/previous-defaults-run-timeseries.csv)
 (columns: ts, sat_raw, sat_smoothed, wva_desired, current_replicas, predTTFT_s, actTTFT_s, actTPOT_s, …).
 
 - **Attainment:** snapshot `sum(llm_d_epp_request_slo_violation_total{type=…})`

@@ -20,21 +20,28 @@ import "fmt"
 
 const (
 	// DefaultEPPScaleUpThreshold is the saturation level above which scale-up
-	// is triggered. At 0.85 saturation (85% of SLO), the pool is approaching
-	// its limit and needs more capacity.
-	DefaultEPPScaleUpThreshold = 0.85
+	// is triggered. Set below the queueing knee on purpose: the P90 signal's
+	// healthy band sits around 0.2–0.45 of the SLO (latency barely moves with
+	// load under continuous batching, then goes vertical), so a threshold near
+	// 1.0 only fires after the SLO budget is nearly burned. 0.55 fires on the
+	// P90 pre-rise at the knee's base — benchmarked at 95.8% SLO attainment vs
+	// 84.7% for a 0.85 threshold (docs/developer-guide/epp-saturation-benchmark.md).
+	// Workloads whose SLO is close to their base latency (healthy band shifted
+	// upward) should raise this.
+	DefaultEPPScaleUpThreshold = 0.55
 
 	// DefaultEPPScaleDownBoundary is the saturation level below which scale-down
-	// is safe. At 0.50 saturation (50% of SLO), there is enough headroom to
-	// remove capacity without risking SLO violations.
-	DefaultEPPScaleDownBoundary = 0.50
+	// is safe. 0.40 sits just below the P90 signal's healthy-load band
+	// (~0.35–0.45), so pools serving real traffic retain their replicas through
+	// short lulls while idle pools (signal ≈ 0.1) still scale down.
+	DefaultEPPScaleDownBoundary = 0.40
 
 	// DefaultEPPSmoothingAlpha is the EMA smoothing factor applied to the raw
-	// saturation signal. Range (0.0, 1.0]: 1.0 = no smoothing, 0.1 = heavy
-	// smoothing (only ~10% of a new sample flows into the smoothed value per cycle).
-	// Lower values reduce reaction to transient spikes/dips at the cost of
-	// slower response to real load changes.
-	DefaultEPPSmoothingAlpha = 0.3
+	// saturation signal. Range (0.0, 1.0]: 1.0 = no smoothing, lower = heavier
+	// smoothing. 0.6 lets the smoothed signal reach the (clamped) raw level in
+	// 1–2 cycles so the scale-up ask is sized promptly; spike protection is the
+	// clamp's job (SaturationCap), not the EMA's.
+	DefaultEPPSmoothingAlpha = 0.6
 
 	// DefaultEPPTTFTSLOMs is the default time-to-first-token SLO (milliseconds)
 	// the analyzer divides predicted TTFT by to derive saturation.
@@ -59,26 +66,27 @@ const (
 // It implements interfaces.AnalyzerConfig.
 type EPPSaturationConfig struct {
 	// ScaleUpThreshold is the saturation score above which scale-up is triggered.
-	// Value range: (0.0, 2.0+]. Typical: 0.85 (scale up at 85% of SLO).
-	// Since saturation = predictedLatency/SLO, values > 1.0 mean "only scale
-	// when already violating SLO" (aggressive), while < 1.0 means "scale
-	// proactively before SLO violation" (conservative).
+	// Value range: (0.0, 2.0+]. Since saturation = P90 predictedLatency/SLO, the
+	// threshold should sit at the top of the signal's healthy band (measured
+	// ~0.2–0.45 when the SLO is generously above base latency) so it fires on
+	// the pre-knee rise; values near 1.0 fire only after the SLO budget is
+	// nearly consumed. Default 0.55.
 	ScaleUpThreshold float64 `yaml:"scaleUpThreshold,omitempty"`
 
 	// ScaleDownBoundary is the saturation score below which scale-down is safe.
-	// Must be less than ScaleUpThreshold to create a hysteresis band.
+	// Must be less than ScaleUpThreshold to create a hysteresis band. Placed
+	// just below the healthy-load band so serving pools hold replicas through
+	// lulls while idle pools shed. Default 0.40.
 	ScaleDownBoundary float64 `yaml:"scaleDownBoundary,omitempty"`
 
-	// SmoothingAlpha is the EMA smoothing factor applied to the raw saturation
-	// signal before it drives scaling decisions. Range (0.0, 1.0]:
+	// SmoothingAlpha is the EMA smoothing factor applied to the (clamped) raw
+	// saturation signal before it drives scaling decisions. Range (0.0, 1.0]:
 	//   1.0  = no smoothing (use raw signal)
-	//   0.3  = moderate smoothing (default)
+	//   0.6  = light smoothing (default) — reaches the clamped level in 1–2 cycles
 	//   0.1  = heavy smoothing
 	// The smoothed value evolves as: smoothed = alpha*raw + (1-alpha)*smoothed_prev.
-	// At alpha=0.3 with a cycle every 5s, the effective window is ~17s (1/alpha × cycle).
-	// Helps absorb signal volatility from the EPP latency detector (which updates
-	// every probeInterval based on the input-profile-tracker's percentile samples)
-	// so transient single-cycle spikes/dips don't translate directly into replica churn.
+	// Spike suppression is primarily SaturationCap's job; alpha mainly sets how
+	// fast the scale-up ask is sized after a load change.
 	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
 
 	// TTFTSLOMs and TPOTSLOMs are the latency SLO targets (milliseconds) used to

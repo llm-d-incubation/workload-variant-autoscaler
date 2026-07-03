@@ -42,7 +42,8 @@ type SaturationScalingConfig struct {
 	// ScaleUpThreshold is the utilization threshold above which scale-up is triggered.
 	// Applied by the engine post-step universally to every analyzer's result:
 	//   requiredCapacity = max(0, totalDemand / ScaleUpThreshold − anticipatedSupply)
-	// Default: 0.85 (85% utilization triggers scale-up)
+	// Default: 0.85 for the V2 path; when unset on the epp-saturation path,
+	// the analyzer's own default (0.55, below the queueing knee) applies.
 	ScaleUpThreshold float64 `yaml:"scaleUpThreshold,omitempty"`
 
 	// ScaleDownBoundary is the utilization boundary below which scale-down is safe.
@@ -58,7 +59,7 @@ type SaturationScalingConfig struct {
 
 	// SmoothingAlpha is the EMA smoothing factor applied to the raw saturation
 	// signal by the epp-saturation analyzer. Range (0.0, 1.0]: 1.0 = no smoothing,
-	// 0.3 = moderate (default), 0.1 = heavy.
+	// 0.6 = light (analyzer default; spike suppression is saturationCap's job), 0.1 = heavy.
 	// Ignored by other analyzers.
 	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
 
