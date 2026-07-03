@@ -27,14 +27,13 @@ WVA (default configuration, calibrated predictor) vs a peak-sized static pool:
 | **TTFT attainment (≤ 3 s)** | **95.9 %** | 100 % |
 | **Combined SLO attainment** | **95.8 %** | 100 % |
 | TTFT violations (of 12 480 requests) | **515** | 0 |
-| **Avg replicas — full episode** | **5.93** | 8 |
-| Avg replicas — 42-min load window | 6.55 | 8 |
+| **Avg replicas (cost)** | **5.93** | 8 |
 | Cost vs static-at-peak | **~26 % fewer** GPU-replica-hours | — |
 
-Throughout this doc, **cost** is the time-averaged replica count (each replica
-= 2 H100s), i.e. a proxy for GPU-replica-hours — reported over the fixed 42-min
-load window (comparable across runs) and over the full episode including the
-post-load drain (the absolute number).
+Throughout this doc, **cost** is the time-averaged replica count over the full
+run — load plus the post-load drain back to minReplicas — with each replica
+= 2 H100s, i.e. a proxy for GPU-replica-hours. (Where a table compares runs
+over a fixed load window instead, it says so.)
 
 WVA trades ~4 SLO points for ~26 % lower cost. Client-side per-stage
 percentiles confirm the residual violations sit in one shallow transient at the
@@ -135,10 +134,10 @@ Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/ep
   counter delta, denominator from the load generator's own report
   (`request_lifecycle` summary). Cross-check with
   `increase(..._bucket{le="3.0"}[window])` — note Prometheus stores `le="3.0"`.
-- **Cost:** report both the fixed 42-min-window average (cross-run comparable)
-  and `avg_over_time(wva_current_replicas[<episode>])` over the exact job
-  start→completion window (absolute). The load generator drains between stages,
-  so episodes run ~15–20 min past the nominal profile length.
+- **Cost:** `avg_over_time(wva_current_replicas[<episode>])` over the exact job
+  start→completion window. The load generator drains between stages, so
+  episodes run ~15–20 min past the nominal profile length; a fixed-window
+  average is only useful for comparing runs against each other.
 - **Warm-start protocol:** pin HPA `minReplicas` to the peak count, wait for
   Ready, launch the load, then restore — an active autoscaler immediately
   drains a manually-scaled idle pool, so plain `kubectl scale` does not hold.
@@ -195,7 +194,9 @@ Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/ep
 
 ## Appendix: full experiment frontier
 
-All runs: same profile, same SLOs, warm-start protocol unless noted.
+All runs: same profile, same SLOs, warm-start protocol unless noted. Costs in
+this table are averaged over the fixed 42-min load window for cross-run
+comparability (the headline run's full-episode average is marked).
 
 | configuration | attainment | cost | takeaway |
 |---|---|---|---|
