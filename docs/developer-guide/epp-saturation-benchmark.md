@@ -46,9 +46,10 @@ arrived.
 
 *Top: the P90 control signal rises ahead of the actual mean and crosses the
 trigger at the knee's base — the whole excursion above the 3 s SLO lasts ~2
-samples. Bottom: the pool holds 4 through the lull (boundary retention), then
-`desired` jumps 4→8 in one cycle and `ready` follows within ~2 minutes — the
-gap between the two lines is the total actuation delay.*
+samples. Bottom: the pool holds 4 through the lull (boundary retention),
+`desired` jumps 4→8 in one cycle and `current` follows within ~2 minutes (the
+gap between the lines is the total actuation delay), and after the load ends
+the pool drains back to minReplicas.*
 
 > **Note — earlier defaults:** before the threshold band was aligned to the P90
 > signal, the analyzer's defaults (`0.85 / 0.50`, α 0.3, mean-based signal)
