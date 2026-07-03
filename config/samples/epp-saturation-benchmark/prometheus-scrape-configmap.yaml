@@ -1,0 +1,42 @@
+# Scrape jobs the epp-saturation path needs, as a reference fragment.
+# These are NOT standalone objects: merge the two entries under
+# `scrape_configs:` in your prometheus-server ConfigMap's prometheus.yml
+# (kubectl -n wva-monitoring edit cm prometheus-server), then restart or
+# reload Prometheus.
+#
+# Notes:
+# - epp-metrics: the EPP serves /metrics with bearer-token auth; the
+#   prometheus-server ServiceAccount must be able to authenticate (it uses its
+#   own token) and the EPP SA needs auth-delegator
+#   (see epp-metrics-clusterrolebinding.yaml). Point the target at YOUR EPP
+#   service.
+# - wva-metrics: MUST be a static-target job with the namespace →
+#   exported_namespace metric relabel. A pod-discovery job overwrites the
+#   metric's own `namespace` label (the VariantAutoscaling namespace) with the
+#   WVA pod's namespace, which breaks the prometheus-adapter → HPA match on
+#   exported_namespace.
+#
+# scrape_configs:
+# - job_name: epp-metrics
+#   scheme: http
+#   scrape_interval: 5s
+#   authorization:
+#     type: Bearer
+#     credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+#   static_configs:
+#   - targets:
+#     - optimized-baseline-epp.llm-d-optimized-baseline.svc.cluster.local:9090
+# - job_name: wva-metrics
+#   scheme: https
+#   scrape_interval: 5s
+#   tls_config:
+#     insecure_skip_verify: true
+#   authorization:
+#     type: Bearer
+#     credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+#   static_configs:
+#   - targets:
+#     - workload-variant-autoscaler-metrics.workload-variant-autoscaler-system.svc.cluster.local:8443
+#   metric_relabel_configs:
+#   - source_labels: [namespace]
+#     target_label: exported_namespace

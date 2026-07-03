@@ -1,0 +1,24 @@
+# VariantAutoscaling for a vLLM decode Deployment on the epp-saturation path.
+# This is the object the benchmark ran (docs/developer-guide/epp-saturation-benchmark.md).
+# Adjust name/namespace/modelID/scaleTargetRef to your serving stack.
+#
+# The acceleratorName label is required when the decode Deployment has no
+# GPU nodeSelector for WVA to resolve the accelerator from.
+apiVersion: llmd.ai/v1alpha1
+kind: VariantAutoscaling
+metadata:
+  name: optimized-baseline-nvidia-gpu-vllm-decode-va
+  namespace: llm-d-optimized-baseline
+  labels:
+    inference.optimization/acceleratorName: H100
+spec:
+  # Size maxReplicas at measured peak demand: under a trailing latency signal,
+  # headroom beyond peak cannot arrive in time to matter (see benchmark doc).
+  minReplicas: 3
+  maxReplicas: 8
+  modelID: Qwen/Qwen3-32B
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: optimized-baseline-nvidia-gpu-vllm-decode
+  variantCost: "10.0"

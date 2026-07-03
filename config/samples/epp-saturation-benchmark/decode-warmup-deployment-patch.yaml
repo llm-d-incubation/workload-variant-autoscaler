@@ -1,0 +1,39 @@
+# Warmup fixes for the vLLM decode Deployment — cuts pod-ready time from
+# ~2m15s to ~100s (measured; docs/developer-guide/epp-saturation-benchmark.md):
+#   1. torch.compile cache on a node-local hostPath + VLLM_CACHE_ROOT pointing
+#      at the mount: the compile cache is container-ephemeral by default AND
+#      vLLM writes it under $HOME, so an emptyDir mounted elsewhere does
+#      nothing. With this patch the first pod per node pays the ~33s compile;
+#      every later pod on that node loads the cached artifacts in ~8s.
+#   2. startupProbe every 5s (a 30s period leaves pods serving but unnoticed
+#      for up to 30s).
+#
+# Apply with:
+#   kubectl -n <serving-namespace> patch deploy <decode-deployment> \
+#     --type=strategic --patch-file decode-warmup-deployment-patch.yaml
+spec:
+  template:
+    spec:
+      volumes:
+      - name: torch-compile-cache
+        hostPath:
+          path: /var/cache/vllm-torch-compile
+          type: DirectoryOrCreate
+      containers:
+      - name: modelserver
+        volumeMounts:
+        - name: torch-compile-cache
+          mountPath: /.cache
+        env:
+        - name: VLLM_CACHE_ROOT
+          value: /.cache/vllm
+        startupProbe:
+          httpGet:
+            path: /v1/models
+            port: modelserver
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          failureThreshold: 150
+          timeoutSeconds: 5
+          successThreshold: 1

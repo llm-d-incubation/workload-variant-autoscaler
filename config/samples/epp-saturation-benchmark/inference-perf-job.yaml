@@ -1,0 +1,23 @@
+# inference-perf runner Job for the scored profile
+# (see inference-perf-configmap.yaml). Read the report from the pod logs after
+# completion: total/per-stage request counts and latency percentiles are the
+# scoring denominator (docs/developer-guide/epp-saturation-benchmark.md,
+# "Reproducing").
+apiVersion: batch/v1
+kind: Job
+metadata: {name: ip-scored, namespace: llm-d-optimized-baseline}
+spec:
+  backoffLimit: 0
+  template:
+    metadata: {labels: {app: ip-scored}}
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: inference-perf
+        image: ghcr.io/llm-d/llm-d-benchmark:v0.7.0
+        workingDir: /workspace
+        command: ["sh","-lc"]
+        args: ["mkdir -p /workspace/results && inference-perf --config_file /config/config.yml && echo DONE"]
+        volumeMounts: [{name: config, mountPath: /config}]
+        resources: {requests: {cpu: "4", memory: 8Gi}, limits: {cpu: "8", memory: 16Gi}}
+      volumes: [{name: config, configMap: {name: ip-scored-config}}]

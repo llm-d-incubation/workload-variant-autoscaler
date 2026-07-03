@@ -1,0 +1,18 @@
+# The EPP authenticates metrics scrapes with TokenReview/SubjectAccessReview
+# (controller-runtime WithAuthenticationAndAuthorization). Its ServiceAccount
+# therefore needs system:auth-delegator, or every scrape fails with:
+#   "tokenreviews.authentication.k8s.io is forbidden ... cannot create resource"
+# and Prometheus reports the target down (401/500).
+# Adjust the subject to your EPP's ServiceAccount name/namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: optimized-baseline-epp-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: optimized-baseline-epp
+  namespace: llm-d-optimized-baseline

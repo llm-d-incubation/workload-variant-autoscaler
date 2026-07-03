@@ -1,0 +1,50 @@
+# External-metric HPA that applies WVA's recommendation to the decode
+# Deployment: target AverageValue "1" makes HPA replicas = wva_desired_replicas.
+# These are the benchmarked scale policies (docs/developer-guide/epp-saturation-benchmark.md):
+#   - scaleUp Max(100%, 4 pods)/60s: the whole ask lands in one step and the
+#     new pods warm in parallel (removes grant lag).
+#   - scaleDown 1 pod/120s with a 180s stabilization window: gradual release.
+# Requires prometheus-adapter serving wva_desired_replicas on
+# external.metrics.k8s.io (see ../prometheus-adapter-values.yaml).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: optimized-baseline-decode-hpa
+  namespace: llm-d-optimized-baseline
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: optimized-baseline-nvidia-gpu-vllm-decode
+  minReplicas: 3
+  maxReplicas: 8
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      selectPolicy: Max
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 180
+      selectPolicy: Max
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 120
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: wva_desired_replicas
+        selector:
+          matchLabels:
+            variant_name: optimized-baseline-nvidia-gpu-vllm-decode-va
+            exported_namespace: llm-d-optimized-baseline
+      target:
+        type: AverageValue
+        averageValue: "1"
