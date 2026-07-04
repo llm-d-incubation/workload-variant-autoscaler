@@ -165,18 +165,21 @@ Tunable parameters:
 
 | symbol | parameter | meaning | benchmarked value | where set |
 |---|---|---|---|---|
-| $S_{ttft}$, $S_{tpot}$ | `ttftSLOMs` / `tpotSLOMs` | latency SLO targets; denominator of the saturation signal | 3000 ms / 100 ms | WVA scaling ConfigMap (code default) |
-| $\theta_{up}$ | `scaleUpThreshold` | credited demand above which scale-up fires | 0.55 | WVA scaling ConfigMap (code default) |
-| $\theta_{dn}$ | `scaleDownBoundary` | uncredited signal below which scale-down fires; the gap to $\theta_{up}$ is the hysteresis band | 0.40 | WVA scaling ConfigMap (code default) |
-| $\alpha$ | `smoothingAlpha` | EMA factor; how fast the smoothed signal tracks the clamped raw signal | 0.6 | WVA scaling ConfigMap (code default) |
-| $C$ | `saturationCap` | clamp on the raw signal before the EMA | 2.0 | WVA scaling ConfigMap (code default) |
-| — | `holdScaleUpWhileWarming` | optional: freeze scale-up while pods are pending | off | WVA scaling ConfigMap (code default) |
+| $S_{ttft}$, $S_{tpot}$ | `ttftSLOMs` / `tpotSLOMs` | latency SLO targets; denominator of the saturation signal | 3000 ms / 100 ms | WVA scaling ConfigMap |
+| $\theta_{up}$ | `scaleUpThreshold` | credited demand above which scale-up fires | 0.55 | WVA scaling ConfigMap |
+| $\theta_{dn}$ | `scaleDownBoundary` | uncredited signal below which scale-down fires; the gap to $\theta_{up}$ is the hysteresis band | 0.40 | WVA scaling ConfigMap |
+| $\alpha$ | `smoothingAlpha` | EMA factor; how fast the smoothed signal tracks the clamped raw signal | 0.6 | WVA scaling ConfigMap |
+| $C$ | `saturationCap` | clamp on the raw signal before the EMA | 2.0 | WVA scaling ConfigMap |
+| — | `holdScaleUpWhileWarming` | optional: freeze scale-up while pods are pending | off | WVA scaling ConfigMap |
 | $N_{min}$, $N_{max}$ | `minReplicas` / `maxReplicas` | replica bounds; size $N_{max}$ at measured peak demand | 3 / 8 | VariantAutoscaling spec (mirrored on the HPA) |
 | $\Delta$ | WVA reconcile interval | cadence of the signal → target cycle (§1–2) | 60 s | WVA deployment |
 | $W_{up}$, $W_{dn}$ | HPA stabilization windows | how long a new recommendation must persist before acting | 30 s / 180 s | HPA `behavior` |
 | $v_{up}/P_{up}$, $v_{dn}/P_{dn}$ | HPA rate policies | max replica change $v$ per trailing period $P$ | up $\max(100\,\%,\ v_{up}{=}4)$ per $P_{up}{=}60$ s, down $v_{dn}{=}1$ per $P_{dn}{=}120$ s | HPA `behavior` |
 | $\delta$ | HPA sync period | how often the HPA re-evaluates | ~15 s | cluster (kube-controller-manager) |
 | $T_w$ | pod warmup | pod creation → Ready (image, weights, compile, probe) | ~100 s | decode Deployment (compile-cache + probe patch) |
+
+For the ConfigMap-scoped knobs, the benchmarked values are the compiled-in
+defaults — the ConfigMap only needs an entry to override them.
 
 ![The control loop: signal chain, WVA target, HPA, pod warmup, and the serving pool + EPP](assets/epp-saturation/control-loop.png)
 
