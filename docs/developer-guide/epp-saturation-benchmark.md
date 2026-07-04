@@ -86,7 +86,7 @@ measured healthy range on this workload — a workload whose SLO sits close to
 its base latency shifts that band upward and should raise the thresholds
 accordingly.
 
-## Predictor calibration is part of the control loop
+## Predictor calibration affects scaling quality
 
 The latency predictor trains online, and its calibration state materially
 changes autoscaling quality — measured directly by running the identical
@@ -159,11 +159,31 @@ Raw time series: [`assets/epp-saturation/benchmark-run-timeseries.csv`](assets/e
 ## Appendix: control-law model
 
 Desired and ready replicas admit a precise formulation; everything below is
-deterministic except the plant (§5). Parameters as deployed: WVA cycle
-$\Delta = 60$ s, $\alpha = 0.6$, cap $C = 2.0$, $\theta_{up} = 0.55$,
-$\theta_{dn} = 0.40$, warmup $T_w \approx 100$ s, HPA sync $\delta \approx 15$ s,
-stabilization $W_{up} = 30$ s / $W_{dn} = 180$ s, rate policies
-$\max(100\,\%, 4\ \text{pods})/60\ \text{s}$ up and $1\ \text{pod}/120\ \text{s}$ down.
+deterministic except the serving pool's latency response (§5).
+
+Tunable parameters:
+
+| symbol | parameter | meaning | benchmarked value | where set |
+|---|---|---|---|---|
+| $S_{ttft}$, $S_{tpot}$ | `ttftSLOMs` / `tpotSLOMs` | latency SLO targets; denominator of the saturation signal | 3000 ms / 100 ms | WVA scaling ConfigMap (code default) |
+| $\theta_{up}$ | `scaleUpThreshold` | credited demand above which scale-up fires | 0.55 | WVA scaling ConfigMap (code default) |
+| $\theta_{dn}$ | `scaleDownBoundary` | uncredited signal below which scale-down fires; the gap to $\theta_{up}$ is the hysteresis band | 0.40 | WVA scaling ConfigMap (code default) |
+| $\alpha$ | `smoothingAlpha` | EMA factor; how fast the smoothed signal tracks the clamped raw signal | 0.6 | WVA scaling ConfigMap (code default) |
+| $C$ | `saturationCap` | clamp on the raw signal before the EMA | 2.0 | WVA scaling ConfigMap (code default) |
+| — | `holdScaleUpWhileWarming` | optional: freeze scale-up while pods are pending | off | WVA scaling ConfigMap (code default) |
+| $N_{min}$, $N_{max}$ | `minReplicas` / `maxReplicas` | replica bounds; size $N_{max}$ at measured peak demand | 3 / 8 | VariantAutoscaling spec (mirrored on the HPA) |
+| $\Delta$ | WVA reconcile interval | cadence of the signal → target cycle (§1–2) | 60 s | WVA deployment |
+| $W_{up}$, $W_{dn}$ | HPA stabilization windows | how long a new recommendation must persist before acting | 30 s / 180 s | HPA `behavior` |
+| — | HPA rate policies | max replica change per period | up $\max(100\,\%, 4)/60$ s, down $1/120$ s | HPA `behavior` |
+| $\delta$ | HPA sync period | how often the HPA re-evaluates | ~15 s | cluster (kube-controller-manager) |
+| $T_w$ | pod warmup | pod creation → Ready (image, weights, compile, probe) | ~100 s | decode Deployment (compile-cache + probe patch) |
+
+![The control loop: signal chain, WVA target, HPA, pod warmup, and the serving pool + EPP](assets/epp-saturation/control-loop.png)
+
+*The loop, one block per section below. Each green italic tag is one term of
+the violation-bill equation — the total delay from a load step to serving
+capacity is the sum of the four, and the knee's violations are that sum times
+the arrival rate.*
 
 ### 1. Signal chain (per WVA cycle $k$)
 
@@ -213,17 +233,16 @@ exactly $T_w$; a step down registers instantly; staircases compose. The
 horizontal gap between the `desired` and `current` lines in the benchmark
 figure is this $T_w$ plus the HPA terms of §3.
 
-### 5. The plant (the only non-deterministic part)
+### 5. Closing the loop
 
-$$s_{raw}(k) \approx \Phi(\rho(k)), \qquad \rho = \frac{\lambda}{\mu R}, \qquad \mu \approx 1.45\ \text{rps/pod (measured)}$$
-
-where $\Phi$ is nearly flat ($\approx 0.2$–$0.45$) for $\rho < \rho^{*} \approx 0.95$
-and non-stationary beyond it: under overload the backlog integrates,
-$\dot{B} = \lambda - \mu R$, and P90 TTFT $\approx B/(\mu R)$. This is why the
-signal behaves as a step detector rather than a load meter, and the
-violation-bill equation in the configuration section follows directly:
-violations accrue from the moment $\rho$ crosses $1$ until $R$ (per §4) catches
-up with $\lambda/\mu$.
+The loop closes through the EPP: requests are served by the $R$ ready
+replicas, and the EPP's latency predictor emits per-request **predicted TTFT
+and TPOT histograms** to Prometheus — §1 reads their P90. The serving pool's
+latency behavior is not modeled here; empirically (see the findings appendix),
+latency stays flat below a per-pod capacity of ~1.4–1.5 rps and rises sharply
+beyond it, which is why the signal behaves as a step detector and why the
+violation-bill equation holds: violations accrue from the moment load crosses
+capacity until $R$ (per §4) catches up.
 
 ## Appendix: findings
 
