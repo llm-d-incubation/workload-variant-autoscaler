@@ -174,7 +174,7 @@ Tunable parameters:
 | $N_{min}$, $N_{max}$ | `minReplicas` / `maxReplicas` | replica bounds; size $N_{max}$ at measured peak demand | 3 / 8 | VariantAutoscaling spec (mirrored on the HPA) |
 | $\Delta$ | WVA reconcile interval | cadence of the signal → target cycle (§1–2) | 60 s | WVA deployment |
 | $W_{up}$, $W_{dn}$ | HPA stabilization windows | how long a new recommendation must persist before acting | 30 s / 180 s | HPA `behavior` |
-| — | HPA rate policies | max replica change per period | up $\max(100\,\%, 4)/60$ s, down $1/120$ s | HPA `behavior` |
+| $v_{up}/P_{up}$, $v_{dn}/P_{dn}$ | HPA rate policies | max replica change $v$ per trailing period $P$ | up $\max(100\,\%,\ v_{up}{=}4)$ per $P_{up}{=}60$ s, down $v_{dn}{=}1$ per $P_{dn}{=}120$ s | HPA `behavior` |
 | $\delta$ | HPA sync period | how often the HPA re-evaluates | ~15 s | cluster (kube-controller-manager) |
 | $T_w$ | pod warmup | pod creation → Ready (image, weights, compile, probe) | ~100 s | decode Deployment (compile-cache + probe patch) |
 
@@ -216,7 +216,7 @@ $$rec_{stab}(t) = \begin{cases} \min_{\tau \in [t-W_{up},\,t]} rec(\tau) & \text
 
 and the behavior rate limits:
 
-$$N_{spec}(t^{+}) = \text{clip}\Big(rec_{stab}(t),\ \underbrace{N_{spec}(t{-}60\text{s}) + \max\big(N_{spec}(t{-}60\text{s}),\ 4\big)}_{\text{scale-up limit}},\ \underbrace{N_{spec}(t{-}120\text{s}) - 1}_{\text{scale-down limit}}\Big)$$
+$$N_{spec}(t^{+}) = \text{clip}\Big(rec_{stab}(t),\ \underbrace{N_{spec}(t{-}P_{up}) + \max\big(N_{spec}(t{-}P_{up}),\ v_{up}\big)}_{\text{scale-up limit}},\ \underbrace{N_{spec}(t{-}P_{dn}) - v_{dn}}_{\text{scale-down limit}}\Big)$$
 
 plus the HPA's 10 % tolerance dead-band (which integer steps at small $N$
 almost always exceed).
