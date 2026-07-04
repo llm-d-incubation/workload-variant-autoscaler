@@ -18,7 +18,7 @@ and the metrics in [analyzer-checklists.md](analyzer-checklists.md).
 | Bounds | minReplicas 3, maxReplicas 8 (= measured peak demand) |
 | Load | inference-perf, Prefill-Heavy **4000 in / 1000 out**, staged ramp **2→4→6→8→10→4→1 rps**, ~42 min, warm-start protocol |
 
-## Headline result
+## Benchmark result
 
 WVA (default configuration, calibrated predictor) vs a peak-sized static pool:
 
@@ -38,15 +38,16 @@ over a fixed load window instead, it says so.)
 WVA trades ~4 SLO points for ~26 % lower cost. Client-side per-stage
 percentiles confirm the residual violations sit in one shallow transient at the
 rate-6 crossing (stage p90 = 5.1 s); the **rate-10 peak stage ran cleaner than
-the idle stages** (p90 = 0.59 s) because capacity was in place before it
-arrived.
+the opening rate-2 stage** (p90 0.59 s vs 1.77 s) because capacity was in place
+before it arrived.
 
-![Headline run: request rate, TTFT vs SLO, and desired vs current replicas](assets/epp-saturation/headline-run-overview.png)
+![Request rate, TTFT vs SLO, and desired vs current replicas](assets/epp-saturation/benchmark-run-overview.png)
 
 *Top: measured request rate (the staged ramp, with inference-perf's
 between-stage drains visible). Middle: the P90 control signal rises ahead of
-the actual mean and crosses the trigger at the knee's base — the whole
-excursion above the 3 s SLO lasts ~2 samples. Bottom: the pool holds 4 through
+the actual mean and crosses the trigger at the knee's base — the mean-TTFT
+excursion above the 3 s SLO lasts ~2 minutes, and all 515 violating requests
+are concentrated in that transient. Bottom: the pool holds 4 through
 the lull (boundary retention), `desired` jumps 4→8 in one cycle and `current`
 follows within ~2 minutes (the gap between the lines is the total actuation
 delay), and after the load ends the pool drains back to minReplicas.*
@@ -66,7 +67,7 @@ collapsed the window. Every knob below removes one measured term:
 |---|---|---|
 | signal = **P90** predicted latency (not mean) | built-in | trigger lag, signal half — the mean stays flat at any healthy utilization and only rises after the queue exists; the P90 rises as soon as queueing variance appears |
 | `scaleUpThreshold` | **0.55** (code default) | trigger lag, threshold half — fires on the P90 pre-rise. A higher threshold (e.g. 0.85 → 2.55 s predicted TTFT) is only reached once the pool is already queueing, i.e. after the incident has started |
-| `scaleDownBoundary` | **0.40** (code default) | lull drain — healthy loaded pools read P90 ≈ 0.35–0.45, so they retain replicas through lulls; idle pools (≈ 0.1) still shed |
+| `scaleDownBoundary` | **0.40** (code default) | lull drain — healthy loaded pools read P90 ≈ 0.35–0.45, so they retain replicas through lulls; truly idle pools (signal ≈ 0) still shed |
 | `smoothingAlpha` | **0.6** (code default) | ask lag — EMA reaches the clamp in 1–2 cycles (safe because `saturationCap` bounds spikes; that is the clamp's job) |
 | `saturationCap` | 2.0 (code default) | EMA poisoning — knee signals reach 10–90× SLO; magnitude above ~2× carries no information and delays recovery |
 | HPA scaleUp | `Max(100 %, 4 pods)/60 s` (operator-side) | grant lag — the whole ask lands in one step; pods warm in parallel |
@@ -109,7 +110,7 @@ persistent calibration shift as a reason to re-check the threshold band.
    H100 TP=2); the threshold band (0.55/0.40) is calibrated to this signal's
    measured healthy floor and may have to be re-derived per workload.
 2. The predictor-calibration sensitivity (finding above) means results depend
-   on predictor training state; the headline uses a calibrated predictor.
+   on predictor training state; the benchmark result uses a calibrated predictor.
 3. Violations scored from EPP-side counters (`llm_d_epp_request_slo_violation_total`);
    denominators cross-checked against the load generator's own report (exact
    match, 12 480). Client-side per-request scoring (`per_request: true`) is a
@@ -125,8 +126,8 @@ persistent calibration shift as a reason to re-check the threshold band.
 Deployment bundle (the exact VA/HPA/scrape/RBAC/warmup-patch/load objects, with
 deploy order): [`config/samples/epp-saturation-benchmark/`](../../config/samples/epp-saturation-benchmark/).
 
-Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/epp-saturation/headline-run-timeseries.csv)
-(headline run) and [`assets/epp-saturation/previous-defaults-run-timeseries.csv`](assets/epp-saturation/previous-defaults-run-timeseries.csv)
+Raw time series: [`assets/epp-saturation/benchmark-run-timeseries.csv`](assets/epp-saturation/benchmark-run-timeseries.csv)
+(the benchmark run) and [`assets/epp-saturation/previous-defaults-run-timeseries.csv`](assets/epp-saturation/previous-defaults-run-timeseries.csv)
 (columns: ts, sat_raw, sat_smoothed, wva_desired, current_replicas, predTTFT_s, actTTFT_s, actTPOT_s, …).
 
 - **Attainment:** snapshot `sum(llm_d_epp_request_slo_violation_total{type=…})`
@@ -136,7 +137,7 @@ Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/ep
   `increase(..._bucket{le="3.0"}[window])` — note Prometheus stores `le="3.0"`.
 - **Cost:** `avg_over_time(wva_current_replicas[<episode>])` over the exact job
   start→completion window. The load generator drains between stages, so
-  episodes run ~15–20 min past the nominal profile length; a fixed-window
+  episodes run ~15–25 min past the nominal profile length; a fixed-window
   average is only useful for comparing runs against each other.
 - **Warm-start protocol:** pin HPA `minReplicas` to the peak count, wait for
   Ready, launch the load, then restore — an active autoscaler immediately
@@ -154,6 +155,75 @@ Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/ep
   readiness so the EPP excludes sleeping pods (`VLLM_SERVER_DEV_MODE` endpoints).
 - Client-side per-request SLO scoring; additional workload shapes; multi-variant
   cap semantics; scrape-health guard.
+
+## Appendix: control-law model
+
+Desired and ready replicas admit a precise formulation; everything below is
+deterministic except the plant (§5). Parameters as deployed: WVA cycle
+$\Delta = 60$ s, $\alpha = 0.6$, cap $C = 2.0$, $\theta_{up} = 0.55$,
+$\theta_{dn} = 0.40$, warmup $T_w \approx 100$ s, HPA sync $\delta \approx 15$ s,
+stabilization $W_{up} = 30$ s / $W_{dn} = 180$ s, rate policies
+$\max(100\,\%, 4\ \text{pods})/60\ \text{s}$ up and $1\ \text{pod}/120\ \text{s}$ down.
+
+### 1. Signal chain (per WVA cycle $k$)
+
+$$s_{raw}(k) = \max\!\left(\frac{\text{P90 predTTFT}(k)}{S_{ttft}},\ \frac{\text{P90 predTPOT}(k)}{S_{tpot}}\right), \qquad \text{NaN/empty} \mapsto 0$$
+
+$$s_c(k) = \min(s_{raw}(k),\, C) \qquad\text{(clamp)}$$
+
+$$\bar{s}(k) = \alpha\, s_c(k) + (1-\alpha)\, \bar{s}(k-1) \qquad\text{(EMA)}$$
+
+$$D(k) = \bar{s}(k)\cdot r(k), \qquad r(k) = \begin{cases} R(k)/N(k) & 0 < R < N \\ 1 & \text{otherwise} \end{cases} \qquad\text{(in-flight credit)}$$
+
+with $N$ = spec replicas and $R$ = ready replicas.
+
+### 2. WVA desired replicas
+
+$$d(k) = \text{clip}_{[N_{min},\,N_{max}]} \begin{cases} N + \left\lceil N \left( \frac{D(k)}{\theta_{up}} - 1 \right) \right\rceil & D(k) > \theta_{up} \\[4pt] N - \left\lfloor N \left( 1 - \frac{\bar{s}(k)}{\theta_{dn}} \right) \right\rfloor & \bar{s}(k) < \theta_{dn} \\[4pt] N & \text{otherwise (hysteresis)} \end{cases}$$
+
+Scale-up uses the credited demand $D$; scale-down deliberately uses the
+uncredited $\bar{s}$ (so a warming pool cannot be flipped into scale-down by
+its own credit). The clamp bounds the per-cycle ask:
+$d \le N + \lceil N(C/\theta_{up} - 1)\rceil \approx 3.6\,N$ at these values.
+$d(k)$ is exported as `wva_desired_replicas`.
+
+### 3. HPA layer (spec replicas)
+
+With the External metric at `AverageValue: "1"` the raw recommendation is
+$rec(t) = d(k(t))$, evaluated every $\delta$; then stabilization
+
+$$rec_{stab}(t) = \begin{cases} \min_{\tau \in [t-W_{up},\,t]} rec(\tau) & \text{increasing} \\ \max_{\tau \in [t-W_{dn},\,t]} rec(\tau) & \text{decreasing} \end{cases}$$
+
+and the behavior rate limits:
+
+$$N_{spec}(t^{+}) = \text{clip}\Big(rec_{stab}(t),\ \underbrace{N_{spec}(t{-}60\text{s}) + \max\big(N_{spec}(t{-}60\text{s}),\ 4\big)}_{\text{scale-up limit}},\ \underbrace{N_{spec}(t{-}120\text{s}) - 1}_{\text{scale-down limit}}\Big)$$
+
+plus the HPA's 10 % tolerance dead-band (which integer steps at small $N$
+almost always exceed).
+
+### 4. Ready replicas (pod load time)
+
+Additions take $T_w$ to become Ready; removals are immediate. Both compress
+into a single expression:
+
+$$R(t) = \min_{\tau \in [t - T_w,\ t]} N_{spec}(\tau)$$
+
+Sanity checks: a flat spec gives $R = N_{spec}$; a step up stays invisible for
+exactly $T_w$; a step down registers instantly; staircases compose. The
+horizontal gap between the `desired` and `current` lines in the benchmark
+figure is this $T_w$ plus the HPA terms of §3.
+
+### 5. The plant (the only non-deterministic part)
+
+$$s_{raw}(k) \approx \Phi(\rho(k)), \qquad \rho = \frac{\lambda}{\mu R}, \qquad \mu \approx 1.45\ \text{rps/pod (measured)}$$
+
+where $\Phi$ is nearly flat ($\approx 0.2$–$0.45$) for $\rho < \rho^{*} \approx 0.95$
+and non-stationary beyond it: under overload the backlog integrates,
+$\dot{B} = \lambda - \mu R$, and P90 TTFT $\approx B/(\mu R)$. This is why the
+signal behaves as a step detector rather than a load meter, and the
+violation-bill equation in the configuration section follows directly:
+violations accrue from the moment $\rho$ crosses $1$ until $R$ (per §4) catches
+up with $\lambda/\mu$.
 
 ## Appendix: findings
 
@@ -196,11 +266,11 @@ Raw time series: [`assets/epp-saturation/headline-run-timeseries.csv`](assets/ep
 
 All runs: same profile, same SLOs, warm-start protocol unless noted. Costs in
 this table are averaged over the fixed 42-min load window for cross-run
-comparability (the headline run's full-episode average is marked).
+comparability (the benchmark run's whole-run average is marked).
 
 | configuration | attainment | cost | takeaway |
 |---|---|---|---|
-| **default configuration (P90, 0.55/0.40, α 0.6, burst, fast warmup)** | **95.8 %** | **5.93 (episode)** | headline; knee caught at its base |
+| **default configuration (P90, 0.55/0.40, α 0.6, burst, fast warmup)** | **95.8 %** | **5.93 (whole run)** | the benchmark run; knee caught at its base |
 | default configuration, cold predictor | 85.6 % | 6.51 | calibration is part of the loop |
 | previous defaults (mean signal, 0.85/0.50, α 0.3, +1 pod/min) | 84.7 % | 5.89 | best of the pre-P90 configs |
 | previous defaults, cold start (3) | 83.8 % | 4.92 | cheapest; pays full knee |
