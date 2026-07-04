@@ -184,7 +184,7 @@ func TestLocateByVariant_UnmanagedHPA(t *testing.T) {
 	}
 }
 
-func TestLocateByVariant_AmbiguousHPAandSO(t *testing.T) {
+func TestLocateByVariant_AmbiguousHPAndSO(t *testing.T) {
 	ns := testNamespace
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: ns,

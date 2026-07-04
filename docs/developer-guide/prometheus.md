@@ -870,7 +870,7 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 
 ### `wva_errors_total`
 - **Type**: Counter
-- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the compoments currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
+- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the components currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
 - **Labels**:
   - `component`: Component where the error occurred
   - `error_type`: Type or category of the error

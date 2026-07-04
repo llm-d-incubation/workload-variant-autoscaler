@@ -1216,7 +1216,7 @@ func TestLocateByVariant_UnmanagedHPA(t *testing.T) {
 	}
 }
 
-func TestLocateByVariant_AmbiguousHPAandSO(t *testing.T) {
+func TestLocateByVariant_AmbiguousHPAndSO(t *testing.T) {
 	ns := "default"
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: ns,
@@ -1517,7 +1517,7 @@ func asClient(r client.Reader) client.Client {
 ```bash
 go test ./internal/collector/locator/... -v -count=1
 ```
-Expected: PASS for all six tests (`TestLocate_DeploymentChainHitsManagedHPA`, `TestLocate_UnmanagedReturnsNil`, `TestLocate_PodNotFound`, `TestLocateByVariant_HPA`, `TestLocateByVariant_UnmanagedHPA`, `TestLocateByVariant_AmbiguousHPAandSO`, `TestLocate_CacheHitOnSecondCall`).
+Expected: PASS for all six tests (`TestLocate_DeploymentChainHitsManagedHPA`, `TestLocate_UnmanagedReturnsNil`, `TestLocate_PodNotFound`, `TestLocateByVariant_HPA`, `TestLocateByVariant_UnmanagedHPA`, `TestLocateByVariant_AmbiguousHPAndSO`, `TestLocate_CacheHitOnSecondCall`).
 
 - [ ] **Step 5: Commit**
 
