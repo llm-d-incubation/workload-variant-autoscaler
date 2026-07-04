@@ -14,6 +14,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+const schemeHTTPS = "https"
+
 // IsHTTPS reports whether rawURL uses the https scheme.
 // url.Parse normalizes scheme to lowercase, so the comparison is case-insensitive.
 func IsHTTPS(rawURL string) bool {
@@ -21,7 +23,7 @@ func IsHTTPS(rawURL string) bool {
 	if err != nil {
 		return false
 	}
-	return u.Scheme == "https"
+	return u.Scheme == schemeHTTPS
 }
 
 // CreateTLSConfig creates a TLS configuration from getter-based Prometheus config.
@@ -102,7 +104,7 @@ func ValidateTLSConfig(cfg *config.Config) error {
 	}
 
 	switch u.Scheme {
-	case "https":
+	case schemeHTTPS:
 		// Continue with the HTTPS-specific validation below.
 	case "http":
 		if u.User != nil {

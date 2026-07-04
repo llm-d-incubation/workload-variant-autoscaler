@@ -242,7 +242,7 @@ func TestValidateTLSConfig(t *testing.T) {
 		{
 			name: "HTTP URL with embedded credentials - should fail",
 			promConfig: testConfigFromEnv(t, map[string]string{
-				"PROMETHEUS_BASE_URL": "http://user:pass@prometheus:9090",
+				"PROMETHEUS_BASE_URL":  "http://user:pass@prometheus:9090",
 				envPrometheusAllowHTTP: "true",
 			}),
 			expectError: true,

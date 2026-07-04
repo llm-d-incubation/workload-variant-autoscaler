@@ -82,7 +82,7 @@ type bearerTokenRoundTripper struct {
 
 // RoundTrip adds the Authorization header for HTTPS requests only.
 func (b *bearerTokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme == "https" {
+	if req.URL.Scheme == schemeHTTPS {
 		req.Header.Set("Authorization", "Bearer "+b.token)
 	}
 	return b.base.RoundTrip(req)
