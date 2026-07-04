@@ -15,7 +15,7 @@ import (
 )
 
 // IsHTTPS reports whether rawURL uses the https scheme.
-// It uses url.Parse so the comparison is case-insensitive per RFC 3986.
+// url.Parse normalizes scheme to lowercase, so the comparison is case-insensitive.
 func IsHTTPS(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -105,6 +105,9 @@ func ValidateTLSConfig(cfg *config.Config) error {
 	case "https":
 		// Continue with the HTTPS-specific validation below.
 	case "http":
+		if u.User != nil {
+			return fmt.Errorf("refusing to use Prometheus URL with embedded credentials %q; use PROMETHEUS_BEARER_TOKEN or PROMETHEUS_TOKEN_PATH instead", u.Redacted())
+		}
 		if !allowHTTP {
 			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
 		}
@@ -114,7 +117,7 @@ func ValidateTLSConfig(cfg *config.Config) error {
 		if insecureSkipVerify || caCertPath != "" || clientCertPath != "" || clientKeyPath != "" || cfg.PrometheusServerName() != "" {
 			return fmt.Errorf("TLS-related settings are not supported with plain HTTP Prometheus URL %q; remove them or use an https:// URL", baseURL)
 		}
-		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", baseURL)
+		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", u.Redacted())
 		return nil
 	default:
 		return fmt.Errorf("unsupported Prometheus URL scheme %q in %q; expected http or https", u.Scheme, baseURL)

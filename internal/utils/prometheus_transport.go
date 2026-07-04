@@ -72,14 +72,18 @@ func CreatePrometheusClientConfig(cfg *config.Config) (*api.Config, error) {
 	return clientConfig, nil
 }
 
-// bearerTokenRoundTripper adds bearer token authentication to HTTP and HTTPS requests
+// bearerTokenRoundTripper adds bearer token authentication to HTTPS requests.
+// The header is only set for https:// requests to prevent credential leakage
+// if a redirect leads to a plain http:// endpoint.
 type bearerTokenRoundTripper struct {
 	base  http.RoundTripper
 	token string
 }
 
-// RoundTrip adds the Authorization header with bearer token
+// RoundTrip adds the Authorization header for HTTPS requests only.
 func (b *bearerTokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", "Bearer "+b.token)
+	if req.URL.Scheme == "https" {
+		req.Header.Set("Authorization", "Bearer "+b.token)
+	}
 	return b.base.RoundTrip(req)
 }

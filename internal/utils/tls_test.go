@@ -64,6 +64,26 @@ func testConfigFromEnv(t *testing.T, env map[string]string) *config.Config {
 	return cfg
 }
 
+func TestIsHTTPS(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{"https scheme", "https://prometheus:9090", true},
+		{"HTTPS uppercase scheme", "HTTPS://prometheus:9090", true},
+		{"http scheme", "http://prometheus:9090", false},
+		{"empty string", "", false},
+		{"invalid url", "://bad", false},
+		{"no scheme", "prometheus:9090", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsHTTPS(tt.rawURL))
+		})
+	}
+}
+
 func TestCreateTLSConfig(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -207,6 +227,23 @@ func TestValidateTLSConfig(t *testing.T) {
 				"PROMETHEUS_BASE_URL":         "http://prometheus:9090",
 				envPrometheusAllowHTTP:        "true",
 				"PROMETHEUS_CLIENT_CERT_PATH": "/tmp/client.crt",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTP URL with opt-in and client key path - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":        "http://prometheus:9090",
+				envPrometheusAllowHTTP:       "true",
+				"PROMETHEUS_CLIENT_KEY_PATH": "/tmp/client.key",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTP URL with embedded credentials - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL": "http://user:pass@prometheus:9090",
+				envPrometheusAllowHTTP: "true",
 			}),
 			expectError: true,
 		},

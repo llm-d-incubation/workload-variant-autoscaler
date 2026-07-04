@@ -23,6 +23,7 @@ import (
 	goflag "flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -427,8 +428,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	promURL, _ := url.Parse(cfg.PrometheusBaseURL()) // already validated above
 	setupLog.Info("Initializing Prometheus client",
-		"address", cfg.PrometheusBaseURL(),
+		"address", promURL.Redacted(),
 		"tlsEnabled", utils.IsHTTPS(cfg.PrometheusBaseURL()),
 		"allowHTTP", cfg.PrometheusAllowHTTP(),
 	)
