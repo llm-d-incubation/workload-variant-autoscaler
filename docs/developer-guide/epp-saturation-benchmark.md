@@ -202,7 +202,7 @@ with $N$ = spec replicas and $R$ = ready replicas.
 
 ### 2. WVA desired replicas
 
-$$d(k) = \text{clip}_{[N_{min},\,N_{max}]} \begin{cases} N + \left\lceil N \left( \frac{D(k)}{\theta_{up}} - 1 \right) \right\rceil & D(k) > \theta_{up} \\[4pt] N - \left\lfloor N \left( 1 - \frac{\bar{s}(k)}{\theta_{dn}} \right) \right\rfloor & \bar{s}(k) < \theta_{dn} \\[4pt] N & \text{otherwise (hysteresis)} \end{cases}$$
+$$d(k) = \text{clip}_{[N_{min},\,N_{max}]} \begin{cases} N + \left\lceil N \left( \frac{D(k)}{\theta_{up}} - 1 \right) \right\rceil & D(k) > \theta_{up} \\ N - \left\lfloor N \left( 1 - \frac{\bar{s}(k)}{\theta_{dn}} \right) \right\rfloor & \bar{s}(k) < \theta_{dn} \\ N & \text{otherwise (hysteresis)} \end{cases}$$
 
 Scale-up uses the credited demand $D$; scale-down deliberately uses the
 uncredited $\bar{s}$ (so a warming pool cannot be flipped into scale-down by
