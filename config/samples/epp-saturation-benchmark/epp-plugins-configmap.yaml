@@ -3,9 +3,11 @@
 # --config-file=<key>; adjust the ConfigMap name/namespace/key to match your
 # EPP deployment.
 #
-# The predicted-latency-producer is what emits the per-request predicted/actual
-# latency histograms and SLO-violation counters the epp-saturation analyzer
-# scales on (requests must carry x-llm-d-slo-*-ms headers).
+# The predicted-latency-producer is what emits the predicted/actual latency
+# histograms the epp-saturation analyzer scales on. Per-request
+# x-llm-d-slo-*-ms headers are not required for scaling; sending them
+# additionally makes the EPP emit per-request SLO-violation counters
+# (how the benchmark scored attainment server-side).
 apiVersion: v1
 kind: ConfigMap
 metadata:

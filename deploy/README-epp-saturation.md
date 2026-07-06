@@ -17,8 +17,11 @@ Use the EPP saturation analyzer when:
   predicted/actual latency histograms
   (`llm_d_epp_request_predicted_ttft_seconds`, `llm_d_epp_request_ttft_seconds`,
   `llm_d_epp_request_ntpot_seconds`) to Prometheus — WVA derives the saturation
-  signal from these vs the configured SLOs (`ttftSLOMs`/`tpotSLOMs`); requests
-  must carry `x-llm-d-slo-*-ms` headers
+  signal from these vs the configured SLOs (`ttftSLOMs`/`tpotSLOMs`).
+  Per-request `x-llm-d-slo-*-ms` headers are **not** required for scaling —
+  the producer emits the histograms regardless; the headers only make the EPP
+  emit per-request SLO-violation counters (useful for scoring attainment
+  server-side; you can equally measure it client-side)
 - You want **predictive** autoscaling (driven by predicted latency vs SLO)
   rather than reactive autoscaling (driven by observed KV cache / queue depth)
 - Your pool has a **single model** (current simplification — no per-model

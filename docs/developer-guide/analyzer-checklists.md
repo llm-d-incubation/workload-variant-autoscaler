@@ -24,6 +24,10 @@ Benchmark results are comparable when run under identical conditions, we current
   a TTFT SLO and a TPOT/ITL SLO (e.g. streaming: TTFT ≤ 3s, TPOT ≤ 100ms). SLO-based
   analyzers consume these targets directly (`saturation = predictedLatency / SLO`), so
   the targets must be fixed and recorded for a run to be meaningful or comparable.
+  The targets are set in the WVA saturation-scaling ConfigMap
+  (`ttftSLOMs` / `tpotSLOMs` — see
+  [`deploy/configmap-saturation-scaling.yaml`](../../deploy/configmap-saturation-scaling.yaml));
+  the load generator should score against the same values.
 
 
 ## Measured Metrics
