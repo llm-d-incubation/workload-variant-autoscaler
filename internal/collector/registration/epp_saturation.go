@@ -15,8 +15,8 @@ const (
 
 	// QueryEPPPredictedTPOT is the pool's recent P90 time-per-output-token in
 	// seconds, predicted-preferred with actual fallback, analogous to
-	// QueryEPPPredictedTTFT. This EPP build does not yet emit predicted TPOT, so
-	// the fallback to actual (normalized) TPOT is what currently drives the value.
+	// QueryEPPPredictedTTFT. The fallback is the actual streaming TPOT
+	// histogram, covering EPP builds that don't emit predicted TPOT.
 	QueryEPPPredictedTPOT = "epp_predicted_tpot_seconds"
 )
 
@@ -69,8 +69,8 @@ func RegisterEPPSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryEPPPredictedTPOT,
 		Type:        source.QueryTypePromQL,
-		Template:    predictedOrActual("llm_d_epp_request_predicted_tpot_seconds", "llm_d_epp_request_ntpot_seconds"),
+		Template:    predictedOrActual("llm_d_epp_request_predicted_tpot_seconds", "llm_d_epp_request_streaming_tpot_seconds"),
 		Params:      []string{},
-		Description: "Pool P90 TPOT (seconds), predicted-preferred with actual (normalized) fallback; analyzer divides by the TPOT SLO",
+		Description: "Pool P90 TPOT (seconds), predicted-preferred with actual streaming-TPOT fallback; analyzer divides by the TPOT SLO",
 	})
 }

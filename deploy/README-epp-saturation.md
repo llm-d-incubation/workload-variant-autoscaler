@@ -15,8 +15,9 @@ Use the EPP saturation analyzer when:
 
 - Your EPP has the **predicted-latency producer plugin** enabled and emits the
   predicted/actual latency histograms
-  (`llm_d_epp_request_predicted_ttft_seconds`, `llm_d_epp_request_ttft_seconds`,
-  `llm_d_epp_request_ntpot_seconds`) to Prometheus — WVA derives the saturation
+  (`llm_d_epp_request_predicted_ttft_seconds` / `llm_d_epp_request_predicted_tpot_seconds`,
+  with actual-latency fallbacks `llm_d_epp_request_ttft_seconds` /
+  `llm_d_epp_request_streaming_tpot_seconds`) to Prometheus — WVA derives the saturation
   signal from these vs the configured SLOs (`ttftSLOMs`/`tpotSLOMs`).
   Per-request `x-llm-d-slo-*-ms` headers are **not** required for scaling —
   the producer emits the histograms regardless; the headers only make the EPP
