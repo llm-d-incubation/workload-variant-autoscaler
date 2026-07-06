@@ -227,57 +227,6 @@ func TestAnalyze_Overloaded(t *testing.T) {
 	// Optimizer: ceil(0.765 / 0.5) = 2 replicas added (N=2, perReplica=0.5)
 }
 
-func TestAnalyze_SaturationCap_ClampsRawBeforeEMA(t *testing.T) {
-	// Raw saturation of 5.0 (TTFT 5s / 1s SLO) is deep in the knee. With a cap of
-	// 2.0 the value feeding the EMA/decision is clamped to 2.0, but the true
-	// uncapped signal is still surfaced in RawSignal for observability.
-	input := func() interfaces.AnalyzerInput {
-		return interfaces.AnalyzerInput{
-			ModelID:   "test-model",
-			Namespace: "default",
-			VariantStates: []interfaces.VariantReplicaState{
-				{VariantName: "variant-a", CurrentReplicas: 4, PendingReplicas: 0},
-			},
-		}
-	}
-
-	// With cap: demand is clamped to 2.0, raw signal preserved at 5.0.
-	analyzer := setupAnalyzer(5.0)
-	in := input()
-	in.Config = &EPPSaturationConfig{
-		ScaleUpThreshold:  0.85,
-		ScaleDownBoundary: 0.50,
-		SmoothingAlpha:    1.0, // no smoothing — isolate the clamp
-		TTFTSLOMs:         1000,
-		TPOTSLOMs:         10000,
-		SaturationCap:     2.0,
-	}
-	result, err := analyzer.Analyze(context.Background(), in)
-	require.NoError(t, err)
-	assert.InDelta(t, 5.0, result.RawSignal, 0.01, "uncapped raw preserved for observability")
-	assert.InDelta(t, 2.0, result.SmoothedSignal, 0.01, "EMA fed the clamped value")
-	assert.InDelta(t, 2.0, result.TotalDemand, 0.01, "demand clamped to the cap")
-	// required = 2.0/0.85 - 1.0 ≈ 1.353 (vs 4.88 uncapped)
-	assert.InDelta(t, 1.353, result.RequiredCapacity, 0.01)
-
-	// With a very large cap (the documented way to effectively disable clamping —
-	// a zero value is replaced by the default via ApplyDefaults, it does not
-	// disable): demand is the full raw 5.0.
-	analyzerNoCap := setupAnalyzer(5.0)
-	inNoCap := input()
-	inNoCap.Config = &EPPSaturationConfig{
-		ScaleUpThreshold:  0.85,
-		ScaleDownBoundary: 0.50,
-		SmoothingAlpha:    1.0,
-		TTFTSLOMs:         1000,
-		TPOTSLOMs:         10000,
-		SaturationCap:     1e9, // effectively disabled
-	}
-	resultNoCap, err := analyzerNoCap.Analyze(context.Background(), inNoCap)
-	require.NoError(t, err)
-	assert.InDelta(t, 5.0, resultNoCap.TotalDemand, 0.01, "no clamp when cap is effectively disabled")
-}
-
 func TestAnalyze_InHysteresisZone_NoAction(t *testing.T) {
 	analyzer := setupAnalyzer(0.65) // between 0.50 (down) and 0.85 (up)
 	cfg := &EPPSaturationConfig{
@@ -330,18 +279,10 @@ func TestAnalyze_PendingReplicas(t *testing.T) {
 
 	// totalReplicas = 4 (current, including pending), normalized supply = 1.0
 	assert.InDelta(t, 1.0, result.TotalSupply, 0.01)
-	// In-flight credit: readyReplicas = 4 - 2 = 2, readyFraction = 2/4 = 0.5, so
-	// the demand driving scaling is the anticipated post-warmup saturation:
-	// 0.95 * 0.5 = 0.475 (the 2 warming pods are credited, so scale-up only asks
-	// for the deficit beyond what is already coming online).
-	assert.InDelta(t, 0.475, result.TotalDemand, 0.01)
-	// Direction guards: the credited demand (0.475/0.85 < 1) means no further
-	// scale-up is needed, and — critically — the credit must NOT flip the pool
-	// into scale-down: spare capacity is derived from the UNCREDITED smoothed
-	// signal (0.95 > 0.50 boundary), so no replicas may be shed mid-warmup even
-	// though the credited demand (0.475) dipped below the boundary.
-	assert.Equal(t, 0.0, result.RequiredCapacity, "credited demand below threshold → no scale-up")
-	assert.Equal(t, 0.0, result.SpareCapacity, "uncredited signal above boundary → scale-down must not fire during warmup")
+	assert.InDelta(t, 0.95, result.TotalDemand, 0.01)
+	// required = 0.95/0.85 - 1.0 ≈ 0.118
+	assert.InDelta(t, 0.118, result.RequiredCapacity, 0.01)
+	assert.Equal(t, 0.0, result.SpareCapacity)
 
 	// Per-variant: readyCount = 4 - 2 = 2, perReplicaCapacity = 1/4 = 0.25
 	// variant capacity = 2 * 0.25 = 0.5
@@ -370,7 +311,6 @@ func TestConfig_Defaults(t *testing.T) {
 	assert.Equal(t, DefaultEPPScaleUpThreshold, cfg.ScaleUpThreshold)
 	assert.Equal(t, DefaultEPPScaleDownBoundary, cfg.ScaleDownBoundary)
 	assert.Equal(t, DefaultEPPSmoothingAlpha, cfg.SmoothingAlpha)
-	assert.Equal(t, DefaultEPPSaturationCap, cfg.SaturationCap)
 }
 
 func TestConfig_Validate(t *testing.T) {
@@ -386,8 +326,6 @@ func TestConfig_Validate(t *testing.T) {
 		{"alpha zero", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0}, true},
 		{"alpha too high", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.5}, true},
 		{"alpha one ok", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 1.0, TTFTSLOMs: 3000, TPOTSLOMs: 100}, false},
-		{"cap ok", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3, TTFTSLOMs: 3000, TPOTSLOMs: 100, SaturationCap: 2.0}, false},
-		{"cap below scaleUpThreshold", EPPSaturationConfig{ScaleUpThreshold: 0.85, ScaleDownBoundary: 0.50, SmoothingAlpha: 0.3, TTFTSLOMs: 3000, TPOTSLOMs: 100, SaturationCap: 0.5}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

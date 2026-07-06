@@ -95,24 +95,11 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	tpotSaturation := tpotSeconds / (cfg.TPOTSLOMs / 1000.0)
 	rawSaturation := math.Max(ttftSaturation, tpotSaturation)
 
-	// Clamp the raw signal before smoothing. Near the queueing knee the predicted
-	// latency (and thus saturation) can spike to tens or hundreds × SLO; anything
-	// above the cap already means "scale up at the max per-cycle rate", so the extra
-	// magnitude carries no additional actionable information and only poisons the
-	// EMA — a single spike then decays slowly, holding replicas high long after the
-	// pool has recovered. Clamping keeps the EMA peak bounded so it recovers in a
-	// few cycles regardless of spike size. The true uncapped signal is preserved in
-	// RawSignal for observability.
-	cappedSaturation := rawSaturation
-	if cfg.SaturationCap > 0 && cappedSaturation > cfg.SaturationCap {
-		cappedSaturation = cfg.SaturationCap
-	}
-
 	// Apply EMA smoothing to absorb single-cycle spikes/dips before the signal
 	// drives scaling decisions. First observation per (namespace, modelID) is
 	// used as-is (no warmup).
 	smoothingKey := input.Namespace + "/" + input.ModelID
-	saturationScore := a.smooth(smoothingKey, cappedSaturation, cfg.SmoothingAlpha)
+	saturationScore := a.smooth(smoothingKey, rawSaturation, cfg.SmoothingAlpha)
 
 	logger.Info("EPP pool saturation score",
 		"modelID", input.ModelID,
@@ -123,43 +110,18 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		"ttftSaturation", ttftSaturation,
 		"tpotSaturation", tpotSaturation,
 		"rawSaturation", rawSaturation,
-		"cappedSaturation", cappedSaturation,
-		"saturationCap", cfg.SaturationCap,
 		"smoothedSaturation", saturationScore,
 		"smoothingAlpha", cfg.SmoothingAlpha,
 		"scaleUpThreshold", cfg.ScaleUpThreshold,
 		"scaleDownBoundary", cfg.ScaleDownBoundary)
 
-	// Compute current + ready replica counts from variant states.
-	var totalReplicas, readyReplicas int
+	// Compute the current replica count from variant states.
+	var totalReplicas int
 	for _, vs := range input.VariantStates {
 		totalReplicas += vs.CurrentReplicas
-		if r := vs.CurrentReplicas - vs.PendingReplicas; r > 0 {
-			readyReplicas += r
-		}
 	}
 	if totalReplicas == 0 {
 		totalReplicas = 1
-	}
-
-	// Credit in-flight (warming) replicas. The saturation signal is measured from
-	// the Ready pods; while a scale-up is in flight those Ready pods absorb more
-	// than their eventual share, so the raw signal over-states the post-warmup
-	// load. Once the pending pods become Ready the load spreads across all
-	// totalReplicas, so the demand that should drive scaling is the *anticipated*
-	// saturation: signal × ready/total. This makes scale-up ask only for the
-	// deficit beyond the pods already coming online (instead of racing to
-	// maxReplicas while pods warm), and re-converge as pending pods become Ready.
-	// readyFraction = 1.0 in steady state (no pending), so behavior is unchanged.
-	readyFraction := 1.0
-	if readyReplicas > 0 && readyReplicas < totalReplicas {
-		readyFraction = float64(readyReplicas) / float64(totalReplicas)
-	}
-	effectiveDemand := saturationScore * readyFraction
-	if readyFraction < 1.0 {
-		logger.Info("EPP saturation crediting in-flight replicas",
-			"modelID", input.ModelID, "readyReplicas", readyReplicas, "totalReplicas", totalReplicas,
-			"readyFraction", readyFraction, "smoothedSaturation", saturationScore, "effectiveDemand", effectiveDemand)
 	}
 
 	// Normalized capacity model for proportional scaling.
@@ -188,7 +150,7 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	//
 	perReplicaCapacity := 1.0 / float64(totalReplicas)
 	totalSupply := 1.0             // normalized pool capacity
-	totalDemand := effectiveDemand // in-flight-credited saturation drives scaling
+	totalDemand := saturationScore // smoothed saturation drives scaling
 
 	utilization := saturationScore
 	if utilization > 1.0 {
@@ -198,14 +160,6 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 	// Scaling signals using the same threshold logic as V2:
 	// requiredCapacity > 0 → scale-up needed
 	// spareCapacity > 0 → scale-down possible
-	//
-	// Scale-up uses the credited demand (effectiveDemand) so in-flight replicas
-	// are not double-provisioned. Scale-down deliberately uses the UNCREDITED
-	// smoothed signal: the credit discounts demand by ready/total, so during a
-	// warmup it could push a signal that is above the scale-up threshold below the
-	// scale-down boundary and shed replicas mid-scale-up (worse with pods stuck
-	// Pending, where the discount persists indefinitely). A pool may only scale
-	// down when the measured signal itself has real headroom.
 	requiredCapacity := math.Max(0, totalDemand/cfg.ScaleUpThreshold-totalSupply)
 	spareCapacity := math.Max(0, totalSupply-saturationScore/cfg.ScaleDownBoundary)
 
@@ -245,10 +199,6 @@ func (a *EPPSaturationAnalyzer) Analyze(ctx context.Context, input interfaces.An
 		Utilization:       utilization,
 		RequiredCapacity:  requiredCapacity,
 		SpareCapacity:     spareCapacity,
-		// Observability: preserve the uncapped raw vs smoothed signal so the
-		// engine can emit them as metrics (Utilization above is capped at 1.0).
-		RawSignal:      rawSaturation,
-		SmoothedSignal: saturationScore,
 	}, nil
 }
 

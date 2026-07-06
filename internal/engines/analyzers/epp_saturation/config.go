@@ -22,9 +22,8 @@ const (
 
 	// DefaultEPPSmoothingAlpha is the EMA smoothing factor applied to the raw
 	// saturation signal. Range (0.0, 1.0]: 1.0 = no smoothing, lower = heavier
-	// smoothing. 0.6 lets the smoothed signal reach the (clamped) raw level in
-	// 1–2 cycles so the scale-up ask is sized promptly; spike protection is the
-	// clamp's job (SaturationCap), not the EMA's.
+	// smoothing. 0.6 lets the smoothed signal reach the raw level in 1–2 cycles
+	// so the scale-up ask is sized promptly.
 	DefaultEPPSmoothingAlpha = 0.6
 
 	// DefaultEPPTTFTSLOMs is the default time-to-first-token SLO (milliseconds)
@@ -34,16 +33,6 @@ const (
 	// DefaultEPPTPOTSLOMs is the default time-per-output-token SLO (milliseconds)
 	// the analyzer divides predicted TPOT by to derive saturation.
 	DefaultEPPTPOTSLOMs = 100.0
-
-	// DefaultEPPSaturationCap bounds the raw saturation signal before it feeds the
-	// EMA. Near the queueing knee, predicted latency (and thus saturation) can spike
-	// to tens or hundreds × SLO; any value above the cap already means "scale up at
-	// the max per-cycle rate", so the extra magnitude carries no additional
-	// actionable information and only poisons the EMA (a single spike then decays
-	// slowly, holding replicas high long after the pool recovers). Clamping the raw
-	// signal keeps the EMA peak bounded so it recovers in a few cycles regardless of
-	// spike size. 2.0 = "at most 2× SLO worth of demand pressure per cycle".
-	DefaultEPPSaturationCap = 2.0
 )
 
 // EPPSaturationConfig holds configuration for the EPP saturation analyzer.
@@ -63,14 +52,12 @@ type EPPSaturationConfig struct {
 	// lulls while idle pools shed. Default 0.40.
 	ScaleDownBoundary float64 `yaml:"scaleDownBoundary,omitempty"`
 
-	// SmoothingAlpha is the EMA smoothing factor applied to the (clamped) raw
-	// saturation signal before it drives scaling decisions. Range (0.0, 1.0]:
+	// SmoothingAlpha is the EMA smoothing factor applied to the raw saturation
+	// signal before it drives scaling decisions. Range (0.0, 1.0]:
 	//   1.0  = no smoothing (use raw signal)
-	//   0.6  = light smoothing (default) — reaches the clamped level in 1–2 cycles
+	//   0.6  = light smoothing (default) — reaches the raw level in 1–2 cycles
 	//   0.1  = heavy smoothing
 	// The smoothed value evolves as: smoothed = alpha*raw + (1-alpha)*smoothed_prev.
-	// Spike suppression is primarily SaturationCap's job; alpha mainly sets how
-	// fast the scale-up ask is sized after a load change.
 	SmoothingAlpha float64 `yaml:"smoothingAlpha,omitempty"`
 
 	// TTFTSLOMs and TPOTSLOMs are the latency SLO targets (milliseconds) used to
@@ -82,14 +69,6 @@ type EPPSaturationConfig struct {
 	// saturation gauge.
 	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
 	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
-
-	// SaturationCap bounds the raw saturation signal before EMA smoothing. Values
-	// above the cap are clamped to it, so a single knee-region spike (which can be
-	// tens or hundreds × SLO) cannot dominate the smoothed signal for many cycles.
-	// The true uncapped signal is still surfaced for observability (RawSignal).
-	// A zero value is replaced by the default (2.0) via ApplyDefaults — it does
-	// NOT disable clamping; to effectively disable, set a very large value.
-	SaturationCap float64 `yaml:"saturationCap,omitempty"`
 }
 
 // GetAnalyzerName implements interfaces.AnalyzerConfig.
@@ -114,9 +93,6 @@ func (c *EPPSaturationConfig) ApplyDefaults() {
 	if c.TPOTSLOMs == 0 {
 		c.TPOTSLOMs = DefaultEPPTPOTSLOMs
 	}
-	if c.SaturationCap == 0 {
-		c.SaturationCap = DefaultEPPSaturationCap
-	}
 }
 
 // Validate checks for invalid threshold values.
@@ -139,12 +115,6 @@ func (c *EPPSaturationConfig) Validate() error {
 	}
 	if c.TPOTSLOMs <= 0 {
 		return fmt.Errorf("tpotSLOMs must be > 0, got %.2f", c.TPOTSLOMs)
-	}
-	// The cap must leave room to cross the scale-up threshold, otherwise clamping
-	// would make scale-up impossible.
-	if c.SaturationCap > 0 && c.SaturationCap < c.ScaleUpThreshold {
-		return fmt.Errorf("saturationCap (%.2f) must be >= scaleUpThreshold (%.2f)",
-			c.SaturationCap, c.ScaleUpThreshold)
 	}
 	return nil
 }
