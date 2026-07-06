@@ -41,6 +41,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
+	epp_saturation "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/epp_saturation"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
@@ -153,6 +154,10 @@ type Engine struct {
 	// Selected via analyzerName: "queueing-model" in SaturationScalingConfig.
 	queueingModelAnalyzer *queueingmodel.QueueingModelAnalyzer
 
+	// eppSaturationAnalyzer derives pool saturation from the EPP's predicted-latency histograms.
+	// Selected via analyzerName: "epp-saturation" in SaturationScalingConfig.
+	eppSaturationAnalyzer *epp_saturation.EPPSaturationAnalyzer
+
 	// capacityStore is shared with the V2 analyzer for caching capacity knowledge.
 	capacityStore *saturation_v2.CapacityKnowledgeStore
 
@@ -234,6 +239,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		metricsRegistry:         metricsRegistry,
 		saturationV2Analyzer:    satV2,
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
+		eppSaturationAnalyzer:   epp_saturation.NewEPPSaturationAnalyzer(metricsRegistry),
 		capacityStore:           capacityStore,
 		optimizer:               scalingOptimizer,
 		metricsEmitter:          metrics.NewMetricsEmitter(),
@@ -243,11 +249,15 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		},
 	}
 
+	pollInterval := cfg.OptimizationInterval()
+	if pollInterval <= 0 {
+		pollInterval = 30 * time.Second
+	}
 	engine.executor = executor.NewPollingExecutor(executor.PollingConfig{
 		Config: executor.Config{
 			OptimizeFunc: engine.optimize,
 		},
-		Interval:     30 * time.Second,
+		Interval:     pollInterval,
 		RetryBackoff: 100 * time.Millisecond,
 	})
 
@@ -266,6 +276,9 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 	// ReplicaMetrics struct and used by the queueing model analyzer to
 	// estimate per-replica arrival rate and model queue behavior.
 	registration.RegisterQueueingModelQueries(metricsRegistry)
+
+	// Register EPP saturation queries (P90 predicted/actual latency histograms).
+	registration.RegisterEPPSaturationQueries(metricsRegistry)
 
 	return &engine
 }
@@ -430,7 +443,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
-	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
+	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName || analyzerName == epp_saturation.AnalyzerName {
 		savedOptimizer := e.optimizer
 		if enableLimiter {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
@@ -457,6 +470,8 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
 	case interfaces.SaturationAnalyzerName:
 		allDecisions = e.optimizeV2(ctx, modelGroups, currentAllocations)
+	case epp_saturation.AnalyzerName:
+		allDecisions = e.optimizeEPPSaturation(ctx, modelGroups, currentAllocations)
 	default:
 		allDecisions = e.optimizeV1(ctx, modelGroups, currentAllocations)
 	}
@@ -1679,6 +1694,8 @@ func (e *Engine) applySaturationDecisions(
 				MetricsAvailable:  metricsAvailable,
 				MetricsReason:     metricsReason,
 				MetricsMessage:    metricsMessage,
+				ScalingCapped:     decision.ScalingCapped,
+				UncappedReplicas:  decision.UncappedReplicas,
 			})
 
 			// 2. Trigger Reconciler
