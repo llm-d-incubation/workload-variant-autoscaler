@@ -32,11 +32,9 @@ data:
     enableLimiter: false
 
   # EPP-saturation analyzer example: derives saturation from the EPP's P90
-  # predicted latency vs the SLOs below (see
-  # docs/developer-guide/epp-saturation-benchmark.md and
-  # config/samples/epp-saturation-benchmark/). The threshold band, smoothing,
-  # and clamp default to the benchmarked values (0.55 / 0.40 / 0.6 / 2.0) —
-  # only set them here to override.
+  # predicted latency vs the SLOs below. The threshold band and smoothing
+  # default to the benchmarked values (0.55 / 0.40 / 0.6) — only set them here
+  # to override.
   # default: |
   #   analyzerName: epp-saturation
   #   ttftSLOMs: 3000
@@ -44,8 +42,6 @@ data:
   #   # scaleUpThreshold: 0.55
   #   # scaleDownBoundary: 0.40
   #   # smoothingAlpha: 0.6
-  #   # saturationCap: 2.0
-  #   # holdScaleUpWhileWarming: false
 
   # Example per-model override for granite model in lab namespace
   # Uncomment and customize as needed

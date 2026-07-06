@@ -71,25 +71,6 @@ type SaturationScalingConfig struct {
 	TTFTSLOMs float64 `yaml:"ttftSLOMs,omitempty"`
 	TPOTSLOMs float64 `yaml:"tpotSLOMs,omitempty"`
 
-	// SaturationCap bounds the raw saturation signal the epp-saturation analyzer
-	// feeds into its EMA. Near the queueing knee the signal can spike to many × SLO;
-	// clamping it keeps the smoothed signal from staying inflated for many cycles
-	// after the pool recovers (which otherwise causes scale-up overshoot). Default:
-	// 2.0. Ignored by other analyzers.
-	SaturationCap float64 `yaml:"saturationCap,omitempty"`
-
-	// HoldScaleUpWhileWarming enables warmup-aware scale-up damping for the
-	// epp-saturation path: while replicas already requested are still warming
-	// (pending > 0), the target is held at the current replica count so the pool
-	// does not stack a new scale-up request every cycle before the in-flight pods
-	// come online. Scale-down is unaffected.
-	//
-	// Nil defaults to FALSE. The hold lowers the replica peak for step-and-hold
-	// workloads, but its one-pod-per-warmup climb falls behind a rising (ramping)
-	// load and causes sustained SLO violations, so it is opt-in for steady,
-	// cost-sensitive workloads only. Ignored by other analyzers.
-	HoldScaleUpWhileWarming *bool `yaml:"holdScaleUpWhileWarming,omitempty"`
-
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].
@@ -235,12 +216,6 @@ func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
 	if override.Priority != 0 {
 		c.Priority = override.Priority
 	}
-	if override.SaturationCap != 0 {
-		c.SaturationCap = override.SaturationCap
-	}
-	if override.HoldScaleUpWhileWarming != nil {
-		c.HoldScaleUpWhileWarming = override.HoldScaleUpWhileWarming
-	}
 	if override.TTFTSLOMs != 0 {
 		c.TTFTSLOMs = override.TTFTSLOMs
 	}
@@ -298,22 +273,6 @@ func (c *SaturationScalingConfig) Validate() error {
 		}
 		if c.SmoothingAlpha < 0 || c.SmoothingAlpha > 1.0 {
 			return fmt.Errorf("smoothingAlpha must be in [0, 1], got %.2f", c.SmoothingAlpha)
-		}
-		// The cap must leave room to cross the scale-up threshold, otherwise
-		// clamping makes scale-up permanently impossible. Compare against the
-		// effective (defaulted) threshold when unset — the epp-saturation
-		// analyzer's own default (epp_saturation.DefaultEPPScaleUpThreshold =
-		// 0.55), not the V2 DefaultScaleUpThreshold, which does not apply on
-		// this path. Kept as a literal to avoid importing the analyzer package
-		// from config.
-		if c.SaturationCap > 0 {
-			up := c.ScaleUpThreshold
-			if up == 0 {
-				up = 0.55
-			}
-			if c.SaturationCap < up {
-				return fmt.Errorf("saturationCap (%.2f) must be >= scaleUpThreshold (%.2f)", c.SaturationCap, up)
-			}
 		}
 	}
 
