@@ -1,9 +1,9 @@
 # WVA with EPP Saturation Analyzer
 
-Guide for the **EPP saturation analyzer** — an autoscaling mode that consumes
-the pool-level saturation signal emitted by the gateway-api-inference-extension
-(EPP) latency detector, instead of computing saturation from per-pod vLLM
-metrics.
+Guide for the **EPP saturation analyzer** — an autoscaling mode that derives a
+pool-level saturation signal from the predicted-latency histograms emitted by
+the gateway-api-inference-extension (EPP), instead of computing saturation
+from per-pod vLLM metrics.
 
 For GKE-specific cluster setup (Prometheus, TLS, GMP), see
 [README-gke.md](README-gke.md). For the general deployment guide (all
@@ -28,19 +28,42 @@ Use the EPP saturation analyzer when:
 - Your pool has a **single model** (current simplification — no per-model
   saturation breakdown from the EPP signal)
 
+### Metric name overrides
+
+The metric names above are the llm-d EPP's contract and are the defaults. If
+your EPP build exposes the histograms under different names (e.g. the upstream
+gateway-api-inference-extension `inference_objective_*` family), override them
+with environment variables on the WVA manager container:
+
+| Environment variable | Default |
+|---|---|
+| `WVA_EPP_PREDICTED_TTFT_METRIC` | `llm_d_epp_request_predicted_ttft_seconds` |
+| `WVA_EPP_ACTUAL_TTFT_METRIC` | `llm_d_epp_request_ttft_seconds` |
+| `WVA_EPP_PREDICTED_TPOT_METRIC` | `llm_d_epp_request_predicted_tpot_seconds` |
+| `WVA_EPP_ACTUAL_TPOT_METRIC` | `llm_d_epp_request_streaming_tpot_seconds` |
+
+Names are histogram base names (no `_bucket` suffix). Values that are not
+valid Prometheus metric names are ignored with a log line and the default is
+used.
+
 ## How the saturation signal works
 
-The EPP latency detector runs a background probe every `probeInterval`:
+As requests flow through the EPP, its predicted-latency producer records a
+predicted TTFT/TPOT per request (from the latency-predictor sidecars) into
+Prometheus histograms, alongside the actual latencies. Each WVA cycle:
 
-1. Builds a synthetic prediction request from current traffic profile
-2. Calls the latency prediction sidecar per endpoint
-3. Computes `endpointSaturation = predictedLatency / SLO`
-4. Averages across endpoints → `poolSaturation`
+1. Queries the recent **P90** of the predicted-latency histograms
+   (`histogram_quantile(0.9, ...)` over 1-minute bucket rates), falling back
+   to the actual-latency histograms when the predicted series is absent or
+   stalled
+2. Computes `saturation = max(P90 predTTFT / ttftSLOMs, P90 predTPOT / tpotSLOMs)`
+3. Clamps at `saturationCap`, then smooths with an EMA (`smoothingAlpha`)
 
-Semantics:
-- `< 1.0` = headroom available
-- `>= 1.0` = at or over SLO
-- Score is unbounded (can be > 1.0 when heavily overloaded)
+Semantics of the raw score:
+- `< 1.0` = tail latency within SLO (headroom)
+- `>= 1.0` = P90 at or over SLO
+- Unbounded above 1.0 when overloaded (hence the clamp); no recent traffic
+  reads as 0 and drifts the pool toward `minReplicas`
 
 ## How WVA uses the signal
 

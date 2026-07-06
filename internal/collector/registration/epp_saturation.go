@@ -1,7 +1,32 @@
 package registration
 
 import (
+	"os"
+	"regexp"
+
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
+	ctrl "sigs.k8s.io/controller-runtime"
+)
+
+// Environment variables overriding the EPP latency metric names the saturation
+// queries are built from. The defaults are the llm-d EPP's metric contract;
+// override them when the EPP build exposes the histograms under different
+// names (e.g. the upstream gateway-api-inference-extension
+// `inference_objective_*` family, or a renamed fork).
+const (
+	EnvEPPPredictedTTFTMetric = "WVA_EPP_PREDICTED_TTFT_METRIC"
+	EnvEPPActualTTFTMetric    = "WVA_EPP_ACTUAL_TTFT_METRIC"
+	EnvEPPPredictedTPOTMetric = "WVA_EPP_PREDICTED_TPOT_METRIC"
+	EnvEPPActualTPOTMetric    = "WVA_EPP_ACTUAL_TPOT_METRIC"
+)
+
+// Default EPP latency metric names (histogram base names, without the
+// `_bucket` suffix).
+const (
+	DefaultEPPPredictedTTFTMetric = "llm_d_epp_request_predicted_ttft_seconds"
+	DefaultEPPActualTTFTMetric    = "llm_d_epp_request_ttft_seconds"
+	DefaultEPPPredictedTPOTMetric = "llm_d_epp_request_predicted_tpot_seconds"
+	DefaultEPPActualTPOTMetric    = "llm_d_epp_request_streaming_tpot_seconds"
 )
 
 // Query name constants for EPP saturation metrics.
@@ -49,27 +74,53 @@ func predictedOrActual(predicted, actual string) string {
 	return "((" + p90Rate(predicted) + ") >= 0) or (" + p90Rate(actual) + ")"
 }
 
+// validMetricName matches legal Prometheus metric names. Overrides that fail
+// it are rejected (falling back to the default) so a typo'd or malformed env
+// var cannot produce a broken — or injected — PromQL expression.
+var validMetricName = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+
+// metricFromEnv returns the metric name from the given environment variable,
+// or def when the variable is unset or not a valid Prometheus metric name.
+func metricFromEnv(envVar, def string) string {
+	name := os.Getenv(envVar)
+	if name == "" {
+		return def
+	}
+	if !validMetricName.MatchString(name) {
+		ctrl.Log.Info("Ignoring invalid EPP metric name override",
+			"envVar", envVar, "value", name, "default", def)
+		return def
+	}
+	return name
+}
+
 // RegisterEPPSaturationQueries registers queries used by the EPP saturation analyzer.
 //
 // The analyzer derives saturation itself (saturation = max(TTFT/SLO, TPOT/SLO))
 // from these latency signals rather than reading a pre-computed saturation gauge
 // from the EPP, so the SLO policy lives in WVA config. Each query prefers the
-// predicted latency and falls back to the actual latency via PromQL `or`.
+// predicted latency and falls back to the actual latency via PromQL `or`. The
+// metric names default to the llm-d EPP contract and can be overridden with the
+// WVA_EPP_*_METRIC environment variables.
 func RegisterEPPSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry := sourceRegistry.Get("prometheus").QueryList()
 
 	registry.MustRegister(source.QueryTemplate{
-		Name:        QueryEPPPredictedTTFT,
-		Type:        source.QueryTypePromQL,
-		Template:    predictedOrActual("llm_d_epp_request_predicted_ttft_seconds", "llm_d_epp_request_ttft_seconds"),
+		Name: QueryEPPPredictedTTFT,
+		Type: source.QueryTypePromQL,
+		Template: predictedOrActual(
+			metricFromEnv(EnvEPPPredictedTTFTMetric, DefaultEPPPredictedTTFTMetric),
+			metricFromEnv(EnvEPPActualTTFTMetric, DefaultEPPActualTTFTMetric)),
 		Params:      []string{},
 		Description: "Pool P90 TTFT (seconds), predicted-preferred with actual fallback; analyzer divides by the TTFT SLO",
 	})
 
 	registry.MustRegister(source.QueryTemplate{
-		Name:        QueryEPPPredictedTPOT,
-		Type:        source.QueryTypePromQL,
-		Template:    predictedOrActual("llm_d_epp_request_predicted_tpot_seconds", "llm_d_epp_request_streaming_tpot_seconds"),
+		Name: QueryEPPPredictedTPOT,
+		Type: source.QueryTypePromQL,
+		Template: predictedOrActual(
+			metricFromEnv(EnvEPPPredictedTPOTMetric, DefaultEPPPredictedTPOTMetric),
+			metricFromEnv(EnvEPPActualTPOTMetric, DefaultEPPActualTPOTMetric)),
 		Params:      []string{},
 		Description: "Pool P90 TPOT (seconds), predicted-preferred with actual streaming-TPOT fallback; analyzer divides by the TPOT SLO",
 	})
