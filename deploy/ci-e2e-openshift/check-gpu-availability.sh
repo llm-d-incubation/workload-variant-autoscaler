@@ -3,10 +3,10 @@ set -euo pipefail
 
 echo "Checking GPU availability for e2e test..."
 
-# Minimum GPUs needed: 2 models × 2 GPUs each = 4
-# Recommended with scale-up headroom: 6
-REQUIRED_GPUS=4
-RECOMMENDED_GPUS=6
+# Minimum GPUs needed: 1 replica × 1 GPU (TP=1) + 1 for scale-up = 2
+# Recommended with scale-up headroom: 3
+REQUIRED_GPUS=2
+RECOMMENDED_GPUS=3
 
 # Total allocatable GPUs across all nodes
 TOTAL_GPUS=$(kubectl get nodes -o json | \

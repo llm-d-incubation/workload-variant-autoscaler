@@ -135,13 +135,14 @@ type ReplicaMetrics struct {
 	// Zero when metrics are unavailable.
 	KvUsageInstant float64
 
-	// VLLMRequestRate is the vLLM-side request completion rate on this replica (req/s).
-	// Derived from rate(vllm:request_generation_tokens_count[1m]) per pod.
+	// RequestRate is the engine-side request completion rate on this replica (req/s).
+	// Engine-agnostic: derived per pod from rate(vllm:request_generation_tokens_count[1m])
+	// for vLLM and rate(sglang:generation_tokens_histogram_count[1m]) for SGLang.
 	// TA notation: fallback λ_req — used when ArrivalRate == 0 (EPP not deployed).
-	// λ_dec_fallback = sum(VLLMRequestRate) × avg(AvgOutputTokens).
+	// λ_dec_fallback = sum(RequestRate) × avg(AvgOutputTokens).
 	// Measures completed requests only; undercounts when requests queue in the scheduler.
 	// Zero when metrics are unavailable.
-	VLLMRequestRate float64
+	RequestRate float64
 }
 
 // ReplicaMetricsMetadata contains freshness information for replica metrics
@@ -236,10 +237,11 @@ type VariantDecision struct {
 	// --- Resource requirements (for resource limiting) ---
 	GPUsPerReplica int // GPUs required per replica
 	// SpareCapacity indicates how much spare capacity this variant has.
-	// 0.0 = fully saturated, 1.0 = completely idle.
-	// Used by allocation algorithms to prioritize saturated variants.
-	// V1: threshold-relative spare KV capacity (AvgSpareKvCapacity).
-	// V2: 1.0 - Utilization (absolute spare).
+	// V1: threshold-relative spare KV capacity (AvgSpareKvCapacity), a 0.0-1.0
+	//     fraction (0.0 = fully saturated, 1.0 = completely idle).
+	// V2: absolute spare in KV-cache tokens, max(0, TotalSupply - TotalDemand/scaleDownBoundary)
+	//     from AnalyzerResult — the scale-down companion to RequiredCapacity, in the same
+	//     token units (unit is "continuous", matching RequiredCapacityUnit).
 	SpareCapacity float64
 	// Utilization is the variant-level utilization ratio (0.0-1.0) reported for
 	// observability. The exact formula differs by analyzer because V1 and V2
@@ -254,10 +256,10 @@ type VariantDecision struct {
 	KvCacheTokensUsed int64
 	// KvCacheTokensCapacity is the sum of TotalKvCapacityTokens across this variant's replicas.
 	KvCacheTokensCapacity int64
-	// RequiredCapacity is the model-level required capacity (>0 means scale-up needed).
-	// Same value for all variants of a model.
-	// V1: binary (1.0 if shouldScaleUp, else 0.0).
-	// V2: continuous token-based demand from AnalyzerResult.
+	// RequiredCapacity indicates whether scale-up is needed (>0 means yes).
+	// V1: binary (1.0 if shouldScaleUp, else 0.0), model-level.
+	// V2: continuous token-based deficit from AnalyzerResult — per-role for P/D
+	//     disaggregated models, model-level otherwise.
 	// Use RequiredCapacityUnit to disambiguate the units when consuming this field
 	// (or its corresponding Prometheus metric).
 	RequiredCapacity float64

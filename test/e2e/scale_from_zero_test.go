@@ -21,6 +21,7 @@ import (
 
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
 // cleanupScaleFromZeroResources deletes all resources created by scale-from-zero tests to ensure clean state
@@ -179,17 +180,20 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
 		}).Should(Succeed(), "EPP service should exist")
 
-		// Wait for EPP pods to be ready
+		// Wait for EPP pods to be ready. Use the EPP Service's own selector
+		// (via FindExistingEPPPods) rather than hard-coding a label key —
+		// the llm-d chart changed the EPP pod label in v0.9.0 from
+		// `inferencepool=<name>` to `llm-d-router-gateway=<name>`, and
+		// future changes are likely. The Service.spec.selector is the
+		// authoritative source.
 		Eventually(func(g Gomega) {
-			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: "inferencepool=" + eppServiceName,
-			})
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
+			pods, err := utils.FindExistingEPPPods(ctx, k8sClient, cfg.LLMDNamespace, eppServiceName)
+			g.Expect(err).NotTo(HaveOccurred(), "Should be able to find EPP pods")
+			g.Expect(pods).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
-			for _, pod := range podList.Items {
+			for _, pod := range pods {
 				for _, condition := range pod.Status.Conditions {
 					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
 						hasReadyPod = true
@@ -649,17 +653,20 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
 		}).Should(Succeed(), "EPP service should exist")
 
-		// Wait for EPP pods to be ready
+		// Wait for EPP pods to be ready. Use the EPP Service's own selector
+		// (via FindExistingEPPPods) rather than hard-coding a label key —
+		// the llm-d chart changed the EPP pod label in v0.9.0 from
+		// `inferencepool=<name>` to `llm-d-router-gateway=<name>`, and
+		// future changes are likely. The Service.spec.selector is the
+		// authoritative source.
 		Eventually(func(g Gomega) {
-			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: "inferencepool=" + eppServiceName,
-			})
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
+			pods, err := utils.FindExistingEPPPods(ctx, k8sClient, cfg.LLMDNamespace, eppServiceName)
+			g.Expect(err).NotTo(HaveOccurred(), "Should be able to find EPP pods")
+			g.Expect(pods).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
-			for _, pod := range podList.Items {
+			for _, pod := range pods {
 				for _, condition := range pod.Status.Conditions {
 					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
 						hasReadyPod = true
@@ -1076,17 +1083,20 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			g.Expect(err).NotTo(HaveOccurred(), "EPP service should exist")
 		}).Should(Succeed(), "EPP service should exist")
 
-		// Wait for EPP pods to be ready
+		// Wait for EPP pods to be ready. Use the EPP Service's own selector
+		// (via FindExistingEPPPods) rather than hard-coding a label key —
+		// the llm-d chart changed the EPP pod label in v0.9.0 from
+		// `inferencepool=<name>` to `llm-d-router-gateway=<name>`, and
+		// future changes are likely. The Service.spec.selector is the
+		// authoritative source.
 		Eventually(func(g Gomega) {
-			podList, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{
-				LabelSelector: "inferencepool=" + eppServiceName,
-			})
-			g.Expect(err).NotTo(HaveOccurred(), "Should be able to list pods")
-			g.Expect(podList.Items).ToNot(BeEmpty(), "EPP pods should exist")
+			pods, err := utils.FindExistingEPPPods(ctx, k8sClient, cfg.LLMDNamespace, eppServiceName)
+			g.Expect(err).NotTo(HaveOccurred(), "Should be able to find EPP pods")
+			g.Expect(pods).ToNot(BeEmpty(), "EPP pods should exist")
 
 			// Check that at least one pod is ready
 			hasReadyPod := false
-			for _, pod := range podList.Items {
+			for _, pod := range pods {
 				for _, condition := range pod.Status.Conditions {
 					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
 						hasReadyPod = true

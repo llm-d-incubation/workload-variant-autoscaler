@@ -73,6 +73,97 @@ var _ = Describe("CostAwareOptimizer", func() {
 			Expect(dm["expensive"].TargetReplicas).To(Equal(1))
 		})
 
+		It("populates decision observability fields (utilization/required/spare) from the analyzer result", func() {
+			// Regression: these three feed wva_saturation_utilization / wva_required_capacity /
+			// wva_spare_capacity. If buildDecisionsWithOptimizer stops copying them, the gauges read 0.
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 5000,
+				SpareCapacity:    1200,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000, Utilization: 0.42},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v1", CurrentReplicas: 2},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["v1"].Utilization).To(Equal(0.42))
+			Expect(dm["v1"].RequiredCapacity).To(Equal(5000.0)) // model-level (no RoleCapacities)
+			Expect(dm["v1"].SpareCapacity).To(Equal(1200.0))    // tokens, companion to required
+		})
+
+		It("uses per-role required/spare capacity for P/D-disaggregated models", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 9999, // model-level; must NOT be used for role-scoped variants
+				SpareCapacity:    8888,
+				RoleCapacities: map[string]interfaces.RoleCapacity{
+					"prefill": {Role: "prefill", RequiredCapacity: 100, SpareCapacity: 10},
+					"decode":  {Role: "decode", RequiredCapacity: 200, SpareCapacity: 20},
+				},
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "p", Role: "prefill", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.3},
+					{VariantName: "d", Role: "decode", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.6},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "p", Role: "prefill", CurrentReplicas: 1},
+						{VariantName: "d", Role: "decode", CurrentReplicas: 1},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["p"].RequiredCapacity).To(Equal(100.0))
+			Expect(dm["p"].SpareCapacity).To(Equal(10.0))
+			Expect(dm["d"].RequiredCapacity).To(Equal(200.0))
+			Expect(dm["d"].SpareCapacity).To(Equal(20.0))
+		})
+
+		It("maps an empty-role variant to the \"both\" RoleCapacities entry", func() {
+			// Role "" normalizes to RoleBoth, so the "both" entry (not the model-level
+			// totals) must be used. Model-level 9999/8888 are decoys.
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 9999,
+				SpareCapacity:    8888,
+				RoleCapacities: map[string]interfaces.RoleCapacity{
+					"both": {Role: "both", RequiredCapacity: 300, SpareCapacity: 30},
+				},
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", Role: "", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.5},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v", Role: "", CurrentReplicas: 1},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["v"].RequiredCapacity).To(Equal(300.0)) // "both" entry, not model-level 9999
+			Expect(dm["v"].SpareCapacity).To(Equal(30.0))     // "both" entry, not model-level 8888
+		})
+
 		It("should not skip variants with pending replicas", func() {
 			r := &interfaces.AnalyzerResult{
 				RequiredCapacity: 5000,

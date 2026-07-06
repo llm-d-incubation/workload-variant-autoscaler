@@ -19,12 +19,14 @@ package collector
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,6 +40,15 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+)
+
+// Shared test literals (extracted to satisfy goconst across the new SGLang cases).
+const (
+	sglangScaleTargetKey = "test-ns/sglang-decode"
+	mixedVLLMPodName     = "vllm-0"
+	testServerContainer  = "server"
+	sglangVariantLabel   = "va-sglang"
+	sglangKVUsageKey     = "sglang/kv_cache_usage"
 )
 
 // mockMetricsSource is a mock implementation of source.MetricsSource for testing
@@ -564,7 +575,7 @@ func TestCollectReplicaMetrics_ErrorMetrics(t *testing.T) {
 
 // TestCollectReplicaMetrics_ThroughputKeyMerge verifies that when the KV-cache
 // query and the throughput queries (GenerationTokenRate, KvUsageInstant,
-// VLLMRequestRate) return results for the same pod, they merge into a single
+// RequestRate) return results for the same pod, they merge into a single
 // ReplicaMetrics entry with all fields non-zero.
 //
 // Before the Bug A fix, throughput loops used the bare pod name as the podData
@@ -607,7 +618,7 @@ func TestCollectReplicaMetrics_ThroughputKeyMerge(t *testing.T) {
 						{Labels: podLabels, Value: 0.50, Timestamp: ts},
 					},
 				},
-				"vllm_request_rate": {
+				"request_rate": {
 					Values: []source.MetricValue{
 						{Labels: podLabels, Value: 7.0, Timestamp: ts},
 					},
@@ -641,11 +652,234 @@ func TestCollectReplicaMetrics_ThroughputKeyMerge(t *testing.T) {
 	if m.KvUsageInstant == 0 {
 		t.Errorf("KvUsageInstant is zero — throughput key merge failed")
 	}
-	if m.VLLMRequestRate == 0 {
-		t.Errorf("VLLMRequestRate is zero — throughput key merge failed")
+	if m.RequestRate == 0 {
+		t.Errorf("RequestRate is zero — throughput key merge failed")
 	}
 	if m.KvCacheUsage == 0 {
 		t.Errorf("KvCacheUsage is zero — KV cache result not merged")
+	}
+}
+
+// TestCollectReplicaMetrics_SGLangCacheConfig verifies the SGLang cache-config
+// pass: SGLang exposes total KV-cache token capacity directly via
+// sglang:max_total_num_tokens (queried as sglang/cache_config_info), and the
+// collector must surface that value as ReplicaMetrics.TotalKvCapacityTokens —
+// unlike vLLM, which derives capacity from num_gpu_blocks × block_size.
+func TestCollectReplicaMetrics_SGLangCacheConfig(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	podLabels := map[string]string{
+		"pod":                               "sglang-pod-0",
+		"instance":                          "10.0.0.3:8000",
+		constants.VariantLabelPrometheusKey: sglangVariantLabel,
+	}
+	ts := time.Now()
+	const capacity = 100000.0
+
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			// Physical SGLang keys. The KV query makes the pod discoverable;
+			// cache_config_info carries the directly-exposed token capacity.
+			return map[string]*source.MetricResult{
+				sglangKVUsageKey: {
+					Values: []source.MetricValue{{Labels: podLabels, Value: 0.85, Timestamp: ts}},
+				},
+				"sglang/cache_config_info": {
+					Values: []source.MetricValue{{Labels: podLabels, Value: capacity, Timestamp: ts}},
+				},
+			}, nil
+		},
+	}
+
+	// An SGLang scale target so inferenceengine.Present detects SGLang and the
+	// collector runs the SGLang cache-config pass.
+	sglangTarget := scaletarget.NewDeploymentAccessor(&appsv1.Deployment{
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: testServerContainer, Image: "lmsysorg/sglang:latest"}},
+				},
+			},
+		},
+	})
+
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	results, err := collector.CollectReplicaMetrics(
+		context.Background(),
+		"test-model",
+		"test-ns",
+		map[string]scaletarget.ScaleTargetAccessor{sglangScaleTargetKey: sglangTarget},
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
+		make(map[string]float64),
+	)
+	if err != nil {
+		t.Fatalf("CollectReplicaMetrics: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected exactly 1 ReplicaMetrics entry, got %d", len(results))
+	}
+	if got := results[0].TotalKvCapacityTokens; got != int64(capacity) {
+		t.Errorf("TotalKvCapacityTokens = %d, want %d (from sglang:max_total_num_tokens)", got, int64(capacity))
+	}
+}
+
+// TestCollectReplicaMetrics_SGLangPrefixCacheHitRate verifies the SGLang
+// prefix-cache-hit-rate value flows end-to-end (through mergeEngineResults
+// re-keying) into ReplicaMetrics.PrefixCacheHitRate, and that a NaN ratio
+// (0/0 when prompt_tokens_total has not increased) is dropped to 0 rather than
+// poisoning the field.
+func TestCollectReplicaMetrics_SGLangPrefixCacheHitRate(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+
+	podLabels := map[string]string{
+		"pod":                               "sglang-pod-0",
+		"instance":                          "10.0.0.4:8000",
+		constants.VariantLabelPrometheusKey: sglangVariantLabel,
+	}
+	sglangTarget := scaletarget.NewDeploymentAccessor(&appsv1.Deployment{
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: testServerContainer, Image: "lmsysorg/sglang:latest"}},
+				},
+			},
+		},
+	})
+
+	cases := []struct {
+		name string
+		hit  float64
+		want float64
+	}{
+		{"valid ratio flows into PrefixCacheHitRate", 0.3, 0.3},
+		{"NaN ratio (0/0) is dropped to 0", math.NaN(), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			ts := time.Now()
+			mockSource := &mockMetricsSource{
+				refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
+					return map[string]*source.MetricResult{
+						// KV query makes the pod discoverable.
+						sglangKVUsageKey: {
+							Values: []source.MetricValue{{Labels: podLabels, Value: 0.85, Timestamp: ts}},
+						},
+						"sglang/prefix_cache_hit_rate": {
+							Values: []source.MetricValue{{Labels: podLabels, Value: tc.hit, Timestamp: ts}},
+						},
+					}, nil
+				},
+			}
+			collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+			results, err := collector.CollectReplicaMetrics(
+				context.Background(), "test-model", "test-ns",
+				map[string]scaletarget.ScaleTargetAccessor{sglangScaleTargetKey: sglangTarget},
+				make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+				nil, make(map[string]float64),
+			)
+			if err != nil {
+				t.Fatalf("CollectReplicaMetrics: %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("expected 1 ReplicaMetrics entry, got %d", len(results))
+			}
+			if got := results[0].PrefixCacheHitRate; got != tc.want {
+				t.Errorf("PrefixCacheHitRate = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCollectReplicaMetrics_MixedEngine drives the mixed vLLM+SGLang collection
+// path end-to-end: both engines' series are merged under the logical names, and
+// each pod must get its capacity from its own engine's source — the SGLang
+// cache-config pass (capacity = sglang:max_total_num_tokens) must not corrupt the
+// vLLM pod's num_gpu_blocks × block_size capacity, and vice versa.
+func TestCollectReplicaMetrics_MixedEngine(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	ts := time.Now()
+
+	vllmPod := map[string]string{"pod": mixedVLLMPodName, "instance": "10.0.1.1:8000", constants.VariantLabelPrometheusKey: "va-vllm"}
+	sglangPod := map[string]string{"pod": "sglang-0", "instance": "10.0.2.1:8000", constants.VariantLabelPrometheusKey: sglangVariantLabel}
+	vllmCacheLabels := map[string]string{"pod": mixedVLLMPodName, "instance": "10.0.1.1:8000", "num_gpu_blocks": "1000", "block_size": "16"}
+
+	const sglangCapacity = 100000.0
+
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			return map[string]*source.MetricResult{
+				// vLLM uses the bare logical keys.
+				"kv_cache_usage":    {Values: []source.MetricValue{{Labels: vllmPod, Value: 0.5, Timestamp: ts}}},
+				"cache_config_info": {Values: []source.MetricValue{{Labels: vllmCacheLabels, Value: 1, Timestamp: ts}}},
+				// SGLang uses the engine-scoped physical keys.
+				sglangKVUsageKey:           {Values: []source.MetricValue{{Labels: sglangPod, Value: 0.85, Timestamp: ts}}},
+				"sglang/cache_config_info": {Values: []source.MetricValue{{Labels: sglangPod, Value: sglangCapacity, Timestamp: ts}}},
+			}, nil
+		},
+	}
+
+	target := func(image string) scaletarget.ScaleTargetAccessor {
+		return scaletarget.NewDeploymentAccessor(&appsv1.Deployment{
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: testServerContainer, Image: image}}},
+				},
+			},
+		})
+	}
+
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	results, err := collector.CollectReplicaMetrics(
+		context.Background(), "test-model", "test-ns",
+		map[string]scaletarget.ScaleTargetAccessor{
+			"test-ns/vllm-decode": target("vllm/vllm-openai:latest"),
+			sglangScaleTargetKey:  target("lmsysorg/sglang:latest"),
+		},
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil, make(map[string]float64),
+	)
+	if err != nil {
+		t.Fatalf("CollectReplicaMetrics: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 ReplicaMetrics entries (one per engine), got %d", len(results))
+	}
+
+	byPod := make(map[string]int64, 2)
+	for _, m := range results {
+		byPod[m.PodName] = m.TotalKvCapacityTokens
+	}
+	if got := byPod[mixedVLLMPodName]; got != 1000*16 {
+		t.Errorf("vLLM pod TotalKvCapacityTokens = %d, want %d (num_gpu_blocks × block_size)", got, 1000*16)
+	}
+	if got := byPod["sglang-0"]; got != int64(sglangCapacity) {
+		t.Errorf("SGLang pod TotalKvCapacityTokens = %d, want %d (sglang:max_total_num_tokens)", got, int64(sglangCapacity))
 	}
 }
 

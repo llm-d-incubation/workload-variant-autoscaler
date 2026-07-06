@@ -47,6 +47,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
@@ -328,6 +329,18 @@ func (e *Engine) recordActiveOptimizer() {
 	}
 }
 
+func (e *Engine) recordDefaultConfigMetrics() {
+	metrics.SetConfigOptimizationInterval(float64(e.Config.OptimizationInterval().Seconds()))
+
+	globalSatCfgMap := e.Config.SaturationConfig()
+	// record global default config
+	if cfg, ok := globalSatCfgMap["default"]; ok {
+		metrics.SetConfigKvSpareThreshold(cfg.KvSpareTrigger)
+		metrics.SetConfigQueueSpareThreshold(cfg.QueueSpareTrigger)
+		metrics.SetConfigInfo(cfg.GetAnalyzerName(), cfg.EnableLimiter, e.Config.ScaleToZeroEnabled())
+	}
+}
+
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	start := time.Now()
@@ -342,6 +355,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	}()
 
 	logger := ctrl.LoggerFrom(ctx)
+	e.recordDefaultConfigMetrics() // record as soon as possible to reflect any changes in configuration
 
 	// Get optimization interval from Config (already a time.Duration)
 	interval := e.Config.OptimizationInterval()
@@ -549,13 +563,7 @@ func (e *Engine) resolveSaturationConfig(
 	configMap map[string]config.SaturationScalingConfig,
 	modelID, namespace string,
 ) config.SaturationScalingConfig {
-	config := resolveSaturationConfig(configMap, modelID, namespace)
-	// record config metric after resolution instead of where the configmaps are reconciled. Here we
-	// have the exact values being used by the optimize engine.
-	metrics.SetConfigKvSpareThreshold(config.KvSpareTrigger)
-	metrics.SetConfigQueueSpareThreshold(config.QueueSpareTrigger)
-	metrics.SetConfigInfo(config.AnalyzerName, config.EnableLimiter, e.Config.ScaleToZeroEnabled())
-	return config
+	return resolveSaturationConfig(configMap, modelID, namespace)
 }
 
 // optimizeV1 runs the V1 percentage-based saturation analysis path (saturation-percentage-based).
@@ -624,22 +632,10 @@ func (e *Engine) optimizeV1(
 		// not per role group. In P/D deployments, scaling prefill to zero while
 		// keeping decode (or vice versa) makes the model non-functional — both
 		// stages must scale together.
-		if len(modelDecisions) > 0 {
-			if !hasMinReplicasAboveZero(data.variantStates) {
-				scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
-				scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-					ctx, modelID, namespace,
-					modelDecisions, scaleToZeroConfig, "v1-saturation",
-				)
-				if scaledToZero {
-					logger.Info("Scale-to-zero enforcement applied",
-						"modelID", modelID)
-				}
-			} else {
-				logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: variant has minReplicas > 0",
-					"modelID", modelID)
-			}
-		}
+		e.applyScaleToZeroEnforcement(
+			ctx, modelID, namespace, "v1-saturation",
+			modelDecisions, data.scaleTargets, data.variantStates,
+		)
 
 		allDecisions = append(allDecisions, modelDecisions...)
 	}
@@ -824,6 +820,10 @@ func (e *Engine) optimizeV2(
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
 	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
+	// modelScaleTargets carries each model's scale targets into stage 3, where
+	// applyScaleToZeroEnforcement needs them to gate the enforcer. Captured here
+	// because data.scaleTargets is only in scope during this collection loop.
+	modelScaleTargets := make(map[string]map[string]scaletarget.ScaleTargetAccessor)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -869,6 +869,7 @@ func (e *Engine) optimizeV2(
 
 		requests = append(requests, *req)
 		modelReplicaMetrics[modelID] = data.replicaMetrics
+		modelScaleTargets[utils.GetNamespacedKey(namespace, modelID)] = data.scaleTargets
 	}
 
 	if len(requests) == 0 {
@@ -887,23 +888,12 @@ func (e *Engine) optimizeV2(
 
 	// Stage 3: Apply enforcer per-model (directly on decisions)
 	for _, req := range requests {
-		// Skip scale-to-zero enforcement if any variant has minReplicas > 0
-		if hasMinReplicasAboveZero(req.VariantStates) {
-			logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement (V2): variant has minReplicas > 0",
-				"modelID", req.ModelID)
-			continue
-		}
-
-		scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(req.Namespace)
-
-		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-			ctx, req.ModelID, req.Namespace,
-			allDecisions, scaleToZeroConfig, optimizer.Name(),
+		e.applyScaleToZeroEnforcement(
+			ctx, req.ModelID, req.Namespace, optimizer.Name(),
+			allDecisions,
+			modelScaleTargets[utils.GetNamespacedKey(req.Namespace, req.ModelID)],
+			req.VariantStates,
 		)
-		if scaledToZero {
-			logger.Info("Scale-to-zero enforcement applied (V2)",
-				"modelID", req.ModelID)
-		}
 	}
 
 	// Stage 4: Enrich decisions with KV cache token data from replicaMetrics.
@@ -1158,6 +1148,70 @@ func hasMinReplicasAboveZero(states []interfaces.VariantReplicaState) bool {
 		}
 	}
 	return false
+}
+
+// scaleToZeroSupportedForEngines reports whether scale-to-zero enforcement is safe
+// for a model running the given set of scale targets. Scale-to-zero relies on
+// CollectModelRequestCount, which is currently hardcoded to vLLM's request counter
+// (vllm:request_success_total); routing the per-engine counter through the enforcer
+// is the deferred Phase 2 work (see docs/proposals/sglang-backend.md). For any
+// non-vLLM engine that counter returns 0, which the enforcer would misread as
+// "no traffic" and scale the model to zero. Until the engine is threaded through,
+// scale-to-zero is skipped for models that run a non-vLLM engine.
+func scaleToZeroSupportedForEngines(scaleTargets map[string]scaletarget.ScaleTargetAccessor) bool {
+	for _, eng := range inferenceengine.Present(scaleTargets) {
+		if eng != inferenceengine.EngineVLLM {
+			return false
+		}
+	}
+	return true
+}
+
+// applyScaleToZeroEnforcement runs scale-to-zero / minimum-replica enforcement for a
+// single model's decisions, unless a safety gate skips it:
+//   - the model runs a non-vLLM engine — CollectModelRequestCount is hardcoded to
+//     vLLM's request counter, so an active SGLang model would falsely read as idle
+//     and be zeroed (see scaleToZeroSupportedForEngines); or
+//   - any variant declares minReplicas > 0 (hasMinReplicasAboveZero).
+//
+// Decisions are mutated in place; returns true if the model was scaled to zero.
+//
+// All three optimize paths (V1, V2, queueing-model) funnel their enforcement through
+// this one method so the gate lives in a single place — a caller cannot accidentally
+// invoke the enforcer ungated, and one test (engine_scale_to_zero_enforce_test.go)
+// locks the gate down for every path.
+func (e *Engine) applyScaleToZeroEnforcement(
+	ctx context.Context,
+	modelID, namespace, optimizerName string,
+	decisions []interfaces.VariantDecision,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variantStates []interfaces.VariantReplicaState,
+) bool {
+	if len(decisions) == 0 {
+		return false
+	}
+	logger := ctrl.LoggerFrom(ctx)
+
+	if !scaleToZeroSupportedForEngines(scaleTargets) {
+		logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: model runs a non-vLLM engine; engine-aware request counting is not yet wired through the enforcer (see docs/proposals/sglang-backend.md Phase 2)",
+			"modelID", modelID, "optimizer", optimizerName)
+		return false
+	}
+	if hasMinReplicasAboveZero(variantStates) {
+		logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: variant has minReplicas > 0",
+			"modelID", modelID, "optimizer", optimizerName)
+		return false
+	}
+
+	scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
+	scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
+		ctx, modelID, namespace, decisions, scaleToZeroConfig, optimizerName,
+	)
+	if scaledToZero {
+		logger.Info("Scale-to-zero enforcement applied",
+			"modelID", modelID, "optimizer", optimizerName)
+	}
+	return scaledToZero
 }
 
 // normalizeRole maps empty and "both" roles to the same canonical key so that
@@ -1580,15 +1634,25 @@ func (e *Engine) applySaturationDecisions(
 		}
 
 		// Record saturation and capacity metrics when this cycle produced a
-		// fresh decision for the variant. These series carry the accelerator_type
-		// label, so they are emitted only when the type is resolved — otherwise
-		// the internal sentinel would leak into a label. When there is no fresh
-		// decision the existing series persist with their last-recorded values
-		// until Prometheus' staleness marker fires; surfacing freshness on the
-		// dashboard side is tracked in #1082 (an explicit "up" gauge per VA,
-		// rather than deleting series here).
+		// fresh decision for the variant. These accelerator-dimensioned series
+		// carry the accelerator_type label, so they are emitted only when the
+		// type is resolved — otherwise the internal sentinel would leak into a
+		// label. When there is no fresh decision the existing series persist with
+		// their last-recorded values until Prometheus' staleness marker fires.
 		if hasDecision && constants.IsAcceleratorResolved(acceleratorName) {
 			act.RecordSaturationMetrics(ctx, decision)
+		}
+
+		// The wva_saturation_metrics_up freshness gauge carries only
+		// {variant_name, namespace} (no accelerator_type), so it is emitted on
+		// every cycle independent of accelerator resolution: 1.0 when a fresh
+		// decision was produced for the variant, 0.0 otherwise. Dashboards gate
+		// alerts on this gauge instead of relying on Prometheus' 5-minute
+		// implicit staleness marker.
+		if hasDecision {
+			act.RecordSaturationFreshness(ctx, decision.VariantName, decision.Namespace, true)
+		} else {
+			act.RecordSaturationFreshness(ctx, va.Name, va.Namespace, false)
 		}
 
 		// Update Shared State and Trigger Reconcile via Channel.

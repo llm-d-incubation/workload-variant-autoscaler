@@ -11,6 +11,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // optimizeQueueingModel runs the queueing model-based analysis path.
@@ -36,6 +38,10 @@ func (e *Engine) optimizeQueueingModel(
 
 	// Stage 1: Collect ModelScalingRequests for all models
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
+	// modelScaleTargets carries each model's scale targets into stage 3, where
+	// applyScaleToZeroEnforcement needs them to gate the enforcer. Captured here
+	// because data.scaleTargets is only in scope during this collection loop.
+	modelScaleTargets := make(map[string]map[string]scaletarget.ScaleTargetAccessor)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -80,6 +86,7 @@ func (e *Engine) optimizeQueueingModel(
 			}},
 			VariantStates: data.variantStates,
 		})
+		modelScaleTargets[utils.GetNamespacedKey(namespace, modelID)] = data.scaleTargets
 	}
 
 	if len(requests) == 0 {
@@ -94,18 +101,16 @@ func (e *Engine) optimizeQueueingModel(
 		"decisionCount", len(allDecisions),
 		"modelCount", len(requests))
 
-	// Stage 3: Apply enforcer per-model (directly on decisions)
+	// Stage 3: Apply enforcer per-model (directly on decisions). Routed through the
+	// shared gate so a non-vLLM (e.g. SGLang) model is not falsely zeroed — the
+	// queueing-model path previously enforced ungated (see applyScaleToZeroEnforcement).
 	for _, req := range requests {
-		scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(req.Namespace)
-
-		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-			ctx, req.ModelID, req.Namespace,
-			allDecisions, scaleToZeroConfig, e.optimizer.Name(),
+		e.applyScaleToZeroEnforcement(
+			ctx, req.ModelID, req.Namespace, e.optimizer.Name(),
+			allDecisions,
+			modelScaleTargets[utils.GetNamespacedKey(req.Namespace, req.ModelID)],
+			req.VariantStates,
 		)
-		if scaledToZero {
-			logger.Info("Scale-to-zero enforcement applied (queueing-model)",
-				"modelID", req.ModelID)
-		}
 	}
 
 	return allDecisions

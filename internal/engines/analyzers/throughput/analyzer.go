@@ -175,7 +175,7 @@ func (a *ThroughputAnalyzer) Observe(
 //
 // Demand per variant is estimated in priority order:
 //  1. EPP primary: Σ ArrivalRate × AvgOutputTokens (when ArrivalRate > 0 on any replica).
-//  2. vLLM fallback: VLLMRequestRate × avgOL (when EPP absent but vLLM rate is nonzero).
+//  2. Engine-rate fallback: RequestRate × avgOL (when EPP absent but the engine completion rate is nonzero).
 //  3. k*-based local: Σ k_r* × KV_max_r / KVreq / ITL(k_r*) (scale-up only; no EPP needed).
 //
 // Scheduler queue demand (QueueSize / (DefaultQueueDrainFactor × ITL(k_sat))) is added
@@ -277,7 +277,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		}
 
 		demand, isEPP := computeDemand(variantMetrics)
-		// k*-based local demand: when EPP and vLLM rate are both absent, or when
+		// k*-based local demand: when EPP and the engine completion rate are both absent, or when
 		// EPP is present but yields zero usable demand (warm-up, no completions yet),
 		// derive demand from observed KV utilization so a busy replica is not
 		// mis-classified as idle and spuriously scaled down.
@@ -516,7 +516,7 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 // computeDemand aggregates λ_dec (decode token demand in tokens/sec) across replicas.
 //
 // Primary path (EPP deployed): Σ ArrivalRate_r × AvgOutputTokens_r.
-// Fallback path (EPP absent): Σ VLLMRequestRate_r × AvgOutputTokens_r.
+// Fallback path (EPP absent): Σ RequestRate_r × AvgOutputTokens_r.
 //
 // Both paths use the per-replica product rather than sumRate × avgOL to avoid
 // averaging-the-averages: replicas with higher throughput contribute proportionally
@@ -524,9 +524,9 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 //
 // Returns (λ_dec, isEPP). isEPP is true when at least one replica reports ArrivalRate > 0.
 // When EPP is present but yields zero usable demand (warm-up: ArrivalRate > 0 but
-// AvgOutputTokens == 0), the function falls through to the vLLM proxy so the caller
-// can use computeLocalDemand when both paths yield zero. isEPP still reflects "EPP
-// present" so the anyEPP tracking in Analyze is unaffected.
+// AvgOutputTokens == 0), the function falls through to the engine request-rate proxy
+// so the caller can use computeLocalDemand when both paths yield zero. isEPP still
+// reflects "EPP present" so the anyEPP tracking in Analyze is unaffected.
 func computeDemand(metrics []interfaces.ReplicaMetrics) (float64, bool) {
 	var lambdaDec float64
 	var isEPP bool
@@ -542,20 +542,20 @@ func computeDemand(metrics []interfaces.ReplicaMetrics) (float64, bool) {
 		return lambdaDec, isEPP // EPP present and gave usable demand
 	}
 	// EPP absent, OR EPP present but zero usable demand (warm-up, no completions yet):
-	// fall through to the vLLM request-rate proxy.
-	// Σ VLLMRequestRate_r × AvgOutputTokens_r mirrors the EPP formula structure and
+	// fall through to the engine request-rate proxy.
+	// Σ RequestRate_r × AvgOutputTokens_r mirrors the EPP formula structure and
 	// correctly weights each replica's OL by its own throughput.
 	var lambdaDecFallback float64
 	for _, m := range metrics {
-		if m.VLLMRequestRate > 0 && m.AvgOutputTokens > 0 {
-			lambdaDecFallback += m.VLLMRequestRate * m.AvgOutputTokens
+		if m.RequestRate > 0 && m.AvgOutputTokens > 0 {
+			lambdaDecFallback += m.RequestRate * m.AvgOutputTokens
 		}
 	}
 	return lambdaDecFallback, isEPP // isEPP still reflects "EPP present"
 }
 
 // computeLocalDemand estimates decode token demand from per-replica k* observations
-// when the EPP ArrivalRate and vLLM request rate are both unavailable.
+// when the EPP ArrivalRate and the engine request rate are both unavailable.
 //
 //	λ_local = Σ_r (k_r* × KV_max_r / KVreq) / ITL(k_r*)
 //
@@ -630,10 +630,10 @@ func groupByVariant(metrics []interfaces.ReplicaMetrics) map[string][]interfaces
 	return groups
 }
 
-// averageShapeMetrics computes the VLLMRequestRate-weighted mean IL, OL, and
+// averageShapeMetrics computes the RequestRate-weighted mean IL, OL, and
 // prefix hit rate across a slice of replica metrics. Replicas with zero or
 // negative IL or OL are excluded. When all eligible replicas have zero
-// VLLMRequestRate, falls back to an unweighted mean.
+// RequestRate, falls back to an unweighted mean.
 func averageShapeMetrics(metrics []interfaces.ReplicaMetrics) (il, ol, hitRate float64) {
 	var sumIL, sumOL, sumHitRate float64 // weighted accumulators
 	var sumILu, sumOLu, sumHRu float64   // unweighted fallback
@@ -646,11 +646,11 @@ func averageShapeMetrics(metrics []interfaces.ReplicaMetrics) (il, ol, hitRate f
 		sumILu += m.AvgInputTokens
 		sumOLu += m.AvgOutputTokens
 		sumHRu += m.PrefixCacheHitRate
-		if m.VLLMRequestRate > 0 {
-			sumIL += m.VLLMRequestRate * m.AvgInputTokens
-			sumOL += m.VLLMRequestRate * m.AvgOutputTokens
-			sumHitRate += m.VLLMRequestRate * m.PrefixCacheHitRate
-			totalWeight += m.VLLMRequestRate
+		if m.RequestRate > 0 {
+			sumIL += m.RequestRate * m.AvgInputTokens
+			sumOL += m.RequestRate * m.AvgOutputTokens
+			sumHitRate += m.RequestRate * m.PrefixCacheHitRate
+			totalWeight += m.RequestRate
 		}
 	}
 	if count == 0 {

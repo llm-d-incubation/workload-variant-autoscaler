@@ -32,7 +32,7 @@ limitations under the License.
 //	    podName = value.Labels["pod_name"]
 //	}
 //
-// vLLM metrics are typically scraped via a PodMonitor or ServiceMonitor that
+// Engine metrics are typically scraped via a PodMonitor or ServiceMonitor that
 // applies the Prometheus operator's default target-relabeling, which produces
 // a "pod" label. Some scrape configurations (e.g., raw Prometheus scrape jobs,
 // kube-state-metrics–style configs) instead expose the pod identity as
@@ -60,6 +60,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
@@ -340,25 +341,38 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		source.ParamNamespace: namespace,
 	}
 
+	// Determine which inference engines this model's variants run. Engine-specific
+	// queries are refreshed once per present engine (vLLM pods emit vllm:* series,
+	// SGLang pods emit sglang:* series — the per-pod results are disjoint and are
+	// merged back under the logical query name below). For vLLM-only models this
+	// is identical to the previous fixed query list.
+	engines := inferenceengine.Present(scaleTargets)
+
+	// Log the engine detected for each scale target, plus the resolved engine set.
+	// inferenceengine.Detect defaults to vLLM when a leader pod template is nil or
+	// unresolvable, or when an SGLang image/command isn't matched — so a misdetected
+	// SGLang variant silently gets vllm:* queries and emits nothing. Logging the
+	// per-target engine lets operators tell "wrong engine detected" apart from
+	// "engine correct, but no metrics".
+	if debug := logger.V(logging.DEBUG); debug.Enabled() {
+		for key, st := range scaleTargets {
+			debug.Info("Detected inference engine for scale target",
+				"scaleTarget", key, "engine", inferenceengine.Detect(st).String())
+		}
+		engineNames := make([]string, len(engines))
+		for i, e := range engines {
+			engineNames[i] = e.String()
+		}
+		debug.Info("Resolved inference engines for model",
+			"modelID", modelID, "namespace", namespace, "engines", engineNames)
+	}
+
 	// Refresh all Prometheus-sourced queries:
 	// - Saturation: KV cache, queue length, cache config, prefix cache hit rate
 	// - Shared (saturation + queueing model): avg input tokens, avg output tokens
 	// - Queueing model: scheduler dispatch rate, avg TTFT, avg ITL
-	// - Throughput analyzer: generation token rate, instantaneous KV usage (k*), vLLM request rate
-	queries := []string{
-		registration.QueryKvCacheUsage,
-		registration.QueryQueueLength,
-		registration.QueryCacheConfigInfo,
-		registration.QueryAvgOutputTokens,
-		registration.QueryAvgInputTokens,
-		registration.QueryPrefixCacheHitRate,
-		registration.QuerySchedulerDispatchRate,
-		registration.QueryAvgTTFT,
-		registration.QueryAvgITL,
-		registration.QueryGenerationTokenRate,
-		registration.QueryKvUsageInstant,
-		registration.QueryVLLMRequestRate,
-	}
+	// - Throughput analyzer: generation token rate, instantaneous KV usage (k*), request rate
+	queries := buildEngineQueryList(engines, engineSpecificReplicaQueries, agnosticReplicaQueries)
 
 	// Execute the query with timing
 	startTime := time.Now()
@@ -378,6 +392,13 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeCacheConfig, reason)
 		return nil, fmt.Errorf("failed to refresh replica metrics: %w", err)
 	}
+
+	// Re-key engine-specific results under their logical query names so the per-pod
+	// processing below is engine-agnostic. For SGLang-only models this renames the
+	// "sglang/<query>" results to "<query>"; for mixed-engine models it concatenates
+	// the per-engine series. The structural cache-config difference is handled by a
+	// dedicated SGLang pass after the vLLM cache-config block.
+	mergeEngineResults(results, engines, engineSpecificReplicaQueries)
 
 	// podMetricData holds per-pod metric values and timestamps
 	type podMetricData struct {
@@ -411,7 +432,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		// Throughput analyzer fields
 		generationTokenRate float64
 		kvUsageInstant      float64
-		vllmRequestRate     float64
+		requestRate         float64
 	}
 
 	// trackMetricFreshness determines the freshness status of metrics in podMetricData
@@ -561,6 +582,43 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		}
 	}
 
+	// Process SGLang cache config (structural difference from vLLM).
+	//
+	// SGLang exposes total KV-cache token capacity directly via
+	// sglang:max_total_num_tokens (the value), rather than as
+	// num_gpu_blocks/block_size labels. We map the capacity onto the existing
+	// numGpuBlocks × blockSize computation by setting blockSize = 1 and
+	// numGpuBlocks = capacity, so the downstream TotalKvCapacityTokens math is
+	// unchanged. Only runs when an SGLang variant is present for this model.
+	if containsEngine(engines, inferenceengine.EngineSGLang) {
+		sglangCacheKey := registration.EngineQuery(inferenceengine.EngineSGLang, registration.QueryCacheConfigInfo)
+		if result := results[sglangCacheKey]; result != nil && !result.HasError() {
+			for _, value := range result.Values {
+				instanceKey, podName, _ := c.buildInstanceKey(ctx, namespace, value.Labels)
+				if instanceKey == "" {
+					continue
+				}
+				data := podData[instanceKey]
+				if data == nil {
+					// Not seen by the model-scoped KV/queue queries — skip.
+					continue
+				}
+				capacity := int64(value.Value)
+				if capacity > 0 {
+					data.numGpuBlocks = capacity
+					data.blockSize = 1
+					data.hasCacheConfig = true
+					data.cacheConfigTimestamp = value.Timestamp
+				}
+
+				logger.V(logging.DEBUG).Info("SGLang cache config metric",
+					"instanceKey", instanceKey,
+					"pod", podName,
+					"totalKvCapacityTokens", capacity)
+			}
+		}
+	}
+
 	// Process average output tokens results (V2)
 	if result := results[registration.QueryAvgOutputTokens]; result != nil {
 		if !result.HasError() {
@@ -637,7 +695,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	if result := results[registration.QuerySchedulerDispatchRate]; result != nil {
 		if !result.HasError() {
 			for _, value := range result.Values {
-				// The scheduler metric has pod_name and port labels to identify the vLLM instance.
+				// The scheduler metric has pod_name and port labels to identify the engine instance.
 				// Build a composite key: pod_name:port to support multiple instances per pod.
 				podName := value.Labels["pod_name"]
 				port := value.Labels["port"]
@@ -772,8 +830,8 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		}
 	}
 
-	// Process vLLM request completion rate (req/s) — throughput analyzer fallback λ_req
-	if result := results[registration.QueryVLLMRequestRate]; result != nil {
+	// Process engine request completion rate (req/s) — throughput analyzer fallback λ_req
+	if result := results[registration.QueryRequestRate]; result != nil {
 		if !result.HasError() {
 			for _, value := range result.Values {
 				instanceKey, _, _ := c.buildInstanceKey(ctx, namespace, value.Labels)
@@ -784,19 +842,20 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 					continue // skip pods the KV/queue queries didn't see (scrape skew)
 				}
 				if !math.IsNaN(value.Value) && !math.IsInf(value.Value, 0) && value.Value >= 0 {
-					podData[instanceKey].vllmRequestRate = value.Value
+					podData[instanceKey].requestRate = value.Value
 				}
 			}
 		}
 	}
 
 	// Pre-compute MaxBatchSize per scale target from container args.
-	// MaxBatchSize (--max-num-seqs) is not a Prometheus metric; it is parsed
-	// from the Deployment/LWS spec using the vLLM argument parser.
+	// MaxBatchSize is not a Prometheus metric; it is parsed from the Deployment/LWS
+	// spec using the argument parser for the variant's detected engine
+	// (vLLM --max-num-seqs / SGLang --max-running-requests).
 	// Map key is scale target key (namespace/name).
 	scaleTargetMaxBatchSize := make(map[string]int64, len(scaleTargets))
 	for key, scaleTarget := range scaleTargets {
-		params := saturation_v2.ParseVLLMArgs(scaleTarget)
+		params := saturation_v2.ParseEngineArgs(inferenceengine.Detect(scaleTarget), scaleTarget)
 		scaleTargetMaxBatchSize[key] = params.MaxNumSeqs
 	}
 
@@ -904,7 +963,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			tokensInUse = int64(rounded)
 		}
 
-		// Look up MaxBatchSize from the scale target's vLLM args via the VA's ScaleTargetRef
+		// Look up MaxBatchSize from the scale target's engine args via the VA's ScaleTargetRef
 		var maxBatchSize int64
 		if va, ok := variantAutoscalings[variantKey]; ok && va != nil {
 			key := utils.GetNamespacedKey(namespace, va.Spec.ScaleTargetRef.Name)
@@ -914,7 +973,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		}
 
 		if (data.hasKv || data.hasQueue) && !data.hasArrivalRate {
-			logger.Info("Pod has vLLM metrics but no dispatch rate — possible pod/pod_name label mismatch", "pod", podName, "model", modelID, "namespace", namespace)
+			logger.Info("Pod has engine metrics but no dispatch rate — possible pod/pod_name label mismatch", "pod", podName, "model", modelID, "namespace", namespace)
 		}
 
 		metric := interfaces.ReplicaMetrics{
@@ -939,7 +998,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			AvgITL:                data.avgITL,
 			GenerationTokenRate:   data.generationTokenRate,
 			KvUsageInstant:        data.kvUsageInstant,
-			VLLMRequestRate:       data.vllmRequestRate,
+			RequestRate:           data.requestRate,
 			Metadata: &interfaces.ReplicaMetricsMetadata{
 				CollectedAt:     collectedAt,
 				Age:             0, // Fresh
@@ -966,7 +1025,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 
 // CollectSchedulerQueueMetrics collects model-level queue metrics from the
 // llm-d inference scheduler flow control layer. These metrics are not per-pod
-// but per-model, representing requests queued upstream before reaching vLLM.
+// but per-model, representing requests queued upstream before reaching the engine.
 // Returns nil (not an error) when flow control metrics are unavailable.
 func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 	ctx context.Context,

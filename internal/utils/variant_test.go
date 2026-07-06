@@ -337,6 +337,53 @@ func TestReadyVariantAutoscalingsMergePath(t *testing.T) {
 		}
 	})
 
+	t.Run("VA CRD NoMatch still returns annotation-sourced variants", func(t *testing.T) {
+		s := variantTestScheme(t)
+		vaGK := schema.GroupKind{Group: wvav1alpha1.GroupVersion.Group, Kind: "VariantAutoscaling"}
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-ann", "deploy-ann", "model-ann"),
+		).WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*wvav1alpha1.VariantAutoscalingList); ok {
+					return &apimeta.NoKindMatchError{GroupKind: vaGK}
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+		result, err := readyVariantAutoscalings(ctx, cl)
+		if err != nil {
+			t.Fatalf("expected VA NoMatch to be non-fatal, got error: %v", err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("want 1 annotation-sourced VA, got %d", len(result))
+		}
+		if result[0].Name != "hpa-ann" || result[0].Spec.ModelID != "model-ann" {
+			t.Errorf("unexpected synthetic VA: name=%q modelID=%q", result[0].Name, result[0].Spec.ModelID)
+		}
+		if !IsSynthetic(&result[0]) {
+			t.Error("want annotation-sourced VA to be marked synthetic")
+		}
+	})
+
+	t.Run("VA CRD non-NoMatch list error is returned", func(t *testing.T) {
+		s := variantTestScheme(t)
+		expectedErr := errors.New("api server unavailable")
+		cl := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*wvav1alpha1.VariantAutoscalingList); ok {
+					return expectedErr
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+		_, err := readyVariantAutoscalings(ctx, cl)
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("want non-NoMatch VA list error %v, got %v", expectedErr, err)
+		}
+	})
+
 	t.Run("CRD wins when same namespace/kind/name as annotation-sourced", func(t *testing.T) {
 		s := variantTestScheme(t)
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(

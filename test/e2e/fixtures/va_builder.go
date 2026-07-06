@@ -134,6 +134,12 @@ func buildVariantAutoscaling(namespace, name, deploymentName, modelID, accelerat
 			Name:      name,
 			Namespace: namespace,
 			Labels:    labels,
+			// Pre-acknowledge the deprecation warning so the controller does not
+			// emit it repeatedly during e2e tests (it fires once per VA object
+			// absent this annotation, which would spam logs on every test cycle).
+			Annotations: map[string]string{
+				"llm-d.ai/deprecation-warned": "true",
+			},
 		},
 		Spec: variantautoscalingv1alpha1.VariantAutoscalingSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{

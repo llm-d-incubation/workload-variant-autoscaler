@@ -354,6 +354,16 @@ jobs:
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
+          fetch-depth: 0
+
+      - name: Merge main into PR branch
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.email "ci@github.com"
+          git config user.name "CI"
+          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -386,8 +396,7 @@ jobs:
       MAX_NUM_SEQS: ${{ github.event.inputs.max_num_seqs || '5' }}
       HPA_STABILIZATION_SECONDS: ${{ github.event.inputs.hpa_stabilization_seconds || '240' }}
       SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
-      # Pin llm-d release for deterministic CI behavior
-      LLM_D_RELEASE: v0.7.0
+      LLM_D_ROUTER_VERSION: v0.9.0
       GAIE_VERSION: v1.5.0
       # PR-specific namespaces for isolation between concurrent PR tests
       LLMD_NAMESPACE: llm-d-autoscaler-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
@@ -403,13 +412,16 @@ jobs:
         with:
           # Use PR head SHA from gate (works for both pull_request and issue_comment)
           ref: ${{ needs.gate.outputs.pr_head_sha }}
+          fetch-depth: 0
 
-      - name: Checkout llm-d/llm-d
-        uses: actions/checkout@v6
-        with:
-          repository: llm-d/llm-d
-          ref: ${{ env.LLM_D_RELEASE }}
-          path: llm-d
+      - name: Merge main into PR branch
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.email "ci@github.com"
+          git config user.name "CI"
+          git remote add upstream ${{ github.server_url }}/${{ github.repository }}.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -490,14 +502,12 @@ jobs:
           LLMD_NS: ${{ env.LLMD_NAMESPACE }}
           WVA_NS: ${{ env.WVA_NAMESPACE }}
           CONTROLLER_INSTANCE: ${{ env.WVA_NAMESPACE }}
-          VLLM_MAX_NUM_SEQS: ${{ env.MAX_NUM_SEQS }}
           MONITORING_NAMESPACE: openshift-user-workload-monitoring
           WVA_METRICS_SECURE: "false"
           ENABLE_SCALE_TO_ZERO: "true"
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
           VLLM_SVC_PORT: "8000"
-          MODEL_ID: ${{ env.MODEL_ID }}
           ACCELERATOR_TYPE: ${{ env.ACCELERATOR_TYPE }}
           GAIE_VERSION: ${{ env.GAIE_VERSION }}
         run: deploy/ci-e2e-openshift/deploy-infrastructure.sh
@@ -531,7 +541,6 @@ jobs:
           # Legacy variables for backward compatibility (if needed by tests)
           CONTROLLER_NAMESPACE: ${{ env.WVA_NAMESPACE }}
           GATEWAY_NAME: optimized-baseline-inference-gateway-istio
-          DEPLOYMENT: optimized-baseline-nvidia-gpu-vllm-decode
           # Pass WVA_RELEASE_NAME so test can filter for current run's resources
           WVA_RELEASE_NAME: ${{ env.WVA_RELEASE_NAME }}
           # Controller instance label must match what the controller was deployed with

@@ -53,6 +53,7 @@ var (
 	// pipeline stage visibility metrics
 	decisionsLimitedTotal               *prometheus.CounterVec
 	availableGpus                       *prometheus.GaugeVec
+	gpuDiscoveryUp                      *prometheus.GaugeVec
 	enforcerModificationsTotal          *prometheus.CounterVec
 	optimizerActive                     *prometheus.GaugeVec
 	configInfoGauge                     *prometheus.GaugeVec
@@ -71,6 +72,7 @@ var (
 	requiredCapacity      *prometheus.GaugeVec
 	kvCacheTokensUsed     *prometheus.GaugeVec
 	kvCacheTokensCapacity *prometheus.GaugeVec
+	saturationMetricsUp   *prometheus.GaugeVec
 
 	// EPP saturation analyzer observability metrics
 	eppSaturationRaw      *prometheus.GaugeVec
@@ -116,6 +118,10 @@ func InitMetrics(registry prometheus.Registerer) error {
 	// requiredCapacityLabels: satModelLabels + "unit" to disambiguate V1 (binary 0/1)
 	// vs V2 (continuous token demand) values of the wva_required_capacity gauge.
 	requiredCapacityLabels := []string{constants.LabelVariantName, constants.LabelNamespace, constants.LabelModelName, constants.LabelUnit}
+	// satFreshnessLabels: smallest cardinality shared across the five
+	// saturation/capacity gauges. Freshness is a per-VA property, so
+	// model_name / accelerator_type / unit don't need to be on this series.
+	satFreshnessLabels := []string{constants.LabelVariantName, constants.LabelNamespace}
 
 	if controllerInstance != "" {
 		baseLabels = append(baseLabels, constants.LabelControllerInstance)
@@ -124,6 +130,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 		satAccelLabels = append(satAccelLabels, constants.LabelControllerInstance)
 		satModelLabels = append(satModelLabels, constants.LabelControllerInstance)
 		requiredCapacityLabels = append(requiredCapacityLabels, constants.LabelControllerInstance)
+		satFreshnessLabels = append(satFreshnessLabels, constants.LabelControllerInstance)
 	}
 
 	replicaScalingTotal = prometheus.NewCounterVec(
@@ -171,30 +178,37 @@ func InitMetrics(registry prometheus.Registerer) error {
 	spareCapacity = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVASpareCapacity,
-			Help: "Per-variant spare KV-cache capacity (0.0-1.0) from saturation analysis. V1 path: threshold-relative spare (kvCacheThreshold - avg KV usage). V2 path: 1.0 - utilization.",
+			Help: fmt.Sprintf("Spare capacity; >0 indicates safe scale-down headroom (per-role for P/D-disaggregated models, model-level otherwise). The %q label (shared with wva_required_capacity) interprets the value: %q → token surplus from the Token-based analyzer, max(0, TotalSupply - TotalDemand/scaleDownBoundary); empty → a 0.0-1.0 threshold-relative fraction from the Percentage-based analyzer.", constants.LabelUnit, constants.UnitContinuous),
 		},
-		satAccelLabels,
+		requiredCapacityLabels,
 	)
 	requiredCapacity = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVARequiredCapacity,
-			Help: fmt.Sprintf("Model-level required capacity; >0 indicates scale-up needed. Use the %q label to interpret the value: %q → 0/1 scale-up signal (V1), %q → token demand (V2).", constants.LabelUnit, constants.UnitBinary, constants.UnitContinuous),
+			Help: fmt.Sprintf("Required capacity; >0 indicates scale-up needed (per-role for P/D-disaggregated models, model-level otherwise). Use the %q label to interpret the value: %q → token demand from the Token-based analyzer, %q → 0/1 scale-up signal from the Percentage-based analyzer.", constants.LabelUnit, constants.UnitContinuous, constants.UnitBinary),
 		},
 		requiredCapacityLabels,
 	)
 	kvCacheTokensUsed = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAKvCacheTokensUsed,
-			Help: "Total KV cache tokens currently in use across all replicas of a variant (sum of vLLM TokensInUse).",
+			Help: "Total KV cache tokens currently in use across all replicas of a variant (sum of per-replica TokensInUse).",
 		},
 		satModelLabels,
 	)
 	kvCacheTokensCapacity = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAKvCacheTokensCapacity,
-			Help: "Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).",
+			Help: "Total KV cache token capacity across all replicas of a variant (sum of per-replica TotalKvCapacityTokens).",
 		},
 		satModelLabels,
+	)
+	saturationMetricsUp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVASaturationMetricsUp,
+			Help: "Per-VA freshness signal for the saturation/capacity gauges: 1.0 in cycles where the optimizer produced a fresh decision for the variant, 0.0 in cycles where the analyzer was aware of the variant but did not refresh those gauges. Pairs with wva_saturation_utilization, wva_spare_capacity, wva_required_capacity, wva_kv_cache_tokens_used, and wva_kv_cache_tokens_capacity so dashboards can gate alerts on this gauge instead of relying on Prometheus' implicit staleness marker.",
+		},
+		satFreshnessLabels,
 	)
 	eppSaturationRaw = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -261,9 +275,21 @@ func InitMetrics(registry prometheus.Registerer) error {
 	availableGpus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAAvailableGpus,
-			Help: "Number of GPUs currently available",
+			Help: "Number of currently available GPUs when wva_gpu_discovery_up is 1. When wva_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery.",
 		},
 		availableGpusLabels,
+	)
+
+	gpuDiscoveryUpLabels := []string{}
+	if controllerInstance != "" {
+		gpuDiscoveryUpLabels = append(gpuDiscoveryUpLabels, constants.LabelControllerInstance)
+	}
+	gpuDiscoveryUp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.WVAGpuDiscoveryUp,
+			Help: "Indicates whether GPU discovery is on or off",
+		},
+		gpuDiscoveryUpLabels,
 	)
 
 	enforcerModificationsLabels := []string{constants.LabelPolicyType}
@@ -311,14 +337,14 @@ func InitMetrics(registry prometheus.Registerer) error {
 	configKvSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigKvSpareThreshold,
-			Help: "KV cache spare threshold configuration value",
+			Help: "Global default (not per-model override) KV cache spare threshold configuration value",
 		},
 		configLabels,
 	)
 	configQueueSpareThresholdGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.WVAConfigQueueSpareThreshold,
-			Help: "Queue spare threshold configuration value",
+			Help: "Global default (not per-model override) queue spare threshold configuration value",
 		},
 		configLabels,
 	)
@@ -419,6 +445,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	if err := registry.Register(availableGpus); err != nil {
 		return fmt.Errorf("failed to register availableGpus metric: %w", err)
 	}
+	if err := registry.Register(gpuDiscoveryUp); err != nil {
+		return fmt.Errorf("failed to register gpuDiscoveryUp metric: %w", err)
+	}
 	if err := registry.Register(enforcerModificationsTotal); err != nil {
 		return fmt.Errorf("failed to register enforcerModificationsTotal metric: %w", err)
 	}
@@ -466,6 +495,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(kvCacheTokensCapacity); err != nil {
 		return fmt.Errorf("failed to register kvCacheTokensCapacity metric: %w", err)
+	}
+	if err := registry.Register(saturationMetricsUp); err != nil {
+		return fmt.Errorf("failed to register saturationMetricsUp metric: %w", err)
 	}
 	if err := registry.Register(eppSaturationRaw); err != nil {
 		return fmt.Errorf("failed to register eppSaturationRaw metric: %w", err)
@@ -673,6 +705,19 @@ func (m *MetricsEmitter) RecordEnforcerMetric(policyType string) {
 	enforcerModificationsTotal.With(labels).Inc()
 }
 
+// SetGpuDiscoveryUp sets the GPU discovery status metric.
+// status should be 1 when GPU discovery is enabled, 0 when it is disabled.
+func SetGpuDiscoveryUp(status float64) {
+	if gpuDiscoveryUp == nil {
+		return
+	}
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	gpuDiscoveryUp.With(labels).Set(status)
+}
+
 // RecordAvailableGPUsMetric records the number of available GPUs for a given accelerator type. acceleratorModel is
 // accelerator full name, acceleratorType is short name.
 // This metric is updated during GPU discovery and reflects cluster GPU capacity.
@@ -720,6 +765,7 @@ func SetConfigInfo(analyzerName string, limiterEnabled, scaleToZeroEnabled bool)
 	if configInfoGauge == nil {
 		return
 	}
+	configInfoGauge.Reset()
 	labels := prometheus.Labels{
 		constants.LabelAnalyzerName:       analyzerName,
 		constants.LabelLimiterEnabled:     strconv.FormatBool(limiterEnabled),
@@ -736,6 +782,7 @@ func SetConfigKvSpareThreshold(threshold float64) {
 	if configKvSpareThresholdGauge == nil {
 		return
 	}
+	configKvSpareThresholdGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
@@ -748,6 +795,7 @@ func SetConfigQueueSpareThreshold(threshold float64) {
 	if configQueueSpareThresholdGauge == nil {
 		return
 	}
+	configQueueSpareThresholdGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
@@ -760,6 +808,7 @@ func SetConfigOptimizationInterval(intervalSeconds float64) {
 	if configOptimizationIntervalSecsGauge == nil {
 		return
 	}
+	configOptimizationIntervalSecsGauge.Reset()
 	labels := prometheus.Labels{}
 	if controllerInstance != "" {
 		labels[constants.LabelControllerInstance] = controllerInstance
@@ -845,8 +894,8 @@ func SetMetricsFreshnessStatus(variantName, status string, count int) {
 //
 // modelID is exposed as the model_name label so dashboards can group/filter by
 // the model a variant serves. requiredCapacityUnit ("binary" or "continuous")
-// is used as the "unit" label on wva_required_capacity to describe how the
-// value should be interpreted.
+// is used as the "unit" label on both wva_required_capacity and wva_spare_capacity
+// (they share the same label set) to describe how the value should be interpreted.
 //
 // Callers MUST invoke InitMetrics before this method (the package-level
 // metric vars are nil otherwise, and the Set calls below would panic).
@@ -869,7 +918,9 @@ func (m *MetricsEmitter) RecordSaturationMetrics(
 		constants.LabelNamespace:   namespace,
 		constants.LabelModelName:   modelID,
 	}
-	requiredLabels := prometheus.Labels{
+	// capacityLabels are shared by wva_required_capacity and wva_spare_capacity: both
+	// are model/role-level signals carrying the unit label (no accelerator_type).
+	capacityLabels := prometheus.Labels{
 		constants.LabelVariantName: variantName,
 		constants.LabelNamespace:   namespace,
 		constants.LabelModelName:   modelID,
@@ -879,14 +930,47 @@ func (m *MetricsEmitter) RecordSaturationMetrics(
 	if controllerInstance != "" {
 		accelLabels[constants.LabelControllerInstance] = controllerInstance
 		modelLabels[constants.LabelControllerInstance] = controllerInstance
-		requiredLabels[constants.LabelControllerInstance] = controllerInstance
+		capacityLabels[constants.LabelControllerInstance] = controllerInstance
 	}
 
 	saturationUtilization.With(accelLabels).Set(utilization)
-	spareCapacity.With(accelLabels).Set(spare)
-	requiredCapacity.With(requiredLabels).Set(required)
+	spareCapacity.With(capacityLabels).Set(spare)
+	requiredCapacity.With(capacityLabels).Set(required)
 	kvCacheTokensUsed.With(modelLabels).Set(float64(kvTokensUsed))
 	kvCacheTokensCapacity.With(modelLabels).Set(float64(kvTokensCapacity))
+}
+
+// RecordSaturationFreshness publishes the per-VA freshness signal for the
+// five saturation/capacity gauges recorded by RecordSaturationMetrics.
+//
+// fresh=true means the optimizer just produced a fresh decision for the
+// variant this cycle (the other gauges have just been refreshed). fresh=false
+// means the analyzer was aware of the variant but did not refresh those
+// gauges this cycle, so dashboards see an explicit "stale" signal rather
+// than relying on Prometheus' 5-minute implicit staleness marker.
+//
+// Unlike RecordSaturationMetrics, this method runs on every variant every
+// cycle (not gated on hasDecision), so it must tolerate tests that haven't
+// called InitMetrics — nil-guarded the same way as SetMetricsFreshnessStatus.
+// In production InitMetrics runs at startup from main.go and the guard is a
+// no-op fast path.
+func (m *MetricsEmitter) RecordSaturationFreshness(ctx context.Context, variantName, namespace string, fresh bool) {
+	if saturationMetricsUp == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		constants.LabelVariantName: variantName,
+		constants.LabelNamespace:   namespace,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+
+	value := 0.0
+	if fresh {
+		value = 1.0
+	}
+	saturationMetricsUp.With(labels).Set(value)
 }
 
 // eppSaturationLabels builds the model-level label set shared by the

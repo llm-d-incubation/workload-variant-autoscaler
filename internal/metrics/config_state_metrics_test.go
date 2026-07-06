@@ -80,17 +80,18 @@ func TestSetConfigInfo(t *testing.T) {
 	}
 }
 
-func TestSetConfigInfo_MultipleConfigurations(t *testing.T) {
+func TestSetConfigInfo_OnlyLatestConfigPresent(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	if err := InitMetrics(registry); err != nil {
 		t.Fatalf("InitMetrics failed: %v", err)
 	}
 
-	// Set multiple different configurations to test label cardinality
+	// Set multiple different configurations
+	// Due to Reset(), only the last one should be present
 	SetConfigInfo("saturation_analyzer_v1", false, false)
 	SetConfigInfo("saturation_analyzer_v2", true, true)
 
-	// Verify the gauge
+	// Verify only the last configuration is present
 	metrics, err := registry.Gather()
 	if err != nil {
 		t.Fatalf("Failed to gather metrics: %v", err)
@@ -100,40 +101,29 @@ func TestSetConfigInfo_MultipleConfigurations(t *testing.T) {
 	for _, mf := range metrics {
 		if mf.GetName() == constants.WVAConfigInfo {
 			found = true
-			// Should have 2 metrics (one per configuration)
-			if len(mf.GetMetric()) != 2 {
-				t.Errorf("Expected 2 metric series, got %d", len(mf.GetMetric()))
+			// Should have exactly 1 metric (the last configuration set)
+			if len(mf.GetMetric()) != 1 {
+				t.Errorf("Expected exactly 1 metric series (current config only), got %d", len(mf.GetMetric()))
 			}
 
-			for _, m := range mf.GetMetric() {
-				g := m.GetGauge()
-				if g == nil {
-					t.Error("Expected gauge metric")
-					continue
-				}
-				if g.GetValue() != 1 {
-					t.Errorf("Expected gauge value 1, got %f", g.GetValue())
-				}
+			m := mf.GetMetric()[0]
+			g := m.GetGauge()
+			if g == nil {
+				t.Error("Expected gauge metric")
+			} else if g.GetValue() != 1 {
+				t.Errorf("Expected gauge value 1, got %f", g.GetValue())
+			}
 
-				analyzerName := getLabelValue(m, constants.LabelAnalyzerName)
-				switch analyzerName {
-				case "saturation_analyzer_v1":
-					if getLabelValue(m, constants.LabelLimiterEnabled) != falseStr {
-						t.Error("Expected limiter_enabled 'false' for v1")
-					}
-					if getLabelValue(m, constants.LabelScaleToZeroEnabled) != falseStr {
-						t.Error("Expected scale_to_zero_enabled 'false' for v1")
-					}
-				case "saturation_analyzer_v2":
-					if getLabelValue(m, constants.LabelLimiterEnabled) != trueStr {
-						t.Error("Expected limiter_enabled 'true' for v2")
-					}
-					if getLabelValue(m, constants.LabelScaleToZeroEnabled) != trueStr {
-						t.Error("Expected scale_to_zero_enabled 'true' for v2")
-					}
-				default:
-					t.Errorf("Unexpected analyzer_name: %s", analyzerName)
-				}
+			// Verify it's the last configuration that was set
+			analyzerName := getLabelValue(m, constants.LabelAnalyzerName)
+			if analyzerName != "saturation_analyzer_v2" {
+				t.Errorf("Expected analyzer_name 'saturation_analyzer_v2' (last set), got '%s'", analyzerName)
+			}
+			if getLabelValue(m, constants.LabelLimiterEnabled) != trueStr {
+				t.Error("Expected limiter_enabled 'true'")
+			}
+			if getLabelValue(m, constants.LabelScaleToZeroEnabled) != trueStr {
+				t.Error("Expected scale_to_zero_enabled 'true'")
 			}
 		}
 	}

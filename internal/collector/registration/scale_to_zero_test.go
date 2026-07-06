@@ -13,6 +13,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
@@ -322,5 +323,49 @@ var _ = Describe("CollectModelRequestCount", func() {
 
 			Expect(found).To(BeTrue(), "Should have found %s metric", constants.WVAMetricsCollectionDurationSeconds)
 		})
+	})
+})
+
+var _ = Describe("CollectModelRequestCountForEngine", func() {
+	var (
+		ctx           context.Context
+		registry      *source.SourceRegistry
+		metricsSource source.MetricsSource
+		capturedQuery string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		registry = source.NewSourceRegistry()
+		capturedQuery = ""
+		mockAPI := &mockPrometheusAPI{
+			queryFunc: func(_ context.Context, query string, _ time.Time, _ ...v1.Option) (model.Value, v1.Warnings, error) {
+				capturedQuery = query
+				return &model.Scalar{Value: model.SampleValue(7), Timestamp: model.TimeFromUnix(0)}, nil, nil
+			},
+		}
+		metricsSource = prometheus.NewPrometheusSource(ctx, mockAPI, prometheus.DefaultPrometheusSourceConfig())
+		Expect(registry.Register("prometheus", metricsSource)).NotTo(HaveOccurred())
+		RegisterScaleToZeroQueries(registry)
+	})
+
+	It("routes EngineSGLang to the sglang:num_requests_total query", func() {
+		// The SGLang request-count query is registered under the physical name
+		// sglang/model_request_count; this asserts the engine-aware routing reaches it.
+		Expect(EngineQuery(inferenceengine.EngineSGLang, QueryModelRequestCount)).To(Equal("sglang/" + QueryModelRequestCount))
+
+		count, err := CollectModelRequestCountForEngine(ctx, metricsSource, inferenceengine.EngineSGLang, "m", "ns", 10*time.Minute)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(Equal(7.0))
+		Expect(capturedQuery).To(ContainSubstring("sglang:num_requests_total"))
+		Expect(capturedQuery).NotTo(ContainSubstring("vllm:"))
+	})
+
+	It("routes EngineVLLM to the vllm:request_success_total query", func() {
+		count, err := CollectModelRequestCountForEngine(ctx, metricsSource, inferenceengine.EngineVLLM, "m", "ns", 10*time.Minute)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(Equal(7.0))
+		Expect(capturedQuery).To(ContainSubstring("vllm:request_success_total"))
+		Expect(capturedQuery).NotTo(ContainSubstring("sglang:"))
 	})
 })

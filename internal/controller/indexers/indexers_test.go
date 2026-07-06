@@ -63,8 +63,9 @@ var _ = Describe("Indexers", Ordered, func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		// Setup indexes
-		err = SetupIndexes(testCtx, mgr, true)
+		// Register all indexes for the main indexer suite; focused gating
+		// coverage below verifies the VA-disabled startup path.
+		err = SetupIndexes(testCtx, mgr, true, true)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Start the manager's cache
@@ -96,6 +97,65 @@ var _ = Describe("Indexers", Ordered, func() {
 			// The indexes are set up in the BeforeAll
 			// If we got here without error, the indexes were registered successfully
 			Expect(mgr).NotTo(BeNil())
+		})
+
+		It("should skip optional VA and ScaledObject indexes while keeping HPA indexing", func() {
+			ctx, cancelDisabledMgr := context.WithCancel(context.Background())
+			defer cancelDisabledMgr()
+
+			disabledMgr, err := manager.New(cfg, manager.Options{
+				Metrics: metricsserver.Options{BindAddress: "0"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulates a cluster where optional CRDs are absent: startup should not
+			// register their indexes, but HPA annotation discovery still needs its index.
+			Expect(SetupIndexes(ctx, disabledMgr, false, false)).To(Succeed())
+
+			go func() {
+				defer GinkgoRecover()
+				_ = disabledMgr.Start(ctx)
+			}()
+			Expect(disabledMgr.GetCache().WaitForCacheSync(ctx)).To(BeTrue())
+
+			ns := namespace + "-hpa-only-index"
+			Expect(k8sClient.Create(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))).To(Succeed())
+			}()
+
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "managed-hpa-only",
+					Namespace:   ns,
+					Annotations: map[string]string{"llm-d.ai/managed": "true"},
+				},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+						APIVersion: "apps/v1", Kind: "Deployment", Name: "target-deploy",
+					},
+					MaxReplicas: 3,
+				},
+			}
+			Expect(k8sClient.Create(testCtx, hpa)).To(Succeed())
+			defer func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(testCtx, hpa))).To(Succeed())
+			}()
+
+			disabledClient := disabledMgr.GetClient()
+			Eventually(func() string {
+				got, err := FindHPAForScaleTarget(ctx, disabledClient, hpa.Spec.ScaleTargetRef, ns)
+				if err != nil || got == nil {
+					return ""
+				}
+				return got.Name
+			}).Should(Equal("managed-hpa-only"))
+
+			// Envtest still has the VA CRD installed; this checks that skipping
+			// the VA index disables indexed lookup, not a true CRD-absent API path.
+			_, err = FindVAForDeployment(ctx, disabledClient, "target-deploy", ns)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(VAScaleTargetKey))
 		})
 	})
 

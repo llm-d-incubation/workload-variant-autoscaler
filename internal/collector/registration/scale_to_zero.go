@@ -13,6 +13,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -48,6 +49,15 @@ func RegisterScaleToZeroQueries(sourceRegistry *source.SourceRegistry) {
 		Params:      []string{source.ParamNamespace, source.ParamModelID, ParamRetentionPeriod},
 		Description: "Total successful requests for a model over the retention period",
 	})
+
+	// SGLang variant: sglang:num_requests_total is the received-request counter.
+	registerForEngine(registry, inferenceengine.EngineSGLang, source.QueryTemplate{
+		Name:        QueryModelRequestCount,
+		Type:        source.QueryTypePromQL,
+		Template:    `sum(increase(sglang:num_requests_total{namespace="{{.namespace}}",model_name="{{.modelID}}"}[{{.retentionPeriod}}]))`,
+		Params:      []string{source.ParamNamespace, source.ParamModelID, ParamRetentionPeriod},
+		Description: "Total requests for a model over the retention period (SGLang)",
+	})
 }
 
 // CollectModelRequestCount collects the total number of successful requests for a model
@@ -75,6 +85,28 @@ func CollectModelRequestCount(
 	namespace string,
 	retentionPeriod time.Duration,
 ) (float64, error) {
+	// Defaults to vLLM for backward compatibility: this queries
+	// vllm:request_success_total regardless of the model's actual engine. Engine-
+	// aware scale-to-zero is available via CollectModelRequestCountForEngine but is
+	// not yet threaded through the enforcer (see docs/proposals/sglang-backend.md
+	// Phase 2). Until it is, callers MUST NOT invoke scale-to-zero for non-vLLM
+	// models — the saturation engine gates this via scaleToZeroSupportedForEngines,
+	// since for SGLang this function would always return 0 (no vllm:* series) and
+	// the enforcer would incorrectly scale the model to zero.
+	return CollectModelRequestCountForEngine(ctx, metricsSource, inferenceengine.EngineVLLM, modelID, namespace, retentionPeriod)
+}
+
+// CollectModelRequestCountForEngine is the engine-aware variant of
+// CollectModelRequestCount. It selects the request-count metric appropriate for
+// the given inference engine (vllm:request_success_total vs sglang:num_requests_total).
+func CollectModelRequestCountForEngine(
+	ctx context.Context,
+	metricsSource source.MetricsSource,
+	engine inferenceengine.Engine,
+	modelID string,
+	namespace string,
+	retentionPeriod time.Duration,
+) (float64, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Convert Go duration to Prometheus duration format
@@ -86,10 +118,12 @@ func CollectModelRequestCount(
 		ParamRetentionPeriod:  retentionPeriodStr,
 	}
 
+	queryName := EngineQuery(engine, QueryModelRequestCount)
+
 	// Execute the query with timing
 	startTime := time.Now()
 	results, err := metricsSource.Refresh(ctx, source.RefreshSpec{
-		Queries: []string{QueryModelRequestCount},
+		Queries: []string{queryName},
 		Params:  params,
 	})
 	duration := time.Since(startTime).Seconds()
@@ -107,7 +141,7 @@ func CollectModelRequestCount(
 	}
 
 	// Extract the result
-	result := results[QueryModelRequestCount]
+	result := results[queryName]
 	if result == nil {
 		logger.V(logging.VERBOSE).Info("No result for model request count query",
 			"model", modelID,

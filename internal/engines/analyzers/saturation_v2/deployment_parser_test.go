@@ -4,6 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -209,71 +210,110 @@ var _ = Describe("ParseVLLMArgs", func() {
 
 var _ = Describe("IsCapacityCompatible", func() {
 	It("should return true for identical default params", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeTrue())
 	})
 
 	It("should return false when GpuMemoryUtilization differs", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.GpuMemoryUtilization = 0.5
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
 	})
 
 	It("should return false when BlockSize differs", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.BlockSize = 32
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
 	})
 
 	It("should return false when KvCacheDtype differs", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.KvCacheDtype = "fp8"
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
 	})
 
 	It("should return false when TensorParallelSize differs", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.TensorParallelSize = 4
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
 	})
 
 	It("should return false when EffectiveMaxBatchedTokens differs", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.EffectiveMaxBatchedTokens = 4096
 		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
 	})
 
+	It("should return false when the Engine differs (no cross-engine capacity reuse)", func() {
+		// Same model on the same hardware served by two engines must not share a
+		// capacity record: vLLM and SGLang derive KV capacity from different sources.
+		p1 := defaultEngineParams() // Engine == EngineVLLM
+		resolveEffectiveMaxBatchedTokens(&p1)
+		p2 := defaultSGLangEngineParams() // Engine == EngineSGLang
+		// Force every other capacity field equal so only Engine distinguishes them.
+		p2.GpuMemoryUtilization = p1.GpuMemoryUtilization
+		p2.BlockSize = p1.BlockSize
+		p2.KvCacheDtype = p1.KvCacheDtype
+		p2.TensorParallelSize = p1.TensorParallelSize
+		p2.NumGpuBlocksOverride = p1.NumGpuBlocksOverride
+		p2.TotalKvTokensOverride = p1.TotalKvTokensOverride
+		resolveEffectiveMaxBatchedTokens(&p2)
+		p2.EffectiveMaxBatchedTokens = p1.EffectiveMaxBatchedTokens
+
+		Expect(p1.Engine).NotTo(Equal(p2.Engine))
+		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
+	})
+
+	It("should treat same-engine parsed params as Engine-compatible", func() {
+		p1 := ParseEngineArgs(inferenceengine.EngineSGLang, scaletarget.NewDeploymentAccessor(makeTestDeployment()))
+		p2 := ParseEngineArgs(inferenceengine.EngineSGLang, scaletarget.NewDeploymentAccessor(makeTestDeployment()))
+		Expect(p1.Engine).To(Equal(inferenceengine.EngineSGLang))
+		Expect(p1.IsCapacityCompatible(&p2)).To(BeTrue())
+	})
+
+	It("should return false when TotalKvTokensOverride differs", func() {
+		// Two SGLang variants differing only in --max-total-tokens must NOT be
+		// treated as capacity-compatible: the override directly sets KV capacity.
+		p1 := defaultEngineParams()
+		resolveEffectiveMaxBatchedTokens(&p1)
+		p2 := defaultEngineParams()
+		resolveEffectiveMaxBatchedTokens(&p2)
+		p1.TotalKvTokensOverride = 100000
+		p2.TotalKvTokensOverride = 200000
+		Expect(p1.IsCapacityCompatible(&p2)).To(BeFalse())
+	})
+
 	It("should return false when either param is nil", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
 		Expect(p1.IsCapacityCompatible(nil)).To(BeFalse())
 
-		var p2 *VLLMEngineParams
+		var p2 *EngineParams
 		Expect(p2.IsCapacityCompatible(&p1)).To(BeFalse())
 	})
 
 	It("should ignore non-capacity fields like MaxNumSeqs and MaxModelLen", func() {
-		p1 := defaultVLLMEngineParams()
+		p1 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p1)
-		p2 := defaultVLLMEngineParams()
+		p2 := defaultEngineParams()
 		resolveEffectiveMaxBatchedTokens(&p2)
 		p2.MaxNumSeqs = 512
 		p2.MaxModelLen = 16384

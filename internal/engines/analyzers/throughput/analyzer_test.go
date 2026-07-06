@@ -215,7 +215,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(result.Namespace).To(Equal(namespace))
 		})
 
-		It("returns zero signal when demand is zero (no ArrivalRate or VLLMRequestRate set)", func() {
+		It("returns zero signal when demand is zero (no ArrivalRate or RequestRate set)", func() {
 			metrics := makeMetrics("v1", 3, 0.20, 0.10)
 			input := interfaces.AnalyzerInput{
 				ModelID:        modelID,
@@ -338,7 +338,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("returns zero SpareCapacity when EPP is not deployed (ArrivalRate==0)", func() {
 			buildReadyWindow()
 
-			// ArrivalRate=0, VLLMRequestRate=0 → isEPP=false → no scale-down signal
+			// ArrivalRate=0, RequestRate=0 → isEPP=false → no scale-down signal
 			replica := baseReplica(0)
 			input := interfaces.AnalyzerInput{
 				ModelID:        modelID,
@@ -895,7 +895,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				{VariantName: "v1", KvCacheUsage: 0.95, KvUsageInstant: 0.95,
 					AvgITL: A*0.95 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
-					// ArrivalRate=0, VLLMRequestRate=0 → EPP absent
+					// ArrivalRate=0, RequestRate=0 → EPP absent
 				},
 				{VariantName: "v1", KvCacheUsage: 0.95, KvUsageInstant: 0.95,
 					AvgITL: A*0.95 + B, AvgInputTokens: il, AvgOutputTokens: ol,
@@ -933,7 +933,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("emits zero RequiredCapacity when OL is below the decode-dominated threshold", func() {
 			// OL=5 < DefaultMinDecodeOLForLocalDemand(20): the k*-based formula must not fire.
-			// EPP and vLLM paths are also absent (no ArrivalRate, no VLLMRequestRate).
+			// EPP and vLLM paths are also absent (no ArrivalRate, no RequestRate).
 			// Expected: demand=0, RC=0, SC=0.
 			const lowOL = 5.0
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, lowOL, prefix, kvMax, B, kValues)
@@ -947,7 +947,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				AvgOutputTokens:       lowOL,
 				PrefixCacheHitRate:    prefix,
 				TotalKvCapacityTokens: kvMax,
-				// ArrivalRate=0, VLLMRequestRate=0
+				// ArrivalRate=0, RequestRate=0
 			}
 			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
@@ -1304,14 +1304,14 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		})
 	})
 
-	Describe("averageShapeMetrics — VLLMRequestRate-weighted averaging", func() {
-		It("returns rate-weighted mean when replicas have different VLLMRequestRates", func() {
+	Describe("averageShapeMetrics — RequestRate-weighted averaging", func() {
+		It("returns rate-weighted mean when replicas have different RequestRates", func() {
 			// r1: rate=1, IL=1000, OL=200, hr=0.1
 			// r2: rate=3, IL=3000, OL=600, hr=0.5
 			// Weighted: IL=(1*1000+3*3000)/4=2500, OL=(1*200+3*600)/4=500, hr=(1*0.1+3*0.5)/4=0.4
 			metrics := []interfaces.ReplicaMetrics{
-				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, VLLMRequestRate: 1},
-				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, VLLMRequestRate: 3},
+				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 1},
+				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 3},
 			}
 			il, ol, hr := averageShapeMetrics(metrics)
 			Expect(il).To(BeNumerically("~", 2500.0, 1e-9))
@@ -1319,10 +1319,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(hr).To(BeNumerically("~", 0.4, 1e-9))
 		})
 
-		It("falls back to unweighted mean when all VLLMRequestRates are zero", func() {
+		It("falls back to unweighted mean when all RequestRates are zero", func() {
 			metrics := []interfaces.ReplicaMetrics{
-				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, VLLMRequestRate: 0},
-				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, VLLMRequestRate: 0},
+				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 0},
+				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 0},
 			}
 			il, ol, hr := averageShapeMetrics(metrics)
 			Expect(il).To(BeNumerically("~", 2000.0, 1e-9))
@@ -1334,8 +1334,8 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// r1 has rate=0: contributes only to unweighted fallback
 			// r2 has rate=2: drives the weighted result entirely
 			metrics := []interfaces.ReplicaMetrics{
-				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, VLLMRequestRate: 0},
-				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, VLLMRequestRate: 2},
+				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 0},
+				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 2},
 			}
 			il, ol, hr := averageShapeMetrics(metrics)
 			Expect(il).To(BeNumerically("~", 3000.0, 1e-9))
