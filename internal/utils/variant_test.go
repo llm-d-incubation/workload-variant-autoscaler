@@ -208,7 +208,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -223,7 +223,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-a", "deploy-a", "model-x"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -239,7 +239,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-b", "deploy-b", "model-x"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -262,7 +262,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		}).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -282,7 +282,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			},
 		}).Build()
 
-		_, err := annotationSourcedVariants(ctx, cl)
+		_, err := annotationSourcedVariants(ctx, cl, nil)
 		if err == nil {
 			t.Fatal("want error for non-NoMatch ScaledObject list failure, got nil")
 		}
@@ -296,7 +296,7 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 			managedSO("ns1", "so-a", "deploy-a", "model-so"),
 		).Build()
 
-		result, err := annotationSourcedVariants(ctx, cl)
+		result, err := annotationSourcedVariants(ctx, cl, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -305,6 +305,62 @@ func TestAnnotationSourcedVariants(t *testing.T) {
 		}
 		if result[0].Spec.ModelID != "model-so" {
 			t.Errorf("want ScaledObject to win, got modelID %q", result[0].Spec.ModelID)
+		}
+	})
+}
+
+func TestAnnotationSourcedVariantsNamespaceScoping(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("only resources in tracked namespace are returned", func(t *testing.T) {
+		s := variantTestScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-y"), // different namespace
+		).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 {
+			t.Errorf("want 1 VA from ns1, got %d", len(result))
+		}
+		if result[0].Namespace != "ns1" {
+			t.Errorf("want namespace ns1, got %q", result[0].Namespace)
+		}
+	})
+
+	t.Run("multiple tracked namespaces union results", func(t *testing.T) {
+		s := variantTestScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-y"),
+			managedHPA("ns3", "hpa-c", "deploy-c", "model-z"), // not tracked
+		).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, []string{"ns1", "ns2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("want 2 VAs from ns1+ns2, got %d", len(result))
+		}
+	})
+
+	t.Run("nil trackedNamespaces falls back to cluster-wide", func(t *testing.T) {
+		s := variantTestScheme(t)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			managedHPA("ns1", "hpa-a", "deploy-a", "model-x"),
+			managedHPA("ns2", "hpa-b", "deploy-b", "model-y"),
+		).Build()
+
+		result, err := annotationSourcedVariants(ctx, cl, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("want 2 VAs cluster-wide, got %d", len(result))
 		}
 	})
 }
@@ -318,7 +374,7 @@ func TestReadyVariantAutoscalings(t *testing.T) {
 			managedHPA("ns1", "hpa-ann", "deploy-ann", "model-ann"),
 		).Build()
 
-		result := readyVariantAutoscalings(ctx, cl)
+		result := readyVariantAutoscalings(ctx, cl, nil)
 		if len(result) != 1 {
 			t.Fatalf("want 1 annotation-sourced variant, got %d", len(result))
 		}
@@ -337,7 +393,7 @@ func TestReadyVariantAutoscalings(t *testing.T) {
 			managedSO("ns-so", "so-ann", "deploy-so", "model-so"),
 		).Build()
 
-		result := readyVariantAutoscalings(ctx, cl)
+		result := readyVariantAutoscalings(ctx, cl, nil)
 		if len(result) != 2 {
 			t.Errorf("want 2 variants, got %d", len(result))
 		}
@@ -360,7 +416,7 @@ func TestReadyVariantAutoscalings(t *testing.T) {
 			},
 		}).Build()
 
-		result := readyVariantAutoscalings(ctx, cl)
+		result := readyVariantAutoscalings(ctx, cl, nil)
 		if len(result) != 1 {
 			t.Errorf("want 1 variant (HPA-sourced, KEDA error is non-fatal), got %d", len(result))
 		}

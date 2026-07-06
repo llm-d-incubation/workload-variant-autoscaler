@@ -283,7 +283,7 @@ func TestMultipleInactiveVariants(t *testing.T) {
 	}
 
 	// Get all inactive VAs
-	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, fakeClient)
+	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, fakeClient, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, len(inactiveVAs), "Should have 3 inactive VAs")
 

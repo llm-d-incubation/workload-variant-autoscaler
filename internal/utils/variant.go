@@ -41,8 +41,9 @@ type VariantFilter func(scaletarget.ScaleTargetAccessor) bool
 // ActiveVariantAutoscalingByModel retrieves all VariantAutoscaling resources that are ready for optimization
 // and have at least one target replica.
 // Returns the shallow-copied VAs (not safe for mutation) grouped by ModelID.
-func ActiveVariantAutoscalingByModel(ctx context.Context, client client.Client) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
-	vas, _, err := ActiveVariantAutoscaling(ctx, client)
+// trackedNamespaces scopes HPA/ScaledObject discovery to specific namespaces; nil means cluster-wide.
+func ActiveVariantAutoscalingByModel(ctx context.Context, client client.Client, trackedNamespaces []string) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
+	vas, _, err := ActiveVariantAutoscaling(ctx, client, trackedNamespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +53,9 @@ func ActiveVariantAutoscalingByModel(ctx context.Context, client client.Client) 
 // InactiveVariantAutoscalingByModel retrieves all VariantAutoscaling resources that are ready for optimization
 // and have no target replicas.
 // Returns the shallow-copied VAs (not safe for mutation) grouped by ModelID.
-func InactiveVariantAutoscalingByModel(ctx context.Context, client client.Client) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
-	vas, _, err := InactiveVariantAutoscaling(ctx, client)
+// trackedNamespaces scopes HPA/ScaledObject discovery to specific namespaces; nil means cluster-wide.
+func InactiveVariantAutoscalingByModel(ctx context.Context, client client.Client, trackedNamespaces []string) (map[string][]wvav1alpha1.VariantAutoscaling, error) {
+	vas, _, err := InactiveVariantAutoscaling(ctx, client, trackedNamespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -80,22 +82,24 @@ func GroupVariantAutoscalingByModel(
 // and have at least one target replica.
 // Returns a slice of deep-copied VariantAutoscaling objects.
 // It also returns a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
-func ActiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
-	return filterVariantsByScaleTargetAccessor(ctx, client, isActive, "active")
+// trackedNamespaces scopes HPA/ScaledObject discovery to specific namespaces; nil means cluster-wide.
+func ActiveVariantAutoscaling(ctx context.Context, client client.Client, trackedNamespaces []string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
+	return filterVariantsByScaleTargetAccessor(ctx, client, isActive, "active", trackedNamespaces)
 }
 
 // InactiveVariantAutoscaling retrieves all VariantAutoscaling resources that are ready for optimization
 // and have no target replicas.
 // Returns a slice of deep-copied VariantAutoscaling objects.
 // It also returns a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
-func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
-	return filterVariantsByScaleTargetAccessor(ctx, client, isInactive, "inactive")
+// trackedNamespaces scopes HPA/ScaledObject discovery to specific namespaces; nil means cluster-wide.
+func InactiveVariantAutoscaling(ctx context.Context, client client.Client, trackedNamespaces []string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
+	return filterVariantsByScaleTargetAccessor(ctx, client, isInactive, "inactive", trackedNamespaces)
 }
 
 // filterVariantsByScaleTargetAccessors is a generic function to filter VAs based on scaleTarget state.
 // Returns filtered VAs and a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
-func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
-	readyVAs := readyVariantAutoscalings(ctx, client)
+func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Client, filter VariantFilter, filterName string, trackedNamespaces []string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
+	readyVAs := readyVariantAutoscalings(ctx, client, trackedNamespaces)
 
 	filteredVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(readyVAs))
 	scaleTargetAccessors := make(map[string]scaletarget.ScaleTargetAccessor)
@@ -161,14 +165,15 @@ func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Clie
 // synthesizing in-memory VariantAutoscaling objects from annotated ScaledObjects
 // and HPAs (annotation-based discovery). When CONTROLLER_INSTANCE is configured,
 // only variants whose source object carries a matching controller-instance label
-// are returned, enabling multi-controller isolation.
+// are returned, enabling multi-controller isolation. trackedNamespaces scopes
+// HPA/ScaledObject discovery; nil or empty means cluster-wide.
 //
 // Errors from annotation discovery are non-fatal (logged), so this always returns
 // whatever was discovered and never an error.
-func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) []wvav1alpha1.VariantAutoscaling {
+func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client, trackedNamespaces []string) []wvav1alpha1.VariantAutoscaling {
 	logger := ctrl.LoggerFrom(ctx)
 
-	annotated, err := annotationSourcedVariants(ctx, k8sClient)
+	annotated, err := annotationSourcedVariants(ctx, k8sClient, trackedNamespaces)
 	if err != nil {
 		// Non-fatal: log and continue with whatever was discovered.
 		logger.Error(err, "Error while listing annotation-sourced variants (non-fatal)")
@@ -191,53 +196,64 @@ func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) []wv
 	return readyVAs
 }
 
+// namespacedListCalls returns one []client.ListOption slice per namespace to query,
+// or a single empty slice for a cluster-wide query when trackedNamespaces is empty.
+func namespacedListCalls(trackedNamespaces []string) [][]client.ListOption {
+	if len(trackedNamespaces) == 0 {
+		return [][]client.ListOption{{}} // one cluster-wide call
+	}
+	calls := make([][]client.ListOption, len(trackedNamespaces))
+	for i, ns := range trackedNamespaces {
+		calls[i] = []client.ListOption{client.InNamespace(ns)}
+	}
+	return calls
+}
+
 // annotationSourcedVariants lists HPAs and KEDA ScaledObjects bearing llm-d.ai/managed: "true"
 // and synthesizes in-memory VariantAutoscaling objects from them. ScaledObject discovery is
 // skipped gracefully when the KEDA CRD is not installed. When both an HPA and a ScaledObject
 // target the same scale target, the ScaledObject entry wins.
-func annotationSourcedVariants(ctx context.Context, k8sClient client.Client) ([]wvav1alpha1.VariantAutoscaling, error) {
+// When trackedNamespaces is non-empty, List calls are scoped per namespace to avoid full-cluster
+// cache scans on every engine tick.
+func annotationSourcedVariants(ctx context.Context, k8sClient client.Client, trackedNamespaces []string) ([]wvav1alpha1.VariantAutoscaling, error) {
 	logger := ctrl.LoggerFrom(ctx)
 	// keyed by namespace/kind/name for deduplication; ScaledObject entries overwrite HPA entries.
 	byTarget := make(map[string]wvav1alpha1.VariantAutoscaling)
 
+	// Build per-call list options: one per tracked namespace, or a single cluster-wide call.
+	nsCalls := namespacedListCalls(trackedNamespaces)
+
 	// HPAs are a core Kubernetes type — always available (lower priority for deduplication).
-	// TODO(#1134): scope to tracked namespaces only (client.InNamespace per ds.ListTrackedNamespaces())
-	// to avoid iterating the full cluster cache on every engine tick.
-	var hpaList autoscalingv2.HorizontalPodAutoscalerList
-	if err := k8sClient.List(ctx, &hpaList); err != nil {
-		return nil, fmt.Errorf("listing HPAs: %w", err)
-	}
-	for i := range hpaList.Items {
-		hpa := &hpaList.Items[i]
-		if !annotations.IsManaged(hpa) || !hpa.DeletionTimestamp.IsZero() {
-			continue
+	for _, opts := range nsCalls {
+		var hpaList autoscalingv2.HorizontalPodAutoscalerList
+		if err := k8sClient.List(ctx, &hpaList, opts...); err != nil {
+			return nil, fmt.Errorf("listing HPAs: %w", err)
 		}
-		va, err := annotations.VariantAutoscalingFromHPA(hpa)
-		if err != nil {
-			logger.V(logging.DEBUG).Info("Skipping HPA with invalid WVA annotations",
-				"namespace", hpa.Namespace, "name", hpa.Name, "error", err)
-			continue
+		for i := range hpaList.Items {
+			hpa := &hpaList.Items[i]
+			if !annotations.IsManaged(hpa) || !hpa.DeletionTimestamp.IsZero() {
+				continue
+			}
+			va, err := annotations.VariantAutoscalingFromHPA(hpa)
+			if err != nil {
+				logger.V(logging.DEBUG).Info("Skipping HPA with invalid WVA annotations",
+					"namespace", hpa.Namespace, "name", hpa.Name, "error", err)
+				continue
+			}
+			key := fmt.Sprintf("%s/%s/%s", va.Namespace, va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Name)
+			byTarget[key] = *va
 		}
-		key := fmt.Sprintf("%s/%s/%s", va.Namespace, va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Name)
-		byTarget[key] = *va
 	}
 
 	// KEDA ScaledObjects — may not be installed; handle gracefully.
 	// ScaledObject takes precedence over HPA for the same scale target.
-	// TODO(#1134): scope to tracked namespaces only (client.InNamespace per ds.ListTrackedNamespaces())
-	// to avoid iterating the full cluster cache on every engine tick.
-	var soList kedav1alpha1.ScaledObjectList
-	if err := k8sClient.List(ctx, &soList); err != nil {
-		if apimeta.IsNoMatchError(err) {
-			logger.V(logging.DEBUG).Info("KEDA ScaledObject CRD not available, skipping annotation discovery for ScaledObjects")
-		} else {
-			result := make([]wvav1alpha1.VariantAutoscaling, 0, len(byTarget))
-			for _, va := range byTarget {
-				result = append(result, va)
-			}
-			return result, fmt.Errorf("listing ScaledObjects: %w", err)
+	var soListErr error
+	for _, opts := range nsCalls {
+		var soList kedav1alpha1.ScaledObjectList
+		if err := k8sClient.List(ctx, &soList, opts...); err != nil {
+			soListErr = err
+			break
 		}
-	} else {
 		for i := range soList.Items {
 			so := &soList.Items[i]
 			if !annotations.IsManaged(so) || !so.DeletionTimestamp.IsZero() {
@@ -251,6 +267,17 @@ func annotationSourcedVariants(ctx context.Context, k8sClient client.Client) ([]
 			}
 			key := fmt.Sprintf("%s/%s/%s", va.Namespace, va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Name)
 			byTarget[key] = *va
+		}
+	}
+	if soListErr != nil {
+		if apimeta.IsNoMatchError(soListErr) {
+			logger.V(logging.DEBUG).Info("KEDA ScaledObject CRD not available, skipping annotation discovery for ScaledObjects")
+		} else {
+			result := make([]wvav1alpha1.VariantAutoscaling, 0, len(byTarget))
+			for _, va := range byTarget {
+				result = append(result, va)
+			}
+			return result, fmt.Errorf("listing ScaledObjects: %w", soListErr)
 		}
 	}
 

@@ -41,6 +41,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -145,6 +146,10 @@ type Engine struct {
 	vaEventTracker map[string]bool
 
 	Config *config.Config // Unified configuration (injected from main.go)
+
+	// Datastore is used to scope HPA/ScaledObject list calls to tracked namespaces.
+	// When nil, list calls fall back to cluster-wide.
+	Datastore datastore.Datastore
 
 	// ReplicaMetricsCollector is the collector for replica metrics using the source infrastructure
 	ReplicaMetricsCollector *collector.ReplicaMetricsCollector
@@ -450,7 +455,11 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.Info("Scaling to zero is enabled")
 	}
 
-	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client)
+	var trackedNamespaces []string
+	if e.Datastore != nil {
+		trackedNamespaces = e.Datastore.ListTrackedNamespaces()
+	}
+	activeVAs, _, err := utils.ActiveVariantAutoscaling(ctx, e.client, trackedNamespaces)
 	if err != nil {
 		logger.Error(err, "Unable to get active variant autoscalings")
 		return err

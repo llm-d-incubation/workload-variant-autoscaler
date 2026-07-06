@@ -129,7 +129,7 @@ func (e *Engine) optimize(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
 	// Get all inactive (replicas == 0) VAs
-	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, e.client)
+	inactiveVAs, scaleTargets, err := utils.InactiveVariantAutoscaling(ctx, e.client, e.Datastore.ListTrackedNamespaces())
 	if err != nil {
 		return err
 	}

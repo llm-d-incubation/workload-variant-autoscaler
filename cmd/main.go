@@ -501,6 +501,7 @@ func main() {
 		engine.SetLimiterBuilder(func() (pipeline.Limiter, error) {
 			return pipeline.NewLimiterFromConfig(cfg, mgr.GetClient())
 		})
+		engine.Datastore = ds
 		if taRegistered {
 			registration.RegisterThroughputAnalyzerQueries(sourceRegistry)
 			if err := engine.RegisterAnalyzer(throughput.AnalyzerName, throughput.NewThroughputAnalyzer()); err != nil {
