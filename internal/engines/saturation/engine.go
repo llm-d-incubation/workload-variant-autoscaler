@@ -153,7 +153,7 @@ type Engine struct {
 	// Selected via analyzerName: "queueing-model" in SaturationScalingConfig.
 	queueingModelAnalyzer *queueingmodel.QueueingModelAnalyzer
 
-	// eppSaturationAnalyzer uses the EPP's pre-computed pool saturation signal.
+	// eppSaturationAnalyzer derives pool saturation from the EPP's predicted-latency histograms.
 	// Selected via analyzerName: "epp-saturation" in SaturationScalingConfig.
 	eppSaturationAnalyzer *epp_saturation.EPPSaturationAnalyzer
 
@@ -276,7 +276,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 	// estimate per-replica arrival rate and model queue behavior.
 	registration.RegisterQueueingModelQueries(metricsRegistry)
 
-	// Register EPP saturation queries (pool-level saturation from EPP latency detector).
+	// Register EPP saturation queries (P90 predicted/actual latency histograms).
 	registration.RegisterEPPSaturationQueries(metricsRegistry)
 
 	return &engine

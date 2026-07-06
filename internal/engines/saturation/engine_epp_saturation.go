@@ -19,8 +19,8 @@ import (
 )
 
 // eppSignalUnavailableMessage is the MetricsAvailable=False message used when the
-// EPP latency detector's pool saturation signal cannot be queried.
-const eppSignalUnavailableMessage = "EPP saturation signal unavailable (latency detector or predictor sidecar may be down)"
+// EPP predicted-latency signal cannot be queried.
+const eppSignalUnavailableMessage = "EPP saturation signal unavailable (EPP metrics or predictor sidecar may be down)"
 
 // applyWarmupHold implements warmup-aware scale-up damping: while replicas already
 // requested are still warming (pending > 0), a scale-up target (target > current) is
@@ -36,8 +36,8 @@ func applyWarmupHold(target, current, pending int) int {
 
 // optimizeEPPSaturation runs the EPP saturation analyzer path.
 // Unlike V1/V2, this does not collect per-replica metrics from vLLM pods.
-// Instead, it queries the EPP's pre-computed pool saturation score and
-// translates it into scaling decisions via the optimizer pipeline.
+// Instead, it queries the P90 of the EPP's predicted-latency histograms and
+// translates the derived saturation into scaling decisions via the optimizer pipeline.
 func (e *Engine) optimizeEPPSaturation(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,

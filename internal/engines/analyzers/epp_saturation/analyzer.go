@@ -1,12 +1,14 @@
-// Package epp_saturation implements an analyzer that consumes the pool-level
-// saturation score emitted by the EPP's latency detector plugin. Unlike the
+// Package epp_saturation implements an analyzer that derives a pool-level
+// saturation signal from the EPP's predicted-latency histograms. Unlike the
 // V1/V2 saturation analyzers that scrape per-pod vLLM metrics and compute
-// capacity internally, this analyzer relies on a pre-computed signal:
+// capacity internally, this analyzer queries the recent P90 of the EPP's
+// predicted TTFT/TPOT (falling back to actual latency) and divides by the
+// configured SLOs:
 //
-//	saturation = predictedLatency / SLO  (averaged across endpoints)
+//	saturation = max(P90 predTTFT / ttftSLOMs, P90 predTPOT / tpotSLOMs)
 //
-// The EPP exposes this as inference_extension_latency_detector_pool_saturation.
-// A value < 1.0 means the pool has headroom; >= 1.0 means it is at or over SLO.
+// A value < 1.0 means the pool's tail latency is within SLO (headroom);
+// >= 1.0 means the P90 is at or over SLO.
 package epp_saturation
 
 import (
