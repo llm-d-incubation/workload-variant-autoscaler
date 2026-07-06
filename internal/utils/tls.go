@@ -17,7 +17,7 @@ import (
 const schemeHTTPS = "https"
 
 // IsHTTPS reports whether rawURL uses the https scheme.
-// url.Parse normalizes scheme to lowercase, so the comparison is case-insensitive.
+// url.Parse normalizes the scheme to lowercase before comparison, so HTTPS:// is treated the same as https://.
 func IsHTTPS(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
