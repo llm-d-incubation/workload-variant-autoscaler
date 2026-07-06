@@ -196,13 +196,17 @@ $$s_c(k) = \min(s_{raw}(k),\, C) \qquad\text{(clamp)}$$
 
 $$\bar{s}(k) = \alpha\, s_c(k) + (1-\alpha)\, \bar{s}(k-1) \qquad\text{(EMA)}$$
 
-$$D(k) = \bar{s}(k)\cdot r(k), \qquad r(k) = \begin{cases} R(k)/N(k) & 0 < R < N \\ 1 & \text{otherwise} \end{cases} \qquad\text{(in-flight credit)}$$
+```math
+D(k) = \bar{s}(k)\cdot r(k), \qquad r(k) = \begin{cases} R(k)/N(k) & 0 < R < N \\ 1 & \text{otherwise} \end{cases} \qquad\text{(in-flight credit)}
+```
 
 with $N$ = spec replicas and $R$ = ready replicas.
 
 ### 2. WVA desired replicas
 
-$$d(k) = \text{clip}_{[N_{min},\,N_{max}]} \begin{cases} N + \left\lceil N \left( \frac{D(k)}{\theta_{up}} - 1 \right) \right\rceil & D(k) > \theta_{up} \\ N - \left\lfloor N \left( 1 - \frac{\bar{s}(k)}{\theta_{dn}} \right) \right\rfloor & \bar{s}(k) < \theta_{dn} \\ N & \text{otherwise (hysteresis)} \end{cases}$$
+```math
+d(k) = \text{clip}_{[N_{min},\,N_{max}]} \begin{cases} N + \left\lceil N \left( \frac{D(k)}{\theta_{up}} - 1 \right) \right\rceil & D(k) > \theta_{up} \\ N - \left\lfloor N \left( 1 - \frac{\bar{s}(k)}{\theta_{dn}} \right) \right\rfloor & \bar{s}(k) < \theta_{dn} \\ N & \text{otherwise (hysteresis)} \end{cases}
+```
 
 Scale-up uses the credited demand $D$; scale-down deliberately uses the
 uncredited $\bar{s}$ (so a warming pool cannot be flipped into scale-down by
@@ -215,7 +219,9 @@ $d(k)$ is exported as `wva_desired_replicas`.
 With the External metric at `AverageValue: "1"` the raw recommendation is
 $rec(t) = d(k(t))$, evaluated every $\delta$; then stabilization
 
-$$rec_{stab}(t) = \begin{cases} \min_{\tau \in [t-W_{up},\,t]} rec(\tau) & \text{increasing} \\ \max_{\tau \in [t-W_{dn},\,t]} rec(\tau) & \text{decreasing} \end{cases}$$
+```math
+rec_{stab}(t) = \begin{cases} \min_{\tau \in [t-W_{up},\,t]} rec(\tau) & \text{increasing} \\ \max_{\tau \in [t-W_{dn},\,t]} rec(\tau) & \text{decreasing} \end{cases}
+```
 
 and the behavior rate limits:
 
