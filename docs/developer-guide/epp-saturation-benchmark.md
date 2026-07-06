@@ -190,11 +190,17 @@ the arrival rate.*
 
 ### 1. Signal chain (per WVA cycle $k$)
 
-$$s_{raw}(k) = \max\!\left(\frac{\text{P90 predTTFT}(k)}{S_{ttft}},\ \frac{\text{P90 predTPOT}(k)}{S_{tpot}}\right), \qquad \text{NaN/empty} \mapsto 0$$
+```math
+s_{raw}(k) = \max\!\left(\frac{\text{P90 predTTFT}(k)}{S_{ttft}},\ \frac{\text{P90 predTPOT}(k)}{S_{tpot}}\right), \qquad \text{NaN/empty} \mapsto 0
+```
 
-$$s_c(k) = \min(s_{raw}(k),\, C) \qquad\text{(clamp)}$$
+```math
+s_c(k) = \min(s_{raw}(k),\, C) \qquad\text{(clamp)}
+```
 
-$$\bar{s}(k) = \alpha\, s_c(k) + (1-\alpha)\, \bar{s}(k-1) \qquad\text{(EMA)}$$
+```math
+\bar{s}(k) = \alpha\, s_c(k) + (1-\alpha)\, \bar{s}(k-1) \qquad\text{(EMA)}
+```
 
 ```math
 D(k) = \bar{s}(k)\cdot r(k), \qquad r(k) = \begin{cases} R(k)/N(k) & 0 < R < N \\ 1 & \text{otherwise} \end{cases} \qquad\text{(in-flight credit)}
@@ -225,7 +231,9 @@ rec_{stab}(t) = \begin{cases} \min_{\tau \in [t-W_{up},\,t]} rec(\tau) & \text{i
 
 and the behavior rate limits:
 
-$$N_{spec}(t^{+}) = \text{clip}\Big(rec_{stab}(t),\ \underbrace{N_{spec}(t{-}P_{up}) + \max\big(N_{spec}(t{-}P_{up}),\ v_{up}\big)}_{\text{scale-up limit}},\ \underbrace{N_{spec}(t{-}P_{dn}) - v_{dn}}_{\text{scale-down limit}}\Big)$$
+```math
+N_{spec}(t^{+}) = \text{clip}\Big(rec_{stab}(t),\ \underbrace{N_{spec}(t{-}P_{up}) + \max\big(N_{spec}(t{-}P_{up}),\ v_{up}\big)}_{\text{scale-up limit}},\ \underbrace{N_{spec}(t{-}P_{dn}) - v_{dn}}_{\text{scale-down limit}}\Big)
+```
 
 plus the HPA's 10 % tolerance dead-band (which integer steps at small $N$
 almost always exceed).
@@ -235,7 +243,9 @@ almost always exceed).
 Additions take $T_w$ to become Ready; removals are immediate. Both compress
 into a single expression:
 
-$$R(t) = \min_{\tau \in [t - T_w,\ t]} N_{spec}(\tau)$$
+```math
+R(t) = \min_{\tau \in [t - T_w,\ t]} N_{spec}(\tau)
+```
 
 Sanity checks: a flat spec gives $R = N_{spec}$; a step up stays invisible for
 exactly $T_w$; a step down registers instantly; staircases compose. The
