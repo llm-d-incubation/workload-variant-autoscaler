@@ -1428,7 +1428,7 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Average number of scaling decisions limited by constraints per optimization cycle (averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, there were 36 limited decisions total in the last hour for 30 seconds optimization interval, and there are 120 optimization cycles per hour (3600 seconds ÷ 30 seconds), then the average is 36 ÷ 120 = 0.3 decisions per cycle. The metric is wva_decisions_limited_total.",
+      "description": "Number of scaling decisions limited by constraints in the last 15 minutes. Shows how often limiters prevent scaling due to insufficient capacity. The metric is wva_decisions_limited_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1511,7 +1511,7 @@
             "uid": "$datasource_uid"
           },
           "editorMode": "code",
-          "expr": "sum(rate(wva_decisions_limited_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[1h])) by ($namespace_label, variant_name, limiter_name) * max(wva_config_optimization_interval_seconds)",
+          "expr": "sum(increase(wva_decisions_limited_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[15m])) by ($namespace_label, variant_name, limiter_name)",
           "instant": false,
           "legendFormat": "{{variant_name}} - {{limiter_name}}",
           "range": true,
