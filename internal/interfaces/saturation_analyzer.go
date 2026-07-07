@@ -185,6 +185,7 @@ type VariantSaturationAnalysis struct {
 	ReplicaCount        int
 	NonSaturatedCount   int
 	MaxKvCacheUsage     float64
+	AvgKvCacheUsage     float64 // Mean KV cache utilization across all replicas (for V1 Utilization)
 	MaxQueueLength      int
 	AvgSpareKvCapacity  float64
 	AvgSpareQueueLength float64

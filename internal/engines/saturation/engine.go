@@ -1074,6 +1074,8 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			decision.Cost = va.Cost
 			// Use average spare KV capacity as the SpareCapacity indicator for limiter prioritization
 			decision.SpareCapacity = va.AvgSpareKvCapacity
+			// V1 Utilization: mean of per-replica KvCacheUsage fractions
+			decision.Utilization = va.AvgKvCacheUsage
 		} else {
 			logger.Info("No variant analysis found for decision (metrics may be unavailable)",
 				"variant", variantName)

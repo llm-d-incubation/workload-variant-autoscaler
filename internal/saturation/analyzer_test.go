@@ -541,3 +541,71 @@ func TestCalculatesaturationTargets_LWSGroupSizeDoesNotBlock(t *testing.T) {
 		t.Errorf("expected lws-variant target=2 (1 group scaled up by 1, in group units), got %d", targets["lws-variant"])
 	}
 }
+
+func TestAnalyzeVariant_AvgKvCacheUsage(t *testing.T) {
+	analyzer := &Analyzer{}
+	config := config.SaturationScalingConfig{
+		KvCacheThreshold:     0.80,
+		QueueLengthThreshold: 5,
+		KvSpareTrigger:       0.10,
+		QueueSpareTrigger:    3,
+	}
+
+	tests := []struct {
+		name               string
+		metrics            []interfaces.ReplicaMetrics
+		expectedAvgKvUsage float64
+		expectedMaxKvUsage float64
+	}{
+		{
+			name: "uniform KV cache usage",
+			metrics: []interfaces.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0.50, QueueLength: 2},
+				{PodName: "pod-2", VariantName: "v1", KvCacheUsage: 0.50, QueueLength: 2},
+				{PodName: "pod-3", VariantName: "v1", KvCacheUsage: 0.50, QueueLength: 2},
+			},
+			expectedAvgKvUsage: 0.50,
+			expectedMaxKvUsage: 0.50,
+		},
+		{
+			name: "mixed KV cache usage",
+			metrics: []interfaces.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0.30, QueueLength: 2},
+				{PodName: "pod-2", VariantName: "v1", KvCacheUsage: 0.60, QueueLength: 2},
+				{PodName: "pod-3", VariantName: "v1", KvCacheUsage: 0.90, QueueLength: 2},
+			},
+			expectedAvgKvUsage: 0.60, // (0.30 + 0.60 + 0.90) / 3
+			expectedMaxKvUsage: 0.90,
+		},
+		{
+			name: "mixed saturated and non-saturated",
+			metrics: []interfaces.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0.85, QueueLength: 2}, // Saturated
+				{PodName: "pod-2", VariantName: "v1", KvCacheUsage: 0.40, QueueLength: 2}, // Not saturated
+				{PodName: "pod-3", VariantName: "v1", KvCacheUsage: 0.55, QueueLength: 2}, // Not saturated
+			},
+			expectedAvgKvUsage: 0.60, // (0.85 + 0.40 + 0.55) / 3 - includes ALL replicas
+			expectedMaxKvUsage: 0.85,
+		},
+		{
+			name:               "empty metrics",
+			metrics:            []interfaces.ReplicaMetrics{},
+			expectedAvgKvUsage: 0.0,
+			expectedMaxKvUsage: 0.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analysis := analyzer.analyzeVariant(context.Background(), "v1", tt.metrics, config)
+
+			if analysis.AvgKvCacheUsage != tt.expectedAvgKvUsage {
+				t.Errorf("expected AvgKvCacheUsage=%.2f, got %.2f", tt.expectedAvgKvUsage, analysis.AvgKvCacheUsage)
+			}
+
+			if analysis.MaxKvCacheUsage != tt.expectedMaxKvUsage {
+				t.Errorf("expected MaxKvCacheUsage=%.2f, got %.2f", tt.expectedMaxKvUsage, analysis.MaxKvCacheUsage)
+			}
+		})
+	}
+}
