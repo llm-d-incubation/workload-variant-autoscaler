@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -19,6 +21,8 @@ const (
 	AnnotationInferencePool = "llm-d.ai/epp-inference-pool"
 	gpuQuotaResource        = "requests.nvidia.com/gpu"
 	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q})`
+	displayKindHPA          = "HorizontalPodAutoscaler"
+	displayKindScaledObject = "ScaledObject"
 )
 
 // Plugin implements the Coordinator Plugin interface for GPU rebalancing.
@@ -29,6 +33,7 @@ type Plugin struct {
 
 // +kubebuilder:rbac:groups="",resources=resourcequotas,verbs=get;list;watch
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;patch;update
+// +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch;patch;update
 
 // New constructs the gpu-rebalance Plugin.
 func New(c client.Client, promAPI promv1.API) *Plugin {
@@ -38,33 +43,34 @@ func New(c client.Client, promAPI promv1.API) *Plugin {
 // Name returns the unique plugin identifier.
 func (p *Plugin) Name() string { return "gpu-rebalance" }
 
-// hpaEntry pairs an HPA with its inference-pool name.
-type hpaEntry struct {
-	hpa  *autoscalingv2.HorizontalPodAutoscaler
-	pool string
+// scalerEntry pairs a managed scaling object with its inference-pool name.
+type scalerEntry struct {
+	obj         client.Object
+	pool        string
+	currentMax  int32
+	displayKind string
 }
 
-// Tick splits the GPU quota proportionally across managed HPAs based on each
-// pool's EPP flow-control queue depth. HPAs are grouped by namespace so each
-// namespace is rebalanced independently against its own ResourceQuota. When
-// all queues in a namespace are zero the quota is divided equally. MaxReplicas
-// is patched only when the computed target differs from the current value.
+// Tick splits the GPU quota proportionally across managed HPAs or KEDA
+// ScaledObjects based on each pool's EPP flow-control queue depth. Objects are
+// grouped by namespace so each namespace is rebalanced independently against
+// its own ResourceQuota. When all queues in a namespace are zero the quota is
+// divided equally. MaxReplicas / maxReplicaCount is patched only when the
+// computed target differs from the current value.
 func (p *Plugin) Tick(ctx context.Context, selected []client.Object) error {
 	log := ctrl.LoggerFrom(ctx).WithName("gpu-rebalance")
 
-	// Group annotated HPAs by namespace.
-	byNamespace := make(map[string][]hpaEntry)
+	// Group annotated scaling objects by namespace.
+	byNamespace := make(map[string][]scalerEntry)
 	for _, obj := range selected {
-		hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler)
+		entry, ok := scalerEntryFromObject(obj)
 		if !ok {
 			continue
 		}
-		pool := hpa.Annotations[AnnotationInferencePool]
-		if pool == "" {
+		if entry.pool == "" {
 			continue
 		}
-		ns := hpa.Namespace
-		byNamespace[ns] = append(byNamespace[ns], hpaEntry{hpa: hpa, pool: pool})
+		byNamespace[entry.obj.GetNamespace()] = append(byNamespace[entry.obj.GetNamespace()], entry)
 	}
 	if len(byNamespace) == 0 {
 		return nil
@@ -78,9 +84,30 @@ func (p *Plugin) Tick(ctx context.Context, selected []client.Object) error {
 	return nil
 }
 
+func scalerEntryFromObject(obj client.Object) (scalerEntry, bool) {
+	switch o := obj.(type) {
+	case *autoscalingv2.HorizontalPodAutoscaler:
+		return scalerEntry{
+			obj:         o,
+			pool:        o.Annotations[AnnotationInferencePool],
+			currentMax:  o.Spec.MaxReplicas,
+			displayKind: displayKindHPA,
+		}, true
+	case *kedav1alpha1.ScaledObject:
+		return scalerEntry{
+			obj:         o,
+			pool:        o.Annotations[AnnotationInferencePool],
+			currentMax:  o.GetHPAMaxReplicas(),
+			displayKind: displayKindScaledObject,
+		}, true
+	default:
+		return scalerEntry{}, false
+	}
+}
+
 // rebalanceNamespace applies proportional GPU quota allocation to all managed
-// HPAs in a single namespace.
-func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns string, entries []hpaEntry) error {
+// scaling objects in a single namespace.
+func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns string, entries []scalerEntry) error {
 	quota, err := p.namespaceGPUQuota(ctx, ns)
 	if err != nil {
 		return fmt.Errorf("reading GPU quota in namespace %s: %w", ns, err)
@@ -169,17 +196,17 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 	// which dampens burst noise without adding a hard cooldown delay.
 
 	for i, e := range entries {
-		if targets[i] == e.hpa.Spec.MaxReplicas {
+		if targets[i] == e.currentMax {
 			continue
 		}
-		log.Info("Setting maxReplicas",
-			"hpa", e.hpa.Name, "namespace", ns,
+		log.Info("Setting max replica ceiling",
+			"kind", e.displayKind, "name", e.obj.GetName(), "namespace", ns,
 			"pool", e.pool,
-			"from", e.hpa.Spec.MaxReplicas, "to", targets[i],
+			"from", e.currentMax, "to", targets[i],
 			"queue", queues[i], "quota", quota,
 		)
-		if err := p.setMaxReplicas(ctx, e.hpa, targets[i]); err != nil {
-			return fmt.Errorf("patching %s: %w", e.hpa.Name, err)
+		if err := p.setMaxReplicas(ctx, e.obj, targets[i]); err != nil {
+			return fmt.Errorf("patching %s %s: %w", e.displayKind, e.obj.GetName(), err)
 		}
 	}
 	return nil
@@ -226,14 +253,23 @@ func (p *Plugin) queryQueue(ctx context.Context, inferencePool string) (float64,
 	return float64(vec[0].Value), nil
 }
 
-func (p *Plugin) setMaxReplicas(ctx context.Context, hpa *autoscalingv2.HorizontalPodAutoscaler, target int32) error {
+func (p *Plugin) setMaxReplicas(ctx context.Context, obj client.Object, target int32) error {
 	// TODO: MergeFrom uses the object captured at List time. If another controller
 	// or user updated maxReplicas between the List and this Patch, the write will
 	// silently overwrite that change. Use MergeFromWithOptimisticLock (which sets
 	// resourceVersion on the patch) so the API server rejects a stale write with
 	// a 409 Conflict, allowing the Coordinator to re-read and retry cleanly.
 
-	original := hpa.DeepCopy()
-	hpa.Spec.MaxReplicas = target
-	return p.client.Patch(ctx, hpa, client.MergeFrom(original))
+	switch o := obj.(type) {
+	case *autoscalingv2.HorizontalPodAutoscaler:
+		original := o.DeepCopy()
+		o.Spec.MaxReplicas = target
+		return p.client.Patch(ctx, o, client.MergeFrom(original))
+	case *kedav1alpha1.ScaledObject:
+		original := o.DeepCopy()
+		o.Spec.MaxReplicaCount = ptr.To(target)
+		return p.client.Patch(ctx, o, client.MergeFrom(original))
+	default:
+		return fmt.Errorf("unsupported scaler type %T", obj)
+	}
 }
