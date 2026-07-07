@@ -124,7 +124,7 @@ func buildScaledObject(namespace, name, scaleTargetName, vaName string, minRepli
 	prometheusURL := "https://kube-prometheus-stack-prometheus." + monitoringNamespace + ".svc.cluster.local:9090"
 	// Use "namespace" not "exported_namespace": WVA controller emits the metric with label namespace;
 	// exported_namespace is only used by Prometheus Adapter for the external metrics API.
-	query := fmt.Sprintf("max(wva_desired_replicas{variant_name=%q,namespace=%q})", vaName, namespace)
+	query := fmt.Sprintf("wva_desired_replicas{variant_name=%q,namespace=%q}", vaName, namespace)
 
 	spec := kedav1alpha1.ScaledObjectSpec{
 		ScaleTargetRef: &kedav1alpha1.ScaleTarget{
