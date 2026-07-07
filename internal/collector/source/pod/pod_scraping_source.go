@@ -140,8 +140,12 @@ func (p *PodScrapingSource) Refresh(ctx context.Context, spec source.RefreshSpec
 
 	// Also cache per-metric slices keyed by __name__ so that
 	// Get("vllm:queue_size", nil) returns only the relevant values.
-	perMetric := p.splitByMetricName(aggregated)
+	perMetric := splitByMetricName(aggregated)
+
+	out := make(map[string]*source.MetricResult, len(perMetric)+1)
+	out["all_metrics"] = aggregated
 	for name, mr := range perMetric {
+		out[name] = mr
 		p.cache.Set(source.BuildCacheKey(name, nil), *mr, p.config.DefaultTTL)
 	}
 
@@ -151,11 +155,6 @@ func (p *PodScrapingSource) Refresh(ctx context.Context, spec source.RefreshSpec
 		"metricCount", len(aggregated.Values),
 		"distinctMetrics", len(perMetric))
 
-	out := make(map[string]*source.MetricResult, len(perMetric)+1)
-	out["all_metrics"] = aggregated
-	for name, mr := range perMetric {
-		out[name] = mr
-	}
 	return out, nil
 }
 
@@ -410,11 +409,12 @@ func (p *PodScrapingSource) parsePrometheusMetrics(reader io.Reader, podName str
 
 // splitByMetricName groups aggregated values by their "__name__" label,
 // returning one MetricResult per distinct metric name.
-func (p *PodScrapingSource) splitByMetricName(aggregated *source.MetricResult) map[string]*source.MetricResult {
+// Values without a "__name__" label and the reserved name "all_metrics" are skipped.
+func splitByMetricName(aggregated *source.MetricResult) map[string]*source.MetricResult {
 	grouped := make(map[string][]source.MetricValue)
 	for _, v := range aggregated.Values {
 		name := v.Labels["__name__"]
-		if name == "" {
+		if name == "" || name == "all_metrics" {
 			continue
 		}
 		grouped[name] = append(grouped[name], v)

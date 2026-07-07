@@ -874,19 +874,6 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 	})
 
 	Describe("splitByMetricName", func() {
-		var src *PodScrapingSource
-
-		BeforeEach(func() {
-			config := PodScrapingSourceConfig{
-				ServiceName:      "test-pool-epp",
-				ServiceNamespace: "test-ns",
-				MetricsPort:      9090,
-			}
-			var err error
-			src, err = NewPodScrapingSource(ctx, fakeClient.Build(), config)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
 		It("should group values by __name__ label", func() {
 			now := time.Now()
 			aggregated := &sourcepkg.MetricResult{
@@ -899,7 +886,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				},
 			}
 
-			result := src.splitByMetricName(aggregated)
+			result := splitByMetricName(aggregated)
 			Expect(result).To(HaveLen(2))
 
 			kvCache := result["vllm_kv_cache_usage_perc"]
@@ -925,9 +912,25 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				},
 			}
 
-			result := src.splitByMetricName(aggregated)
+			result := splitByMetricName(aggregated)
 			Expect(result).To(HaveLen(1))
 			Expect(result).To(HaveKey("vllm_queue"))
+		})
+
+		It("should skip values whose __name__ is the reserved 'all_metrics'", func() {
+			aggregated := &sourcepkg.MetricResult{
+				QueryName:   "all_metrics",
+				CollectedAt: time.Now(),
+				Values: []sourcepkg.MetricValue{
+					{Value: 1.0, Labels: map[string]string{"__name__": "all_metrics"}}, // reserved — skip
+					{Value: 2.0, Labels: map[string]string{"__name__": "vllm_queue"}},
+				},
+			}
+
+			result := splitByMetricName(aggregated)
+			Expect(result).To(HaveLen(1))
+			Expect(result).To(HaveKey("vllm_queue"))
+			Expect(result).NotTo(HaveKey("all_metrics"))
 		})
 
 		It("should return empty map for aggregated with no values", func() {
@@ -937,7 +940,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				Values:      []sourcepkg.MetricValue{},
 			}
 
-			result := src.splitByMetricName(aggregated)
+			result := splitByMetricName(aggregated)
 			Expect(result).To(BeEmpty())
 		})
 	})
