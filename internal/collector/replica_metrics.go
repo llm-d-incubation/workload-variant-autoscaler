@@ -879,9 +879,6 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		// This replaces the previous ownership traversal approach
 		vaName := data.vaName
 
-		// Track freshness for metrics in this pod for this variant right away
-		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
-
 		// Skip pods that have no metrics at all. This can happen when the query returns pods that
 		// were scaled up then scaled down, i.e. no longer running in the namespace.
 		if !data.hasKv && !data.hasQueue {
@@ -920,6 +917,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 				"scale targets", getScaleTargetNames(scaleTargets))
 			continue
 		}
+
 		variantKey := utils.GetNamespacedKey(namespace, vaName)
 		// Get accelerator name from Deployment/LWS nodeSelector/nodeAffinity or VA label
 		acceleratorName := ""
@@ -976,6 +974,8 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			logger.Info("Pod has engine metrics but no dispatch rate — possible pod/pod_name label mismatch", "pod", podName, "model", modelID, "namespace", namespace)
 		}
 
+		// Track freshness for metrics in this pod
+		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
 		metric := interfaces.ReplicaMetrics{
 			PodName:               podName,
 			ModelID:               modelID,
@@ -1016,7 +1016,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	}
 
 	// Only set this after all pods have been processed, making sure not to include pods without metrics (which are skipped above).
-	// This ensures that the discovered pod count reflects only those pods for which metrics were actually collected.
+	// This ensures that the discovered pod count reflects only those pods that produced replica metrics.
 	metrics.SetMetricsPodsDiscovered(namespace, len(replicaMetrics))
 	logger.V(logging.DEBUG).Info("Collected replica metrics",
 		"modelID", modelID,

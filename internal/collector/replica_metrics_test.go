@@ -1032,3 +1032,128 @@ func TestCollectReplicaMetrics_ThroughputOrphanSkipped(t *testing.T) {
 	assert.Equal(t, "pod-known", results[0].PodName)
 	assert.Equal(t, float64(0), results[0].GenerationTokenRate, "orphan entry must not contaminate pod-known")
 }
+
+func TestCollectReplicaMetrics_PodsDiscoveredCount(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	ts := time.Now()
+
+	// Create mock data with 3 pods:
+	// - pod-1: has both KV and queue metrics (should be counted)
+	// - pod-2: has only KV metric (should be counted)
+	// - pod-3: has neither KV nor queue metrics (should NOT be counted)
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			return map[string]*source.MetricResult{
+				"kv_cache_usage": {
+					Values: []source.MetricValue{
+						{
+							Labels: map[string]string{
+								"pod":                               "pod-1",
+								"instance":                          "10.0.0.1:8000",
+								constants.VariantLabelPrometheusKey: "va-1",
+							},
+							Value:     0.55,
+							Timestamp: ts,
+						},
+						{
+							Labels: map[string]string{
+								"pod":                               "pod-2",
+								"instance":                          "10.0.0.2:8000",
+								constants.VariantLabelPrometheusKey: "va-1",
+							},
+							Value:     0.60,
+							Timestamp: ts,
+						},
+					},
+				},
+				"queue_length": {
+					Values: []source.MetricValue{
+						{
+							Labels: map[string]string{
+								"pod":                               "pod-1",
+								"instance":                          "10.0.0.1:8000",
+								constants.VariantLabelPrometheusKey: "va-1",
+							},
+							Value:     5.0,
+							Timestamp: ts,
+						},
+					},
+				},
+				// Pod-3 has only throughput metrics (no KV or queue)
+				"generation_token_rate": {
+					Values: []source.MetricValue{
+						{
+							Labels: map[string]string{
+								"pod":                               "pod-3",
+								"instance":                          "10.0.0.3:8000",
+								constants.VariantLabelPrometheusKey: "va-1",
+							},
+							Value:     1000.0,
+							Timestamp: ts,
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	results, err := collector.CollectReplicaMetrics(
+		context.Background(),
+		"test-model",
+		"test-ns",
+		make(map[string]scaletarget.ScaleTargetAccessor),
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
+		make(map[string]float64),
+	)
+	require.NoError(t, err)
+
+	// Only pod-1 and pod-2 should be in results (pod-3 has no KV/queue metrics)
+	require.Len(t, results, 2, "only pods with KV or queue metrics should produce ReplicaMetrics")
+
+	// Gather metrics from the registry
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+
+	// Find the pods_discovered metric and verify its value
+	var foundPodsDiscovered bool
+	for _, mf := range metricFamilies {
+		if mf.GetName() == constants.WVAMetricsPodsDiscovered {
+			foundPodsDiscovered = true
+			require.NotEmpty(t, mf.GetMetric(), "pods_discovered metric should have at least one entry")
+
+			// Find the metric for test-ns namespace
+			for _, m := range mf.GetMetric() {
+				var namespace string
+				for _, label := range m.GetLabel() {
+					if label.GetName() == constants.LabelNamespace && label.GetValue() == "test-ns" {
+						namespace = label.GetValue()
+						break
+					}
+				}
+				if namespace == "test-ns" {
+					gauge := m.GetGauge()
+					require.NotNil(t, gauge, "pods_discovered should be a gauge metric")
+					// The fix ensures this is len(replicaMetrics) = 2, not len(podData) = 3
+					assert.Equal(t, float64(2), gauge.GetValue(),
+						"pods_discovered should count only pods with KV or queue metrics, not all pods in podData")
+					return
+				}
+			}
+			t.Error("pods_discovered metric for test-ns namespace not found")
+		}
+	}
+
+	require.True(t, foundPodsDiscovered, "pods_discovered metric not found")
+}
