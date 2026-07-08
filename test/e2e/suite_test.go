@@ -55,7 +55,6 @@ func TestE2E(t *testing.T) {
 	RunSpecs(t, "E2E Test Suite")
 }
 
-
 var _ = BeforeSuite(func() {
 	// Initialize controller-runtime logger to avoid warnings when using log.FromContext
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))

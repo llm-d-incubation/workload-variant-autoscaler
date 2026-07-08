@@ -41,15 +41,15 @@ func LoadConfigFromEnv() E2EConfig {
 		PodReadyTimeout: testconfig.GetEnvInt("POD_READY_TIMEOUT", 300), // 5 minutes
 		ScaleUpTimeout:  testconfig.GetEnvInt("SCALE_UP_TIMEOUT", 600),  // 10 minutes
 
-		EventuallyShortSec:        testconfig.GetEnvInt("E2E_EVENTUALLY_SHORT", 30),
-		EventuallyMediumSec:       testconfig.GetEnvInt("E2E_EVENTUALLY_MEDIUM", 60),
-		EventuallyStandardSec:     testconfig.GetEnvInt("E2E_EVENTUALLY_STANDARD", 120),
-		EventuallyLongSec:         testconfig.GetEnvInt("E2E_EVENTUALLY_LONG", 180),
-		EventuallyExtendedSec:     testconfig.GetEnvInt("E2E_EVENTUALLY_EXTENDED", 300),
-		PollIntervalSec:           testconfig.GetEnvInt("E2E_EVENTUALLY_POLL", 5),
-		PollIntervalQuickSec:      testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_QUICK", 2),
-		PollIntervalSlowSec:       testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_SLOW", 10),
-		PollIntervalVerySlowSec:   testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_VERY_SLOW", 15),
+		EventuallyShortSec:      testconfig.GetEnvInt("E2E_EVENTUALLY_SHORT", 30),
+		EventuallyMediumSec:     testconfig.GetEnvInt("E2E_EVENTUALLY_MEDIUM", 60),
+		EventuallyStandardSec:   testconfig.GetEnvInt("E2E_EVENTUALLY_STANDARD", 120),
+		EventuallyLongSec:       testconfig.GetEnvInt("E2E_EVENTUALLY_LONG", 180),
+		EventuallyExtendedSec:   testconfig.GetEnvInt("E2E_EVENTUALLY_EXTENDED", 300),
+		PollIntervalSec:         testconfig.GetEnvInt("E2E_EVENTUALLY_POLL", 5),
+		PollIntervalQuickSec:    testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_QUICK", 2),
+		PollIntervalSlowSec:     testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_SLOW", 10),
+		PollIntervalVerySlowSec: testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_VERY_SLOW", 15),
 	}
 
 	// OpenShift clusters typically don't have the HPAScaleToZero feature gate enabled, so native HPAs
