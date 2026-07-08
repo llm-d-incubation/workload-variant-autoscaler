@@ -35,10 +35,9 @@ import (
 )
 
 const (
-	scalerBackendKeda = "keda"
-	envKindEmulator   = "kind-emulator"
-	envKind           = "kind"
-	boolTrue          = "true"
+	envKindEmulator = "kind-emulator"
+	envKind         = "kind"
+	boolTrue        = "true"
 )
 
 var (
@@ -56,45 +55,6 @@ func TestE2E(t *testing.T) {
 	RunSpecs(t, "E2E Test Suite")
 }
 
-// restartPrometheusAdapterPods forces a rollout by deleting adapter pods, then waits for readiness.
-func restartPrometheusAdapterPods() {
-	By("Restarting prometheus-adapter pods")
-	podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-	})
-	Expect(err).NotTo(HaveOccurred(), "Failed to list prometheus-adapter pods")
-	for _, pod := range podList.Items {
-		deleteErr := k8sClient.CoreV1().Pods(cfg.MonitoringNS).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			GinkgoWriter.Printf("Warning: Failed to delete prometheus-adapter pod %s: %v\n", pod.Name, deleteErr)
-		} else {
-			GinkgoWriter.Printf("Deleted prometheus-adapter pod: %s\n", pod.Name)
-		}
-	}
-	By("Waiting for prometheus-adapter pods to be ready")
-	tm := time.Duration(cfg.EventuallyLongSec) * time.Second
-	poll := time.Duration(cfg.PollIntervalSec) * time.Second
-	Eventually(func(g Gomega) {
-		pods, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-		})
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(pods.Items).NotTo(BeEmpty(), "At least one prometheus-adapter pod should exist")
-		ready := 0
-		for _, pod := range pods.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-						ready++
-						break
-					}
-				}
-			}
-		}
-		g.Expect(ready).To(BeNumerically(">", 0), "At least one prometheus-adapter pod should be ready")
-	}, tm, poll).Should(Succeed())
-	GinkgoWriter.Println("prometheus-adapter pods restarted and ready")
-}
 
 var _ = BeforeSuite(func() {
 	// Initialize controller-runtime logger to avoid warnings when using log.FromContext
@@ -193,60 +153,12 @@ var _ = BeforeSuite(func() {
 		g.Expect(pods.Items).NotTo(BeEmpty(), "Prometheus pod not found")
 	}).Should(Succeed(), "Prometheus should be running")
 
-	// RESTART_PROMETHEUS_ADAPTER: false (never), true (always delete pods), auto (default: probe then restart only if needed).
-	if cfg.ScalerBackend == "prometheus-adapter" && cfg.Environment == envKindEmulator {
-		mode := strings.ToLower(strings.TrimSpace(os.Getenv("RESTART_PROMETHEUS_ADAPTER")))
-		if mode == "" {
-			mode = "auto"
-		}
-		switch mode {
-		case "false":
-			GinkgoWriter.Println("RESTART_PROMETHEUS_ADAPTER=false: skipping prometheus-adapter restart")
-		case boolTrue:
-			restartPrometheusAdapterPods()
-		default:
-			probe := time.Duration(cfg.PrometheusAdapterProbeSec) * time.Second
-			probeErr := wait.PollUntilContextTimeout(ctx, 5*time.Second, probe, true, func(_ context.Context) (bool, error) {
-				podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-					LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-				})
-				if err != nil || len(podList.Items) == 0 {
-					return false, nil
-				}
-				ready := 0
-				for _, pod := range podList.Items {
-					if pod.Status.Phase == corev1.PodRunning {
-						for _, condition := range pod.Status.Conditions {
-							if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-								ready++
-								break
-							}
-						}
-					}
-				}
-				if ready == 0 {
-					return false, nil
-				}
-				_, discErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-				return discErr == nil, nil
-			})
-			if probeErr != nil {
-				GinkgoWriter.Printf("prometheus-adapter probe failed within %v (%v); restarting pods\n", probe, probeErr)
-				restartPrometheusAdapterPods()
-			} else {
-				GinkgoWriter.Println("prometheus-adapter ready and external.metrics API registered; skipping restart")
-			}
-		}
-	}
-
-	if cfg.ScalerBackend == scalerBackendKeda {
-		By("Verifying KEDA is available (ScaledObject CRD)")
-		Eventually(func(g Gomega) {
-			gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
-			_, err := dynamicClient.Resource(gvr).Namespace(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{Limit: 1})
-			g.Expect(err).NotTo(HaveOccurred(), "KEDA ScaledObject CRD should be installed when SCALER_BACKEND=keda")
-		}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
-	}
+	By("Verifying KEDA is available (ScaledObject CRD)")
+	Eventually(func(g Gomega) {
+		gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+		_, err := dynamicClient.Resource(gvr).Namespace(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{Limit: 1})
+		g.Expect(err).NotTo(HaveOccurred(), "KEDA ScaledObject CRD should be installed")
+	}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
 
 	GinkgoWriter.Println("BeforeSuite completed successfully - infrastructure ready")
 })

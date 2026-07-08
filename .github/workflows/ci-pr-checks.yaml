@@ -113,8 +113,8 @@ jobs:
       - name: Build namespace-scoped kubernetes overlay
         run: bin/kustomize build config/overlays/namespace-scoped/kubernetes > /dev/null
 
-  # E2E smoke tests - run automatically on every PR with code changes
-  # Skip if PR only contains docs/metadata changes
+  # E2E smoke tests - run automatically on every PR with code changes.
+  # Skip if PR only contains docs/metadata changes.
   e2e-tests-smoke:
     runs-on: ubuntu-latest
     needs: [lint-and-test, check-code-changes]
@@ -151,69 +151,6 @@ jobs:
         run: deploy/ci-pr-checks/build-wva-image-local.sh
 
       - name: Run e2e tests (smoke)
-        shell: bash
-        env:
-          ENVIRONMENT: kind-emulator
-          USE_SIMULATOR: "true"
-          SCALE_TO_ZERO_ENABLED: "false"
-          CREATE_CLUSTER: "true"
-          # Emulated Kind: llm-d model serving is deployed by install-epp.sh (llm-d-router-standalone chart + simulator).
-          LLM_D_ROUTER_VERSION: "v0.9.0"
-          # Dual-controller smoke installs a secondary controller via Kustomize; overlay path must be explicit in CI.
-          WVA_E2E_SECONDARY_OVERLAY_PATH: ${{ github.workspace }}/test/e2e/testdata/secondary-controller
-          IMG: ${{ steps.build-image.outputs.image }}
-          SKIP_BUILD: "true"
-          PROMETHEUS_ADAPTER_WAIT: "false"
-          DELETE_CLUSTER: "true"
-          # Lower saturation thresholds for simulator mode — the simulator's
-          # KV-cache and queue metrics are modest, so default thresholds
-          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
-          # scale-up reliably. These values trigger when kvUsage > 0.30 or
-          # queueLength > 0.5, which the simulator produces under load.
-          KV_SPARE_TRIGGER: "0.5"
-          QUEUE_SPARE_TRIGGER: "4.5"
-        run: |
-          make test-e2e-smoke-with-setup
-
-  # KEDA E2E smoke tests - run automatically on every PR with code changes.
-  # Non-blocking: not a required status check. Will be promoted to required once stable.
-  # Each run gets its own Kind cluster with KEDA installed instead of Prometheus Adapter.
-  e2e-tests-smoke-keda:
-    runs-on: ubuntu-latest
-    needs: [lint-and-test, check-code-changes]
-    if: github.event_name == 'pull_request' && needs.check-code-changes.outputs.has_code_changes == 'true'
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-
-      - name: Extract Go version from go.mod
-        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
-
-      - name: Set up Go with cache
-        uses: actions/setup-go@v6
-        with:
-          go-version: "${{ env.GO_VERSION }}"
-          cache-dependency-path: ./go.sum
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Install Kind
-        run: deploy/ci-pr-checks/install-kind.sh
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build WVA image locally
-        id: build-image
-        env:
-          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: deploy/ci-pr-checks/build-wva-image-local.sh
-
-      - name: Run e2e tests (KEDA smoke)
         shell: bash
         env:
           ENVIRONMENT: kind-emulator

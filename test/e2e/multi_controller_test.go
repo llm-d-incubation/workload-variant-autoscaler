@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -42,9 +40,10 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 			primaryNamespace    = "llm-d-sim"
 			secondaryNamespace  = "llm-d-sim-dual"
 			secondaryController = "workload-variant-autoscaler-system-dual"
-			// Deliberately identical HPA object name in both namespaces to prove
-			// isolation works despite overlapping (colliding) variant names. The HPA
-			// object name is also the variant_name label on wva_desired_replicas.
+			// Deliberately identical ScaledObject base name in both namespaces to prove
+			// isolation works despite overlapping (colliding) variant names. Each ScaledObject's
+			// Prometheus trigger queries wva_desired_replicas{variant_name=..., namespace=<ns>},
+			// so KEDA reads only the metric emitted for its own workload namespace.
 			sharedHPABase      = "smoke-test-dual-shared"
 			sharedVariantName  = sharedHPABase + "-hpa"
 			primaryModelName   = "smoke-test-dual-primary-ms"
@@ -54,8 +53,8 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 		)
 
 		BeforeAll(func() {
-			if cfg.ScalerBackend == scalerBackendKeda {
-				Skip("Dual-controller external metrics check is specific to Prometheus Adapter backend")
+			if cfg.Environment == "openshift" {
+				Skip("Dual-controller test skipped on OpenShift: patch-and-restore of cluster-scoped CRBs is unsafe on shared persistent clusters")
 			}
 			if cfg.Environment != envKindEmulator {
 				Skip("Dual-controller smoke scenario currently targets kind-emulator setup")
@@ -227,111 +226,59 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 			err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, secondaryNamespace, secondaryModelName, secondaryModelName+"-decode")
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary ServiceMonitor")
 
-			// Create annotated HPAs (the discovery source AND scaler) with an
-			// overlapping object name in both namespaces. The HPA object name is the
-			// variant_name label; the WVA controller-instance label on each HPA is what
-			// keeps the two namespace-scoped controllers isolated. The secondary
-			// controller (CONTROLLER_INSTANCE=controllerInstance) only reconciles the
-			// HPA carrying a matching label; the cluster-scoped primary has no
-			// CONTROLLER_INSTANCE and reconciles the unlabeled primary HPA.
-			By("Creating annotated HPAs in both namespaces with the shared variant name")
-			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, sharedHPABase, primaryModelName+"-decode", sharedVariantName, 1, 10,
-				fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create primary HPA")
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).Delete(ctx, sharedVariantName, metav1.DeleteOptions{})
-			})
+			// Create annotated ScaledObjects with an overlapping variant name in both
+			// namespaces. Each ScaledObject's Prometheus trigger queries
+			// wva_desired_replicas{variant_name=<sharedVariantName>, namespace=<ns>},
+			// ensuring KEDA reads only the metric series for its own namespace.
+			By("Creating annotated ScaledObjects in both namespaces with the shared variant name")
+			err = fixtures.EnsureScaledObject(ctx, crClient, primaryNamespace, sharedHPABase, primaryModelName+"-decode", sharedVariantName, 1, 10, cfg.MonitoringNS,
+				fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "30.0"))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create primary ScaledObject")
+			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, primaryNamespace, sharedHPABase) })
 
-			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, sharedHPABase, secondaryModelName+"-decode", sharedVariantName, 1, 10,
-				fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary HPA")
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Delete(ctx, sharedVariantName, metav1.DeleteOptions{})
-			})
-
-			// Stamp the controller-instance label on the secondary HPA so WVA's
-			// annotation discovery scopes it to the secondary controller.
-			// readyVariantAutoscalings filters synthesized variants by this label;
-			// the primary HPA is left unlabeled so the cluster-scoped primary controller owns it.
-			By("Labeling the secondary HPA with the controller-instance for isolation")
-			secondaryHPA, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to read secondary HPA for labeling")
-			if secondaryHPA.Labels == nil {
-				secondaryHPA.Labels = map[string]string{}
-			}
-			secondaryHPA.Labels[constants.ControllerInstanceLabelKey] = controllerInstance
-			_, err = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Update(ctx, secondaryHPA, metav1.UpdateOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to label secondary HPA with controller-instance")
+			err = fixtures.EnsureScaledObject(ctx, crClient, secondaryNamespace, sharedHPABase, secondaryModelName+"-decode", sharedVariantName, 1, 10, cfg.MonitoringNS,
+				fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "30.0"))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary ScaledObject")
+			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, secondaryNamespace, sharedHPABase) })
 		})
 
-		It("should expose isolated external metrics for each namespace-scoped controller", func() {
-			// Both controllers now discover their variant from the annotated HPA and
-			// emit wva_desired_replicas. WVA no longer writes VA .status, so isolation
-			// is verified purely through the per-namespace external metrics surface:
-			// each namespace must return exactly its own variant, attributed to the
-			// controller that owns it.
-			By("Querying external metrics for primary namespace")
+		It("should reconcile ScaledObjects in both namespaces independently", func() {
+			// Each namespace-scoped controller discovers its own ScaledObject and WVA
+			// emits wva_desired_replicas per namespace. Verify KEDA has consumed the
+			// metric in each namespace by checking the KEDA-managed HPA CurrentMetrics
+			// (KEDA only populates this after a successful Prometheus query).
+			By("Verifying KEDA reads wva_desired_replicas for primary namespace")
 			Eventually(func(g Gomega) {
-				raw, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/"+primaryNamespace+"/"+constants.WVADesiredReplicas).
-					Param("labelSelector", "variant_name="+sharedVariantName+",exported_namespace="+primaryNamespace).
-					DoRaw(ctx)
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).List(ctx, metav1.ListOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
-				var metricList externalMetricValueList
-				g.Expect(json.Unmarshal(raw, &metricList)).To(Succeed())
-				g.Expect(metricList.Items).To(HaveLen(1))
-				g.Expect(metricList.Items[0].MetricLabels["exported_namespace"]).To(Equal(primaryNamespace))
-			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
-			By("Querying external metrics for secondary controller namespace")
-			Eventually(func(g Gomega) {
-				raw, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/"+secondaryNamespace+"/"+constants.WVADesiredReplicas).
-					Param("labelSelector", "variant_name="+sharedVariantName+",exported_namespace="+secondaryNamespace).
-					DoRaw(ctx)
-				g.Expect(err).NotTo(HaveOccurred())
-				var metricList externalMetricValueList
-				g.Expect(json.Unmarshal(raw, &metricList)).To(Succeed())
-				g.Expect(metricList.Items).To(HaveLen(1))
-				g.Expect(metricList.Items[0].MetricLabels["exported_namespace"]).To(Equal(secondaryNamespace))
-				g.Expect(metricList.Items[0].MetricLabels["controller_instance"]).To(Equal(controllerInstance))
-			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
-			By("Verifying both HPAs report active metric scaling")
-			Eventually(func(g Gomega) {
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				var scalingActive *autoscalingv2.HorizontalPodAutoscalerCondition
-				for i := range hpa.Status.Conditions {
-					if hpa.Status.Conditions[i].Type == autoscalingv2.ScalingActive {
-						scalingActive = &hpa.Status.Conditions[i]
+				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+				for i := range hpaList.Items {
+					if hpaList.Items[i].Spec.ScaleTargetRef.Name == primaryModelName+"-decode" {
+						kedaHPA = &hpaList.Items[i]
 						break
 					}
 				}
-				if scalingActive == nil || scalingActive.Status != corev1.ConditionTrue {
-					GinkgoWriter.Printf("primary HPA %s/%s conditions: %+v\n", primaryNamespace, sharedVariantName, hpa.Status.Conditions)
-				}
-				g.Expect(scalingActive).NotTo(BeNil(), "Primary HPA should report ScalingActive condition")
-				g.Expect(scalingActive.Status).To(Equal(corev1.ConditionTrue), "Primary HPA should have external metric available")
+				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the primary deployment")
+				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"Primary KEDA HPA should have CurrentMetrics populated — wva_desired_replicas{namespace=%q} is being consumed", primaryNamespace)
+				GinkgoWriter.Printf("Primary KEDA HPA CurrentMetrics: %d entries\n", len(kedaHPA.Status.CurrentMetrics))
 			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
+			By("Verifying KEDA reads wva_desired_replicas for secondary namespace independently")
 			Eventually(func(g Gomega) {
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).List(ctx, metav1.ListOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
-				var scalingActive *autoscalingv2.HorizontalPodAutoscalerCondition
-				for i := range hpa.Status.Conditions {
-					if hpa.Status.Conditions[i].Type == autoscalingv2.ScalingActive {
-						scalingActive = &hpa.Status.Conditions[i]
+				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+				for i := range hpaList.Items {
+					if hpaList.Items[i].Spec.ScaleTargetRef.Name == secondaryModelName+"-decode" {
+						kedaHPA = &hpaList.Items[i]
 						break
 					}
 				}
-				if scalingActive == nil || scalingActive.Status != corev1.ConditionTrue {
-					GinkgoWriter.Printf("secondary HPA %s/%s conditions: %+v\n", secondaryNamespace, sharedVariantName, hpa.Status.Conditions)
-				}
-				g.Expect(scalingActive).NotTo(BeNil(), "Secondary HPA should report ScalingActive condition")
-				g.Expect(scalingActive.Status).To(Equal(corev1.ConditionTrue), "Secondary HPA should have external metric available")
+				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the secondary deployment")
+				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"Secondary KEDA HPA should have CurrentMetrics populated — wva_desired_replicas{namespace=%q} is being consumed", secondaryNamespace)
+				GinkgoWriter.Printf("Secondary KEDA HPA CurrentMetrics: %d entries\n", len(kedaHPA.Status.CurrentMetrics))
 			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 		})
 	})

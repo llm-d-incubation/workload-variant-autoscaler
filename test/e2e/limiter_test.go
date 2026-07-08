@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -11,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -107,120 +105,70 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			g.Expect(depB.Status.ReadyReplicas).To(Equal(int32(1)))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating annotated scalers (discovery sources) for both deployments, with distinct variant costs")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaA, modelServiceA+"-decode", variantA, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject A")
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaA) })
+		By("Creating annotated ScaledObjects (discovery sources) for both deployments, with distinct variant costs")
+		err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaA, modelServiceA+"-decode", variantA, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "30.0"))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject A")
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaA) })
 
-			err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaB, modelServiceB+"-decode", variantB, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "40.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject B")
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaB) })
-		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, ns, hpaA, modelServiceA+"-decode", variantA, 1, 10,
-				fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA A")
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).Delete(ctx, hpaA+"-hpa", metav1.DeleteOptions{})
-			})
-
-			err = fixtures.EnsureHPA(ctx, k8sClient, ns, hpaB, modelServiceB+"-decode", variantB, 1, 10,
-				fixtures.WithWVAAnnotations(cfg.ModelID, "40.0"))
-			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA B")
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).Delete(ctx, hpaB+"-hpa", metav1.DeleteOptions{})
-			})
-		}
+		err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaB, modelServiceB+"-decode", variantB, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "40.0"))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject B")
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaB) })
 
 		GinkgoWriter.Println("GPU Limiter test setup complete with two annotated scalers (distinct variant costs)")
 	})
 
 	Context("Annotated scaler discovery", func() {
 		It("should discover both variants via their annotated scalers", func() {
-			// Both annotated scalers are the discovery sources; each drives a managed
-			// HPA (KEDA) or is itself the HPA (Prometheus-adapter). Verify both scale
-			// targets have a corresponding HPA, which is the observable signal that WVA
-			// discovered the variant and the scaler is wired.
-			if cfg.ScalerBackend == scalerBackendKeda {
-				By("Verifying KEDA created a managed HPA for each deployment")
-				Eventually(func(g Gomega) {
-					hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
-					g.Expect(err).NotTo(HaveOccurred())
-					var foundA, foundB bool
-					for i := range hpaList.Items {
-						switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
-						case modelServiceA + "-decode":
-							foundA = true
-						case modelServiceB + "-decode":
-							foundB = true
-						}
+			// Both annotated ScaledObjects are the discovery sources; KEDA creates a
+			// managed HPA for each. Verify both scale targets have a corresponding HPA,
+			// which is the observable signal that WVA discovered the variant and the
+			// scaler is wired.
+			By("Verifying KEDA created a managed HPA for each deployment")
+			Eventually(func(g Gomega) {
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				var foundA, foundB bool
+				for i := range hpaList.Items {
+					switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
+					case modelServiceA + "-decode":
+						foundA = true
+					case modelServiceB + "-decode":
+						foundB = true
 					}
-					g.Expect(foundA).To(BeTrue(), "KEDA should have created an HPA for deployment A")
-					g.Expect(foundB).To(BeTrue(), "KEDA should have created an HPA for deployment B")
-				}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-			} else {
-				By("Verifying both annotated HPAs exist")
-				hpaObjA, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).Get(ctx, hpaA+"-hpa", metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred(), "HPA A should exist")
-				Expect(hpaObjA.Spec.ScaleTargetRef.Name).To(Equal(modelServiceA + "-decode"))
-
-				hpaObjB, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).Get(ctx, hpaB+"-hpa", metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred(), "HPA B should exist")
-				Expect(hpaObjB.Spec.ScaleTargetRef.Name).To(Equal(modelServiceB + "-decode"))
-			}
+				}
+				g.Expect(foundA).To(BeTrue(), "KEDA should have created an HPA for deployment A")
+				g.Expect(foundB).To(BeTrue(), "KEDA should have created an HPA for deployment B")
+			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 			GinkgoWriter.Println("Both variants discovered via their annotated scalers")
 		})
 
 		It("should emit wva_desired_replicas for both variants", func() {
-			// WVA's sole output is the wva_desired_replicas metric. For KEDA we observe
-			// it through each managed HPA's CurrentMetrics (populated only after a
-			// successful Prometheus query); for the Prometheus-adapter backend through
-			// the external metrics API.
-			if cfg.ScalerBackend == scalerBackendKeda {
-				By("Verifying KEDA read wva_desired_replicas for both deployments")
-				Eventually(func(g Gomega) {
-					hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
-					g.Expect(err).NotTo(HaveOccurred())
-					var hpaForA, hpaForB *autoscalingv2.HorizontalPodAutoscaler
-					for i := range hpaList.Items {
-						switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
-						case modelServiceA + "-decode":
-							hpaForA = &hpaList.Items[i]
-						case modelServiceB + "-decode":
-							hpaForB = &hpaList.Items[i]
-						}
+			// WVA's sole output is the wva_desired_replicas metric. Verify KEDA has
+			// consumed it by checking each managed HPA's CurrentMetrics (populated only
+			// after a successful Prometheus query).
+			By("Verifying KEDA read wva_desired_replicas for both deployments")
+			Eventually(func(g Gomega) {
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				var hpaForA, hpaForB *autoscalingv2.HorizontalPodAutoscaler
+				for i := range hpaList.Items {
+					switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
+					case modelServiceA + "-decode":
+						hpaForA = &hpaList.Items[i]
+					case modelServiceB + "-decode":
+						hpaForB = &hpaList.Items[i]
 					}
-					g.Expect(hpaForA).NotTo(BeNil(), "KEDA should have an HPA for deployment A")
-					g.Expect(hpaForB).NotTo(BeNil(), "KEDA should have an HPA for deployment B")
-					g.Expect(hpaForA.Status.CurrentMetrics).NotTo(BeEmpty(),
-						"KEDA HPA A should have CurrentMetrics populated from wva_desired_replicas")
-					g.Expect(hpaForB.Status.CurrentMetrics).NotTo(BeEmpty(),
-						"KEDA HPA B should have CurrentMetrics populated from wva_desired_replicas")
-				}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-			} else {
-				By("Querying external metrics API for wva_desired_replicas")
-				Eventually(func(g Gomega) {
-					result, err := k8sClient.RESTClient().
-						Get().
-						AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + ns + "/" + constants.WVADesiredReplicas).
-						DoRaw(ctx)
-					if err != nil {
-						if !strings.Contains(err.Error(), "the server could not find the requested resource") {
-							g.Expect(err).NotTo(HaveOccurred())
-						}
-						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-						g.Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
-						return
-					}
-					if !strings.Contains(string(result), `"items":[]`) {
-						g.Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas))
-						GinkgoWriter.Println("wva_desired_replicas emitted for the annotated limiter variants")
-					}
-				}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-			}
+				}
+				g.Expect(hpaForA).NotTo(BeNil(), "KEDA should have an HPA for deployment A")
+				g.Expect(hpaForB).NotTo(BeNil(), "KEDA should have an HPA for deployment B")
+				g.Expect(hpaForA.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"KEDA HPA A should have CurrentMetrics populated from wva_desired_replicas")
+				g.Expect(hpaForB.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"KEDA HPA B should have CurrentMetrics populated from wva_desired_replicas")
+			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 		})
 	})
 

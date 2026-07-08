@@ -165,7 +165,7 @@ Tests expect **WVA + monitoring + scaler + llm-d EPP/gateway** to be deployed; t
 This deploys:
 - WVA controller (via Kustomize)
 - llm-d EPP (GAIE standalone chart) via `deploy/install-epp.sh`
-- Prometheus stack and Prometheus Adapter (or KEDA when `SCALER_BACKEND=keda`)
+- Prometheus stack and KEDA
 - **No** VariantAutoscaling or HPA (tests create these)
 
 When `ENABLE_SCALE_TO_ZERO=true` (set by `make deploy-e2e-infra` when `SCALE_TO_ZERO_ENABLED=true`), **`install-epp.sh`** enables the **flowControl feature gate** on the EPP so it exposes `inference_extension_flow_control_queue_size`. The **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts.
@@ -220,10 +220,9 @@ Key environment variables (see [E2E Test Suite README](../../test/e2e/README.md)
 | `ENVIRONMENT` | `kind-emulator` | `kind-emulator`, `openshift`, or `kubernetes` |
 | `USE_SIMULATOR` | `true` | Emulated GPUs (true) or real vLLM (false) |
 | `SCALE_TO_ZERO_ENABLED` | `false` | Enable scale-to-zero tests (Kind supports both enabled and disabled) |
-| `SCALER_BACKEND` | `prometheus-adapter` | `prometheus-adapter` or `keda` (KEDA only for kind-emulator) |
+| `SCALER_BACKEND` | `keda` | `keda` (ScaledObject) or `none` (skip install, use pre-installed backend) |
 | `POD_READY_TIMEOUT` / `SCALE_UP_TIMEOUT` | `300` / `600` | Model ready vs longest scale/job waits (seconds) |
 | `E2E_EVENTUALLY_STANDARD`, etc. | see README | Optional `Eventually` timeouts and poll intervals (`E2E_EVENTUALLY_*`, `E2E_EVENTUALLY_POLL*`) |
-| `RESTART_PROMETHEUS_ADAPTER` | `auto` | kind-emulator: `auto` probes adapter + API before restarting pods; `true`/`false` force always/never |
 
 Deploy-time knobs: `SKIP_HELM_REPO_UPDATE`, optional `KV_SPARE_TRIGGER` / `QUEUE_SPARE_TRIGGER` (Makefile patches the `wva-saturation-scaling-config` ConfigMap when set) — see **Install script tuning** above.
 

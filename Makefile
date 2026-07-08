@@ -23,7 +23,7 @@ NUM_PROMPTS          ?= 3000
 ENVIRONMENT                 ?= kind-emulator
 USE_SIMULATOR               ?= true
 SCALE_TO_ZERO_ENABLED       ?= false
-SCALER_BACKEND              ?= prometheus-adapter  # prometheus-adapter (HPA), keda (ScaledObject), or none (skip, use pre-installed backend)
+SCALER_BACKEND              ?= keda  # keda (ScaledObject) or none (skip, use pre-installed backend)
 LLM_D_ROUTER_VERSION        ?= v0.9.0
 GAIE_VERSION                ?= v1.5.0
 KV_SPARE_TRIGGER           ?=
@@ -180,7 +180,7 @@ undeploy-wva-on-k8s:
 # For OpenShift/Kubernetes: ENVIRONMENT=openshift LLMD_NS=<your-ns> make deploy-e2e-infra
 # If IMG is set, builds the image locally first (unless SKIP_BUILD=true).
 .PHONY: deploy-e2e-infra
-deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server or VA/HPA). Works for kind-emulator, openshift, kubernetes. Uses Prometheus Adapter unless SCALER_BACKEND=keda.
+deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server or VA/HPA). Works for kind-emulator, openshift, kubernetes.
 	@echo "Deploying e2e test infrastructure..."
 	@if [ -n "$(IMG)" ]; then \
 		echo "IMG is set to '$(IMG)'"; \

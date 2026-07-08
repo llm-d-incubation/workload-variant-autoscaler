@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Workload-Variant-Autoscaler infrastructure bootstrap: optional WVA controller,
-# Prometheus monitoring stack, and scaler backend (KEDA or Prometheus Adapter).
+# Prometheus monitoring stack, and scaler backend (KEDA).
 #
 # For llm-d (gateway, EPP, ModelService), see the llm-d project guides at https://github.com/llm-d/llm-d.
 # For EPP setup (all environments), run deploy/install-epp.sh after this script.
@@ -49,15 +49,14 @@ PROMETHEUS_SECRET_NAME=${PROMETHEUS_SECRET_NAME:-"prometheus-web-tls"}
 DEPLOY_PROMETHEUS=${DEPLOY_PROMETHEUS:-true}
 DEPLOY_OPERATIONAL_DASHBOARD=${DEPLOY_OPERATIONAL_DASHBOARD:-true}
 DEPLOY_WVA=${DEPLOY_WVA:-true}
-DEPLOY_PROMETHEUS_ADAPTER=${DEPLOY_PROMETHEUS_ADAPTER:-true}
 SKIP_CHECKS=${SKIP_CHECKS:-false}
 WVA_METRICS_SECURE=${WVA_METRICS_SECURE:-true}
 
-# Scaler backend: prometheus-adapter | keda | none.
+# Scaler backend: keda | none.
 # - keda on kubernetes: expects cluster CRD unless KEDA_HELM_INSTALL=true (then this script installs Helm KEDA).
 # - keda on openshift: platform-managed KEDA only (no Helm install from this script).
 # - none: skip scaler install (cluster already provides external metrics).
-SCALER_BACKEND=${SCALER_BACKEND:-prometheus-adapter}
+SCALER_BACKEND=${SCALER_BACKEND:-keda}
 KEDA_NAMESPACE=${KEDA_NAMESPACE:-keda-system}
 # Pinned for reproducible Helm installs (used when deploy_keda actually runs helm upgrade).
 KEDA_CHART_VERSION=${KEDA_CHART_VERSION:-2.19.0}
