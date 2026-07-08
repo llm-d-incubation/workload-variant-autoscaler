@@ -864,7 +864,6 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 
 	// Build replica metrics from pod data
 	replicaMetrics := make([]interfaces.ReplicaMetrics, 0, len(podData))
-	metrics.SetMetricsPodsDiscovered(namespace, len(podData))
 	collectedAt := time.Now()
 
 	for instanceKey, data := range podData {
@@ -883,7 +882,8 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		// Track freshness for metrics in this pod for this variant right away
 		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
 
-		// Skip pods that have no metrics at all
+		// Skip pods that have no metrics at all. This can happen when the query returns pods that
+		// were scaled up then scaled down, i.e. no longer running in the namespace.
 		if !data.hasKv && !data.hasQueue {
 			continue
 		}
@@ -1015,6 +1015,9 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 		}
 	}
 
+	// Only set this after all pods have been processed, making sure not to include pods without metrics (which are skipped above).
+	// This ensures that the discovered pod count reflects only those pods for which metrics were actually collected.
+	metrics.SetMetricsPodsDiscovered(namespace, len(replicaMetrics))
 	logger.V(logging.DEBUG).Info("Collected replica metrics",
 		"modelID", modelID,
 		"namespace", namespace,
