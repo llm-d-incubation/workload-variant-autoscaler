@@ -40,7 +40,7 @@ func CreatePrometheusClientConfig(cfg *config.Config) (*api.Config, error) {
 		Address: cfg.PrometheusBaseURL(),
 	}
 
-	// Create custom HTTPS transport with TLS support
+	// Create the custom transport; TLS is applied only for https:// endpoints.
 	transport, err := CreatePrometheusTransport(cfg)
 	if err != nil {
 		return nil, err

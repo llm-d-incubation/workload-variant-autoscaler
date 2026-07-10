@@ -136,9 +136,11 @@ spec:
 - If your Prometheus is only reachable over plain HTTP (e.g. `kube-prometheus-stack`'s
   default in-cluster service), set `PROMETHEUS_ALLOW_HTTP=true` and use an
   `http://` `PROMETHEUS_BASE_URL` instead of standing up a TLS-terminating proxy.
-  This cannot be combined with `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`, any
-  `PROMETHEUS_CA_CERT_PATH`/client cert settings, or bearer token auth — WVA
-  refuses to start if those are set alongside a plain HTTP URL.
+  This cannot be combined with `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`,
+  `PROMETHEUS_SERVER_NAME`, any `PROMETHEUS_CA_CERT_PATH`/client cert settings, or
+  bearer token auth — WVA refuses to start if those are set alongside a plain HTTP
+  URL. Note that credentials and metrics are sent in cleartext, so use this only
+  on a trusted network (dev/test or a secured in-cluster path).
 
 ### PromQL Injection Prevention
 

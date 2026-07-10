@@ -264,6 +264,37 @@ func TestValidateTLSConfig(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name: "HTTPS URL with embedded credentials - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL": "https://user:pass@prometheus:9090",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTPS URL with missing CA cert - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":     "https://prometheus:9090",
+				"PROMETHEUS_CA_CERT_PATH": t.TempDir() + "/missing-ca.crt",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTPS URL with missing client cert - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":         "https://prometheus:9090",
+				"PROMETHEUS_CLIENT_CERT_PATH": t.TempDir() + "/missing-client.crt",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTPS URL with missing client key - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":        "https://prometheus:9090",
+				"PROMETHEUS_CLIENT_KEY_PATH": t.TempDir() + "/missing-client.key",
+			}),
+			expectError: true,
+		},
+		{
 			name: "TLS with insecure skip verify",
 			promConfig: testConfigFromEnv(t, map[string]string{
 				"PROMETHEUS_BASE_URL":                 "https://prometheus:9090",

@@ -14,7 +14,10 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
-const schemeHTTPS = "https"
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
 
 // IsHTTPS reports whether rawURL uses the https scheme.
 // url.Parse normalizes the scheme to lowercase before comparison, so HTTPS:// is treated the same as https://.
@@ -103,13 +106,18 @@ func ValidateTLSConfig(cfg *config.Config) error {
 		return fmt.Errorf("invalid Prometheus URL %q: %w", baseURL, err)
 	}
 
+	// Reject credentials embedded in the URL for any scheme: they leak through
+	// process listings, config dumps, redirect Referer headers, and any log that
+	// doesn't redact the URL — even over TLS. Use PROMETHEUS_BEARER_TOKEN or
+	// PROMETHEUS_TOKEN_PATH (over https) instead.
+	if u.User != nil {
+		return fmt.Errorf("refusing to use Prometheus URL with embedded credentials %q; use PROMETHEUS_BEARER_TOKEN or PROMETHEUS_TOKEN_PATH instead", u.Redacted())
+	}
+
 	switch u.Scheme {
 	case schemeHTTPS:
 		// Continue with the HTTPS-specific validation below.
-	case "http":
-		if u.User != nil {
-			return fmt.Errorf("refusing to use Prometheus URL with embedded credentials %q; use PROMETHEUS_BEARER_TOKEN or PROMETHEUS_TOKEN_PATH instead", u.Redacted())
-		}
+	case schemeHTTP:
 		if !allowHTTP {
 			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
 		}
