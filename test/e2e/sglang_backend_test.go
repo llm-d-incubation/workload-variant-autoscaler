@@ -2,16 +2,13 @@ package e2e
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -58,17 +55,9 @@ var _ = Describe("SGLang backend", Label("smoke", "full"), Ordered, func() {
 		DeferCleanup(func() { _ = fixtures.DeleteServiceMonitor(ctx, crClient, cfg.MonitoringNS, baseName) })
 
 		By("Registering the SGLang deployment with WVA via an annotated scaler")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName, appLabel, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName) })
-		} else {
-			Expect(fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, baseName, appLabel, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, variantName, metav1.DeleteOptions{})
-			})
-		}
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName, appLabel, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName) })
 	})
 
 	It("detects SGLang and emits wva_desired_replicas from sglang:* metrics", func() {
@@ -81,45 +70,22 @@ var _ = Describe("SGLang backend", Label("smoke", "full"), Ordered, func() {
 		// single replica. We observe that through the scaler surface rather than a
 		// VA status field: for KEDA via the managed HPA's CurrentMetrics, for the
 		// Prometheus-adapter backend via the external metrics API.
-		if cfg.ScalerBackend == scalerBackendKeda {
-			By("Verifying KEDA read wva_desired_replicas for the SGLang variant")
-			Eventually(func(g Gomega) {
-				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
-				for i := range hpaList.Items {
-					if hpaList.Items[i].Spec.ScaleTargetRef.Name == appLabel {
-						kedaHPA = &hpaList.Items[i]
-						break
-					}
+		By("Verifying KEDA read wva_desired_replicas for the SGLang variant")
+		Eventually(func(g Gomega) {
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == appLabel {
+					kedaHPA = &hpaList.Items[i]
+					break
 				}
-				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the SGLang deployment")
-				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
-					"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
-			}).WithTimeout(time.Duration(cfg.EventuallyExtendedSec) * time.Second).
-				WithPolling(time.Duration(cfg.PollIntervalSlowSec) * time.Second).
-				Should(Succeed())
-		} else {
-			By("Querying the external metrics API for wva_desired_replicas")
-			Eventually(func(g Gomega) {
-				result, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
-					DoRaw(ctx)
-				if err != nil {
-					if errors.IsNotFound(err) {
-						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-						g.Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
-						return
-					}
-					g.Expect(err).NotTo(HaveOccurred())
-				}
-				g.Expect(strings.Contains(string(result), `"items":[]`)).To(BeFalse(),
-					"wva_desired_replicas should be emitted for the SGLang variant")
-				g.Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas))
-			}).WithTimeout(time.Duration(cfg.EventuallyExtendedSec) * time.Second).
-				WithPolling(time.Duration(cfg.PollIntervalSlowSec) * time.Second).
-				Should(Succeed())
-		}
+			}
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the SGLang deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
+		}).WithTimeout(time.Duration(cfg.EventuallyExtendedSec) * time.Second).
+			WithPolling(time.Duration(cfg.PollIntervalSlowSec) * time.Second).
+			Should(Succeed())
 	})
 })

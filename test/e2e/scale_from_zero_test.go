@@ -281,18 +281,12 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 
 	Context("Initial state verification", func() {
 		It("should have annotated scaler created", func() {
-			if cfg.ScalerBackend == scalerBackendKeda {
-				By("Verifying annotated ScaledObject exists")
-				so := &unstructured.Unstructured{}
-				so.SetAPIVersion("keda.sh/v1alpha1")
-				so.SetKind("ScaledObject")
-				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
-				Expect(err).NotTo(HaveOccurred())
-			} else {
-				By("Verifying annotated HPA exists")
-				_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred())
-			}
+			By("Verifying annotated ScaledObject exists")
+			so := &unstructured.Unstructured{}
+			so.SetAPIVersion("keda.sh/v1alpha1")
+			so.SetKind("ScaledObject")
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			Expect(err).NotTo(HaveOccurred())
 
 			GinkgoWriter.Printf("Annotated scaler verified: %s\n", hpaName)
 		})
@@ -726,23 +720,16 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 
 	Context("Initial state verification with LWS", func() {
 		It("should have annotated scaler created for LWS", func() {
-			if cfg.ScalerBackend == scalerBackendKeda {
-				By("Verifying annotated ScaledObject exists and targets LeaderWorkerSet")
-				so := &unstructured.Unstructured{}
-				so.SetAPIVersion("keda.sh/v1alpha1")
-				so.SetKind("ScaledObject")
-				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
-				Expect(err).NotTo(HaveOccurred())
-				scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(found).To(BeTrue(), "ScaledObject should have scaleTargetRef")
-				Expect(scaleTargetRef["kind"]).To(Equal("LeaderWorkerSet"), "ScaledObject should target LeaderWorkerSet")
-			} else {
-				By("Verifying annotated HPA exists and targets LeaderWorkerSet")
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(hpa.Spec.ScaleTargetRef.Kind).To(Equal("LeaderWorkerSet"), "HPA should target LeaderWorkerSet")
-			}
+			By("Verifying annotated ScaledObject exists and targets LeaderWorkerSet")
+			so := &unstructured.Unstructured{}
+			so.SetAPIVersion("keda.sh/v1alpha1")
+			so.SetKind("ScaledObject")
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			Expect(err).NotTo(HaveOccurred())
+			scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "ScaledObject should have scaleTargetRef")
+			Expect(scaleTargetRef["kind"]).To(Equal("LeaderWorkerSet"), "ScaledObject should target LeaderWorkerSet")
 
 			GinkgoWriter.Printf("Annotated scaler verified: %s\n", hpaName)
 		})
@@ -1090,23 +1077,16 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 
 	Context("Initial state verification with single-node LWS", func() {
 		It("should have annotated scaler created for single-node LWS", func() {
-			if cfg.ScalerBackend == scalerBackendKeda {
-				By("Verifying annotated ScaledObject exists and targets LeaderWorkerSet")
-				so := &unstructured.Unstructured{}
-				so.SetAPIVersion("keda.sh/v1alpha1")
-				so.SetKind("ScaledObject")
-				err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
-				Expect(err).NotTo(HaveOccurred())
-				scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(found).To(BeTrue(), "ScaledObject should have scaleTargetRef")
-				Expect(scaleTargetRef["kind"]).To(Equal("LeaderWorkerSet"), "ScaledObject should target LeaderWorkerSet")
-			} else {
-				By("Verifying annotated HPA exists and targets LeaderWorkerSet")
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(hpa.Spec.ScaleTargetRef.Kind).To(Equal("LeaderWorkerSet"), "HPA should target LeaderWorkerSet")
-			}
+			By("Verifying annotated ScaledObject exists and targets LeaderWorkerSet")
+			so := &unstructured.Unstructured{}
+			so.SetAPIVersion("keda.sh/v1alpha1")
+			so.SetKind("ScaledObject")
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			Expect(err).NotTo(HaveOccurred())
+			scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "ScaledObject should have scaleTargetRef")
+			Expect(scaleTargetRef["kind"]).To(Equal("LeaderWorkerSet"), "ScaledObject should target LeaderWorkerSet")
 
 			GinkgoWriter.Printf("Annotated scaler verified: %s\n", hpaName)
 		})

@@ -106,11 +106,26 @@ var _ = AfterSuite(func() {
 // directory does not exist; callers should skip appending the path in
 // that case.
 func getKEDACRDDir() string {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/kedacore/keda/v2").Output()
+	moduleDir, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/kedacore/keda/v2").Output()
+	if err == nil && strings.TrimSpace(string(moduleDir)) != "" {
+		dir := filepath.Join(strings.TrimSpace(string(moduleDir)), "config", "crd", "bases")
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+	}
+	// Fall back to GOMODCACHE when the module is in the download cache but not
+	// checked out locally (go list -m {{.Dir}} returns empty in that case).
+	version, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}", "github.com/kedacore/keda/v2").Output()
+	if err != nil || strings.TrimSpace(string(version)) == "" {
+		return ""
+	}
+	cache, err := exec.Command("go", "env", "GOMODCACHE").Output()
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "bases")
+	dir := filepath.Join(strings.TrimSpace(string(cache)),
+		"github.com", "kedacore", "keda", "v2@"+strings.TrimSpace(string(version)),
+		"config", "crd", "bases")
 	if _, err := os.Stat(dir); err != nil {
 		return ""
 	}

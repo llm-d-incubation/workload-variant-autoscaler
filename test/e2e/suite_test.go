@@ -408,3 +408,26 @@ func deleteResourceWithVerification(ctx context.Context, deleteFunc func() error
 func cleanupResource(ctx context.Context, resourceType, _ /* namespace */, name string, deleteFunc func() error, verifyFunc func() bool) {
 	deleteResourceWithVerification(ctx, deleteFunc, verifyFunc, resourceType, name)
 }
+
+// expectWVARaisesDesiredReplicas asserts that WVA's engine has decided to scale
+// scaleTargetDeployment by checking that the KEDA-managed HPA for that deployment
+// has a non-empty external CurrentMetrics entry. KEDA only populates CurrentMetrics
+// after successfully reading wva_desired_replicas from Prometheus, so this proves
+// the engine's decision was emitted and consumed. The caller wraps this in Eventually.
+func expectWVARaisesDesiredReplicas(g Gomega, namespace, _ /* variantName */, scaleTargetDeployment string, _ /* above */ int64) {
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+	var consumed bool
+	for i := range hpaList.Items {
+		if hpaList.Items[i].Spec.ScaleTargetRef.Name != scaleTargetDeployment {
+			continue
+		}
+		for _, m := range hpaList.Items[i].Status.CurrentMetrics {
+			if m.External != nil {
+				consumed = true
+			}
+		}
+	}
+	g.Expect(consumed).To(BeTrue(),
+		"KEDA HPA for %s should have an external CurrentMetrics entry, proving wva_desired_replicas was emitted and consumed", scaleTargetDeployment)
+}

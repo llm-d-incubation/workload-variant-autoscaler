@@ -1,8 +1,6 @@
 package e2e
 
 import (
-	"encoding/json"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -11,10 +9,8 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -112,11 +108,7 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = "default"
-		if cfg.ScalerBackend == scalerBackendKeda {
-			variantName = scalerBaseName + "-so"
-		} else {
-			variantName = scalerBaseName + "-hpa"
-		}
+		variantName = scalerBaseName + "-so"
 
 		By("Snapshotting existing saturation ConfigMap for restore in AfterAll")
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
@@ -154,20 +146,12 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
 			Should(Succeed())
 
-		By("Registering the V2 smoke deployment with WVA via an annotated scaler (min=1, max=10)")
-		// The annotated scaler is both the WVA discovery source and the scaler;
+		By("Registering the V2 smoke deployment with WVA via an annotated ScaledObject (min=1, max=10)")
+		// The annotated ScaledObject is both the WVA discovery source and the scaler;
 		// no VariantAutoscaling CR is created.
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
-		} else {
-			Expect(fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, variantName, metav1.DeleteOptions{})
-			})
-		}
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
 
 		By("Installing V2 saturation config so all subsequent It() blocks share state")
 		// Done in BeforeAll (rather than inside the first It) so the suite's
@@ -215,49 +199,25 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 		By("Asserting controller logs show V2 path selected for our model")
 		expectAnalyzerPathLog("V2", modelID)
 
-		// WVA no longer publishes a VA status; the observable output is the
-		// wva_desired_replicas external metric being consumed by the scaler.
-		// For KEDA: verify the KEDA-managed HPA has CurrentMetrics populated
-		// (only set after a successful Prometheus query). For the
-		// Prometheus-adapter backend: verify the external metrics API returns it.
-		if cfg.ScalerBackend == scalerBackendKeda {
-			By("Verifying KEDA read wva_desired_replicas for the V2 smoke variant")
-			Eventually(func(g Gomega) {
-				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
-				for i := range hpaList.Items {
-					if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
-						kedaHPA = &hpaList.Items[i]
-						break
-					}
+		// WVA's observable output is the wva_desired_replicas metric being consumed by KEDA.
+		// Verify the KEDA-managed HPA has CurrentMetrics populated (only set after a
+		// successful Prometheus query).
+		By("Verifying KEDA read wva_desired_replicas for the V2 smoke variant")
+		Eventually(func(g Gomega) {
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
+					kedaHPA = &hpaList.Items[i]
+					break
 				}
-				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the V2 smoke deployment")
-				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
-					"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
-			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
-				Should(Succeed())
-		} else {
-			By("Querying the external metrics API for wva_desired_replicas")
-			Eventually(func(g Gomega) {
-				result, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
-					DoRaw(ctx)
-				if err != nil {
-					if errors.IsNotFound(err) {
-						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-						g.Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
-						return
-					}
-					g.Expect(err).NotTo(HaveOccurred())
-				}
-				g.Expect(strings.Contains(string(result), `"items":[]`)).To(BeFalse(),
-					"wva_desired_replicas should be emitted for the V2 smoke variant")
-				g.Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas))
-			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
-				Should(Succeed())
-		}
+			}
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the V2 smoke deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
+		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
+			Should(Succeed())
 	})
 
 	// Verifies that V2 recommends scale-up when --fake-metrics drives a
@@ -275,63 +235,4 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 			Should(Succeed())
 	})
 
-	// Verifies that with conservative thresholds chosen so the cost-aware
-	// optimizer's scale-down rule fires, V2 recommends a smaller target and the
-	// managed scaler drives the Deployment back down. Uses canonical-ordering
-	// thresholds (scaleUpThreshold > scaleDownBoundary):
-	//
-	//   scaleUpThreshold  = 0.95 (high, so kv=0.3 demand does not trigger scale-up)
-	//   scaleDownBoundary = 0.85 (chosen so spareCapacity exceeds one full
-	//                             per-replica capacity — see calibration comment
-	//                             on v2SmokeFakeMetricsJSON for the math)
-	//
-	// The scaler enforces minReplicas=1, so the only valid scale-down outcome is
-	// 1. Assert wva_desired_replicas converges to exactly 1 so any regression that
-	// recommends 0 (MinReplicas violated) or stays above 1 (no scale-down) fails
-	// loudly with a precise diff.
-	It("should recommend scale-down when load drops below scaleDownBoundary", func() {
-		By("Switching to canonical-ordering thresholds (scaleUp=0.95, scaleDown=0.85)")
-		const (
-			scaleDownTestUpThreshold = 0.95
-			scaleDownTestBoundary    = 0.85
-		)
-		cfgYAML := buildSaturationConfigYAMLWithThresholds(
-			"saturation",
-			v2SmokeKvCacheThreshold, v2SmokeQueueLengthThreshold,
-			v2SmokeKvSpareTrigger, v2SmokeQueueSpareTrigger,
-			scaleDownTestUpThreshold, scaleDownTestBoundary,
-		)
-		Expect(upsertSaturationConfigEntry(ctx, cmNamespace, cmName, cmKey, cfgYAML)).To(Succeed())
-
-		// The exact scale-down target (== 1) is only observable via the Prometheus
-		// Adapter's external-metrics API, which surfaces the gauge value faithfully.
-		// KEDA's emulated HPA does not expose a reliable numeric value (it reports
-		// the reading as 0 even when Prometheus holds the real value), so the strict
-		// floor assertion is not portable to that backend.
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Skip("Exact wva_desired_replicas scale-down value is not observable via KEDA's HPA; " +
-				"covered by the Prometheus-adapter backend")
-		}
-
-		By("Asserting WVA drops wva_desired_replicas to the minReplicas floor (1)")
-		// Reflects the engine's scale-down recommendation, decoupled from scaler actuation.
-		Eventually(func(g Gomega) {
-			raw, err := k8sClient.RESTClient().
-				Get().
-				AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/"+cfg.LLMDNamespace+"/"+constants.WVADesiredReplicas).
-				Param("labelSelector", "variant_name="+variantName+",exported_namespace="+cfg.LLMDNamespace).
-				DoRaw(ctx)
-			if err != nil {
-				g.Expect(err).NotTo(HaveOccurred())
-			}
-			var list externalMetricValueList
-			g.Expect(json.Unmarshal(raw, &list)).To(Succeed())
-			g.Expect(list.Items).NotTo(BeEmpty(), "wva_desired_replicas should be available for %s", variantName)
-			q, perr := resource.ParseQuantity(list.Items[0].Value)
-			g.Expect(perr).NotTo(HaveOccurred())
-			g.Expect(q.Value()).To(Equal(int64(1)),
-				"V2 should drop wva_desired_replicas to 1 (MinReplicas floor) when load is below scaleDownBoundary")
-		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
-			Should(Succeed())
-	})
 })

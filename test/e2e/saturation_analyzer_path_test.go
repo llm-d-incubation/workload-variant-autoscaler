@@ -165,11 +165,7 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 				"The suite uses llm-d-inference-sim's --fake-metrics flag, which real vLLM rejects.")
 		}
 
-		if cfg.ScalerBackend == scalerBackendKeda {
-			variantName = soObjectName
-		} else {
-			variantName = hpaObjectName
-		}
+		variantName = soObjectName
 
 		modelID = cfg.ModelID
 		cmName = saturationConfigMapName()
@@ -204,22 +200,13 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Registering the saturation-path deployment with WVA via an annotated scaler")
-		// The scaler's variantName (variant name) matches the model service's variantName so the
+		By("Registering the saturation-path deployment with WVA via an annotated ScaledObject")
+		// The ScaledObject's variantName matches the model service's variantName so the
 		// decode pods' llm-d.ai/variant label and wva_desired_replicas variant_name align.
-		if cfg.ScalerBackend == scalerBackendKeda {
-			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
-		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaObjectName, metav1.DeleteOptions{})
-			})
-		}
+		err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
 	})
 
 	AfterAll(func() {

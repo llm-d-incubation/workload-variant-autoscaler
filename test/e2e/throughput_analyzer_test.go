@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -19,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -242,11 +240,7 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
-		if cfg.ScalerBackend == scalerBackendKeda {
-			variantName = modelSvcName + "-so"
-		} else {
-			variantName = modelSvcName + "-hpa"
-		}
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -278,17 +272,9 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Registering the deployment with WVA via an annotated scaler (both analyzers enabled)")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
-		} else {
-			Expect(fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, modelSvcName+"-hpa", metav1.DeleteOptions{})
-			})
-		}
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 	})
 
 	AfterAll(func() {
@@ -313,45 +299,22 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 	It("emits wva_desired_replicas at steady state with both analyzers enabled", func() {
 		// Post-CRD-removal WVA no longer writes VA .status; its sole output is the
 		// wva_desired_replicas external metric. Steady-state reconcile is observed as
-		// that metric being emitted for the variant (via the external metrics API for
-		// the Prometheus-adapter backend, or via the KEDA-managed HPA's CurrentMetrics
-		// for the KEDA backend).
-		if cfg.ScalerBackend == scalerBackendKeda {
-			By("Verifying KEDA read wva_desired_replicas for the variant")
-			Eventually(func(g Gomega) {
-				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
-				for i := range hpaList.Items {
-					if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
-						kedaHPA = &hpaList.Items[i]
-						break
-					}
+		// that metric being emitted for the variant via the KEDA-managed HPA's CurrentMetrics.
+		By("Verifying KEDA read wva_desired_replicas for the variant")
+		Eventually(func(g Gomega) {
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
+					kedaHPA = &hpaList.Items[i]
+					break
 				}
-				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
-				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
-					"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
-			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-		} else {
-			By("Querying the external metrics API for wva_desired_replicas")
-			Eventually(func(g Gomega) {
-				result, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
-					DoRaw(ctx)
-				if err != nil {
-					if errors.IsNotFound(err) {
-						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-						g.Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
-						return
-					}
-					g.Expect(err).NotTo(HaveOccurred())
-				}
-				g.Expect(strings.Contains(string(result), `"items":[]`)).To(BeFalse(),
-					"wva_desired_replicas should be emitted for the variant")
-				g.Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas))
-			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-		}
+			}
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 })
 
@@ -393,11 +356,7 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
-		if cfg.ScalerBackend == scalerBackendKeda {
-			variantName = modelSvcName + "-so"
-		} else {
-			variantName = modelSvcName + "-hpa"
-		}
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -435,17 +394,9 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Registering the deployment with WVA via an annotated scaler (both analyzers enabled)")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
-		} else {
-			Expect(fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, modelSvcName+"-hpa", metav1.DeleteOptions{})
-			})
-		}
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 		// No load job: --fake-metrics replaces simulator runtime emission entirely, so
 		// service traffic has no effect on the values the engine reads. Scale-up is
 		// driven solely by the faked kv-cache-usage gauge.
@@ -515,11 +466,7 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
-		if cfg.ScalerBackend == scalerBackendKeda {
-			variantName = modelSvcName + "-so"
-		} else {
-			variantName = modelSvcName + "-hpa"
-		}
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -551,17 +498,9 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 		By("Registering the deployment with WVA via an annotated scaler (TA-only config)")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-				fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
-		} else {
-			Expect(fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10,
-				fixtures.WithWVAAnnotations(modelID, "30.0"))).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, modelSvcName+"-hpa", metav1.DeleteOptions{})
-			})
-		}
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 
 		By("Starting sustained load for TA-only scenario")
 		targetURL := fmt.Sprintf("http://%s:8000/v1/completions", serviceName)
@@ -593,44 +532,22 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 	It("produces a positive desired allocation driven by the throughput analyzer", func() {
 		// Post-CRD-removal WVA no longer writes VA .status; its sole output is the
 		// wva_desired_replicas external metric. A positive throughput-driven allocation
-		// is observed as that metric being emitted for the variant (external metrics API
-		// for the Prometheus-adapter backend, KEDA-managed HPA CurrentMetrics for KEDA).
-		if cfg.ScalerBackend == scalerBackendKeda {
-			By("Verifying KEDA read wva_desired_replicas for the throughput-driven variant")
-			Eventually(func(g Gomega) {
-				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
-				g.Expect(err).NotTo(HaveOccurred())
-				var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
-				for i := range hpaList.Items {
-					if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
-						kedaHPA = &hpaList.Items[i]
-						break
-					}
+		// is observed via the KEDA-managed HPA's CurrentMetrics.
+		By("Verifying KEDA read wva_desired_replicas for the throughput-driven variant")
+		Eventually(func(g Gomega) {
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
+					kedaHPA = &hpaList.Items[i]
+					break
 				}
-				g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
-				g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
-					"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
-			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-		} else {
-			By("Querying the external metrics API for wva_desired_replicas")
-			Eventually(func(g Gomega) {
-				result, err := k8sClient.RESTClient().
-					Get().
-					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/" + cfg.LLMDNamespace + "/" + constants.WVADesiredReplicas).
-					DoRaw(ctx)
-				if err != nil {
-					if errors.IsNotFound(err) {
-						_, discoveryErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-						g.Expect(discoveryErr).NotTo(HaveOccurred(), "External metrics API should be accessible")
-						return
-					}
-					g.Expect(err).NotTo(HaveOccurred())
-				}
-				g.Expect(strings.Contains(string(result), `"items":[]`)).To(BeFalse(),
-					"wva_desired_replicas should be emitted for the throughput-driven variant")
-				g.Expect(string(result)).To(ContainSubstring(constants.WVADesiredReplicas))
-			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-		}
+			}
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
 	// The "preserves accelerator info from VariantCapacities even with saturation disabled"
