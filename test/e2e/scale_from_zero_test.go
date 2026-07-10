@@ -285,7 +285,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 			so := &unstructured.Unstructured{}
 			so.SetAPIVersion("keda.sh/v1alpha1")
 			so.SetKind("ScaledObject")
-			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
 			Expect(err).NotTo(HaveOccurred())
 
 			GinkgoWriter.Printf("Annotated scaler verified: %s\n", hpaName)
@@ -724,7 +724,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet", Serial, Label("
 			so := &unstructured.Unstructured{}
 			so.SetAPIVersion("keda.sh/v1alpha1")
 			so.SetKind("ScaledObject")
-			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
 			Expect(err).NotTo(HaveOccurred())
 			scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
 			Expect(err).NotTo(HaveOccurred())
@@ -1081,7 +1081,7 @@ var _ = Describe("Scale-From-Zero Feature with LeaderWorkerSet (single-node)", S
 			so := &unstructured.Unstructured{}
 			so.SetAPIVersion("keda.sh/v1alpha1")
 			so.SetKind("ScaledObject")
-			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName}, so)
+			err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
 			Expect(err).NotTo(HaveOccurred())
 			scaleTargetRef, found, err := unstructured.NestedMap(so.Object, "spec", "scaleTargetRef")
 			Expect(err).NotTo(HaveOccurred())

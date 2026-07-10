@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,10 +15,23 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
 const secondaryControllerOverlayPathEnv = "WVA_E2E_SECONDARY_OVERLAY_PATH"
+
+const (
+	// prometheusServiceName is the kube-prometheus-stack Prometheus Service in the
+	// monitoring namespace; it serves the query API over HTTPS on 9090 with a
+	// self-signed cert (KEDA reaches it with unsafeSsl).
+	prometheusServiceName = "kube-prometheus-stack-prometheus"
+	prometheusServicePort = 9090
+	// prometheusLocalPort is a non-default local port for the port-forward to avoid
+	// colliding with anything bound to 9090 on the test runner.
+	prometheusLocalPort = 39090
+)
 
 func splitImage(image string) (string, string) {
 	lastColon := strings.LastIndex(image, ":")
@@ -28,7 +42,7 @@ func splitImage(image string) (string, string) {
 	return image[:lastColon], image[lastColon+1:]
 }
 
-var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Label("multi-controller"), func() {
+var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Label("multi-controller", "full"), func() {
 	// TODO: run dual-controller isolation in a dedicated fresh cluster rather than layering
 	// a namespace-scoped secondary controller on top of an existing cluster-scoped primary.
 	// The two modes are mutually exclusive by design: cluster-scoped ClusterRoleBindings
@@ -246,7 +260,16 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 			// Each namespace-scoped controller discovers its own ScaledObject and WVA
 			// emits wva_desired_replicas per namespace. Verify KEDA has consumed the
 			// metric in each namespace by checking the KEDA-managed HPA CurrentMetrics
-			// (KEDA only populates this after a successful Prometheus query).
+			// (KEDA only populates this after a successful Prometheus query). Because
+			// each namespace's ScaledObject trigger queries wva_desired_replicas scoped
+			// to its own namespace, non-empty CurrentMetrics in BOTH namespaces proves
+			// per-namespace metric isolation despite the colliding variant_name.
+			//
+			// The KEDA HPA surface exposes only the aggregated metric value, not its
+			// labels, so it cannot prove the secondary series carries
+			// controller_instance="dual-secondary". That controller-instance attribution
+			// (the guarantee this suite exists for) is asserted separately below by
+			// querying Prometheus directly for the labeled series.
 			By("Verifying KEDA reads wva_desired_replicas for primary namespace")
 			Eventually(func(g Gomega) {
 				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).List(ctx, metav1.ListOptions{})
@@ -280,6 +303,42 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 					"Secondary KEDA HPA should have CurrentMetrics populated — wva_desired_replicas{namespace=%q} is being consumed", secondaryNamespace)
 				GinkgoWriter.Printf("Secondary KEDA HPA CurrentMetrics: %d entries\n", len(kedaHPA.Status.CurrentMetrics))
 			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+
+			// Controller-instance attribution: the secondary controller runs with
+			// CONTROLLER_INSTANCE=dual-secondary, so wva_desired_replicas it emits carries
+			// the controller_instance label (see internal/metrics/metrics.go baseLabels).
+			// The primary controller has no CONTROLLER_INSTANCE, so its series carry no
+			// such label. Query Prometheus directly for the labeled series to prove the
+			// secondary namespace's metric is attributed to the secondary controller —
+			// the KEDA HPA surface can't see metric labels, so this is the only place the
+			// isolation guarantee is actually verified.
+			By("Port-forwarding to Prometheus to inspect wva_desired_replicas labels")
+			pfCmd := utils.SetUpPortForward(k8sClient, ctx, prometheusServiceName, cfg.MonitoringNS, prometheusLocalPort, prometheusServicePort)
+			defer func() {
+				if pfCmd != nil && pfCmd.Process != nil {
+					_ = pfCmd.Process.Kill()
+				}
+			}()
+			promBaseURL := fmt.Sprintf("https://localhost:%d", prometheusLocalPort)
+			Expect(utils.VerifyPortForwardReadiness(ctx, prometheusLocalPort, promBaseURL+"/-/ready")).To(Succeed(),
+				"Prometheus port-forward should become ready")
+			promClient, err := utils.NewPrometheusClient(promBaseURL, true)
+			Expect(err).NotTo(HaveOccurred(), "Should be able to build Prometheus client")
+
+			By("Verifying wva_desired_replicas for the secondary namespace is attributed to controller_instance=" + controllerInstance)
+			attributedQuery := fmt.Sprintf("%s{%s=%q,%s=%q}",
+				constants.WVADesiredReplicas,
+				constants.LabelControllerInstance, controllerInstance,
+				constants.LabelNamespace, secondaryNamespace)
+			Eventually(func(g Gomega) {
+				val, qErr := promClient.QueryWithRetry(ctx, attributedQuery)
+				g.Expect(qErr).NotTo(HaveOccurred(),
+					"wva_desired_replicas must carry controller_instance=%q for namespace=%q; a missing series means the secondary controller is not attributing its emission (query: %s)",
+					controllerInstance, secondaryNamespace, attributedQuery)
+				g.Expect(val).To(BeNumerically(">=", 1),
+					"secondary controller's desired replicas should be at least MinReplicas (1)")
+			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+			GinkgoWriter.Printf("Attribution verified: %s present\n", attributedQuery)
 		})
 	})
 })

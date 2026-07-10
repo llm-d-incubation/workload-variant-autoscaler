@@ -409,12 +409,17 @@ func cleanupResource(ctx context.Context, resourceType, _ /* namespace */, name 
 	deleteResourceWithVerification(ctx, deleteFunc, verifyFunc, resourceType, name)
 }
 
-// expectWVARaisesDesiredReplicas asserts that WVA's engine has decided to scale
-// scaleTargetDeployment by checking that the KEDA-managed HPA for that deployment
-// has a non-empty external CurrentMetrics entry. KEDA only populates CurrentMetrics
-// after successfully reading wva_desired_replicas from Prometheus, so this proves
-// the engine's decision was emitted and consumed. The caller wraps this in Eventually.
-func expectWVARaisesDesiredReplicas(g Gomega, namespace, _ /* variantName */, scaleTargetDeployment string, _ /* above */ int64) {
+// expectWVADesiredReplicasConsumed asserts that WVA emitted wva_desired_replicas
+// for scaleTargetDeployment and that KEDA consumed it, by checking that the
+// KEDA-managed HPA for that deployment has a non-empty external CurrentMetrics
+// entry. KEDA only populates CurrentMetrics after successfully reading the metric
+// from Prometheus, so this proves the engine's decision was emitted and consumed.
+//
+// Note: this does NOT assert the numeric magnitude of the recommendation. The
+// KEDA HPA surface exposes the consumed value but not reliably enough to gate a
+// ">= N" assertion here; callers that need magnitude must query Prometheus
+// directly. The caller wraps this in Eventually.
+func expectWVADesiredReplicasConsumed(g Gomega, namespace, scaleTargetDeployment string) {
 	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
 	g.Expect(err).NotTo(HaveOccurred())
 	var consumed bool

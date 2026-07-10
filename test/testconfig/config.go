@@ -22,9 +22,10 @@ type SharedConfig struct {
 	UseSimulator bool   // true for emulated GPUs, false for real vLLM
 	GPUType      string // "nvidia-mix", "amd-mix", "real"...
 
-	// Scaler backend: "prometheus-adapter" (HPA) or "keda" (ScaledObject)
+	// Scaler backend. KEDA (ScaledObject) is the only supported backend; the
+	// field is retained for diagnostics and future backend selection.
 	ScalerBackend string
-	// KEDANamespace is the namespace where KEDA is installed (used when ScalerBackend is "keda")
+	// KEDANamespace is the namespace where KEDA is installed
 	KEDANamespace string
 
 	// EPP configuration
@@ -65,7 +66,7 @@ func LoadSharedConfig() SharedConfig {
 		UseSimulator: GetEnvBool("USE_SIMULATOR", true),
 		GPUType:      GetEnv("GPU_TYPE", "nvidia-mix"),
 
-		ScalerBackend: GetEnv("SCALER_BACKEND", "prometheus-adapter"),
+		ScalerBackend: GetEnv("SCALER_BACKEND", "keda"),
 		KEDANamespace: GetEnv("KEDA_NAMESPACE", "keda-system"),
 
 		EPPMode:          GetEnv("EPP_MODE", "poolName"),

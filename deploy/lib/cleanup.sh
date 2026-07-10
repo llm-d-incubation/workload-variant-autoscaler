@@ -66,11 +66,16 @@ cleanup() {
         undeploy_prometheus_stack
     fi
 
-    # Undeploy scaler backend (KEDA or none)
+    # Undeploy scaler backend (KEDA or none). Mirror deploy_scaler_backend()'s
+    # supported-value check so an unknown SCALER_BACKEND is surfaced rather than
+    # silently leaving a previously-installed backend orphaned. Warn (not error)
+    # so the rest of the teardown still runs.
     if [ "$SCALER_BACKEND" = "keda" ]; then
         undeploy_keda
     elif [ "$SCALER_BACKEND" = "none" ]; then
         log_info "Skipping scaler backend undeployment (SCALER_BACKEND=none)"
+    else
+        log_warning "Unsupported SCALER_BACKEND: $SCALER_BACKEND (supported: keda, none); skipping scaler backend undeployment — any installed backend may be left behind"
     fi
 
     # EPP (llm-d-router-standalone chart) is torn down via undeploy_epp() from infra_epp.sh.
