@@ -54,7 +54,7 @@ func FitITLModel(obs []ITLObservation) (ITLModel, bool) {
 	if math.IsNaN(A) || math.IsInf(A, 0) {
 		return ITLModel{}, false
 	}
-	if A < 1e-9 {
+	if A <= 0 {
 		return ITLModel{}, false
 	}
 	// Defensive guard: NaN/Inf B is mathematically possible with degenerate input.
