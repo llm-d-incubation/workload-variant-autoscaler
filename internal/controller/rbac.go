@@ -16,8 +16,8 @@ package controller
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets/scale,verbs=get;update
 
 // Node inventory for accelerator/capacity discovery.
-// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups="",resources=nodes/status,verbs=get;list;update;patch;watch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=nodes/status,verbs=get;list;watch
 
 // Core resources read during optimization and metrics collection.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch

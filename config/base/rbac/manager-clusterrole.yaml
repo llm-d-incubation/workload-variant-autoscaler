@@ -9,6 +9,8 @@ rules:
   resources:
   - configmaps
   - namespaces
+  - nodes
+  - nodes/status
   - pods
   - resourcequotas
   - secrets
@@ -30,17 +32,6 @@ rules:
   verbs:
   - create
   - patch
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  - nodes/status
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - apps
   resources:
