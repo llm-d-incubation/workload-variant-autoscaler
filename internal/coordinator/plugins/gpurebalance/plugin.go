@@ -45,10 +45,11 @@ func (p *Plugin) Name() string { return "gpu-rebalance" }
 
 // scalerEntry pairs a managed scaling object with its inference-pool name.
 type scalerEntry struct {
-	obj         client.Object
-	pool        string
-	currentMax  int32
-	displayKind string
+	obj          client.Object
+	pool         string
+	currentMax   int32
+	effectiveMin int32
+	displayKind  string
 }
 
 // Tick splits the GPU quota proportionally across managed HPAs or KEDA
@@ -88,21 +89,33 @@ func scalerEntryFromObject(obj client.Object) (scalerEntry, bool) {
 	switch o := obj.(type) {
 	case *autoscalingv2.HorizontalPodAutoscaler:
 		return scalerEntry{
-			obj:         o,
-			pool:        o.Annotations[AnnotationInferencePool],
-			currentMax:  o.Spec.MaxReplicas,
-			displayKind: displayKindHPA,
+			obj:          o,
+			pool:         o.Annotations[AnnotationInferencePool],
+			currentMax:   o.Spec.MaxReplicas,
+			effectiveMin: effectiveHPAMinReplicas(o.Spec.MinReplicas),
+			displayKind:  displayKindHPA,
 		}, true
 	case *kedav1alpha1.ScaledObject:
 		return scalerEntry{
-			obj:         o,
-			pool:        o.Annotations[AnnotationInferencePool],
-			currentMax:  o.GetHPAMaxReplicas(),
-			displayKind: displayKindScaledObject,
+			obj:          o,
+			pool:         o.Annotations[AnnotationInferencePool],
+			currentMax:   o.GetHPAMaxReplicas(),
+			effectiveMin: *o.GetHPAMinReplicas(),
+			displayKind:  displayKindScaledObject,
 		}, true
 	default:
 		return scalerEntry{}, false
 	}
+}
+
+// effectiveHPAMinReplicas preserves the plugin's existing minimum-one policy.
+// HPA defaults minReplicas to 1 when omitted; explicit zero is also normalized
+// to 1 because gpu-rebalance does not yet support scale-to-zero.
+func effectiveHPAMinReplicas(configured *int32) int32 {
+	if configured != nil && *configured > 1 {
+		return *configured
+	}
+	return 1
 }
 
 // rebalanceNamespace applies proportional GPU quota allocation to all managed
@@ -114,6 +127,16 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 	}
 	if quota <= 0 {
 		log.V(1).Info("No GPU quota set, skipping", "namespace", ns)
+		return nil
+	}
+
+	minimumTotal := int64(0)
+	for _, entry := range entries {
+		minimumTotal += int64(entry.effectiveMin)
+	}
+	if minimumTotal > quota {
+		log.Info("Configured minimum replicas exceed GPU quota, skipping namespace",
+			"namespace", ns, "minimumTotal", minimumTotal, "quota", quota)
 		return nil
 	}
 
@@ -144,18 +167,6 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 		}
 	}
 
-	// TODO: the minimum target is hardcoded to 1 but an HPA may have spec.minReplicas
-	// set higher (e.g. 2 or 3). Setting maxReplicas below minReplicas produces an
-	// invalid HPA and Kubernetes will reject the patch. The floor should be
-	// max(1, hpa.Spec.MinReplicas) so the computed target is always a valid value.
-
-	// TODO: when len(entries) > quota the minimum-1 clamp causes every HPA to
-	// receive maxReplicas=1 and allocated exceeds quota (e.g. 100 HPAs, quota=10
-	// → allocated=100). The ResourceQuota becomes the only enforcement and the
-	// first 10 pods to be scheduled win while the other 90 are stuck pending.
-	// Fix: rank HPAs by queue depth, assign maxReplicas=1 only to the top-quota
-	// pools, and park the rest at minReplicas so the budget is not over-committed.
-
 	// TODO: scale-to-zero is not supported. When a pool's queue is 0 its weight is
 	// 0% and the ideal target is 0 replicas, but the floor clamp below forces it to 1.
 	// Supporting scale-to-zero requires: (a) the HPA has spec.minReplicas=0 (opt-in),
@@ -164,15 +175,14 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 	// before zeroing). Until those conditions are met the floor is kept at 1 to prevent
 	// accidental full scale-down.
 
-	// Targets: floor(quota * weight), minimum 1, remainder to highest-weight pool.
+	// Reserve every scaler's effective minimum, then distribute the remaining
+	// quota proportionally. Any rounding remainder goes to the highest-weight pool.
+	remaining := quota - minimumTotal
 	targets := make([]int32, len(entries))
 	allocated := int64(0)
 	maxWeightIdx := 0
 	for i := range entries {
-		t := int32(math.Floor(float64(quota) * weights[i]))
-		if t < 1 {
-			t = 1
-		}
+		t := entries[i].effectiveMin + int32(math.Floor(float64(remaining)*weights[i]))
 		targets[i] = t
 		allocated += int64(t)
 		if weights[i] > weights[maxWeightIdx] {

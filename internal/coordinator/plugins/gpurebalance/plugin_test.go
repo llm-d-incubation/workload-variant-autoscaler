@@ -146,6 +146,45 @@ func getMaxReplicaCount(t *testing.T, c client.Client, so *kedav1alpha1.ScaledOb
 	return got.GetHPAMaxReplicas()
 }
 
+func TestScalerEntryFromObject_EffectiveMinimum(t *testing.T) {
+	hpaNil := makeHPA("hpa-nil", "ns", "hpa-nil", 10)
+	hpaZero := makeHPA("hpa-zero", "ns", "hpa-zero", 10)
+	hpaZero.Spec.MinReplicas = ptr.To[int32](0)
+	hpaThree := makeHPA("hpa-three", "ns", "hpa-three", 10)
+	hpaThree.Spec.MinReplicas = ptr.To[int32](3)
+
+	soNil := makeScaledObject("so-nil", "so-nil", 10)
+	soZero := makeScaledObject("so-zero", "so-zero", 10)
+	soZero.Spec.MinReplicaCount = ptr.To[int32](0)
+	soThree := makeScaledObject("so-three", "so-three", 10)
+	soThree.Spec.MinReplicaCount = ptr.To[int32](3)
+
+	tests := []struct {
+		name string
+		obj  client.Object
+		want int32
+	}{
+		{name: "HPA nil defaults to one", obj: hpaNil, want: 1},
+		{name: "HPA zero uses minimum-one policy", obj: hpaZero, want: 1},
+		{name: "HPA configured minimum", obj: hpaThree, want: 3},
+		{name: "ScaledObject nil defaults to one", obj: soNil, want: 1},
+		{name: "ScaledObject zero defaults to one", obj: soZero, want: 1},
+		{name: "ScaledObject configured minimum", obj: soThree, want: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, ok := scalerEntryFromObject(tt.obj)
+			if !ok {
+				t.Fatal("scalerEntryFromObject returned ok=false")
+			}
+			if entry.effectiveMin != tt.want {
+				t.Errorf("effectiveMin = %d, want %d", entry.effectiveMin, tt.want)
+			}
+		})
+	}
+}
+
 // TestTick_EmptySelectionIsNoop verifies that an empty selected slice returns
 // nil without touching the cluster.
 func TestTick_EmptySelectionIsNoop(t *testing.T) {
@@ -307,13 +346,12 @@ func TestRebalance_QueryError_TreatedAsZero(t *testing.T) {
 	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// model-a failed query → weight=0 → clamped to min 1.
-	// model-b has all queue → gets 10; total=11 but quota enforcement is at admission.
+	// Reserve one replica for each pool, then give the remaining eight to model-b.
 	if got := getMaxReplicas(t, c, hpaA); got != 1 {
 		t.Errorf("model-a maxReplicas = %d, want 1 (query error → treated as 0, clamped to min)", got)
 	}
-	if got := getMaxReplicas(t, c, hpaB); got != 10 {
-		t.Errorf("model-b maxReplicas = %d, want 10 (all queue depth)", got)
+	if got := getMaxReplicas(t, c, hpaB); got != 9 {
+		t.Errorf("model-b maxReplicas = %d, want 9 (all remaining quota)", got)
 	}
 }
 
@@ -409,6 +447,92 @@ func TestRebalance_MixedHPAAndScaledObject(t *testing.T) {
 	}
 	if got := getMaxReplicaCount(t, c, soB); got != 8 {
 		t.Errorf("model-b maxReplicaCount = %d, want 8", got)
+	}
+}
+
+func TestRebalance_ReservesHPAMinimum(t *testing.T) {
+	hpaA := makeHPA("model-a", "ns", "model-a", 10)
+	hpaA.Spec.MinReplicas = ptr.To[int32](5)
+	hpaB := makeHPA("model-b", "ns", "model-b", 10)
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 50, "model-b": 50},
+		nil,
+		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, hpaA); got != 7 {
+		t.Errorf("model-a maxReplicas = %d, want 7", got)
+	}
+	if got := getMaxReplicas(t, c, hpaB); got != 3 {
+		t.Errorf("model-b maxReplicas = %d, want 3", got)
+	}
+}
+
+func TestRebalance_ReservesScaledObjectMinimum(t *testing.T) {
+	soA := makeScaledObject("model-a", "model-a", 10)
+	soA.Spec.MinReplicaCount = ptr.To[int32](5)
+	soB := makeScaledObject("model-b", "model-b", 10)
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 50, "model-b": 50},
+		nil,
+		soA, soB, makeGPUQuota("q", "ns", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{soA, soB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicaCount(t, c, soA); got != 7 {
+		t.Errorf("model-a maxReplicaCount = %d, want 7", got)
+	}
+	if got := getMaxReplicaCount(t, c, soB); got != 3 {
+		t.Errorf("model-b maxReplicaCount = %d, want 3", got)
+	}
+}
+
+func TestRebalance_ReservesMixedMinimums(t *testing.T) {
+	hpaA := makeHPA("model-a", "ns", "model-a", 10)
+	hpaA.Spec.MinReplicas = ptr.To[int32](3)
+	soB := makeScaledObject("model-b", "model-b", 10)
+	soB.Spec.MinReplicaCount = ptr.To[int32](4)
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 20, "model-b": 80},
+		nil,
+		hpaA, soB, makeGPUQuota("q", "ns", 12),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, soB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, hpaA); got != 4 {
+		t.Errorf("model-a maxReplicas = %d, want 4", got)
+	}
+	if got := getMaxReplicaCount(t, c, soB); got != 8 {
+		t.Errorf("model-b maxReplicaCount = %d, want 8", got)
+	}
+}
+
+func TestRebalance_InfeasibleMinimumsLeaveNamespaceUnchanged(t *testing.T) {
+	hpaA := makeHPA("model-a", "ns", "model-a", 10)
+	hpaA.Spec.MinReplicas = ptr.To[int32](4)
+	soB := makeScaledObject("model-b", "model-b", 9)
+	soB.Spec.MinReplicaCount = ptr.To[int32](3)
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 90, "model-b": 10},
+		nil,
+		hpaA, soB, makeGPUQuota("q", "ns", 6),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, soB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, hpaA); got != 10 {
+		t.Errorf("model-a maxReplicas = %d, want 10 (infeasible namespace must be unchanged)", got)
+	}
+	if got := getMaxReplicaCount(t, c, soB); got != 9 {
+		t.Errorf("model-b maxReplicaCount = %d, want 9 (infeasible namespace must be unchanged)", got)
 	}
 }
 
