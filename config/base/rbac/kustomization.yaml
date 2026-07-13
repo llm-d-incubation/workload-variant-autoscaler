@@ -16,3 +16,6 @@ resources:
 - epp-metrics-reader-clusterrole.yaml
 - epp-metrics-reader-clusterrolebinding.yaml
 - epp-metrics-token-secret.yaml
+# EPP metrics token: namespaced Role for epp-metrics-token Secret access.
+- epp-metrics-role.yaml
+- epp-metrics-rolebinding.yaml

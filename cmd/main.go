@@ -333,6 +333,7 @@ func main() {
 	}
 
 	watchNS := cfg.WatchNamespace()
+	secretNS := config.SystemNamespace()
 	if watchNS != "" {
 		setupLog.Info("Watching single namespace", "namespace", watchNS)
 		mgrOptions.Cache = cache.Options{
@@ -347,17 +348,24 @@ func main() {
 			"app.kubernetes.io/name": "workload-variant-autoscaler",
 		})
 
-		setupLog.Info("Configuring cache with label selector for ConfigMaps",
-			"labelSelector", wvaConfigSelector.String())
+		setupLog.Info("Configuring cache with label selector for ConfigMaps and namespace-scoped Secrets",
+			"labelSelector", wvaConfigSelector.String(),
+			"secretNamespace", secretNS)
 
-		// Configure cache to only watch configmaps with the WVA labels
-		// Other resource types are cached normally without filtering
+		// Configure cache to only watch configmaps with the WVA labels and
+		// secrets in the controller namespace (for epp-metrics-token).
+		// Other resource types are cached normally without filtering.
 		mgrOptions.Cache = cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.ConfigMap{}: {
 					// Empty map means cache all namespaces, but filter by label
 					Namespaces: map[string]cache.Config{},
 					Label:      wvaConfigSelector,
+				},
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						secretNS: {}, // tells the informer to only sync secrets from the one namespace
+					},
 				},
 			},
 		}
