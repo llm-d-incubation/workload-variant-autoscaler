@@ -209,18 +209,26 @@ def _extract_queue_depth_avg(results_dir):
     if not os.path.isdir(raw_dir):
         return None
 
+    metric_names = [
+        "llm_d_epp_average_queue_size",
+    ]
+
     values = []
     for fname in sorted(os.listdir(raw_dir)):
         if not fname.endswith(".log") or "router-epp" not in fname:
             continue
         fpath = os.path.join(raw_dir, fname)
+        found = False
         with open(fpath) as f:
             for line in f:
-                val = _parse_prometheus_value(
-                    line.strip(),
-                    "inference_extension_flow_control_queue_size")
-                if val is not None:
-                    values.append(val)
+                stripped = line.strip()
+                for metric_name in metric_names:
+                    val = _parse_prometheus_value(stripped, metric_name)
+                    if val is not None:
+                        values.append(val)
+                        found = True
+                        break
+                if found:
                     break
 
     return mean(values) if values else None
