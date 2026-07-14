@@ -20,16 +20,16 @@ var _ = Describe("RBAC Least-Privilege Security", Label("full"), func() {
 		}
 	})
 
-	It("namespaced Role should grant get/list/watch on secrets", func() {
+	It("namespaced Role should grant get on specific secret", func() {
 		role, err := k8sClient.RbacV1().Roles(cfg.WVANamespace).Get(ctx, "wva-epp-metrics-role", metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(role.Rules).To(HaveLen(1), "Role should have exactly one rule")
 		Expect(role.Rules[0].Resources).To(ContainElement("secrets"))
-		Expect(role.Rules[0].ResourceNames).To(BeEmpty(),
-			"Role should not use resourceNames (incompatible with list/watch)")
-		Expect(role.Rules[0].Verbs).To(ConsistOf("get", "list", "watch"),
-			"Role should grant get/list/watch on secrets (informer cache requires list/watch)")
+		Expect(role.Rules[0].ResourceNames).To(ConsistOf("wva-epp-metrics-token"),
+			"Role should scope access to the specific secret")
+		Expect(role.Rules[0].Verbs).To(ConsistOf("get"),
+			"Role should only grant get (apiReader bypasses informer cache)")
 	})
 
 	It("RoleBinding should bind controller-manager ServiceAccount to epp-metrics Role", func() {

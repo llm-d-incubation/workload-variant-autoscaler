@@ -5,6 +5,12 @@ nameReference:
   - kind: Secret
     path: metadata/annotations/kubernetes.io\/service-account.name
     create: false
+- kind: Secret
+  version: v1
+  fieldSpecs:
+  - kind: Role
+    path: rules/resourceNames
+    create: false
 # Track Secret renames inside ServiceMonitor's bearerTokenSecret.name so
 # overlay JSON patches can use the unprefixed Secret name and have kustomize
 # apply namePrefix/nameSuffix automatically.
