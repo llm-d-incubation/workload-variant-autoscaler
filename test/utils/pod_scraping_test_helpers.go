@@ -104,6 +104,7 @@ type PodScrapingTestConfig struct {
 	// Kubernetes clients
 	K8sClient *kubernetes.Clientset
 	CRClient  client.Client
+	APIReader client.Reader
 
 	// Context
 	Ctx context.Context
@@ -130,7 +131,7 @@ func CreatePodScrapingSource(config PodScrapingTestConfig) (*pod.PodScrapingSour
 		DefaultTTL:              30 * time.Second,
 	}
 
-	return pod.NewPodScrapingSource(ctx, config.CRClient, podConfig)
+	return pod.NewPodScrapingSource(ctx, config.CRClient, config.APIReader, podConfig)
 }
 
 // TestPodScrapingServiceDiscovery tests that PodScrapingSource can discover the EPP service

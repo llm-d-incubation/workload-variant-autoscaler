@@ -34,6 +34,7 @@ import (
 
 type InferencePoolReconciler struct {
 	client.Client
+	APIReader client.Reader
 	Datastore datastore.Datastore
 	PoolGKNN  common.GKNN
 }
@@ -94,7 +95,7 @@ func (c *InferencePoolReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if endpointPool != nil {
-		if err := c.Datastore.PoolSet(ctx, c.Client, endpointPool); err != nil {
+		if err := c.Datastore.PoolSet(ctx, c.Client, c.APIReader, endpointPool); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add endpoint into the datastore: - %w", err)
 		}
 	}

@@ -362,11 +362,6 @@ func main() {
 					Namespaces: map[string]cache.Config{},
 					Label:      wvaConfigSelector,
 				},
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						secretNS: {}, // tells the informer to only sync secrets from the one namespace
-					},
-				},
 			},
 		}
 	}
@@ -540,6 +535,7 @@ func main() {
 	inferencePoolReconciler := &controller.InferencePoolReconciler{
 		Datastore: ds,
 		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
 		PoolGKNN:  poolGKNN,
 	}
 

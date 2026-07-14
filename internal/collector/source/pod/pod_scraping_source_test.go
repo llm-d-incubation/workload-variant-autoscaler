@@ -43,7 +43,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(source).NotTo(BeNil())
 			Expect(source.config.ServiceName).To(Equal("test-pool-epp"))
@@ -54,7 +54,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("ServiceName is required"))
 		})
@@ -64,7 +64,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceName: "test-pool-epp",
 				MetricsPort: 9090,
 			}
-			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("ServiceNamespace is required"))
 		})
@@ -75,7 +75,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(source.config.MetricsPath).To(Equal("/metrics"))
 			Expect(source.config.MetricsScheme).To(Equal("http"))
@@ -93,7 +93,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			_, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("ServiceName is required"))
 		})
@@ -232,7 +232,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			pods, err := source.discoverPods(ctx)
@@ -250,7 +250,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = source.discoverPods(ctx)
@@ -268,7 +268,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			pods, err := source.discoverPods(ctx)
@@ -298,7 +298,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			pods, err := source.discoverPods(ctx)
@@ -327,7 +327,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			pods, err := source.discoverPods(ctx)
@@ -362,7 +362,7 @@ var _ = Describe("PodScrapingSource", func() {
 				MetricsPort:             9090,
 				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			token, useAuth, err := source.getAuthToken(ctx)
@@ -380,7 +380,7 @@ var _ = Describe("PodScrapingSource", func() {
 				BearerToken:      "explicit-token",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			token, useAuth, err := source.getAuthToken(ctx)
@@ -397,7 +397,7 @@ var _ = Describe("PodScrapingSource", func() {
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			token, useAuth, err := source.getAuthToken(ctx)
@@ -418,7 +418,7 @@ var _ = Describe("PodScrapingSource", func() {
 				MetricsPort:             9090,
 				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			token, useAuth, err := source.getAuthToken(ctx)
@@ -436,7 +436,7 @@ var _ = Describe("PodScrapingSource", func() {
 				MetricsPort:             9090,
 				MetricsReaderSecretName: "", // Empty - no auth
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			token, useAuth, err := source.getAuthToken(ctx)
@@ -456,7 +456,7 @@ var _ = Describe("PodScrapingSource", func() {
 				MetricsPort:      9090,
 			}
 			var err error
-			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -677,7 +677,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				MaxConcurrentScrapes:    10,
 				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
 			}
-			source1, err := NewPodScrapingSource(ctx, client1, config1)
+			source1, err := NewPodScrapingSource(ctx, client1, client1, config1)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Test scraping from first pod
@@ -735,7 +735,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				MetricsPort:      9090,
 				ScrapeTimeout:    1 * time.Second, // Short timeout
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Should return empty results (not error) when pods are unreachable
@@ -804,7 +804,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				ScrapeTimeout:           1 * time.Second,
 				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
 			}
-			source, err := NewPodScrapingSource(ctx, client, config)
+			source, err := NewPodScrapingSource(ctx, client, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Should handle auth failure gracefully (empty results, not error)
@@ -826,7 +826,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				MetricsPort:      9090,
 			}
 			var err error
-			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -956,7 +956,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				DefaultTTL:       1 * time.Hour, // Long TTL for testing
 			}
 			var err error
-			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err = NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -1030,7 +1030,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				ServiceNamespace: "test-ns",
 				MetricsPort:      9090,
 			}
-			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), config)
+			source, err := NewPodScrapingSource(ctx, fakeClient.Build(), nil, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			registry := source.QueryList()
@@ -1120,7 +1120,7 @@ var _ = Describe("Error metrics recording", func() {
 			ScrapeTimeout:    500 * time.Millisecond,
 		}
 
-		source, err := NewPodScrapingSource(ctx, client, config)
+		source, err := NewPodScrapingSource(ctx, client, client, config)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Refresh should not error but scraping will fail

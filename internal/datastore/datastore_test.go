@@ -94,7 +94,7 @@ func TestDatastore(t *testing.T) {
 			}
 
 			// Test PoolSet
-			gotErr := ds.PoolSet(ctx, fakeClient, ep)
+			gotErr := ds.PoolSet(ctx, fakeClient, fakeClient, ep)
 			if diff := cmp.Diff(tt.wantErr, gotErr, cmpopts.EquateErrors()); diff != "" {
 				t.Errorf("Unexpected error diff (+got/-want): %s", diff)
 			}
@@ -146,7 +146,7 @@ func TestDatastore(t *testing.T) {
 				metricsSourceAfterDelete := ds.PoolGetMetricsSource(namespacedName)
 				assert.Nil(t, metricsSourceAfterDelete, "Metrics source should be removed from registry after pool deletion")
 
-				if err := ds.PoolSet(ctx, fakeClient, ep); err != nil {
+				if err := ds.PoolSet(ctx, fakeClient, fakeClient, ep); err != nil {
 					t.Errorf("failed to add endpoint into the datastore: %v", err)
 				}
 				assert.Equal(t, len(ds.PoolList()), tt.listResultLen, "Pools map should have the expected length after item added")

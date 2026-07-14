@@ -72,7 +72,7 @@ func getEPPMetricsToken() string {
 // It also tracks namespaces that should be watched for ConfigMaps (namespaces with VariantAutoscaling or InferencePool resources).
 type Datastore interface {
 	// InferencePool operations
-	PoolSet(ctx context.Context, client client.Client, pool *poolutil.EndpointPool) error
+	PoolSet(ctx context.Context, client client.Client, apiReader client.Reader, pool *poolutil.EndpointPool) error
 	PoolGet(name string) (*poolutil.EndpointPool, error)
 	PoolGetMetricsSource(name string) source.MetricsSource
 	PoolList() []*poolutil.EndpointPool
@@ -113,7 +113,7 @@ type datastore struct {
 }
 
 // Datastore operations
-func (ds *datastore) PoolSet(ctx context.Context, client client.Client, pool *poolutil.EndpointPool) error {
+func (ds *datastore) PoolSet(ctx context.Context, client client.Client, apiReader client.Reader, pool *poolutil.EndpointPool) error {
 	if pool == nil {
 		return errPoolIsNull
 	}
@@ -131,7 +131,7 @@ func (ds *datastore) PoolSet(ctx context.Context, client client.Client, pool *po
 		BearerToken:      getEPPMetricsToken(),
 	}
 
-	podSource, err := pod.NewPodScrapingSource(ctx, client, podConfig)
+	podSource, err := pod.NewPodScrapingSource(ctx, client, apiReader, podConfig)
 	if err != nil {
 		return err
 	}

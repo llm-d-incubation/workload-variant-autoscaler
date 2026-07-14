@@ -32,6 +32,7 @@ import (
 type PodScrapingSource struct {
 	config     PodScrapingSourceConfig
 	k8sClient  client.Client
+	apiReader  client.Reader
 	httpClient *http.Client
 	registry   *source.QueryList
 
@@ -43,6 +44,7 @@ type PodScrapingSource struct {
 func NewPodScrapingSource(
 	ctx context.Context,
 	k8sClient client.Client,
+	apiReader client.Reader,
 	config PodScrapingSourceConfig,
 ) (*PodScrapingSource, error) {
 	// Validate required fields
@@ -81,6 +83,7 @@ func NewPodScrapingSource(
 	podSource := &PodScrapingSource{
 		config:     config,
 		k8sClient:  k8sClient,
+		apiReader:  apiReader,
 		httpClient: httpClient,
 		registry:   source.NewQueryList(),
 		cache:      source.NewCache(ctx, config.DefaultTTL, 1*time.Second),
@@ -335,7 +338,7 @@ func (p *PodScrapingSource) getAuthToken(ctx context.Context) (string, bool, err
 		Namespace: secretNamespace,
 	}
 
-	if err := p.k8sClient.Get(ctx, secretKey, secret); err != nil {
+	if err := p.apiReader.Get(ctx, secretKey, secret); err != nil {
 		// Secret doesn't exist - treat authentication as optional
 		// Return no error, just indicate auth should not be used
 		return "", false, nil

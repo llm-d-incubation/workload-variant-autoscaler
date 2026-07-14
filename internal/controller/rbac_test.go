@@ -50,7 +50,7 @@ func TestRBACMarkersLeastPrivilege(t *testing.T) {
 }
 
 // TestSecretRBACIsNamespaced verifies cluster-wide Secret permissions are replaced
-// with a namespaced Role for epp-metrics-token.
+// with a namespaced Role scoped to the epp-metrics-token secret.
 func TestSecretRBACIsNamespaced(t *testing.T) {
 	rbacDir := filepath.Join("..", "..", "config", "base", "rbac")
 
@@ -69,11 +69,10 @@ func TestSecretRBACIsNamespaced(t *testing.T) {
 		role := string(content)
 		assert.Contains(t, role, "kind: Role", "Should be a namespaced Role, not ClusterRole")
 		assert.Contains(t, role, "- secrets", "Should grant permissions on secrets")
-		assert.NotContains(t, role, "resourceNames",
-			"Should not use resourceNames (incompatible with list/watch verbs)")
+		assert.Contains(t, role, "- epp-metrics-token", "Should scope to specific secret name")
 		assert.Contains(t, role, "- get", "Should grant get verb")
-		assert.Contains(t, role, "- list", "Should grant list verb (required by informer cache)")
-		assert.Contains(t, role, "- watch", "Should grant watch verb (required by informer cache)")
+		assert.NotContains(t, role, "- list", "Should not grant list (not needed with resourceNames)")
+		assert.NotContains(t, role, "- watch", "Should not grant watch (not needed with resourceNames)")
 	})
 
 	t.Run("RoleBinding binds manager ServiceAccount to Role", func(t *testing.T) {
