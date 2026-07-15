@@ -35,9 +35,10 @@ import (
 //
 // WVA no longer writes a VariantAutoscaling .status; its only output is the
 // wva_desired_replicas external metric. The annotated KEDA ScaledObject
-// registers the variant with WVA and actuates the recommendation, so the V2
-// scale-up/scale-down intent is observed through the managed Deployment's
-// replica count rather than a VA status field.
+// registers the variant with WVA and actuates the recommendation. The V2
+// scale-up/scale-down intent is verified through the managed Deployment's
+// replica count — the full KEDA pipeline (WVA → Prometheus → KEDA → HPA →
+// Deployment) is exercised end-to-end.
 //
 // --fake-metrics format:
 //
@@ -62,7 +63,7 @@ const (
 	v2SmokeScaleDownBoundary = 0.20
 )
 
-var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func() {
+var _ = Describe("Saturation V2 engine", Label("smoke", "full", "keda"), Ordered, func() {
 	const (
 		poolName              = "v2-smoke-pool"
 		modelSvcName          = "v2-smoke-ms"
@@ -146,9 +147,12 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 
 		By("Registering the V2 smoke deployment with WVA via an annotated ScaledObject (min=1, max=10)")
 		// The annotated ScaledObject is both the WVA discovery source and the scaler;
-		// no VariantAutoscaling CR is created.
+		// no VariantAutoscaling CR is created. The 30 s scale-down stabilization window
+		// overrides the HPA default (300 s) so the scale-down It completes within the
+		// EventuallyExtendedSec budget.
 		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"),
+			fixtures.WithScaledObjectScaleDownStabilizationWindow(30))).To(Succeed())
 		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
 
 		By("Installing V2 saturation config so all subsequent It() blocks share state")
@@ -218,18 +222,66 @@ var _ = Describe("Saturation V2 engine", Label("smoke", "full"), Ordered, func()
 			Should(Succeed())
 	})
 
-	// Verifies that V2 recommends scale-up when --fake-metrics drives a
-	// kv-cache-usage above scaleUpThreshold. See v2SmokeFakeMetricsJSON for the
-	// calibration math. The recommendation is observed through the managed
-	// scaler driving the Deployment above a single replica.
-	It("should recommend scale-up when token utilization crosses scaleUpThreshold", func() {
-		By("Asserting WVA emits wva_desired_replicas for the scaled-up variant")
-		// The V2 scale-up recommendation is surfaced via wva_desired_replicas,
-		// decoupled from the separate scaler actuation loop. This verifies emission/consumption via
-		// the KEDA HPA surface; the numeric magnitude is not asserted here.
+	// Verifies the full KEDA scale-up pipeline: with kv-cache-usage=0.3 from
+	// --fake-metrics and scaleUpThreshold=0.30, WVA's V2 optimizer emits
+	// wva_desired_replicas=2, KEDA reads the metric and drives the Deployment
+	// to 2 ready replicas.
+	It("should scale up via KEDA when token utilization crosses scaleUpThreshold", func() {
+		By("Asserting KEDA actuates scale-up to ≥ 2 replicas")
+		// Chain: WVA (15 s interval) → wva_desired_replicas=2 → KEDA (5 s poll) →
+		// HPA → Deployment. Uses ScaleUpTimeout (600 s) to accommodate pod scheduling.
 		Eventually(func(g Gomega) {
-			expectWVADesiredReplicasConsumed(g, cfg.LLMDNamespace, modelDecodeDeployment)
+			dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 2),
+				"Deployment should scale up to ≥ 2 replicas with kv-cache-usage=0.3 and scaleUpThreshold=0.30")
 		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
+			Should(Succeed())
+	})
+
+	// Verifies the full KEDA scale-down pipeline: WVA emits wva_desired_replicas=1 after
+	// canonical-ordering thresholds raise the scaleDownBoundary, KEDA reads the updated
+	// metric, and the managed Deployment's replica count drops back to minReplicas (1).
+	//
+	// Pre-condition: the scale-up It must have driven the Deployment to ≥ 2 replicas.
+	// This It first asserts that pre-condition so a false-positive cannot occur when the
+	// Deployment is already at 1 (e.g. if WVA never recommended scale-up).
+	//
+	// With --fake-metrics kv-cache-usage=0.3 at 2 replicas and canonical-ordering
+	// thresholds (scaleUpThreshold=0.95, scaleDownBoundary=0.85), the V2 cost-aware
+	// optimizer's remaining-capacity is ≥ one full per-replica budget → NumReplicas=1.
+	It("should scale down via KEDA when token utilization falls below scaleDownBoundary", func() {
+		By("Confirming Deployment is at ≥ 2 replicas before asserting scale-down")
+		// This also catches regressions in the scale-up path — if KEDA never drove the
+		// Deployment above minReplicas, the scale-down assertion would be meaningless.
+		Eventually(func(g Gomega) {
+			dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 2),
+				"Deployment should be at 2 replicas before testing scale-down")
+		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
+			Should(Succeed())
+
+		By("Switching saturation config to canonical-ordering thresholds (scaleUp=0.95, scaleDown=0.85)")
+		// kv-cache-usage=0.3 << scaleDownBoundary=0.85 at 2 replicas → V2 optimizer
+		// decides desiredReplicas=1 → wva_desired_replicas=1 → KEDA drives HPA to 1.
+		cfgYAML := buildSaturationConfigYAMLWithThresholds(
+			"saturation",
+			v2SmokeKvCacheThreshold, v2SmokeQueueLengthThreshold,
+			v2SmokeKvSpareTrigger, v2SmokeQueueSpareTrigger,
+			0.95, 0.85,
+		)
+		Expect(upsertSaturationConfigEntry(ctx, cmNamespace, cmName, cmKey, cfgYAML)).To(Succeed())
+
+		By("Asserting KEDA actuates scale-down to 1 replica")
+		// Chain: WVA (15 s interval) → wva_desired_replicas=1 → KEDA (5 s poll) →
+		// HPA (30 s stabilization window set on this ScaledObject) → Deployment.
+		Eventually(func(g Gomega) {
+			dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically("<=", 1),
+				"Deployment should scale down to minReplicas=1 after scaleDownBoundary raised to 0.85")
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).
 			Should(Succeed())
 	})
 
