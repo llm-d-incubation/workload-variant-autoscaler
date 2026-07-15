@@ -973,6 +973,107 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
+      "description": "Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases. wva_saturation_utilization.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name, accelerator_type) (wva_saturation_utilization{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - {{accelerator_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Saturation Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
       "description": "KV cache token usage vs capacity. wva_kv_cache_tokens_used: Total KV cache tokens currently in use across all replicas of a variant (sum of vLLM TokensInUse). wva_kv_cache_tokens_capacity: Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).",
       "fieldConfig": {
         "defaults": {
@@ -1101,7 +1202,7 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases. wva_saturation_utilization.",
+      "description": "Number of scaling operations per second over the last 5 minutes, grouped by decision reason. Metric is wva_replica_scaling_total.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1115,8 +1216,8 @@
             "axisPlacement": "auto",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -1134,43 +1235,39 @@
             "spanNulls": false,
             "stacking": {
               "group": "A",
-              "mode": "none"
+              "mode": "normal"
             },
             "thresholdsStyle": {
               "mode": "off"
             }
           },
           "mappings": [],
-          "max": 1,
-          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.8
               }
             ]
           },
-          "unit": "percentunit"
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 7,
+        "h": 8,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 43
       },
-      "id": 41,
+      "id": 52,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -1187,14 +1284,14 @@
             "uid": "$datasource_uid"
           },
           "editorMode": "code",
-          "expr": "max by ($namespace_label, variant_name, accelerator_type) (wva_saturation_utilization{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "expr": "sum by (reason, direction) (rate(wva_replica_scaling_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
           "instant": false,
-          "legendFormat": "{{variant_name}} - {{accelerator_type}}",
+          "legendFormat": "{{reason}}: {{direction}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Saturation Utilization",
+      "title": "Scaling Decision Rate",
       "type": "timeseries"
     },
     {
@@ -1324,103 +1421,6 @@
         }
       ],
       "title": "Replica Overview",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$datasource_uid"
-      },
-      "description": "Number of scaling operations per second over the last 5 minutes, grouped by decision reason. Metric is wva_replica_scaling_total.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "bars",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "normal"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 43
-      },
-      "id": 52,
-      "options": {
-        "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource_uid"
-          },
-          "editorMode": "code",
-          "expr": "sum by (reason, direction) (rate(wva_replica_scaling_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
-          "instant": false,
-          "legendFormat": "{{reason}}: {{direction}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Scaling Decision Rate",
       "type": "timeseries"
     },
     {
