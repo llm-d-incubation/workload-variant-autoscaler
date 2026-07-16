@@ -48,6 +48,11 @@ type SharedConfig struct {
 
 	// Controller isolation
 	ControllerInstance string // Controller instance label for multi-controller filtering
+
+	// Nightly-specific: names injected by the llm-d-infra reusable workflow
+	NightlyDeployment string // DEPLOYMENT env var — target vLLM deployment name
+	GatewayName       string // GATEWAY_NAME env var — inference-gateway Service name
+	NightlyBurstSize  int    // E2E_NIGHTLY_BURST_SIZE — concurrent requests used to saturate the vLLM queue
 }
 
 // LoadSharedConfig reads the shared test configuration from environment variables.
@@ -85,6 +90,10 @@ func LoadSharedConfig() SharedConfig {
 		OutputTokens: GetEnvInt("OUTPUT_TOKENS", 50),
 
 		ControllerInstance: GetEnv("CONTROLLER_INSTANCE", ""),
+
+		NightlyDeployment: GetEnv("DEPLOYMENT", "optimized-baseline-nvidia-gpu-vllm-decode"),
+		GatewayName:       GetEnv("GATEWAY_NAME", ""),
+		NightlyBurstSize:  GetEnvInt("E2E_NIGHTLY_BURST_SIZE", 20),
 	}
 }
 

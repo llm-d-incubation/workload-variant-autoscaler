@@ -330,6 +330,32 @@ test-e2e-full-with-setup:
 	DEPLOY_LWS=true SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
 	$(MAKE) test-e2e-full
 
+# Runs the `nightly` label tests — real-vLLM saturation tests on OCP. KEDA-only.
+# Requires USE_SIMULATOR=false, ENVIRONMENT=openshift, and vLLM deployed with --max-num-seqs=1.
+# LLMD_NAMESPACE / MONITORING_NAMESPACE are overridable by the reusable workflow.
+E2E_NIGHTLY_TIMEOUT ?= 60m
+.PHONY: test-e2e-nightly
+test-e2e-nightly: ## Run nightly real-vLLM saturation tests (OCP only; label=nightly)
+	@echo "Running nightly e2e saturation tests..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$${LLMD_NAMESPACE:-$(E2E_EMULATED_LLMD_NAMESPACE)} \
+	MONITORING_NAMESPACE=$${MONITORING_NAMESPACE:-$(E2E_MONITORING_NAMESPACE)} \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALER_BACKEND=keda \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/e2e/ -timeout $(E2E_NIGHTLY_TIMEOUT) -v -ginkgo.v \
+		-ginkgo.label-filter="nightly" $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
 
 ##@ llm-d-benchmark CLI (standup / run / teardown)
 
@@ -597,12 +623,14 @@ benchmark-teardown: ## Tear down the benchmark environment (set BENCHMARK_NAMESP
 .PHONY: benchmark-full
 benchmark-full: benchmark-standup benchmark-run-all benchmark-teardown ## Full lifecycle: standup -> run all scenarios -> teardown
 
-# Stub for llm-d nightly reusable workflows (test_target=nightly-test-llm-d)
-# No-op; temporarily satisfies nightly CI make invocation
-# TODO: add nightly guide tests here
+# Entry point for the llm-d upstream nightly reusable workflow (test_target=nightly-test-llm-d).
+# Runs the real-vLLM saturation tests (label=nightly) against OCP. The kind/simulator e2e suites
+# self-skip on USE_SIMULATOR=false, so only the nightly label runs here — that is the coverage the
+# nightly uniquely provides (V2's live token-capacity path). ENVIRONMENT/monitoring namespace are
+# fixed to the OCP user-workload-monitoring stack; LLMD_NAMESPACE is injected by the workflow.
 .PHONY: nightly-test-llm-d
-nightly-test-llm-d: ## Nightly CI: noop; use as test_target instead of empty string
-	@:
+nightly-test-llm-d: ## Nightly CI: run real-vLLM saturation tests (label=nightly) on OCP
+	ENVIRONMENT=openshift USE_SIMULATOR=false MONITORING_NAMESPACE=openshift-user-workload-monitoring $(MAKE) test-e2e-nightly
 
 # Canonical target for llm-d-infra nightly reusables: ENVIRONMENT=openshift|kubernetes
 # Deploys WVA + monitoring + scaler backend only. llm-d model serving is deployed separately

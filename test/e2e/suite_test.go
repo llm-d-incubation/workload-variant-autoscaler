@@ -37,6 +37,7 @@ import (
 const (
 	envKindEmulator = "kind-emulator"
 	envKind         = "kind"
+	envOpenShift    = "openshift"
 	boolTrue        = "true"
 )
 
