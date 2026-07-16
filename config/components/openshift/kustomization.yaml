@@ -31,19 +31,18 @@ patches:
 - patch: |-
     - op: add
       path: /spec/template/spec/containers/0/args/-
-      value: --metrics-cert-path=/tmp/k8s-metrics-server/serving-certs
+      value: --metrics-cert-path=/etc/k8s-metrics-server/serving-certs
   target:
     kind: Deployment
     name: controller-manager
 # Request a service-ca serving cert for the metrics Service (metrics-server-cert Secret).
 - patch: |-
-    - op: add
-      path: /metadata/annotations
-      value:
-        service.beta.openshift.io/serving-cert-secret-name: metrics-server-cert
-  target:
+    apiVersion: v1
     kind: Service
-    name: controller-manager-metrics-service
+    metadata:
+      name: controller-manager-metrics-service
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: metrics-server-cert
 # Grant the WVA controller manager SA read access to its own /metrics endpoint
 # so the ServiceMonitor can scrape it.
 - patch: |-
