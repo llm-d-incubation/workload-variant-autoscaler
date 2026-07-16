@@ -423,10 +423,23 @@ benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPAC
 	exit $$rc
 
 .PHONY: benchmark-run
-benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, BENCHMARK_HARNESS=guidellm|inference-perf)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
+	fi
+	@mkdir -p "$(BENCHMARK_SCENARIOS_DIR)"
+	@# Fetch workload from inference-perf catalog if not found locally and harness is inference-perf
+	@if [ "$(BENCHMARK_HARNESS)" = "inference-perf" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
+		echo "Fetching $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog..."; \
+		if curl -sfL "https://raw.githubusercontent.com/kubernetes-sigs/inference-perf/main/workload-catalog/$(BENCHMARK_WORKLOAD)/inference-perf.yaml" \
+			-o "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)"; then \
+			echo "Successfully fetched $(BENCHMARK_WORKLOAD)"; \
+		else \
+			echo "ERROR: Could not fetch $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog"; \
+			echo "Available workloads: interactive-chat, code-generation, deep-research, reasoning, batch-summarization-rag, batch-synthetic-data-generation"; \
+			exit 1; \
+		fi; \
 	fi
 	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
 		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
