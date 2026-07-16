@@ -514,6 +514,48 @@ func TestRebalance_ReservesMixedMinimums(t *testing.T) {
 	}
 }
 
+// TestRebalance_AllocationNeverExceedsQuota verifies that configured minima
+// are reserved before the remaining quota is distributed proportionally.
+func TestRebalance_AllocationNeverExceedsQuota(t *testing.T) {
+	const quota int64 = 12
+
+	hpaA := makeHPA("model-a", "ns", "model-a", 20)
+	hpaA.Spec.MinReplicas = ptr.To[int32](5)
+	soB := makeScaledObject("model-b", "model-b", 20)
+	soB.Spec.MinReplicaCount = ptr.To[int32](4)
+	hpaC := makeHPA("model-c", "ns", "model-c", 20)
+	p, c := newPlugin(t,
+		map[string]float64{
+			"model-a": 10,
+			"model-b": 10,
+			"model-c": 80,
+		},
+		nil,
+		hpaA, soB, hpaC, makeGPUQuota("q", "ns", quota),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, soB, hpaC}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotA := getMaxReplicas(t, c, hpaA)
+	gotB := getMaxReplicaCount(t, c, soB)
+	gotC := getMaxReplicas(t, c, hpaC)
+	if gotA != 5 {
+		t.Errorf("model-a maxReplicas = %d, want 5", gotA)
+	}
+	if gotB != 4 {
+		t.Errorf("model-b maxReplicaCount = %d, want 4", gotB)
+	}
+	if gotC != 3 {
+		t.Errorf("model-c maxReplicas = %d, want 3", gotC)
+	}
+
+	if total := int64(gotA) + int64(gotB) + int64(gotC); total != quota {
+		t.Errorf("sum of target max replicas = %d, want quota %d", total, quota)
+	}
+}
+
 func TestRebalance_InfeasibleMinimumsLeaveNamespaceUnchanged(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 10)
 	hpaA.Spec.MinReplicas = ptr.To[int32](4)
