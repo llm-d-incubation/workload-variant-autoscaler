@@ -2,22 +2,18 @@
 #
 # This script is embedded in the test Job (via //go:embed) and verifies that:
 # 1. The EPP pod metrics endpoint is accessible (HTTP 200)
-# 2. Bearer token authentication works correctly
-# 3. The response contains valid Prometheus-format metrics
+# 2. The response contains valid Prometheus-format metrics
 #
 # This is used by TestInClusterScraping to verify end-to-end scraping functionality
 # when running inside the Kubernetes cluster (where pod IPs are accessible).
 #
-# TODO: Consider migrating to a ConfigMap-based approach for better maintainability
-# and to avoid embedding scripts as command-line arguments.
-#
-# This script expects TARGET_URL and BEARER_TOKEN as environment variables.
+# This script expects TARGET_URL as a required environment variable.
+# BEARER_TOKEN is optional; if set, it is sent as an Authorization header.
 
 set -e
 
-if [ -z "$TARGET_URL" ] || [ -z "$BEARER_TOKEN" ]; then
-  echo "ERROR: Missing required environment variables"
-  echo "Expected: TARGET_URL and BEARER_TOKEN"
+if [ -z "$TARGET_URL" ]; then
+  echo "ERROR: Missing required environment variable TARGET_URL"
   exit 1
 fi
 
@@ -27,9 +23,14 @@ echo ""
 
 # Test 1: Verify endpoint is accessible
 echo "Test 1: Checking if metrics endpoint is accessible..."
-HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
-  -H "Authorization: Bearer ${BEARER_TOKEN}" \
-  "${TARGET_URL}" || echo "000")
+if [ -n "$BEARER_TOKEN" ]; then
+  HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
+    -H "Authorization: Bearer ${BEARER_TOKEN}" \
+    "${TARGET_URL}" || echo "000")
+else
+  HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
+    "${TARGET_URL}" || echo "000")
+fi
 
 if [ "$HTTP_CODE" != "200" ]; then
   echo "ERROR: Metrics endpoint returned HTTP $HTTP_CODE"
