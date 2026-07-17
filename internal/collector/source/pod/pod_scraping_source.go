@@ -60,9 +60,6 @@ func NewPodScrapingSource(
 	if config.MetricsScheme == "" {
 		config.MetricsScheme = "http"
 	}
-	if config.MetricsReaderSecretKey == "" {
-		config.MetricsReaderSecretKey = "token"
-	}
 	if config.ScrapeTimeout == 0 {
 		config.ScrapeTimeout = 5 * time.Second
 	}
@@ -283,11 +280,8 @@ func (p *PodScrapingSource) scrapePodMetrics(ctx context.Context, pod *corev1.Po
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Add authentication header if available (authentication is optional)
-	token, useAuth, err := p.getAuthToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get auth token: %w", err)
-	}
+	// Add authentication header if a bearer token is configured.
+	token, useAuth := p.getAuthToken()
 	if useAuth {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -309,45 +303,13 @@ func (p *PodScrapingSource) scrapePodMetrics(ctx context.Context, pod *corev1.Po
 	return p.parsePrometheusMetrics(resp.Body, pod.Name)
 }
 
-// getAuthToken retrieves the authentication token.
-// Returns (token, useAuth, error) where useAuth indicates if authentication should be used.
-// Authentication is optional - if no token is configured or secret doesn't exist, useAuth will be false.
-func (p *PodScrapingSource) getAuthToken(ctx context.Context) (string, bool, error) { //nolint:unparam // error return kept for future use
-	// If explicit token provided, use it
+// getAuthToken returns the bearer token and whether authentication should be used.
+// If BearerToken is configured, it is returned; otherwise authentication is skipped.
+func (p *PodScrapingSource) getAuthToken() (string, bool) {
 	if p.config.BearerToken != "" {
-		return p.config.BearerToken, true, nil
+		return p.config.BearerToken, true
 	}
-
-	// If no secret name configured, skip authentication
-	if p.config.MetricsReaderSecretName == "" {
-		return "", false, nil
-	}
-
-	// Try to read from secret
-	secret := &corev1.Secret{}
-	// Use the specified secret namespace, or fall back to service namespace
-	secretNamespace := p.config.MetricsReaderSecretNamespace
-	if secretNamespace == "" {
-		secretNamespace = p.config.ServiceNamespace
-	}
-	secretKey := types.NamespacedName{
-		Name:      p.config.MetricsReaderSecretName,
-		Namespace: secretNamespace,
-	}
-
-	if err := p.k8sClient.Get(ctx, secretKey, secret); err != nil {
-		// Secret doesn't exist - treat authentication as optional
-		// Return no error, just indicate auth should not be used
-		return "", false, nil
-	}
-
-	tokenBytes, ok := secret.Data[p.config.MetricsReaderSecretKey]
-	if !ok {
-		// Token key not found - treat as optional, skip auth
-		return "", false, nil
-	}
-
-	return string(tokenBytes), true, nil
+	return "", false
 }
 
 // parsePrometheusMetrics parses Prometheus text format into MetricResult.

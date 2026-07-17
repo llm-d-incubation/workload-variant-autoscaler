@@ -13,7 +13,6 @@ rules:
   - nodes/status
   - pods
   - resourcequotas
-  - secrets
   - services
   verbs:
   - get

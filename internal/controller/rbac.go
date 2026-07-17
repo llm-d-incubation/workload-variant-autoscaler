@@ -22,7 +22,6 @@ package controller
 // Core resources read during optimization and metrics collection.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Note: Namespace watch permission is required for label-based namespace opt-in for namespace-local ConfigMaps.
 

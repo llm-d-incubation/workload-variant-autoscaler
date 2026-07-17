@@ -79,8 +79,6 @@ var _ = Describe("PodScrapingSource", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(source.config.MetricsPath).To(Equal("/metrics"))
 			Expect(source.config.MetricsScheme).To(Equal("http"))
-			Expect(source.config.MetricsReaderSecretName).To(BeEmpty(), "MetricsReaderSecretName should be empty by default (no EPP-specific default)")
-			Expect(source.config.MetricsReaderSecretKey).To(Equal("token"))
 			Expect(source.config.ScrapeTimeout).To(Equal(5 * time.Second))
 			Expect(source.config.MaxConcurrentScrapes).To(Equal(10))
 			Expect(source.config.DefaultTTL).To(Equal(30 * time.Second))
@@ -337,41 +335,7 @@ var _ = Describe("PodScrapingSource", func() {
 	})
 
 	Describe("getAuthToken", func() {
-		var secret *corev1.Secret
-
-		BeforeEach(func() {
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "inference-gateway-sa-metrics-reader-secret",
-					Namespace: "test-ns",
-				},
-				Data: map[string][]byte{
-					"token": []byte("test-bearer-token"),
-				},
-			}
-		})
-
-		It("should read token from secret", func() {
-			client := fakeClient.
-				WithObjects(secret).
-				Build()
-
-			config := PodScrapingSourceConfig{
-				ServiceName:             "test-pool-epp",
-				ServiceNamespace:        "test-ns",
-				MetricsPort:             9090,
-				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
-			}
-			source, err := NewPodScrapingSource(ctx, client, config)
-			Expect(err).NotTo(HaveOccurred())
-
-			token, useAuth, err := source.getAuthToken(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(useAuth).To(BeTrue())
-			Expect(token).To(Equal("test-bearer-token"))
-		})
-
-		It("should use explicit BearerToken if provided", func() {
+		It("should return the BearerToken when configured", func() {
 			client := fakeClient.Build()
 
 			config := PodScrapingSourceConfig{
@@ -383,13 +347,12 @@ var _ = Describe("PodScrapingSource", func() {
 			source, err := NewPodScrapingSource(ctx, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
-			token, useAuth, err := source.getAuthToken(ctx)
-			Expect(err).NotTo(HaveOccurred())
+			token, useAuth := source.getAuthToken()
 			Expect(useAuth).To(BeTrue())
 			Expect(token).To(Equal("explicit-token"))
 		})
 
-		It("should skip authentication if secret not found (optional auth)", func() {
+		It("should skip authentication when no BearerToken is configured", func() {
 			client := fakeClient.Build()
 
 			config := PodScrapingSourceConfig{
@@ -400,47 +363,7 @@ var _ = Describe("PodScrapingSource", func() {
 			source, err := NewPodScrapingSource(ctx, client, config)
 			Expect(err).NotTo(HaveOccurred())
 
-			token, useAuth, err := source.getAuthToken(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(useAuth).To(BeFalse())
-			Expect(token).To(BeEmpty())
-		})
-
-		It("should skip authentication if token key not found in secret (optional auth)", func() {
-			secret.Data = map[string][]byte{} // Empty secret
-			client := fakeClient.
-				WithObjects(secret).
-				Build()
-
-			config := PodScrapingSourceConfig{
-				ServiceName:             "test-pool-epp",
-				ServiceNamespace:        "test-ns",
-				MetricsPort:             9090,
-				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
-			}
-			source, err := NewPodScrapingSource(ctx, client, config)
-			Expect(err).NotTo(HaveOccurred())
-
-			token, useAuth, err := source.getAuthToken(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(useAuth).To(BeFalse())
-			Expect(token).To(BeEmpty())
-		})
-
-		It("should skip authentication if MetricsReaderSecretName is empty", func() {
-			client := fakeClient.Build()
-
-			config := PodScrapingSourceConfig{
-				ServiceName:             "test-pool-epp",
-				ServiceNamespace:        "test-ns",
-				MetricsPort:             9090,
-				MetricsReaderSecretName: "", // Empty - no auth
-			}
-			source, err := NewPodScrapingSource(ctx, client, config)
-			Expect(err).NotTo(HaveOccurred())
-
-			token, useAuth, err := source.getAuthToken(ctx)
-			Expect(err).NotTo(HaveOccurred())
+			token, useAuth := source.getAuthToken()
 			Expect(useAuth).To(BeFalse())
 			Expect(token).To(BeEmpty())
 		})
@@ -516,7 +439,6 @@ vllm_num_requests_waiting{namespace="test-ns"} 5
 	Describe("Refresh", func() {
 		var (
 			service     *corev1.Service
-			secret      *corev1.Secret
 			readyPod1   *corev1.Pod
 			readyPod2   *corev1.Pod
 			mockServer1 *httptest.Server
@@ -538,16 +460,6 @@ vllm_num_requests_waiting{namespace="test-ns"} 5
 					Selector: map[string]string{
 						"inferencepool": "test-pool-epp",
 					},
-				},
-			}
-
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "inference-gateway-sa-metrics-reader-secret",
-					Namespace: "test-ns",
-				},
-				Data: map[string][]byte{
-					"token": []byte("test-token"),
 				},
 			}
 
@@ -664,18 +576,18 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			// Create separate sources for each pod (since they use different ports)
 			// In real scenario, all pods use same port but different IPs
 			client1 := fakeClient.
-				WithObjects(service, secret, readyPod1).
+				WithObjects(service, readyPod1).
 				Build()
 
 			config1 := PodScrapingSourceConfig{
-				ServiceName:             "test-pool-epp",
-				ServiceNamespace:        "test-ns",
-				MetricsPort:             port1,
-				MetricsPath:             "/metrics",
-				MetricsScheme:           "http",
-				ScrapeTimeout:           5 * time.Second,
-				MaxConcurrentScrapes:    10,
-				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
+				ServiceName:          "test-pool-epp",
+				ServiceNamespace:     "test-ns",
+				MetricsPort:          port1,
+				MetricsPath:          "/metrics",
+				MetricsScheme:        "http",
+				ScrapeTimeout:        5 * time.Second,
+				MaxConcurrentScrapes: 10,
+				BearerToken:          "test-token",
 			}
 			source1, err := NewPodScrapingSource(ctx, client1, config1)
 			Expect(err).NotTo(HaveOccurred())
@@ -726,7 +638,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			}
 
 			client := fakeClient.
-				WithObjects(service, secret, unreachablePod).
+				WithObjects(service, unreachablePod).
 				Build()
 
 			config := PodScrapingSourceConfig{
@@ -782,27 +694,16 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 				},
 			}
 
-			// Use wrong token
-			wrongSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "inference-gateway-sa-metrics-reader-secret",
-					Namespace: "test-ns",
-				},
-				Data: map[string][]byte{
-					"token": []byte("wrong-token"),
-				},
-			}
-
 			client := fakeClient.
-				WithObjects(service, wrongSecret, authPod).
+				WithObjects(service, authPod).
 				Build()
 
 			config := PodScrapingSourceConfig{
-				ServiceName:             "test-pool-epp",
-				ServiceNamespace:        "test-ns",
-				MetricsPort:             port,
-				ScrapeTimeout:           1 * time.Second,
-				MetricsReaderSecretName: "inference-gateway-sa-metrics-reader-secret",
+				ServiceName:      "test-pool-epp",
+				ServiceNamespace: "test-ns",
+				MetricsPort:      port,
+				ScrapeTimeout:    1 * time.Second,
+				BearerToken:      "wrong-token",
 			}
 			source, err := NewPodScrapingSource(ctx, client, config)
 			Expect(err).NotTo(HaveOccurred())

@@ -118,16 +118,14 @@ func CreatePodScrapingSource(config PodScrapingTestConfig) (*pod.PodScrapingSour
 	}
 
 	podConfig := pod.PodScrapingSourceConfig{
-		ServiceName:             config.ServiceName,
-		ServiceNamespace:        config.ServiceNamespace,
-		MetricsPort:             config.MetricsPort,
-		MetricsPath:             config.MetricsPath,
-		MetricsScheme:           config.MetricsScheme,
-		MetricsReaderSecretName: config.MetricsReaderSecretName,
-		MetricsReaderSecretKey:  config.MetricsReaderSecretKey,
-		ScrapeTimeout:           5 * time.Second,
-		MaxConcurrentScrapes:    10,
-		DefaultTTL:              30 * time.Second,
+		ServiceName:          config.ServiceName,
+		ServiceNamespace:     config.ServiceNamespace,
+		MetricsPort:          config.MetricsPort,
+		MetricsPath:          config.MetricsPath,
+		MetricsScheme:        config.MetricsScheme,
+		ScrapeTimeout:        5 * time.Second,
+		MaxConcurrentScrapes: 10,
+		DefaultTTL:           30 * time.Second,
 	}
 
 	return pod.NewPodScrapingSource(ctx, config.CRClient, podConfig)
