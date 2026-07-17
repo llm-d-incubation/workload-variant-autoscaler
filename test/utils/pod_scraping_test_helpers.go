@@ -353,24 +353,25 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 	}
 	g.Expect(testPod).NotTo(gom.BeNil(), "Should have at least one ready pod with IP")
 
-	// Create a test Job that runs inside the cluster and verifies scraping works
+	// Run the Job in the controller namespace where the epp-metrics-token secret is
+	// deployed, so it can be mounted the same way the controller mounts it.
+	const jobNS = "workload-variant-autoscaler-system"
 	jobName := fmt.Sprintf("pod-scraping-test-%d", time.Now().Unix())
 	_, err = CreateInClusterScrapingTestJob(
 		ctx,
 		config.K8sClient,
-		config.ServiceNamespace,
+		jobNS,
 		jobName,
 		testPod.Status.PodIP,
 		config.MetricsPort,
 		config.MetricsPath,
 		config.MetricsScheme,
-		"",
 	)
 	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to create test job")
 
 	// Cleanup job after test
 	defer func() {
-		_ = config.K8sClient.BatchV1().Jobs(config.ServiceNamespace).Delete(ctx, jobName, metav1.DeleteOptions{
+		_ = config.K8sClient.BatchV1().Jobs(jobNS).Delete(ctx, jobName, metav1.DeleteOptions{
 			PropagationPolicy: func() *metav1.DeletionPropagation {
 				p := metav1.DeletePropagationForeground
 				return &p
@@ -378,30 +379,27 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 		})
 	}()
 
-	// Wait for job to complete
-	// Timeout must account for image pull time (curlimages/curl may need to be pulled from Docker Hub,
-	// which can be slow in CI due to rate limiting on shared GitHub Actions runner IPs)
 	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Waiting for in-cluster scraping test job to complete...\n")
 	gom.Eventually(func(g gom.Gomega) {
-		currentJob, err := config.K8sClient.BatchV1().Jobs(config.ServiceNamespace).Get(ctx, jobName, metav1.GetOptions{})
+		currentJob, err := config.K8sClient.BatchV1().Jobs(jobNS).Get(ctx, jobName, metav1.GetOptions{})
 		g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to get job")
 		g.Expect(currentJob.Status.Succeeded+currentJob.Status.Failed).To(gom.BeNumerically(">", 0), "Job should complete")
 	}, 5*time.Minute, 5*time.Second).Should(gom.Succeed())
 
 	// Verify job succeeded
-	finalJob, err := config.K8sClient.BatchV1().Jobs(config.ServiceNamespace).Get(ctx, jobName, metav1.GetOptions{})
+	finalJob, err := config.K8sClient.BatchV1().Jobs(jobNS).Get(ctx, jobName, metav1.GetOptions{})
 	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to get final job status")
 	g.Expect(finalJob.Status.Succeeded).To(gom.BeNumerically(">=", 1), "Job should succeed")
 
 	// Get job logs to verify scraping worked
-	podList, err := config.K8sClient.CoreV1().Pods(config.ServiceNamespace).List(ctx, metav1.ListOptions{
+	podList, err := config.K8sClient.CoreV1().Pods(jobNS).List(ctx, metav1.ListOptions{
 		LabelSelector: "job-name=" + jobName,
 	})
 	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to list job pods")
 	g.Expect(podList.Items).NotTo(gom.BeEmpty(), "Should have job pod")
 
 	testPodName := podList.Items[0].Name
-	logsReq := config.K8sClient.CoreV1().Pods(config.ServiceNamespace).GetLogs(testPodName, &corev1.PodLogOptions{
+	logsReq := config.K8sClient.CoreV1().Pods(jobNS).GetLogs(testPodName, &corev1.PodLogOptions{
 		Container: "scraper",
 	})
 	logBytes, err := logsReq.DoRaw(ctx)
@@ -418,28 +416,20 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 // CreateInClusterScrapingTestJob creates a Job that runs inside the cluster and verifies
 // that PodScrapingSource can successfully scrape metrics from EPP pods.
 //
-// This test verifies end-to-end scraping functionality by:
-// 1. Creating a Job pod that runs inside the cluster (can access pod IPs)
-// 2. Using curl to verify the metrics endpoint is accessible
-// 3. Validating that the response contains valid Prometheus-format metrics
-//
-// TODO: Consider migrating to a ConfigMap-based approach where the test script is stored in a ConfigMap
-// and mounted as a volume. This would avoid embedding scripts as command-line arguments and improve
-// maintainability. The current approach embeds the script as a string for simplicity.
+// The Job mounts the epp-metrics-token secret at the same path the controller uses
+// (/var/run/secrets/epp-metrics), so the test script reads the bearer token from a file
+// rather than requiring the caller to look it up via the K8s API.
 func CreateInClusterScrapingTestJob(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	namespace, jobName, podIP string,
 	metricsPort int32,
-	metricsPath, metricsScheme, bearerToken string,
+	metricsPath, metricsScheme string,
 ) (*batchv1.Job, error) {
 	url := fmt.Sprintf("%s://%s:%d%s", metricsScheme, podIP, metricsPort, metricsPath)
 
-	// Use the embedded test script with URL and token as environment variables
-	// The script is read from test/utils/scripts/in_cluster_pod_scraping_test.sh at compile time
-	// via the //go:embed directive
-
-	backoffLimit := int32(0) // Don't retry on failure
+	backoffLimit := int32(0)
+	defaultMode := int32(420)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -453,19 +443,33 @@ func CreateInClusterScrapingTestJob(
 					Containers: []corev1.Container{
 						{
 							Name:  "scraper",
-							Image: "curlimages/curl:8.11.1", // Lightweight curl image
+							Image: "curlimages/curl:8.11.1",
 							Env: []corev1.EnvVar{
 								{
 									Name:  "TARGET_URL",
 									Value: url,
 								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:  "BEARER_TOKEN",
-									Value: bearerToken,
+									Name:      "epp-metrics-token",
+									MountPath: "/var/run/secrets/epp-metrics",
+									ReadOnly:  true,
 								},
 							},
 							Command: []string{"/bin/sh", "-c"},
 							Args:    []string{inClusterPodScrapingTestScript},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "epp-metrics-token",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName:  "wva-epp-metrics-token",
+									DefaultMode: &defaultMode,
+								},
+							},
 						},
 					},
 				},

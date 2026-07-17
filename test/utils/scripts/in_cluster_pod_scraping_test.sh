@@ -7,8 +7,11 @@
 # This is used by TestInClusterScraping to verify end-to-end scraping functionality
 # when running inside the Kubernetes cluster (where pod IPs are accessible).
 #
-# This script expects TARGET_URL as a required environment variable.
-# BEARER_TOKEN is optional; if set, it is sent as an Authorization header.
+# Environment:
+#   TARGET_URL (required) - the metrics endpoint URL to scrape
+#
+# The bearer token is read from the mounted epp-metrics-token secret at
+# /var/run/secrets/epp-metrics/token, mirroring the production controller path.
 
 set -e
 
@@ -17,8 +20,15 @@ if [ -z "$TARGET_URL" ]; then
   exit 1
 fi
 
+TOKEN_PATH="/var/run/secrets/epp-metrics/token"
+BEARER_TOKEN=""
+if [ -f "$TOKEN_PATH" ]; then
+  BEARER_TOKEN=$(cat "$TOKEN_PATH")
+fi
+
 echo "Testing metrics scraping from inside cluster..."
 echo "Target URL: ${TARGET_URL}"
+echo "Auth: $([ -n "$BEARER_TOKEN" ] && echo "bearer token loaded" || echo "no token")"
 echo ""
 
 # Test 1: Verify endpoint is accessible
