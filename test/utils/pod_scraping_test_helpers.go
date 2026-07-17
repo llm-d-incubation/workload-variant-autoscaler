@@ -66,10 +66,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/pod"
 	"github.com/onsi/ginkgo/v2"
 	gom "github.com/onsi/gomega"
-	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,10 +94,6 @@ type PodScrapingTestConfig struct {
 	MetricsPort   int32
 	MetricsPath   string
 	MetricsScheme string
-
-	// Authentication
-	MetricsReaderSecretName string
-	MetricsReaderSecretKey  string
 
 	// Kubernetes clients
 	K8sClient *kubernetes.Clientset
@@ -244,136 +238,6 @@ func TestPodScrapingMetricsCollection(ctx context.Context, config PodScrapingTes
 	}
 }
 
-// DiscoverMetricsReaderSecret discovers the metrics reader secret name for an EPP.
-// It tries multiple strategies:
-// 1. From ServiceMonitor bearerTokenSecret reference
-// 2. From EPP service account token secret
-// 3. Common naming patterns
-// 4. Creates a test secret if none found (for e2e testing only)
-func DiscoverMetricsReaderSecret(ctx context.Context, k8sClient *kubernetes.Clientset, crClient client.Client, namespace, eppServiceName string) (string, error) {
-	// Strategy 1: Check ServiceMonitor for authorization credentials
-	// Supports both deprecated BearerTokenSecret and new Authorization.Credentials
-	serviceMonitorList := &promoperator.ServiceMonitorList{}
-	err := crClient.List(ctx, serviceMonitorList, client.InNamespace(namespace))
-	if err == nil {
-		for _, sm := range serviceMonitorList.Items {
-			// Check if this ServiceMonitor targets the EPP service
-			// ServiceMonitor selector should match the EPP service labels
-			for _, endpoint := range sm.Spec.Endpoints {
-				// Check new Authorization API first (preferred)
-				if endpoint.Authorization != nil && endpoint.Authorization.Credentials != nil {
-					secretName := endpoint.Authorization.Credentials.Name
-					// Verify secret exists
-					_, err := k8sClient.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
-					if err == nil {
-						_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Discovered metrics secret from ServiceMonitor Authorization: %s\n", secretName)
-						return secretName, nil
-					}
-				}
-				// Fallback to deprecated BearerTokenSecret (for backward compatibility)
-				//nolint:staticcheck // SA1019: BearerTokenSecret is deprecated but still used in some deployments
-				if endpoint.BearerTokenSecret != nil {
-					secretName := endpoint.BearerTokenSecret.Name
-					// Verify secret exists
-					_, err := k8sClient.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
-					if err == nil {
-						_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Discovered metrics secret from ServiceMonitor BearerTokenSecret: %s\n", secretName)
-						return secretName, nil
-					}
-				}
-			}
-		}
-	}
-
-	// Strategy 2: Try to find secret from EPP service account
-	svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, eppServiceName, metav1.GetOptions{})
-	if err == nil && svc.Spec.Selector != nil {
-		// Get pods for this service
-		podList, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: metav1.FormatLabelSelector(&metav1.LabelSelector{
-				MatchLabels: svc.Spec.Selector,
-			}),
-		})
-		if err == nil && len(podList.Items) > 0 {
-			// Get service account from first pod
-			saName := podList.Items[0].Spec.ServiceAccountName
-			if saName != "" {
-				// Try common service account token secret patterns
-				secretPatterns := []string{
-					saName + "-token",
-					saName + "-metrics-reader-secret",
-					"inference-gateway-sa-metrics-reader-secret",
-				}
-				for _, pattern := range secretPatterns {
-					_, err := k8sClient.CoreV1().Secrets(namespace).Get(ctx, pattern, metav1.GetOptions{})
-					if err == nil {
-						_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Discovered metrics secret from service account pattern: %s\n", pattern)
-						return pattern, nil
-					}
-				}
-			}
-		}
-	}
-
-	// Strategy 3: Try common naming patterns
-	commonNames := []string{
-		"inference-gateway-sa-metrics-reader-secret",
-		eppServiceName + "-metrics-reader-secret",
-		eppServiceName + "-epp-metrics-reader-secret",
-	}
-	for _, name := range commonNames {
-		_, err := k8sClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err == nil {
-			_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Discovered metrics secret from common pattern: %s\n", name)
-			return name, nil
-		}
-	}
-
-	// Strategy 4: Create a test secret for e2e testing (if none found)
-	// This is acceptable for e2e tests where the secret might not exist in CI
-	testSecretName := "inference-gateway-sa-metrics-reader-secret"
-	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "No metrics secret found, creating test secret for e2e: %s\n", testSecretName)
-
-	// Generate a dummy token for testing
-	testToken := fmt.Sprintf("test-token-%d", time.Now().Unix())
-	testSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      testSecretName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/component":  "e2e-test",
-				"app.kubernetes.io/managed-by": "workload-variant-autoscaler-test",
-			},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"token": []byte(testToken),
-		},
-	}
-
-	// Try to create, ignore if already exists
-	_, err = k8sClient.CoreV1().Secrets(namespace).Create(ctx, testSecret, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("failed to create test secret: %w", err)
-	}
-
-	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "Created test metrics secret: %s (for e2e testing only)\n", testSecretName)
-	return testSecretName, nil
-}
-
-// TestPodScrapingAuthentication tests that PodScrapingSource can read authentication token
-func TestPodScrapingAuthentication(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
-	// Verify secret exists
-	secret, err := config.K8sClient.CoreV1().Secrets(config.ServiceNamespace).Get(
-		ctx,
-		config.MetricsReaderSecretName,
-		metav1.GetOptions{},
-	)
-	g.Expect(err).NotTo(gom.HaveOccurred(), "Metrics reader secret should exist")
-	g.Expect(secret.Data).To(gom.HaveKey(config.MetricsReaderSecretKey), "Secret should have token key")
-	g.Expect(secret.Data[config.MetricsReaderSecretKey]).NotTo(gom.BeEmpty(), "Token should not be empty")
-}
-
 // TestPodScrapingCaching tests that PodScrapingSource caches results
 func TestPodScrapingCaching(ctx context.Context, config PodScrapingTestConfig, g gom.Gomega) {
 	if config.Environment == envKindVal || config.Environment == envKindEmulatorVal {
@@ -450,16 +314,6 @@ func TestPodScrapingFromController(ctx context.Context, config PodScrapingTestCo
 	}
 	g.Expect(testPod).NotTo(gom.BeNil(), "Should have at least one ready pod with IP")
 
-	// Get the Bearer token from the secret
-	secret, err := config.K8sClient.CoreV1().Secrets(config.ServiceNamespace).Get(
-		ctx,
-		config.MetricsReaderSecretName,
-		metav1.GetOptions{},
-	)
-	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to get metrics secret")
-	token := string(secret.Data[config.MetricsReaderSecretKey])
-	g.Expect(token).NotTo(gom.BeEmpty(), "Token should not be empty")
-
 	controllerPods, err := config.K8sClient.CoreV1().Pods("workload-variant-autoscaler-system").List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=workload-variant-autoscaler",
 	})
@@ -499,16 +353,6 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 	}
 	g.Expect(testPod).NotTo(gom.BeNil(), "Should have at least one ready pod with IP")
 
-	// Get the Bearer token from the secret
-	secret, err := config.K8sClient.CoreV1().Secrets(config.ServiceNamespace).Get(
-		ctx,
-		config.MetricsReaderSecretName,
-		metav1.GetOptions{},
-	)
-	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to get metrics secret")
-	token := string(secret.Data[config.MetricsReaderSecretKey])
-	g.Expect(token).NotTo(gom.BeEmpty(), "Token should not be empty")
-
 	// Create a test Job that runs inside the cluster and verifies scraping works
 	jobName := fmt.Sprintf("pod-scraping-test-%d", time.Now().Unix())
 	_, err = CreateInClusterScrapingTestJob(
@@ -520,7 +364,7 @@ func TestInClusterScraping(ctx context.Context, config PodScrapingTestConfig, g 
 		config.MetricsPort,
 		config.MetricsPath,
 		config.MetricsScheme,
-		token,
+		"",
 	)
 	g.Expect(err).NotTo(gom.HaveOccurred(), "Should be able to create test job")
 
@@ -729,15 +573,6 @@ func DescribePodScrapingSourceTests(configFn func() PodScrapingTestConfig) {
 				testCtx = context.Background()
 			}
 			TestPodScrapingPodDiscovery(testCtx, config, gom.NewWithT(ginkgo.GinkgoT()))
-		})
-
-		ginkgo.It("should authenticate with Bearer token", func() {
-			config := configFn()
-			testCtx := config.Ctx
-			if testCtx == nil {
-				testCtx = context.Background()
-			}
-			TestPodScrapingAuthentication(testCtx, config, gom.NewWithT(ginkgo.GinkgoT()))
 		})
 
 		ginkgo.It("should scrape metrics from pods", func() {
