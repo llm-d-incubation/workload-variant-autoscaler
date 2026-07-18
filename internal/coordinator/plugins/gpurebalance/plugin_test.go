@@ -51,6 +51,10 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 }
 
 func makeHPA(name, ns, pool string, maxReplicas int32) *autoscalingv2.HorizontalPodAutoscaler {
+	return makeHPAWithMin(name, ns, pool, maxReplicas, nil)
+}
+
+func makeHPAWithMin(name, ns, pool string, maxReplicas int32, minReplicas *int32) *autoscalingv2.HorizontalPodAutoscaler {
 	ann := map[string]string{}
 	if pool != "" {
 		ann[AnnotationInferencePool] = pool
@@ -62,6 +66,7 @@ func makeHPA(name, ns, pool string, maxReplicas int32) *autoscalingv2.Horizontal
 			Annotations: ann,
 		},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MinReplicas: minReplicas,
 			MaxReplicas: maxReplicas,
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 				APIVersion: "apps/v1",
@@ -341,5 +346,57 @@ func TestRebalance_MultiNamespace(t *testing.T) {
 		if got := getMaxReplicas(t, c, tc.name, tc.ns); got != tc.want {
 			t.Errorf("%s/%s maxReplicas = %d, want %d", tc.ns, tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestRebalance_RespectsHPAMinReplicas verifies that maxReplicas is never
+// patched below an HPA's spec.minReplicas even when the proportional
+// allocation would compute a lower value.
+func TestRebalance_RespectsHPAMinReplicas(t *testing.T) {
+	// quota=10, model-a=80% queue → floor(8)=8
+	// model-b=20% queue → floor(2)=2; but minReplicas=3, so floor is 3.
+	// allocated=8+3=11 > quota=10; remainder is negative so no bonus added.
+	// model-a still gets 8, model-b gets 3 (clamped up from 2).
+	minReplicas := int32(3)
+	hpaA := makeHPA("model-a", "ns", "model-a", 1)
+	hpaB := makeHPAWithMin("model-b", "ns", "model-b", 1, &minReplicas)
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 80, "model-b": 20},
+		nil,
+		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, "model-a", "ns"); got != 8 {
+		t.Errorf("model-a maxReplicas = %d, want 8", got)
+	}
+	// Must be clamped up to minReplicas=3, not the proportional value of 2.
+	if got := getMaxReplicas(t, c, "model-b", "ns"); got != 3 {
+		t.Errorf("model-b maxReplicas = %d, want 3 (clamped to minReplicas)", got)
+	}
+}
+
+// TestRebalance_NoMinReplicasDefaultsToOne verifies that when spec.minReplicas
+// is nil (Kubernetes default of 1) the existing floor-of-1 behaviour is preserved.
+func TestRebalance_NoMinReplicasDefaultsToOne(t *testing.T) {
+	// quota=10, model-a=90%, model-b=10% → floor(9)=9, floor(1)=1; total=10.
+	hpaA := makeHPA("model-a", "ns", "model-a", 1)
+	hpaB := makeHPA("model-b", "ns", "model-b", 1) // MinReplicas nil → default 1
+	p, c := newPlugin(t,
+		map[string]float64{"model-a": 90, "model-b": 10},
+		nil,
+		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, "model-a", "ns"); got != 9 {
+		t.Errorf("model-a maxReplicas = %d, want 9", got)
+	}
+	if got := getMaxReplicas(t, c, "model-b", "ns"); got != 1 {
+		t.Errorf("model-b maxReplicas = %d, want 1 (nil minReplicas defaults to 1)", got)
 	}
 }

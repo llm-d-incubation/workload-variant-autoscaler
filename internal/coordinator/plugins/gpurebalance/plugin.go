@@ -117,34 +117,37 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 		}
 	}
 
-	// TODO: the minimum target is hardcoded to 1 but an HPA may have spec.minReplicas
-	// set higher (e.g. 2 or 3). Setting maxReplicas below minReplicas produces an
-	// invalid HPA and Kubernetes will reject the patch. The floor should be
-	// max(1, hpa.Spec.MinReplicas) so the computed target is always a valid value.
-
-	// TODO: when len(entries) > quota the minimum-1 clamp causes every HPA to
-	// receive maxReplicas=1 and allocated exceeds quota (e.g. 100 HPAs, quota=10
-	// → allocated=100). The ResourceQuota becomes the only enforcement and the
-	// first 10 pods to be scheduled win while the other 90 are stuck pending.
-	// Fix: rank HPAs by queue depth, assign maxReplicas=1 only to the top-quota
-	// pools, and park the rest at minReplicas so the budget is not over-committed.
+	// TODO: when len(entries) > quota the minimum-minReplicas clamp can still
+	// cause allocated to exceed quota (e.g. 100 HPAs each with minReplicas=1,
+	// quota=10 → allocated=100). The ResourceQuota becomes the only enforcement
+	// and the first 10 pods to be scheduled win while the other 90 are stuck
+	// pending. Fix: rank HPAs by queue depth, assign minReplicas only to the
+	// top-quota pools, and park the rest at minReplicas so the budget is not
+	// over-committed.
 
 	// TODO: scale-to-zero is not supported. When a pool's queue is 0 its weight is
-	// 0% and the ideal target is 0 replicas, but the floor clamp below forces it to 1.
-	// Supporting scale-to-zero requires: (a) the HPA has spec.minReplicas=0 (opt-in),
-	// and (b) the Coordinator avoids setting maxReplicas=0 while in-flight requests are
-	// still being drained (check active connection count or use a brief drain window
-	// before zeroing). Until those conditions are met the floor is kept at 1 to prevent
+	// 0% and the ideal target is 0 replicas, but the floor clamp below forces it to
+	// minReplicas (minimum 1). Supporting scale-to-zero requires: (a) the HPA has
+	// spec.minReplicas=0 (opt-in), and (b) the Coordinator avoids setting
+	// maxReplicas=0 while in-flight requests are still being drained (check active
+	// connection count or use a brief drain window before zeroing). Until those
+	// conditions are met the floor is kept at max(1, minReplicas) to prevent
 	// accidental full scale-down.
 
-	// Targets: floor(quota * weight), minimum 1, remainder to highest-weight pool.
+	// Targets: floor(quota * weight), floored at max(1, hpa.Spec.MinReplicas) so
+	// that maxReplicas is never patched below the HPA's own minimum. The remainder
+	// after floor-division goes to the highest-weight pool.
 	targets := make([]int32, len(entries))
 	allocated := int64(0)
 	maxWeightIdx := 0
 	for i := range entries {
+		minReplicas := int32(1)
+		if v := entries[i].hpa.Spec.MinReplicas; v != nil && *v > minReplicas {
+			minReplicas = *v
+		}
 		t := int32(math.Floor(float64(quota) * weights[i]))
-		if t < 1 {
-			t = 1
+		if t < minReplicas {
+			t = minReplicas
 		}
 		targets[i] = t
 		allocated += int64(t)
