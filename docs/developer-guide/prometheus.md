@@ -866,6 +866,32 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   }
   ```
 
+### `wva_replica_scaling_total`
+- **Type**: Counter
+- **Description**: Total number of replica scaling operations performed, labeled by direction and reason
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `direction`: Scaling direction (`up`, `down`)
+  - `reason`: Reason for the scaling operation
+- **Use Case**: Detect scaling thrashing — backs the `WVAReplicaScalingThrashing` alert — and audit scaling activity per variant
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_replica_scaling_total",
+      "direction": "up",
+      "namespace": "workload-variant-autoscaler-system",
+      "reason": "saturation",
+      "variant_name": "smoke-test-va"
+    },
+    "value": [
+      1778846184.925,
+      "3"
+    ]
+  }
+  ```
+
 ### Error Tracking
 
 ### `wva_errors_total`

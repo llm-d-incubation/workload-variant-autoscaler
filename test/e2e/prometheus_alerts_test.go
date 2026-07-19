@@ -135,9 +135,20 @@ func extractMetricNames(expr string) []string {
 	promqlKeywords := map[string]bool{
 		// Functions
 		"rate": true, "irate": true, "sum": true, "avg": true, "min": true, "max": true,
-		"count": true, "stddev": true, "stdvar": true,
+		"count": true, "count_values": true, "stddev": true, "stdvar": true, "group": true,
+		"topk": true, "bottomk": true, "quantile": true,
 		"max_over_time": true, "min_over_time": true, "avg_over_time": true,
+		"sum_over_time": true, "count_over_time": true, "quantile_over_time": true,
+		"stddev_over_time": true, "stdvar_over_time": true,
+		"last_over_time": true, "present_over_time": true,
 		"absent": true, "absent_over_time": true,
+		"increase": true, "delta": true, "idelta": true, "deriv": true,
+		"changes": true, "resets": true, "predict_linear": true, "holt_winters": true,
+		"histogram_quantile": true, "label_replace": true, "label_join": true,
+		"vector": true, "scalar": true, "time": true, "timestamp": true,
+		"sort": true, "sort_desc": true, "clamp": true, "clamp_min": true, "clamp_max": true,
+		"round": true, "ceil": true, "floor": true, "abs": true, "sgn": true,
+		"exp": true, "ln": true, "log2": true, "log10": true, "sqrt": true,
 		// Keywords
 		"by": true, "without": true, "and": true, "or": true, "unless": true,
 		"on": true, "ignoring": true, "group_left": true, "group_right": true,
@@ -248,8 +259,11 @@ var _ = Describe("PrometheusAlerts", Label("smoke"), Label("prometheus-alerts"),
 					"This test requires Prometheus to be reachable. " +
 					"Set PROMETHEUS_URL to point to an accessible Prometheus instance or run tests inside the cluster.")
 			}
-			Skip(fmt.Sprintf("Prometheus not accessible at %s: %v. "+
-				"This test requires Prometheus to be reachable.", prometheusURL, err))
+			// PROMETHEUS_URL was provided explicitly, so the operator intends this
+			// check to run — an unreachable endpoint is a real failure, not a skip.
+			// Otherwise a broken ruleSelector/endpoint would pass silently.
+			Fail(fmt.Sprintf("Prometheus not accessible at %s: %v. "+
+				"PROMETHEUS_URL is set, so this rules-loaded check must run.", prometheusURL, err))
 		}
 
 		By("Waiting for Prometheus operator to reconcile rules (~60s)")

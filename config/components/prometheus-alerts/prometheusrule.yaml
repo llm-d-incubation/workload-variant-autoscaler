@@ -25,8 +25,8 @@ spec:
       labels:
         severity: info
       annotations:
-        summary: "WVA optimization loop has stopped processing models"
-        description: "No models have been processed over a 10-minute window sustained for 15+ minutes. If there are models to process, this can indicate optimization loop may be stalled or crashed, or there are issues with metric collection. Check controller pod status and logs, or verify Prometheus endpoint connectivity."
+        summary: "WVA has processed zero models for 15+ minutes"
+        description: "wva_models_processed has been 0 (or absent) over a 10-minute window, sustained for 15+ minutes. This is EXPECTED when no VariantAutoscaling resources are being managed (an idle controller). If you do have managed workloads, it can indicate the optimization loop is stalled/crashed or metric collection is failing — check controller pod status and logs, and Prometheus connectivity."
 
     - alert: WVAMetricsCollectionFailing
       expr: sum by (query_type, reason) (rate(wva_metrics_collection_errors_total[5m])) > 0.5
@@ -43,8 +43,8 @@ spec:
       labels:
         severity: warning
       annotations:
-        summary: "No {{ $labels.accelerator_type }} GPUs available for WVA scaling"
-        description: "No {{ $labels.accelerator_vendor }} {{ $labels.accelerator_model }} ({{ $labels.accelerator_type }}) GPUs available for WVA scaling for 5+ minutes. Consider adding GPU nodes or check if existing nodes are schedulable."
+        summary: "GPU-labeled {{ $labels.accelerator_type }} nodes report zero allocatable accelerators"
+        description: "WVA sees zero allocatable {{ $labels.accelerator_vendor }} {{ $labels.accelerator_model }} ({{ $labels.accelerator_type }}) GPUs for 5+ minutes. Note: this reflects node *allocatable* capacity (not free/schedulable GPUs), and wva_available_gpus is only emitted when the GPU limiter is enabled (enableLimiter=true). A GPU-labeled node advertising zero allocatable accelerators usually means it is NotReady or its device plugin/driver is not installed — check GPU node status and device-plugin pods."
 
     - alert: WVAReplicaScalingThrashing
       expr: sum by (namespace, variant_name) (rate(wva_replica_scaling_total[10m])) > 0.033

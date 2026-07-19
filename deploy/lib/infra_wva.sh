@@ -136,16 +136,14 @@ EOF
     log_info "Applying Kustomize overlay: $kustomize_overlay"
     kubectl apply -k "$tmp_overlay"
 
-    # Clean up PrometheusRule if alerting rules are disabled
-    if [ "${DEPLOY_ALERTING_RULES:-false}" = "false" ]; then
-        log_info "DEPLOY_ALERTING_RULES is false - ensuring PrometheusRule is removed if it exists..."
-        if kubectl get prometheusrule controller-manager-alerts -n "$WVA_NS" &> /dev/null; then
-            log_info "Deleting existing PrometheusRule: controller-manager-alerts"
-            kubectl delete prometheusrule controller-manager-alerts -n "$WVA_NS" --ignore-not-found=true
-            log_success "PrometheusRule removed"
-        else
-            log_info "PrometheusRule does not exist - no cleanup needed"
-        fi
+    # Clean up a previously-deployed PrometheusRule when alerting rules are disabled.
+    # The `get` guard keeps the common path quiet (only logs/acts when a rule actually
+    # exists) and tolerates the PrometheusRule CRD being absent — `--ignore-not-found`
+    # only covers a missing object, not a missing resource type.
+    if [ "${DEPLOY_ALERTING_RULES:-false}" = "false" ] && \
+        kubectl get prometheusrule controller-manager-alerts -n "$WVA_NS" &> /dev/null; then
+        log_info "DEPLOY_ALERTING_RULES=false - removing existing PrometheusRule controller-manager-alerts"
+        kubectl delete prometheusrule controller-manager-alerts -n "$WVA_NS" --ignore-not-found=true
     fi
 
     if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
