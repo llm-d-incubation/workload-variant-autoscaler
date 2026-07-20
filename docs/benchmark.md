@@ -48,7 +48,7 @@ Summary of WVA benchmark runs with configuration details.
 | Scale-down policy | 10 Pods / 150s |
 | Metric source | External (`wva_desired_replicas`) |
 
-## EPP+KEDA Saturation Configuration
+## EPP+KEDA Inference Pool Saturation Configuration
 
 | Parameter | Value |
 |-----------|-------|
@@ -181,7 +181,7 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 67 | 64 | 66 | 66 |
 | Cost (avg replicas × GPU/hr) | 2.70 | 3.27 | 3.54 | 3.17 |
 
-### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation, Optimized Baseline Plugins, No flowControl, 600s)
 
 **Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins (no flowControl)
@@ -197,7 +197,7 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 0 | 0 | 0 | 0 |
 | Avg pod startup (s) | 108 | 97 | 98 | 101 |
 
-### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation + flowControl, 600s)
 
 **Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins with flowControl enabled
@@ -326,7 +326,7 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 64 | 68 | 67 | 66 |
 | Cost (avg replicas × GPU/hr) | 2.65 | 2.24 | 2.88 | 2.59 |
 
-### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation, Optimized Baseline Plugins, No flowControl, 600s)
 
 **Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins (no flowControl)
@@ -342,7 +342,7 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 1 | 0 | 0 | 0 |
 | Avg pod startup (s) | 125 | 98 | 114 | 112 |
 
-### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation + flowControl, 600s)
 
 **Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins with flowControl enabled
@@ -525,7 +525,7 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 62 | 64 | 67 | 64 |
 | Cost (avg replicas × GPU/hr) | 1.79 | 1.81 | 1.81 | 1.80 |
 
-### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation, Optimized Baseline Plugins, No flowControl, 600s)
 
 **Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins (no flowControl)
@@ -541,7 +541,7 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 0 | 0 | 0 | 0 |
 | Avg pod startup (s) | 98 | 98 | 99 | 98 |
 
-### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation + flowControl, 600s)
 
 **Workload:** 2500 prompt tokens, 2500 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins with flowControl enabled
