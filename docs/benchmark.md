@@ -537,7 +537,7 @@ Summary of WVA benchmark runs with configuration details.
 
 ### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation + flowControl, 600s)
 
-**Workload:** 2500 prompt tokens, 2500 output tokens, 20 RPS, 600s duration
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
 **EPP Config:** Optimized baseline plugins with flowControl enabled
 
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
