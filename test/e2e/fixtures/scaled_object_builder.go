@@ -66,32 +66,6 @@ func WithScaledObjectScaleDownStabilizationWindow(seconds int32) ScaledObjectOpt
 	}
 }
 
-// WithScaledObjectPrometheusServer overrides the Prometheus serverAddress used by the trigger.
-// Use this on OpenShift to point at thanos-querier instead of the default kube-prometheus-stack URL.
-func WithScaledObjectPrometheusServer(serverAddress string) ScaledObjectOption {
-	return func(so *kedav1alpha1.ScaledObject) {
-		for i := range so.Spec.Triggers {
-			so.Spec.Triggers[i].Metadata["serverAddress"] = serverAddress
-		}
-	}
-}
-
-// WithScaledObjectClusterTriggerAuth adds a ClusterTriggerAuthentication reference to all
-// prometheus triggers and sets authModes=bearer so KEDA uses the token. Use this on OpenShift
-// where Thanos requires bearer-token auth (the referenced ClusterTriggerAuthentication provides
-// the WVA controller SA token, which holds cluster-monitoring-view).
-func WithScaledObjectClusterTriggerAuth(name string) ScaledObjectOption {
-	return func(so *kedav1alpha1.ScaledObject) {
-		for i := range so.Spec.Triggers {
-			so.Spec.Triggers[i].AuthenticationRef = &kedav1alpha1.AuthenticationRef{
-				Name: name,
-				Kind: "ClusterTriggerAuthentication",
-			}
-			so.Spec.Triggers[i].Metadata["authModes"] = "bearer"
-		}
-	}
-}
-
 // WithScaledObjectWVAAnnotations adds the WVA annotation-based discovery annotations to the
 // ScaledObject. The ScaledObject then serves as both the WVA discovery source and the KEDA scaler.
 func WithScaledObjectWVAAnnotations(modelID, cost string) ScaledObjectOption {
