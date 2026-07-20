@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,18 +63,47 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 	})
 
 	Describe("LoadFromScaleTarget", func() {
-		It("should populate VLLMParams from deployment args", func() {
+		It("should populate EngineParams from deployment args", func() {
 			deploy := makeTestDeployment("--gpu-memory-utilization=0.85", "--max-num-batched-tokens=4096")
 			store.LoadFromScaleTarget("ns-1", "model-a", "variant-a100", "A100", 2, scaletarget.NewDeploymentAccessor(deploy))
 
 			got := store.Get("ns-1", "model-a", "variant-a100")
 			Expect(got).NotTo(BeNil())
-			Expect(got.VLLMParams).NotTo(BeNil())
-			Expect(got.VLLMParams.GpuMemoryUtilization).To(Equal(0.85))
-			Expect(got.VLLMParams.MaxNumBatchedTokens).To(Equal(int64(4096)))
+			Expect(got.EngineParams).NotTo(BeNil())
+			Expect(got.EngineParams.GpuMemoryUtilization).To(Equal(0.85))
+			Expect(got.EngineParams.MaxNumBatchedTokens).To(Equal(int64(4096)))
 			Expect(got.AcceleratorName).To(Equal("A100"))
 			Expect(got.GpuCount).To(Equal(2))
 			Expect(got.LearnedFrom).To(Equal("deployment"))
+		})
+
+		It("should populate SGLang EngineParams and TotalKvCapacityTokens from --max-total-tokens", func() {
+			// SGLang is detected from the launch command; --max-total-tokens maps to
+			// TotalKvTokensOverride and is used as the total KV capacity directly
+			// (vLLM's num_gpu_blocks path must not be taken).
+			deploy := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{
+								Name:    "sglang",
+								Image:   "lmsysorg/sglang:latest",
+								Command: []string{"python3", "-m", "sglang.launch_server"},
+								Args:    []string{"--mem-fraction-static=0.85", "--max-total-tokens=100000"},
+							}},
+						},
+					},
+				},
+			}
+			store.LoadFromScaleTarget("ns-1", "model-a", "variant-sglang", "H100", 1, scaletarget.NewDeploymentAccessor(deploy))
+
+			got := store.Get("ns-1", "model-a", "variant-sglang")
+			Expect(got).NotTo(BeNil())
+			Expect(got.EngineParams).NotTo(BeNil())
+			Expect(got.EngineParams.Engine).To(Equal(inferenceengine.EngineSGLang))
+			Expect(got.EngineParams.TotalKvTokensOverride).To(Equal(int64(100000)))
+			Expect(got.TotalKvCapacityTokens).To(Equal(int64(100000)))
+			Expect(got.NumGpuBlocks).To(Equal(int64(0)))
 		})
 
 		It("should not overwrite live data with deployment data", func() {
@@ -196,8 +226,8 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 	})
 
 	Describe("FindCompatible", func() {
-		defaultParams := func() *VLLMEngineParams {
-			p := defaultVLLMEngineParams()
+		defaultParams := func() *EngineParams {
+			p := defaultEngineParams()
 			resolveEffectiveMaxBatchedTokens(&p)
 			return &p
 		}
@@ -209,7 +239,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -226,7 +256,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -242,7 +272,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -251,14 +281,14 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 			Expect(found).To(BeNil())
 		})
 
-		It("should not match across different vLLM parameters", func() {
+		It("should not match across different engine parameters", func() {
 			params1 := defaultParams()
 			store.Update("ns-1", "model-a", "variant-h100-high-util", CapacityRecord{
 				AcceleratorName:       "H100",
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params1,
+				EngineParams:          params1,
 				LearnedFrom:           "live",
 			})
 
@@ -276,7 +306,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -293,7 +323,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -310,7 +340,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 30000,
 				EffectiveCapacity:     25000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "deployment",
 			})
 			store.Update("ns-1", "model-a", "variant-h100-live", CapacityRecord{
@@ -318,7 +348,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            params,
+				EngineParams:          params,
 				LearnedFrom:           "live",
 			})
 
@@ -333,7 +363,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 			store.Update("ns-1", "model-a", "variant-h100-empty", CapacityRecord{
 				AcceleratorName:       "H100",
 				GpuCount:              1,
-				VLLMParams:            params,
+				EngineParams:          params,
 				EffectiveCapacity:     0,
 				TotalKvCapacityTokens: 0,
 				LearnedFrom:           "deployment",
@@ -349,7 +379,7 @@ var _ = Describe("CapacityKnowledgeStore", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 32000,
 				EffectiveCapacity:     28000,
-				VLLMParams:            defaultParams(),
+				EngineParams:          defaultParams(),
 				LearnedFrom:           "live",
 			})
 

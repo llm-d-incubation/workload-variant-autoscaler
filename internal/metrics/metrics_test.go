@@ -11,9 +11,9 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -250,10 +250,10 @@ var _ = Describe("RecordSaturationMetrics", func() {
 		Expect(ok).To(BeTrue())
 		Expect(val).To(Equal(0.75))
 
-		// spare_capacity
+		// spare_capacity (carries unit label, same label set as required_capacity)
 		mf = gatherMetric(registry, constants.WVASpareCapacity)
 		Expect(mf).NotTo(BeNil())
-		val, ok = gaugeValue(mf, accelLabels)
+		val, ok = gaugeValue(mf, requiredLabels)
 		Expect(ok).To(BeTrue())
 		Expect(val).To(Equal(0.25))
 
@@ -383,20 +383,23 @@ var _ = Describe("RecordSaturationMetrics", func() {
 			constants.LabelUnit:        constants.UnitBinary,
 		}
 
-		for _, metricName := range []string{
-			constants.WVASaturationUtilization,
-			constants.WVASpareCapacity,
-		} {
-			mf := gatherMetric(registry, metricName)
-			Expect(mf).NotTo(BeNil(), "metric %s not found", metricName)
-			val, ok := gaugeValue(mf, accelLabels)
-			Expect(ok).To(BeTrue(), "gauge not found for %s", metricName)
-			Expect(val).To(Equal(0.0), "expected 0 for %s", metricName)
-		}
+		// saturation_utilization is per-variant (accelerator-labeled).
+		mf := gatherMetric(registry, constants.WVASaturationUtilization)
+		Expect(mf).NotTo(BeNil(), "metric %s not found", constants.WVASaturationUtilization)
+		val, ok := gaugeValue(mf, accelLabels)
+		Expect(ok).To(BeTrue(), "gauge not found for %s", constants.WVASaturationUtilization)
+		Expect(val).To(Equal(0.0))
 
-		mf := gatherMetric(registry, constants.WVARequiredCapacity)
+		// spare_capacity is model/role-level (unit-labeled, same set as required_capacity).
+		mf = gatherMetric(registry, constants.WVASpareCapacity)
+		Expect(mf).NotTo(BeNil(), "metric %s not found", constants.WVASpareCapacity)
+		val, ok = gaugeValue(mf, requiredLabels)
+		Expect(ok).To(BeTrue(), "gauge not found for %s", constants.WVASpareCapacity)
+		Expect(val).To(Equal(0.0))
+
+		mf = gatherMetric(registry, constants.WVARequiredCapacity)
 		Expect(mf).NotTo(BeNil())
-		val, ok := gaugeValue(mf, requiredLabels)
+		val, ok = gaugeValue(mf, requiredLabels)
 		Expect(ok).To(BeTrue())
 		Expect(val).To(Equal(0.0))
 

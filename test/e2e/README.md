@@ -40,9 +40,9 @@ This deploys:
 - ✅ WVA controller
 - ✅ llm-d infrastructure (Gateway, CRDs, RBAC, EPP)
 - ✅ Prometheus stack (metrics collection)
-- ✅ Prometheus Adapter (external metrics API)
+- ✅ KEDA (ScaledObject-driven external metrics API)
 - ❌ **NO** VariantAutoscaling resources (tests create these)
-- ❌ **NO** HPA resources (tests create these)
+- ❌ **NO** ScaledObject resources (tests create these)
 - ❌ **NO** default chart ModelService (`make deploy-e2e-infra` skips it; tests create workloads)
 
 ### Verify Infrastructure
@@ -87,9 +87,8 @@ export WVA_NAMESPACE=workload-variant-autoscaler-system
 export USE_SIMULATOR=true                  # true=emulated GPUs, false=real vLLM
 export SCALE_TO_ZERO_ENABLED=false        # HPAScaleToZero feature gate
 
-# Scaler backend: prometheus-adapter (HPA with wva_desired_replicas) or keda (ScaledObjects)
-# Only one backend per run; with keda, do not deploy Prometheus Adapter for external metrics.
-export SCALER_BACKEND=prometheus-adapter  # or keda
+# Scaler backend: keda (ScaledObjects, default) or none (use a pre-installed backend)
+export SCALER_BACKEND=keda  # or none
 
 # Model configuration
 export MODEL_ID=e2ewva/dummy-model
@@ -110,13 +109,6 @@ export E2E_EVENTUALLY_POLL=5              # default polling interval (seconds)
 export E2E_EVENTUALLY_POLL_QUICK=2
 export E2E_EVENTUALLY_POLL_SLOW=10
 export E2E_EVENTUALLY_POLL_VERY_SLOW=15
-
-# kind-emulator + prometheus-adapter: BeforeSuite probes adapter readiness + `external.metrics.k8s.io/v1beta1` discovery
-# before optionally restarting pods.
-# auto (default if unset): restart only if the probe fails within E2E_PROM_ADAPTER_PROBE_SEC (default 90).
-# true: always delete adapter pods (legacy). false: never restart.
-export RESTART_PROMETHEUS_ADAPTER=auto   # or true / false
-export E2E_PROM_ADAPTER_PROBE_SEC=90
 ```
 
 ### Optional: faster `deploy/install.sh` for e2e
@@ -155,7 +147,7 @@ The scale-from-zero spec submits traffic via a small **curl** Job; see **Trigger
 
 ### Example: Run with KEDA as Scaler Backend
 
-When using KEDA, set `SCALER_BACKEND=keda` and **`ENVIRONMENT=kind-emulator`**; the deploy script will install KEDA and skip Prometheus Adapter. **KEDA is only supported for the kind-emulator (emulated) environment;** for OpenShift use Prometheus Adapter or the platform CMA.
+Set `SCALER_BACKEND=keda` and **`ENVIRONMENT=kind-emulator`**; the deploy script will install KEDA. On the kind-emulator environment the deploy script installs upstream KEDA; on OpenShift use the platform Custom Metrics Autoscaler (CMA) operator (same ScaledObject API).
 
 > **Note:** We do not install the OpenShift Custom Metrics Autoscaler (CMA) operator in e2e. We install **upstream KEDA** (e.g. via Helm) to **imitate** CMA behavior—same ScaledObject-driven flow and external metrics API usage. E2E with `SCALER_BACKEND=keda` is a stand-in for validating WVA with an OpenShift CMA–style scaler.
 
@@ -368,7 +360,6 @@ See [config.go](config.go:1) for the complete list of configuration options.
 | `MaxNumSeqs` | `MAX_NUM_SEQS` | `5` | vLLM batch size (lower = easier to saturate) |
 | `EventuallyStandardSec` | `E2E_EVENTUALLY_STANDARD` | `120` | Default `Eventually` timeout (see bash block above for full set) |
 | `ScaleUpTimeout` | `SCALE_UP_TIMEOUT` | `600` | Longest scale / job waits |
-| (suite) | `RESTART_PROMETHEUS_ADAPTER` | `auto` | adapter pod restart policy on kind-emulator (`auto` probes adapter pod Ready + `external.metrics.k8s.io/v1beta1` discovery; restart only on probe failure) |
 
 Bounded **minimal traffic** (e.g. scale-from-zero trigger job) is documented per spec in code; sustained load belongs in benchmarking, not this suite.
 
@@ -394,7 +385,7 @@ Use this when smoke/full tests fail on **VA reconciliation**, **HPA / desired re
 
 **Things to verify:**
 1. **Prometheus** is scraping model/EPP targets; **`MetricsAvailable`** on the VA in `kubectl describe`.
-2. **`external.metrics.k8s.io`** works when using **`SCALER_BACKEND=prometheus-adapter`**; on kind-emulator, the default `auto` mode already probes adapter pod Ready + `external.metrics.k8s.io/v1beta1` discovery. If the API is still empty after install, set **`RESTART_PROMETHEUS_ADAPTER=true`** to force a restart.
+2. **`external.metrics.k8s.io`** is served by KEDA (`SCALER_BACKEND=keda`); confirm the KEDA operator pods are Ready and that `kubectl get apiservice v1beta1.external.metrics.k8s.io` reports `Available=True`.
 3. **Scale-from-zero:** infra deployed with **`SCALE_TO_ZERO_ENABLED=true make deploy-e2e-infra`** so EPP flow control is on; raise **`E2E_EVENTUALLY_*`** / **`SCALE_UP_TIMEOUT`** if cold start is slow; see **Tier 2** trigger job tunables.
 
 **Debug commands** (adjust `-n` to your llm-d namespace, e.g. `LLMD_NAMESPACE`):

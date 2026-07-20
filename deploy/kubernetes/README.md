@@ -27,7 +27,7 @@ This script automates the complete deployment process on kubernetes cluster incl
 - **kube-prometheus-stack** (Prometheus + Grafana + Alertmanager)
 - **Workload-Variant-Autoscaler** controller with metrics validation
 - **llm-d infrastructure** (Gateway, Scheduler, vLLM)
-- **Prometheus Adapter** for external metrics
+- **KEDA** for external metrics (ScaledObject-driven)
 - **HPA** integration for autoscaling
 - **ServiceMonitors** for metrics collection
 - **VariantAutoscaling** custom resources
@@ -83,7 +83,7 @@ That's it! The script will:
 4. Deploy Prometheus stack  (by default)
 5. Deploy WVA controller  (by default)
 6. Deploy llm-d infrastructure  (by default)
-7. Deploy the Prometheus Adapter (by default)
+7. Deploy KEDA for external metrics (by default)
 8. Create the VariantAutoscaling resource for the vLLM deployment  (by default)
 9. Deploy HPA  (by default)
 10. Verify the deployment process
@@ -103,7 +103,6 @@ export WVA_IMAGE_TAG="latest"               # WVA version
 # HPA stabilization: configure on the HPA resource directly, not install.sh
 
 # Performance tuning (optional; set in llm-d ModelService manifest)
-export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
 export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
 ```
 
@@ -113,7 +112,7 @@ export ACCELERATOR_TYPE="A100"              # GPU type (auto-detected)
 export DEPLOY_PROMETHEUS=true               # Deploy kube-prometheus-stack
 export DEPLOY_OPERATIONAL_DASHBOARD=true    # Deploy kube-prometheus-stack-grafana
 export DEPLOY_WVA=true                      # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
+export SCALER_BACKEND=keda                  # Deploy KEDA for external metrics
 ```
 
 ## Usage Examples
@@ -151,8 +150,7 @@ make deploy-wva-on-k8s   # install.sh (WVA + monitoring + scaler + LWS)
 export DEPLOY_WVA=true
 export DEPLOY_PROMETHEUS=true
 export DEPLOY_OPERATIONAL_DASHBOARD=true  # Grafana and operational dashboard
-export VLLM_SVC_ENABLED=true
-export DEPLOY_PROMETHEUS_ADAPTER=false
+export SCALER_BACKEND=none                # Skip scaler backend (KEDA already installed)
 make deploy-wva-on-k8s
 ```
 
@@ -169,7 +167,6 @@ make deploy-wva-on-k8s
 ```bash
 export HF_TOKEN="hf_xxxxx"
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
-export VLLM_MAX_NUM_SEQS=64         # Match desired max batch size
 make deploy-wva-on-k8s
 ```
 
@@ -257,14 +254,13 @@ Displays:
   - ServiceMonitor for vLLM metrics
   - HuggingFace token secret
 
-### 4. Prometheus Adapter
+### 4. KEDA
 
-- **Namespace**: `workload-variant-autoscaler-monitoring`
+- **Namespace**: `keda-system`
 - **Components**:
-  - Prometheus Adapter deployment
-  - External metrics API configuration
-  - RBAC for cluster monitoring
-  - TLS configuration for Prometheus access
+  - KEDA operator and metrics-apiserver deployments
+  - External metrics API (`external.metrics.k8s.io`)
+  - Prometheus scaler triggers driven by ScaledObjects
 
 ### 5. Autoscaling Resources
 
@@ -364,7 +360,7 @@ make deploy-wva-on-k8s
 
 - vLLM pods to start
 - Prometheus to scrape metrics
-- Prometheus Adapter to process them
+- KEDA to read them via its Prometheus scaler
 - External metrics API to update
 
 **Check metrics availability**:
@@ -541,8 +537,8 @@ Or manually:
 helm uninstall optimized-baseline -n llm-d-optimized-baseline
 kubectl delete -k llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base -n llm-d-optimized-baseline
 
-# Delete Prometheus Adapter
-helm uninstall prometheus-adapter -n workload-variant-autoscaler-monitoring
+# Delete KEDA
+helm uninstall keda -n keda-system
 
 # Delete kube-prometheus-stack
 helm uninstall kube-prometheus-stack -n workload-variant-autoscaler-monitoring

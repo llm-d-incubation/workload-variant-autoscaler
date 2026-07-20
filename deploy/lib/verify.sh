@@ -50,13 +50,6 @@ verify_deployment() {
         fi
     elif [ "$SCALER_BACKEND" = "none" ]; then
         log_info "Scaler backend skipped (SCALER_BACKEND=none) — assuming external metrics API is pre-installed"
-    elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
-        log_info "Checking Prometheus Adapter..."
-        if kubectl get pods -n "$MONITORING_NAMESPACE" -l "$PROMETHEUS_ADAPTER_LABEL_SELECTOR" 2>/dev/null | grep -q Running; then
-            log_success "Prometheus Adapter is running"
-        else
-            log_warning "Prometheus Adapter may still be starting"
-        fi
     fi
 
     if [ "$all_good" = true ]; then
@@ -93,8 +86,6 @@ print_summary() {
         echo "✓ KEDA (scaler backend, external metrics API)"
     elif [ "$SCALER_BACKEND" = "none" ]; then
         echo "- Scaler backend: skipped (SCALER_BACKEND=none, pre-installed on cluster)"
-    elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
-        echo "✓ Prometheus Adapter (external metrics API)"
     fi
     echo ""
     echo "Next Steps:"
@@ -103,12 +94,12 @@ print_summary() {
     echo "1. Deploy llm-d (EPP, gateway, ModelService) when needed:"
     echo "     See llm-d project guides at https://github.com/llm-d/llm-d"
     echo ""
-    echo "2. Create VariantAutoscaling / HPA via tests, operators, or helm with chart toggles."
+    echo "2. Create an annotated HPA or KEDA ScaledObject (llm-d.ai/managed=true) so WVA discovers the variant."
     echo ""
     echo "3. View WVA logs:"
     echo "   kubectl logs -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler -f"
     echo ""
-    echo "4. Check external metrics API (when Prometheus Adapter is used):"
+    echo "4. Check external metrics API (KEDA):"
     echo "   kubectl get --raw \"/apis/external.metrics.k8s.io/v1beta1/namespaces/$LLMD_NS/wva_desired_replicas\" | jq"
     echo ""
     echo "5. Port-forward Prometheus to view metrics:"

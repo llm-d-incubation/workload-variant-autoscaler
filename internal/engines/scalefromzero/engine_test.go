@@ -24,19 +24,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsV1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta/testrestmapper"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 
-	vav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	poolreconciler "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	vav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	unittestutil "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -57,6 +60,35 @@ var (
 	modelId         = "unsloth/Meta-Llama-3.1-8B"
 	variantCost     = float64(5)
 )
+
+// managedHPA builds a WVA-managed HorizontalPodAutoscaler targeting the given
+// Deployment. Variants are discovered by synthesizing them from such annotated
+// HPAs, so scale-from-zero tests seed the fake client with these instead of
+// VariantAutoscaling objects.
+func managedHPA(ns, name, targetDeployment, modelID string) *autoscalingv2.HorizontalPodAutoscaler {
+	return &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Annotations: map[string]string{
+				annotations.Managed:     "true",
+				annotations.ModelID:     modelID,
+				annotations.VariantCost: "5.0",
+			},
+		},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       targetDeployment,
+			},
+			MinReplicas: ptrInt32(0),
+			MaxReplicas: 2,
+		},
+	}
+}
+
+func ptrInt32(i int32) *int32 { return &i }
 
 func TestSingleInactiveVariant(t *testing.T) {
 	gvk := schema.GroupVersionKind{
@@ -190,10 +222,10 @@ func TestMultipleInactiveVariants(t *testing.T) {
 		EndpointPickerRef("epp-pool1-svc").ObjRef()
 	pool1.SetGroupVersionKind(gvk)
 
-	// Create multiple VAs with different models
-	va1 := unittestutil.CreateVariantAutoscalingResource(namespace, "resource-1", "resource-1-deployment", "model-1", acceleratorName, variantCost)
-	va2 := unittestutil.CreateVariantAutoscalingResource(namespace, "resource-2", "resource-2-deployment", "model-2", acceleratorName, variantCost)
-	va3 := unittestutil.CreateVariantAutoscalingResource(namespace, "resource-3", "resource-3-deployment", "model-3", acceleratorName, variantCost)
+	// Variants are discovered from annotated HPAs targeting each Deployment.
+	hpa1 := managedHPA(namespace, "resource-1", "resource-1-deployment", "model-1")
+	hpa2 := managedHPA(namespace, "resource-2", "resource-2-deployment", "model-2")
+	hpa3 := managedHPA(namespace, "resource-3", "resource-3-deployment", "model-3")
 
 	dp1 := unittestutil.MakeDeployment("resource-1-deployment", namespace, 0, selector_v1)
 	dp2 := unittestutil.MakeDeployment("resource-2-deployment", namespace, 0, selector_v1)
@@ -208,7 +240,7 @@ func TestMultipleInactiveVariants(t *testing.T) {
 	_ = appsV1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
 
-	fakeClientInitialObjs := []client.Object{pool1, dp1, dp2, dp3, va1, va2, va3, svc}
+	fakeClientInitialObjs := []client.Object{pool1, dp1, dp2, dp3, hpa1, hpa2, hpa3, svc}
 	fakeDynamicClientInitialObject := []runtime.Object{dp1, dp2, dp3}
 
 	fakeClient := fake.NewClientBuilder().

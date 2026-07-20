@@ -31,7 +31,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -40,6 +40,31 @@ import (
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
+
+// newManagedHPA builds a WVA-managed HorizontalPodAutoscaler targeting the given
+// Deployment. The engine discovers variants by synthesizing them from such
+// annotated HPAs.
+func newManagedHPA(name, namespace, targetDeployment, modelID string) *autoscalingv2.HorizontalPodAutoscaler {
+	return &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				annotations.Managed:     "true",
+				annotations.ModelID:     modelID,
+				annotations.VariantCost: "10.0",
+			},
+		},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       targetDeployment,
+			},
+			MaxReplicas: 2,
+		},
+	}
+}
 
 var _ = Describe("Saturation Engine", func() {
 
@@ -132,24 +157,8 @@ var _ = Describe("Saturation Engine", func() {
 				}
 				Expect(k8sClient.Create(ctx, d)).To(Succeed())
 
-				r := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      name,
-						Namespace: "default",
-						Labels: map[string]string{
-							utils.AcceleratorNameLabel: "A100",
-						},
-					},
-					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-							Kind: "Deployment",
-							Name: name,
-						},
-						ModelID:     modelID,
-						MaxReplicas: 2,
-					},
-				}
-				Expect(k8sClient.Create(ctx, r)).To(Succeed())
+				// Variants are discovered from annotated HPAs targeting the Deployment.
+				Expect(k8sClient.Create(ctx, newManagedHPA(name, "default", name, modelID))).To(Succeed())
 			}
 		})
 
@@ -173,9 +182,9 @@ var _ = Describe("Saturation Engine", func() {
 			err = k8sClient.Delete(ctx, configMap)
 			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
 
-			var variantAutoscalingList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
-			err = k8sClient.List(ctx, &variantAutoscalingList)
-			Expect(err).NotTo(HaveOccurred(), "Failed to list VariantAutoscaling resources")
+			var hpaList autoscalingv2.HorizontalPodAutoscalerList
+			err = k8sClient.List(ctx, &hpaList, client.InNamespace("default"))
+			Expect(err).NotTo(HaveOccurred(), "Failed to list HPAs")
 
 			var deploymentList appsv1.DeploymentList
 			err = k8sClient.List(ctx, &deploymentList, client.InNamespace("default"))
@@ -190,14 +199,14 @@ var _ = Describe("Saturation Engine", func() {
 				}
 			}
 
-			// Clean up all VariantAutoscaling resources
-			for i := range variantAutoscalingList.Items {
-				err = k8sClient.Delete(ctx, &variantAutoscalingList.Items[i])
-				Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred(), "Failed to delete VariantAutoscaling resource")
+			// Clean up all managed HPAs
+			for i := range hpaList.Items {
+				err = k8sClient.Delete(ctx, &hpaList.Items[i])
+				Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred(), "Failed to delete HPA")
 			}
 		})
 
-		It("should set OptimizationReady condition when optimization succeeds", func() {
+		It("should run the optimization loop over annotation-discovered variants", func() {
 			By("Using a working mock Prometheus API with sample data")
 			mockPromAPI := &testutils.MockPromAPI{
 				QueryResults: map[string]model.Value{
@@ -222,23 +231,12 @@ var _ = Describe("Saturation Engine", func() {
 			err := engine.optimize(ctx)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Checking that conditions are set correctly")
-			var variantAutoscalingList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
-			err = k8sClient.List(ctx, &variantAutoscalingList)
-			Expect(err).NotTo(HaveOccurred())
-
-			for _, va := range variantAutoscalingList.Items {
-				if va.DeletionTimestamp.IsZero() {
-					metricsCondition := llmdVariantAutoscalingV1alpha1.GetCondition(&va, llmdVariantAutoscalingV1alpha1.TypeMetricsAvailable)
-					// Note: optimization runs even if metrics are not available (skips parts), but condition checks depend on flow
-					// In mock, activeVAs will be processed.
-					if metricsCondition != nil && metricsCondition.Status == metav1.ConditionTrue {
-						optimizationCondition := llmdVariantAutoscalingV1alpha1.GetCondition(&va, llmdVariantAutoscalingV1alpha1.TypeOptimizationReady)
-						Expect(optimizationCondition).NotTo(BeNil(),
-							"OptimizationReady condition should be set for "+va.Name)
-					}
-				}
-			}
+			By("Verifying Prometheus was queried for the discovered variants")
+			// Each annotated HPA is synthesized into an in-memory variant; the engine
+			// queries Prometheus for saturation metrics for each. Non-empty QueryCallCounts
+			// proves the variants were discovered and fed through the saturation pipeline.
+			Expect(mockPromAPI.QueryCallCounts).NotTo(BeEmpty(),
+				"engine should have queried Prometheus for at least one discovered variant")
 		})
 	})
 
@@ -378,24 +376,8 @@ var _ = Describe("Saturation Engine", func() {
 				}
 				Expect(k8sClient.Create(ctx, d)).To(Succeed())
 
-				r := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      name,
-						Namespace: "default",
-						Labels: map[string]string{
-							utils.AcceleratorNameLabel: "A100",
-						},
-					},
-					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-							Kind: "Deployment",
-							Name: name,
-						},
-						ModelID:     modelID,
-						MaxReplicas: 2,
-					},
-				}
-				Expect(k8sClient.Create(ctx, r)).To(Succeed())
+				// Variants are discovered from annotated HPAs targeting the Deployment.
+				Expect(k8sClient.Create(ctx, newManagedHPA(name, "default", name, modelID))).To(Succeed())
 			}
 		})
 
@@ -419,9 +401,9 @@ var _ = Describe("Saturation Engine", func() {
 			err = k8sClient.Delete(ctx, configMap)
 			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
 
-			var variantAutoscalingList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
-			err = k8sClient.List(ctx, &variantAutoscalingList)
-			Expect(err).NotTo(HaveOccurred(), "Failed to list VariantAutoscaling resources")
+			var hpaList autoscalingv2.HorizontalPodAutoscalerList
+			err = k8sClient.List(ctx, &hpaList, client.InNamespace("default"))
+			Expect(err).NotTo(HaveOccurred(), "Failed to list HPAs")
 
 			var deploymentList appsv1.DeploymentList
 			err = k8sClient.List(ctx, &deploymentList, client.InNamespace("default"))
@@ -436,12 +418,12 @@ var _ = Describe("Saturation Engine", func() {
 				}
 			}
 
-			// Clean up all VariantAutoscaling resources created by v2 tests
-			for i := range variantAutoscalingList.Items {
-				va := &variantAutoscalingList.Items[i]
-				if strings.HasPrefix(va.Name, "v2-test-resource") {
-					err = k8sClient.Delete(ctx, va)
-					Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred(), "Failed to delete VariantAutoscaling resource")
+			// Clean up all managed HPAs created by v2 tests
+			for i := range hpaList.Items {
+				hpa := &hpaList.Items[i]
+				if strings.HasPrefix(hpa.Name, "v2-test-resource") {
+					err = k8sClient.Delete(ctx, hpa)
+					Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred(), "Failed to delete HPA")
 				}
 			}
 
@@ -462,19 +444,20 @@ var _ = Describe("Saturation Engine", func() {
 			err := engine.optimize(ctx)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying optimization completed successfully")
-			var variantAutoscalingList llmdVariantAutoscalingV1alpha1.VariantAutoscalingList
-			err = k8sClient.List(ctx, &variantAutoscalingList)
+			By("Verifying the annotated variants were discovered")
+			// Variants are synthesized from the annotated HPAs; confirm all test
+			// HPAs are present so the loop had the expected discovery surface.
+			var hpaList autoscalingv2.HorizontalPodAutoscalerList
+			err = k8sClient.List(ctx, &hpaList, client.InNamespace("default"))
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify VAs were processed
-			testVAs := 0
-			for _, va := range variantAutoscalingList.Items {
-				if strings.HasPrefix(va.Name, "v2-test-resource") && va.DeletionTimestamp.IsZero() {
-					testVAs++
+			testVariants := 0
+			for _, hpa := range hpaList.Items {
+				if strings.HasPrefix(hpa.Name, "v2-test-resource") && hpa.DeletionTimestamp.IsZero() {
+					testVariants++
 				}
 			}
-			Expect(testVAs).To(Equal(totalVAs), "Expected all test VAs to be present")
+			Expect(testVariants).To(Equal(totalVAs), "Expected all test variants to be present")
 		})
 
 	})
@@ -514,24 +497,8 @@ var _ = Describe("Saturation Engine", func() {
 			}
 			Expect(k8sClient.Create(ctx, d)).To(Succeed())
 
-			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      testName,
-					Namespace: "default",
-					Labels: map[string]string{
-						utils.AcceleratorNameLabel: "A100",
-					},
-				},
-				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-						Kind: "Deployment",
-						Name: testName,
-					},
-					ModelID:     modelID,
-					MaxReplicas: 2,
-				},
-			}
-			Expect(k8sClient.Create(ctx, va)).To(Succeed())
+			// Variant is discovered from an annotated HPA targeting the Deployment.
+			Expect(k8sClient.Create(ctx, newManagedHPA(testName, "default", testName, modelID))).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -545,13 +512,13 @@ var _ = Describe("Saturation Engine", func() {
 			err := k8sClient.Delete(ctx, d)
 			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
 
-			va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      testName,
 					Namespace: "default",
 				},
 			}
-			err = k8sClient.Delete(ctx, va)
+			err = k8sClient.Delete(ctx, hpa)
 			Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred())
 		})
 

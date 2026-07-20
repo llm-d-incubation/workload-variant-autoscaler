@@ -68,6 +68,74 @@ const (
 	VLLMPrefixCacheQueries = "vllm:prefix_cache_queries"
 )
 
+// SGLang Input Metrics
+// These metric names are used to query SGLang inference engine metrics from Prometheus.
+// Names and types were taken from SGLang's metrics collector
+// (python/sglang/srt/observability/metrics_collector.py). SGLang labels its metrics
+// with model_name, matching the label WVA filters on. See docs/proposals/sglang-backend.md.
+const (
+	// SGLangNumRunningReqs is the number of running requests (gauge).
+	// SGLang equivalent of vllm:num_requests_running.
+	SGLangNumRunningReqs = "sglang:num_running_reqs"
+
+	// SGLangNumQueueReqs is the number of requests in the waiting queue (gauge).
+	// SGLang equivalent of vllm:num_requests_waiting.
+	SGLangNumQueueReqs = "sglang:num_queue_reqs"
+
+	// SGLangTokenUsage is the KV-cache token-pool utilization as a fraction 0.0-1.0 (gauge).
+	// SGLang equivalent of vllm:kv_cache_usage_perc.
+	SGLangTokenUsage = "sglang:token_usage"
+
+	// SGLangMaxTotalNumTokens is the total KV-cache token capacity (gauge).
+	// SGLang exposes capacity directly, unlike vLLM which derives it from
+	// vllm:cache_config_info (num_gpu_blocks x block_size).
+	SGLangMaxTotalNumTokens = "sglang:max_total_num_tokens"
+
+	// SGLangTimeToFirstTokenSecondsSum is the sum part of the TTFT histogram.
+	// SGLang equivalent of vllm:time_to_first_token_seconds_sum.
+	SGLangTimeToFirstTokenSecondsSum = "sglang:time_to_first_token_seconds_sum"
+
+	// SGLangTimeToFirstTokenSecondsCount is the count part of the TTFT histogram.
+	// SGLang equivalent of vllm:time_to_first_token_seconds_count.
+	SGLangTimeToFirstTokenSecondsCount = "sglang:time_to_first_token_seconds_count"
+
+	// SGLangInterTokenLatencySecondsSum is the sum part of the inter-token-latency histogram.
+	// SGLang equivalent of vllm:inter_token_latency_seconds_sum.
+	SGLangInterTokenLatencySecondsSum = "sglang:inter_token_latency_seconds_sum"
+
+	// SGLangInterTokenLatencySecondsCount is the count part of the inter-token-latency histogram.
+	// SGLang equivalent of vllm:inter_token_latency_seconds_count.
+	SGLangInterTokenLatencySecondsCount = "sglang:inter_token_latency_seconds_count"
+
+	// SGLangPromptTokensHistogramSum is the sum part of the prompt-token histogram.
+	// SGLang equivalent of vllm:request_prompt_tokens_sum.
+	SGLangPromptTokensHistogramSum = "sglang:prompt_tokens_histogram_sum"
+
+	// SGLangPromptTokensHistogramCount is the count part of the prompt-token histogram.
+	// SGLang equivalent of vllm:request_prompt_tokens_count.
+	SGLangPromptTokensHistogramCount = "sglang:prompt_tokens_histogram_count"
+
+	// SGLangGenerationTokensHistogramSum is the sum part of the generation-token histogram.
+	// SGLang equivalent of vllm:request_generation_tokens_sum.
+	SGLangGenerationTokensHistogramSum = "sglang:generation_tokens_histogram_sum"
+
+	// SGLangGenerationTokensHistogramCount is the count part of the generation-token histogram.
+	// SGLang equivalent of vllm:request_generation_tokens_count.
+	SGLangGenerationTokensHistogramCount = "sglang:generation_tokens_histogram_count"
+
+	// SGLangCachedTokensTotal is a counter of prompt tokens served from the prefix cache.
+	// Used with SGLangPromptTokensTotal to compute the prefix cache hit rate, the
+	// unit-safe analog of vllm:prefix_cache_hits / vllm:prefix_cache_queries.
+	SGLangCachedTokensTotal = "sglang:cached_tokens_total"
+
+	// SGLangPromptTokensTotal is a counter of total prompt tokens.
+	SGLangPromptTokensTotal = "sglang:prompt_tokens_total"
+
+	// SGLangNumRequestsTotal is a counter of received requests.
+	// SGLang equivalent of vllm:request_success_total (used for scale-to-zero).
+	SGLangNumRequestsTotal = "sglang:num_requests_total"
+)
+
 // llm-d Inference Scheduler Flow Control Metrics
 // These metrics come from the Gateway API Inference Extension EPP (Endpoint Picker)
 // flow control layer, not from vLLM pods. They are model-scoped (not per-pod).
@@ -171,15 +239,19 @@ const (
 	// Labels: variant_name, namespace, model_name, accelerator_type
 	WVASaturationUtilization = "wva_saturation_utilization"
 
-	// WVASpareCapacity is a gauge that tracks per-variant spare capacity (0.0-1.0).
-	// Labels: variant_name, namespace, model_name, accelerator_type
+	// WVASpareCapacity is a gauge that tracks spare capacity; >0 means scale-down
+	// headroom (per-role for P/D-disaggregated models, model-level otherwise).
+	// Value semantics differ by analyzer (use the "unit" label to distinguish):
+	//   - unit="continuous" (Token-based analyzer):       token surplus
+	//   - unit="" (empty)   (Percentage-based analyzer): 0.0-1.0 threshold-relative fraction
+	// Labels: variant_name, namespace, model_name, unit
 	WVASpareCapacity = "wva_spare_capacity"
 
-	// WVARequiredCapacity is a gauge that tracks model-level required capacity.
-	// >0 means scale-up needed.
+	// WVARequiredCapacity is a gauge that tracks required capacity; >0 means scale-up
+	// needed (per-role for P/D-disaggregated models, model-level otherwise).
 	// Value semantics differ by analyzer (use the "unit" label to distinguish):
-	//   - unit="binary"     (V1): 0.0 = no scale-up, 1.0 = scale-up needed
-	//   - unit="continuous" (V2): continuous token-based demand
+	//   - unit="continuous" (Token-based analyzer):       token demand
+	//   - unit="binary"     (Percentage-based analyzer): 0.0 = no scale-up, 1.0 = scale-up
 	// Labels: variant_name, namespace, model_name, unit
 	WVARequiredCapacity = "wva_required_capacity"
 
@@ -239,9 +311,9 @@ const (
 	LabelScaleToZeroEnabled = "scale_to_zero_enabled"
 	LabelQueryType          = "query_type"
 	// LabelUnit distinguishes the unit of a metric value when a single metric name
-	// carries values with different semantic units. Currently applied to
-	// wva_required_capacity, whose value is either a binary scale-up signal (V1)
-	// or a continuous token-demand value (V2).
+	// carries values with different semantic units. Applied to wva_required_capacity
+	// and wva_spare_capacity, whose values are either a "binary" 0/1 signal (V1) or a
+	// "continuous" token magnitude (V2).
 	LabelUnit = "unit"
 )
 

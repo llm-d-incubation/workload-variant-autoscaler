@@ -3,7 +3,7 @@ package interfaces
 import (
 	"context"
 
-	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
+	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // VariantAutoscalingsEngine defines the interface for the optimization engine.

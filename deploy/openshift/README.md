@@ -23,7 +23,7 @@ This script automates the complete deployment process on OpenShift cluster inclu
 
 - Workload-Variant-Autoscaler controller
 - llm-d infrastructure (Gateway, Scheduler, vLLM)
-- Prometheus Adapter for external metrics
+- KEDA / Custom Metrics Autoscaler (CMA) for external metrics
 - HPA integration
 - All required ConfigMaps and RBAC
 - Automatic GPU detection
@@ -80,7 +80,7 @@ That's it! The script will:
 
 2. Detect GPU types on your OpenShift cluster
 
-3. Deploy all components, including WVA, llm-d, and the Prometheus-Adapter for HPA
+3. Deploy all components, including WVA, llm-d, and KEDA / CMA for external metrics
 
 4. Verify the deployment
 
@@ -99,7 +99,6 @@ export ACCELERATOR_TYPE="H100"              # GPU type (auto-detected)
 export GATEWAY_PROVIDER="istio"             # Gateway: istio or kgateway
 
 # Performance tuning (optional)
-export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 ```
 
@@ -107,10 +106,10 @@ export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 
 ```bash
 export DEPLOY_WVA=true                    # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true     # Deploy Prometheus Adapter (unless SCALER_BACKEND=keda)
+export SCALER_BACKEND=keda                # Use the platform Custom Metrics Autoscaler (CMA/KEDA) for external metrics
 ```
 
-**Note**: OpenShift uses the built-in User Workload Monitoring (Thanos) instead of deploying a separate Prometheus stack.
+**Note**: OpenShift uses the built-in User Workload Monitoring (Thanos) instead of deploying a separate Prometheus stack. KEDA is provided by the platform Custom Metrics Autoscaler (CMA) operator and is not Helm-installed by `install.sh`; install the CMA operator beforehand.
 
 ## Usage Examples
 
@@ -141,7 +140,7 @@ make deploy-wva-on-openshift   # install.sh (WVA + monitoring + scaler + LWS)
 
 ```bash
 export DEPLOY_WVA=true
-export DEPLOY_PROMETHEUS_ADAPTER=false
+export SCALER_BACKEND=none
 make deploy-wva-on-openshift
 ```
 
@@ -150,7 +149,6 @@ make deploy-wva-on-openshift
 ```bash
 export HF_TOKEN="hf_xxxxx"
 export MODEL_ID="unsloth/Meta-Llama-3.1-8B"
-export VLLM_MAX_NUM_SEQS=64         # Match desired max batch size
 make deploy-wva-on-openshift
 ```
 
@@ -191,7 +189,7 @@ After deployment, the script verifies:
 
 - llm-d infrastructure is deployed
 
-- Prometheus Adapter is running
+- KEDA / CMA is running
 
 - VariantAutoscaling resource exists
 
@@ -234,14 +232,13 @@ Displays:
   - ServiceMonitor for vLLM metrics
   - HuggingFace token secret
 
-### 3. Prometheus Adapter
+### 3. KEDA / Custom Metrics Autoscaler (CMA)
 
-- **Namespace**: `openshift-user-workload-monitoring`
+- **Provided by**: the OpenShift Custom Metrics Autoscaler operator (platform-managed)
 - **Components**:
-  - Prometheus Adapter deployment (2 replicas)
-  - ConfigMap with CA certificate
-  - RBAC for cluster monitoring
-  - External metrics API configuration
+  - KEDA operator and metrics-apiserver
+  - External metrics API (`external.metrics.k8s.io`)
+  - Prometheus scaler triggers driven by ScaledObjects
 
 ### 4. Autoscaling Resources
 
@@ -297,14 +294,14 @@ export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
 
 - Prometheus to scrape metrics
 
-- Prometheus Adapter to process them
+- KEDA to read them via its Prometheus scaler
 
 - External metrics API to update
 
 **Check status**:
 
 ```bash
-kubectl get pods -n openshift-user-workload-monitoring | grep prometheus-adapter
+kubectl get pods -n keda-system
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/llm-d-optimized-baseline/wva_desired_replicas" | jq
 ```
 
@@ -394,8 +391,8 @@ To remove all deployed components:
 helm uninstall optimized-baseline -n llm-d-optimized-baseline
 kubectl delete -k llm-d/guides/optimized-baseline/modelserver/gpu/vllm/base -n llm-d-optimized-baseline
 
-# Delete Prometheus Adapter
-helm uninstall prometheus-adapter -n openshift-user-workload-monitoring
+# KEDA / CMA is platform-managed on OpenShift; remove ScaledObjects, not the operator
+kubectl delete scaledobject --all -n llm-d-optimized-baseline
 
 # Delete WVA
 make undeploy

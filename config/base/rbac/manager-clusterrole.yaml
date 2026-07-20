@@ -8,10 +8,16 @@ rules:
   - ""
   resources:
   - configmaps
+  - namespaces
+  - nodes
+  - nodes/status
+  - pods
+  - resourcequotas
+  - secrets
+  - services
   verbs:
   - get
   - list
-  - update
   - watch
 - apiGroups:
   - ""
@@ -26,29 +32,6 @@ rules:
   verbs:
   - create
   - patch
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  - pods
-  - resourcequotas
-  - secrets
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  - nodes/status
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - apps
   resources:
@@ -118,32 +101,6 @@ rules:
   - leaderworkersets/scale
   verbs:
   - get
-  - update
-- apiGroups:
-  - llmd.ai
-  resources:
-  - variantautoscalings
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - llmd.ai
-  resources:
-  - variantautoscalings/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - llmd.ai
-  resources:
-  - variantautoscalings/status
-  verbs:
-  - get
-  - patch
   - update
 - apiGroups:
   - monitoring.coreos.com

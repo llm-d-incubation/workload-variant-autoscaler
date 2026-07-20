@@ -46,7 +46,7 @@ var _ = Describe("RegisterThroughputAnalyzerQueries", func() {
 			expectedQueries := []string{
 				QueryGenerationTokenRate,
 				QueryKvUsageInstant,
-				QueryVLLMRequestRate,
+				QueryRequestRate,
 			}
 			for _, name := range expectedQueries {
 				q := queryList.Get(name)
@@ -80,8 +80,8 @@ var _ = Describe("RegisterThroughputAnalyzerQueries", func() {
 			Expect(rendered).To(ContainSubstring(`model_name="test-model"`))
 		})
 
-		It("should build QueryVLLMRequestRate with 1m window over token count", func() {
-			rendered, err := queryList.Build(QueryVLLMRequestRate, map[string]string{
+		It("should build QueryRequestRate with 1m window over token count", func() {
+			rendered, err := queryList.Build(QueryRequestRate, map[string]string{
 				source.ParamNamespace: "test-ns",
 				source.ParamModelID:   "test-model",
 			})

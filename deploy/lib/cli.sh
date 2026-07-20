@@ -28,8 +28,7 @@ Environment Variables:
   DEPLOY_PROMETHEUS            Deploy Prometheus stack (default: true)
   DEPLOY_OPERATIONAL_DASHBOARD Deploy Grafana and operational dashboard (default: true)
   DEPLOY_WVA                   Deploy WVA controller (default: true)
-  DEPLOY_PROMETHEUS_ADAPTER    Deploy Prometheus Adapter when SCALER_BACKEND=prometheus-adapter (default: true)
-  SCALER_BACKEND               prometheus-adapter (default), keda, or none
+  SCALER_BACKEND               keda (default) or none
   KEDA_HELM_INSTALL            Install KEDA via Helm on kubernetes when true (default: false)
   KEDA_NAMESPACE               Namespace for KEDA (default: keda-system)
   UNDEPLOY                     Undeploy mode (default: false)

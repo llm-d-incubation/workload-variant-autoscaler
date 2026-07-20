@@ -27,12 +27,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // VariantFilter is a function that determines if a VA should be included.
@@ -98,10 +98,7 @@ func InactiveVariantAutoscaling(ctx context.Context, client client.Client) ([]wv
 // filterVariantsByScaleTargetAccessors is a generic function to filter VAs based on scaleTarget state.
 // Returns filtered VAs and a map of scaleTargetAccessors keyed by "namespace/scaleTargetName".
 func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Client, filter VariantFilter, filterName string) ([]wvav1alpha1.VariantAutoscaling, map[string]scaletarget.ScaleTargetAccessor, error) {
-	readyVAs, err := readyVariantAutoscalings(ctx, client)
-	if err != nil {
-		return nil, nil, err
-	}
+	readyVAs := readyVariantAutoscalings(ctx, client)
 
 	filteredVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(readyVAs))
 	scaleTargetAccessors := make(map[string]scaletarget.ScaleTargetAccessor)
@@ -124,8 +121,8 @@ func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Clie
 		}
 
 		scaleTargetName := va.Spec.ScaleTargetRef.Name
-		var scaleTargetAccessor scaletarget.ScaleTargetAccessor
-		if scaleTargetAccessor, err = scaletarget.FetchScaleTarget(ctx, client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err != nil {
+		scaleTargetAccessor, err := scaletarget.FetchScaleTarget(ctx, client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace)
+		if err != nil {
 			if apierrors.IsNotFound(err) {
 				// Deployment/LWS doesn't exist yet, this is expected for VAs without corresponding scale targets
 				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Scale target not found for VariantAutoscaling, skipping",
@@ -163,83 +160,38 @@ func filterVariantsByScaleTargetAccessor(ctx context.Context, client client.Clie
 	return filteredVAs, scaleTargetAccessors, nil
 }
 
-// readyVariantAutoscalings retrieves all VariantAutoscaling resources that are ready for optimization
-// using the informer cache. When CONTROLLER_INSTANCE is configured, only VAs with matching
-// controller-instance labels are returned to enable multi-controller isolation.
-// It also merges in-memory VAs synthesized from annotated ScaledObjects and HPAs
-// (annotation-based discovery, Phase 1 dual-mode). CRD-sourced VAs take precedence
-// when both refer to the same scale target in the same namespace.
-func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) ([]wvav1alpha1.VariantAutoscaling, error) {
+// readyVariantAutoscalings retrieves all variants ready for optimization by
+// synthesizing in-memory VariantAutoscaling objects from annotated ScaledObjects
+// and HPAs (annotation-based discovery). When CONTROLLER_INSTANCE is configured,
+// only variants whose source object carries a matching controller-instance label
+// are returned, enabling multi-controller isolation.
+//
+// Errors from annotation discovery are non-fatal (logged), so this always returns
+// whatever was discovered and never an error.
+func readyVariantAutoscalings(ctx context.Context, k8sClient client.Client) []wvav1alpha1.VariantAutoscaling {
 	logger := ctrl.LoggerFrom(ctx)
 
-	// Build list options based on controller instance configuration
-	listOpts := []client.ListOption{}
+	annotated, err := annotationSourcedVariants(ctx, k8sClient)
+	if err != nil {
+		// Non-fatal: log and continue with whatever was discovered.
+		logger.Error(err, "Error while listing annotation-sourced variants (non-fatal)")
+	}
+
 	controllerInstance := metrics.GetControllerInstance()
-	if controllerInstance != "" {
-		// Filter by controller-instance label for multi-controller isolation
-		listOpts = append(listOpts, client.MatchingLabels{
-			constants.ControllerInstanceLabelKey: controllerInstance,
-		})
-		logger.V(logging.DEBUG).Info("Filtering VAs by controller instance",
-			"controllerInstance", controllerInstance)
-	}
-
-	// List VAs using the informer cache with optional label selector
-	var vaList wvav1alpha1.VariantAutoscalingList
-	if err := k8sClient.List(ctx, &vaList, listOpts...); err != nil {
-		if !apimeta.IsNoMatchError(err) {
-			return nil, err
-		}
-		// The deprecated VA CRD is optional in annotation mode; treat its
-		// absence as an empty CRD-sourced list and continue with HPA/SO discovery.
-	}
-
-	// Filter out VAs being deleted
-	readyVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(vaList.Items))
-	for _, va := range vaList.Items {
-		// Skip deleted VAs
-		if !va.DeletionTimestamp.IsZero() {
+	readyVAs := make([]wvav1alpha1.VariantAutoscaling, 0, len(annotated))
+	for _, va := range annotated {
+		// Filter by controller-instance label for multi-controller isolation.
+		if controllerInstance != "" && va.Labels[constants.ControllerInstanceLabelKey] != controllerInstance {
 			continue
 		}
 		readyVAs = append(readyVAs, va)
 	}
 
-	logger.V(logging.DEBUG).Info("Found VariantAutoscaling resources ready for optimization",
+	logger.V(logging.DEBUG).Info("Found variants ready for optimization",
 		"count", len(readyVAs),
 		"controllerInstance", controllerInstance)
 
-	// Merge annotation-sourced variants (dual-mode: CRD wins on conflict).
-	annotated, err := annotationSourcedVariants(ctx, k8sClient)
-	if err != nil {
-		// Non-fatal: log and continue with CRD-sourced only.
-		logger.Error(err, "Error while listing annotation-sourced variants (non-fatal)")
-	}
-	if len(annotated) == 0 {
-		return readyVAs, nil
-	}
-
-	// Build set of (namespace/kind/name) already covered by CRD-sourced VAs.
-	// Kind is sufficient for disambiguation: the only in-play kinds are Deployment,
-	// LeaderWorkerSet, and StatefulSet, which are unique names in practice.
-	crdTargets := make(map[string]bool, len(readyVAs))
-	for _, va := range readyVAs {
-		if va.Spec.ScaleTargetRef.Name != "" {
-			key := fmt.Sprintf("%s/%s/%s", va.Namespace, va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Name)
-			crdTargets[key] = true
-		}
-	}
-	for _, va := range annotated {
-		key := fmt.Sprintf("%s/%s/%s", va.Namespace, va.Spec.ScaleTargetRef.Kind, va.Spec.ScaleTargetRef.Name)
-		if !crdTargets[key] {
-			readyVAs = append(readyVAs, va)
-		}
-	}
-
-	logger.V(logging.DEBUG).Info("Merged annotation-sourced variants",
-		"annotatedCount", len(annotated),
-		"totalCount", len(readyVAs))
-
-	return readyVAs, nil
+	return readyVAs
 }
 
 // annotationSourcedVariants lists HPAs and KEDA ScaledObjects bearing llm-d.ai/managed: "true"

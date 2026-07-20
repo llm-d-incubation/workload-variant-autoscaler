@@ -3,10 +3,10 @@ package utils
 import (
 	"strconv"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // BuildAllocationFromMetrics assembles an Allocation struct from raw optimizer metrics
@@ -18,7 +18,7 @@ import (
 // This function is placed in utils to avoid import cycles between collector and controller packages.
 func BuildAllocationFromMetrics(
 	metrics interfaces.OptimizerMetrics,
-	va *v1alpha1.VariantAutoscaling,
+	va *variant.VariantAutoscaling,
 	scaleTarget scaletarget.ScaleTargetAccessor,
 	acceleratorCost float64,
 ) (interfaces.Allocation, error) {

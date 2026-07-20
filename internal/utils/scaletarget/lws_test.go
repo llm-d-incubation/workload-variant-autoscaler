@@ -357,6 +357,45 @@ func TestLWSAccessor_GetTotalGPUsPerReplica(t *testing.T) {
 			expected: 8, // 8 + (4-1)*0 = 8
 		},
 		{
+			name: "CPU-only leader and workers default to 1",
+			lws: &lwsv1.LeaderWorkerSet{
+				Spec: lwsv1.LeaderWorkerSetSpec{
+					LeaderWorkerTemplate: lwsv1.LeaderWorkerTemplate{
+						Size: int32Ptr(3), // 1 leader + 2 workers
+						LeaderTemplate: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name: "leader",
+										Resources: corev1.ResourceRequirements{
+											Requests: corev1.ResourceList{
+												"cpu": resource.MustParse("1"),
+											},
+										},
+									},
+								},
+							},
+						},
+						WorkerTemplate: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name: "worker",
+										Resources: corev1.ResourceRequirements{
+											Requests: corev1.ResourceList{
+												"cpu": resource.MustParse("1"),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: 1,
+		},
+		{
 			name: "size 1 (only leader, no workers)",
 			lws: &lwsv1.LeaderWorkerSet{
 				Spec: lwsv1.LeaderWorkerSetSpec{

@@ -65,10 +65,10 @@ if [ -n "$WVA_POD" ]; then
   kubectl logs "$WVA_POD" -n "$WVA_NAMESPACE" --tail=20 | grep -E "reconcil|metrics|error|saturation" || echo "  (no matching log lines)"
 fi
 
-# 3. Check VariantAutoscaling status
+# 3. Check managed autoscalers (annotation-based discovery surface)
 echo ""
-echo "--- Step 3: VariantAutoscaling status ---"
-kubectl get variantautoscaling -A -o wide 2>/dev/null || echo "  No VariantAutoscalings found"
+echo "--- Step 3: Managed HorizontalPodAutoscalers ---"
+kubectl get hpa -A -o wide 2>/dev/null || echo "  No HorizontalPodAutoscalers found"
 
 # 4. Check ServiceMonitors exist
 echo ""
@@ -80,13 +80,16 @@ for ns in "$LLMD_NAMESPACE" "$WVA_NAMESPACE"; do
 done
 
 # 5. Wait for WVA to start processing metrics (up to 3 minutes)
+# WVA discovers variants from annotated HPAs and emits the wva_desired_replicas
+# external metric; the managed HPA then reports it under status.currentMetrics.
+# Presence of a current metric value is our signal that the pipeline is live.
 echo ""
 echo "--- Step 5: Waiting for WVA to detect metrics (up to 3 minutes) ---"
 METRICS_READY=false
 for i in $(seq 1 18); do
-  VA_STATUS=$(kubectl get variantautoscaling -n "$LLMD_NAMESPACE" -o jsonpath='{.items[0].status.desiredOptimizedAlloc.accelerator}' 2>/dev/null || true)
-  if [ -n "$VA_STATUS" ]; then
-    echo "  ✅ WVA optimization active — accelerator: $VA_STATUS"
+  HPA_METRIC=$(kubectl get hpa -n "$LLMD_NAMESPACE" -o jsonpath='{.items[0].status.currentMetrics}' 2>/dev/null || true)
+  if [ -n "$HPA_METRIC" ] && [ "$HPA_METRIC" != "null" ]; then
+    echo "  ✅ WVA optimization active — HPA currentMetrics: $HPA_METRIC"
     METRICS_READY=true
     break
   fi

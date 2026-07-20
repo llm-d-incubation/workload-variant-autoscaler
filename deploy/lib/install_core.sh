@@ -10,12 +10,6 @@
 main() {
     parse_args "$@"
 
-    # When using KEDA as scaler backend: skip Prometheus Adapter and deploy KEDA instead
-    if [ "$SCALER_BACKEND" = "keda" ]; then
-        log_info "Scaler backend is KEDA: Skipping Prometheus Adapter, will deploy KEDA"
-        DEPLOY_PROMETHEUS_ADAPTER=false
-    fi
-
     # Undeploy mode
     if [ "$UNDEPLOY" = "true" ]; then
         log_info "Starting Workload-Variant-Autoscaler Undeployment on $ENVIRONMENT"

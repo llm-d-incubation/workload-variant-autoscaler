@@ -433,6 +433,5 @@ kubectl get events -n workload-variant-autoscaler-system --field-selector involv
 ## Related Documentation
 
 - [Architecture Overview](modeling-optimization.md)
-- [Configuration Guide](../user-guide/configuration.md)
-- [CRD Reference](../user-guide/crd-reference.md)
+- [Configuration Guide](../developer-guide/configuration.md)
 - [Debugging Guide](../developer-guide/debugging.md)

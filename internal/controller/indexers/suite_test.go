@@ -34,8 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -62,16 +60,15 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
 
 	var err error
-	err = llmdv1alpha1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	err = kedav1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
-	crdPaths := []string{filepath.Join("..", "..", "..", "config", "base", "crd")}
+	// Only the KEDA ScaledObject CRD is needed; HPAs are a built-in type and
+	// VariantAutoscaling is no longer a CRD.
+	var crdPaths []string
 	if dir := getKEDACRDDir(); dir != "" {
 		crdPaths = append(crdPaths, dir)
 	}
@@ -109,11 +106,26 @@ var _ = AfterSuite(func() {
 // directory does not exist; callers should skip appending the path in
 // that case.
 func getKEDACRDDir() string {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/kedacore/keda/v2").Output()
+	moduleDir, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/kedacore/keda/v2").Output()
+	if err == nil && strings.TrimSpace(string(moduleDir)) != "" {
+		dir := filepath.Join(strings.TrimSpace(string(moduleDir)), "config", "crd", "bases")
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+	}
+	// Fall back to GOMODCACHE when the module is in the download cache but not
+	// checked out locally (go list -m {{.Dir}} returns empty in that case).
+	version, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}", "github.com/kedacore/keda/v2").Output()
+	if err != nil || strings.TrimSpace(string(version)) == "" {
+		return ""
+	}
+	cache, err := exec.Command("go", "env", "GOMODCACHE").Output()
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "bases")
+	dir := filepath.Join(strings.TrimSpace(string(cache)),
+		"github.com", "kedacore", "keda", "v2@"+strings.TrimSpace(string(version)),
+		"config", "crd", "bases")
 	if _, err := os.Stat(dir); err != nil {
 		return ""
 	}

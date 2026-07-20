@@ -15,7 +15,6 @@ import (
 	"fmt"
 
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -43,14 +42,8 @@ func scaleTargetIndexKey(namespace string, ref autoscalingv2.CrossVersionObjectR
 }
 
 // SetupIndexes registers custom field indexes with the manager's cache.
-// vaCRDEnabled controls whether the VariantAutoscaling index is registered; set to false when VariantAutoscaling CRD is not installed.
 // kedaEnabled controls whether the ScaledObject index is registered; set to false when KEDA CRDs are not installed.
-func SetupIndexes(ctx context.Context, mgr manager.Manager, vaCRDEnabled bool, kedaEnabled bool) error {
-	if vaCRDEnabled {
-		if err := mgr.GetFieldIndexer().IndexField(ctx, &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{}, VAScaleTargetKey, VAScaleTargetIndexFunc); err != nil {
-			return fmt.Errorf("failed to set up index by scale target for VariantAutoscaling: %w", err)
-		}
-	}
+func SetupIndexes(ctx context.Context, mgr manager.Manager, kedaEnabled bool) error {
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &autoscalingv2.HorizontalPodAutoscaler{}, HPAByScaleTargetKey, HPAByScaleTargetIndexFunc); err != nil {
 		return fmt.Errorf("failed to set up index by scale target for HPA: %w", err)
 	}

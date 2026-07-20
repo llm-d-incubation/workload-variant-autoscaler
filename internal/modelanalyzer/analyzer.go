@@ -3,9 +3,9 @@ package modelanalyzer
 import (
 	"context"
 
-	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	inferno "github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/core"
 )
 

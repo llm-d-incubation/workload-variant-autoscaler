@@ -2,7 +2,6 @@ package crd
 
 import (
 	"github.com/go-logr/logr"
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
@@ -78,10 +77,4 @@ func CheckKEDACRD(restConfig *rest.Config, logger logr.Logger) bool {
 // TODO: checked once at startup; handle LWS installed after controller starts.
 func CheckLeaderWorkerSetCRD(restConfig *rest.Config, logger logr.Logger) bool {
 	return CheckCRDInstalled(restConfig, "leaderworkerset.x-k8s.io/v1", "LeaderWorkerSet", logger)
-}
-
-// CheckVariantAutoscalingCRD reports whether the deprecated VA CRD is installed.
-// Annotation-only deployments should continue when this returns false with no error.
-func CheckVariantAutoscalingCRD(restConfig *rest.Config, logger logr.Logger) (bool, error) {
-	return DetectCRDInstalled(restConfig, llmdVariantAutoscalingV1alpha1.GroupVersion.String(), "VariantAutoscaling", logger)
 }

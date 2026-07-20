@@ -30,9 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	actuator "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/actuator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
@@ -43,15 +41,16 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // analyzerEntry binds a registered analyzer to its name. The engine stores
@@ -616,22 +615,10 @@ func (e *Engine) optimizeV1(
 		// not per role group. In P/D deployments, scaling prefill to zero while
 		// keeping decode (or vice versa) makes the model non-functional — both
 		// stages must scale together.
-		if len(modelDecisions) > 0 {
-			if !hasMinReplicasAboveZero(data.variantStates) {
-				scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
-				scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-					ctx, modelID, namespace,
-					modelDecisions, scaleToZeroConfig, "v1-saturation",
-				)
-				if scaledToZero {
-					logger.Info("Scale-to-zero enforcement applied",
-						"modelID", modelID)
-				}
-			} else {
-				logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: variant has minReplicas > 0",
-					"modelID", modelID)
-			}
-		}
+		e.applyScaleToZeroEnforcement(
+			ctx, modelID, namespace, "v1-saturation",
+			modelDecisions, data.scaleTargets, data.variantStates,
+		)
 
 		allDecisions = append(allDecisions, modelDecisions...)
 	}
@@ -816,6 +803,10 @@ func (e *Engine) optimizeV2(
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
 	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
+	// modelScaleTargets carries each model's scale targets into stage 3, where
+	// applyScaleToZeroEnforcement needs them to gate the enforcer. Captured here
+	// because data.scaleTargets is only in scope during this collection loop.
+	modelScaleTargets := make(map[string]map[string]scaletarget.ScaleTargetAccessor)
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -861,6 +852,7 @@ func (e *Engine) optimizeV2(
 
 		requests = append(requests, *req)
 		modelReplicaMetrics[modelID] = data.replicaMetrics
+		modelScaleTargets[utils.GetNamespacedKey(namespace, modelID)] = data.scaleTargets
 	}
 
 	if len(requests) == 0 {
@@ -879,23 +871,12 @@ func (e *Engine) optimizeV2(
 
 	// Stage 3: Apply enforcer per-model (directly on decisions)
 	for _, req := range requests {
-		// Skip scale-to-zero enforcement if any variant has minReplicas > 0
-		if hasMinReplicasAboveZero(req.VariantStates) {
-			logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement (V2): variant has minReplicas > 0",
-				"modelID", req.ModelID)
-			continue
-		}
-
-		scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(req.Namespace)
-
-		scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-			ctx, req.ModelID, req.Namespace,
-			allDecisions, scaleToZeroConfig, optimizer.Name(),
+		e.applyScaleToZeroEnforcement(
+			ctx, req.ModelID, req.Namespace, optimizer.Name(),
+			allDecisions,
+			modelScaleTargets[utils.GetNamespacedKey(req.Namespace, req.ModelID)],
+			req.VariantStates,
 		)
-		if scaledToZero {
-			logger.Info("Scale-to-zero enforcement applied (V2)",
-				"modelID", req.ModelID)
-		}
 	}
 
 	// Stage 4: Enrich decisions with KV cache token data from replicaMetrics.
@@ -1091,6 +1072,8 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			decision.Cost = va.Cost
 			// Use average spare KV capacity as the SpareCapacity indicator for limiter prioritization
 			decision.SpareCapacity = va.AvgSpareKvCapacity
+			// V1 Utilization: mean of per-replica KvCacheUsage fractions
+			decision.Utilization = va.AvgKvCacheUsage
 		} else {
 			logger.Info("No variant analysis found for decision (metrics may be unavailable)",
 				"variant", variantName)
@@ -1150,6 +1133,70 @@ func hasMinReplicasAboveZero(states []interfaces.VariantReplicaState) bool {
 		}
 	}
 	return false
+}
+
+// scaleToZeroSupportedForEngines reports whether scale-to-zero enforcement is safe
+// for a model running the given set of scale targets. Scale-to-zero relies on
+// CollectModelRequestCount, which is currently hardcoded to vLLM's request counter
+// (vllm:request_success_total); routing the per-engine counter through the enforcer
+// is the deferred Phase 2 work (see docs/proposals/sglang-backend.md). For any
+// non-vLLM engine that counter returns 0, which the enforcer would misread as
+// "no traffic" and scale the model to zero. Until the engine is threaded through,
+// scale-to-zero is skipped for models that run a non-vLLM engine.
+func scaleToZeroSupportedForEngines(scaleTargets map[string]scaletarget.ScaleTargetAccessor) bool {
+	for _, eng := range inferenceengine.Present(scaleTargets) {
+		if eng != inferenceengine.EngineVLLM {
+			return false
+		}
+	}
+	return true
+}
+
+// applyScaleToZeroEnforcement runs scale-to-zero / minimum-replica enforcement for a
+// single model's decisions, unless a safety gate skips it:
+//   - the model runs a non-vLLM engine — CollectModelRequestCount is hardcoded to
+//     vLLM's request counter, so an active SGLang model would falsely read as idle
+//     and be zeroed (see scaleToZeroSupportedForEngines); or
+//   - any variant declares minReplicas > 0 (hasMinReplicasAboveZero).
+//
+// Decisions are mutated in place; returns true if the model was scaled to zero.
+//
+// All three optimize paths (V1, V2, queueing-model) funnel their enforcement through
+// this one method so the gate lives in a single place — a caller cannot accidentally
+// invoke the enforcer ungated, and one test (engine_scale_to_zero_enforce_test.go)
+// locks the gate down for every path.
+func (e *Engine) applyScaleToZeroEnforcement(
+	ctx context.Context,
+	modelID, namespace, optimizerName string,
+	decisions []interfaces.VariantDecision,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variantStates []interfaces.VariantReplicaState,
+) bool {
+	if len(decisions) == 0 {
+		return false
+	}
+	logger := ctrl.LoggerFrom(ctx)
+
+	if !scaleToZeroSupportedForEngines(scaleTargets) {
+		logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: model runs a non-vLLM engine; engine-aware request counting is not yet wired through the enforcer (see docs/proposals/sglang-backend.md Phase 2)",
+			"modelID", modelID, "optimizer", optimizerName)
+		return false
+	}
+	if hasMinReplicasAboveZero(variantStates) {
+		logger.V(logging.DEBUG).Info("Skipping scale-to-zero enforcement: variant has minReplicas > 0",
+			"modelID", modelID, "optimizer", optimizerName)
+		return false
+	}
+
+	scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
+	scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
+		ctx, modelID, namespace, decisions, scaleToZeroConfig, optimizerName,
+	)
+	if scaledToZero {
+		logger.Info("Scale-to-zero enforcement applied",
+			"modelID", modelID, "optimizer", optimizerName)
+	}
+	return scaledToZero
 }
 
 // normalizeRole maps empty and "both" roles to the same canonical key so that
@@ -1361,19 +1408,9 @@ func (e *Engine) applySaturationDecisions(
 				"variant", vaName)
 		}
 
-		// Fetch latest version from API server to avoid conflicts.
-		// Synthetic (annotation-sourced) variants have no CRD instance; use the in-memory copy.
-		var updateVa llmdVariantAutoscalingV1alpha1.VariantAutoscaling
-		if utils.IsSynthetic(va) {
-			updateVa = *va.DeepCopy()
-		} else {
-			if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
-				msg := "Failed to get latest VA from API server"
-				e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, msg)
-				logger.Error(err, msg, "name", va.Name)
-				continue
-			}
-		}
+		// Variants are synthesized in-memory from annotated HPAs/ScaledObjects;
+		// there is no API-server object to fetch, so work on a copy.
+		updateVa := *va.DeepCopy()
 
 		// Update CurrentAlloc from local analysis (which has the latest metrics)
 		// We use currentAllocations map instead of Status.CurrentAlloc
@@ -1385,9 +1422,6 @@ func (e *Engine) applySaturationDecisions(
 			// Previously we updated va.Status.CurrentAlloc = currentAlloc
 			// Now we just don't update status with it.
 		}
-
-		// Check if we have metrics data for this VA (used for cache below)
-		_, hasAllocation := currentAllocations[vaName]
 
 		// Determine target replicas and accelerator
 		var targetReplicas int
@@ -1439,26 +1473,8 @@ func (e *Engine) applySaturationDecisions(
 		// If we still don't have an accelerator name (e.g. new VA, no decision, no current alloc), we can't update status sensibly
 		// But we still need to set MetricsAvailable condition via the cache
 		if acceleratorName == "" {
-			logger.Info("Skipping status update for VA without accelerator info, but setting MetricsAvailable=False",
+			logger.Info("Skipping status update for variant without accelerator info",
 				"variant", vaName, "cacheKey.name", va.Name, "cacheKey.namespace", va.Namespace)
-			// Synthetic variants have no CRD status to patch; skip cache/trigger.
-			if !utils.IsSynthetic(va) {
-				// Still set the cache entry so the controller can set MetricsAvailable=False.
-				// This is a partial decision for metrics status only - other fields like
-				// TargetReplicas and AcceleratorName are left at zero values since we don't
-				// have enough information to set them.
-				common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-					VariantName:      vaName,
-					Namespace:        va.Namespace,
-					MetricsAvailable: false,
-					MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
-					MetricsMessage:   llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable,
-				})
-				// Trigger reconciler to apply the condition
-				common.DecisionTrigger <- event.GenericEvent{
-					Object: &updateVa,
-				}
-			}
 		}
 
 		// Emit a K8s event when accelerator cannot be resolved so operators
@@ -1593,52 +1609,10 @@ func (e *Engine) applySaturationDecisions(
 			act.RecordSaturationFreshness(ctx, va.Name, va.Namespace, false)
 		}
 
-		// Update Shared State and Trigger Reconcile via Channel.
-		// Synthetic (annotation-sourced) variants have no CRD status to patch;
-		// metric emission above is their sole output, so skip cache/trigger.
-		if !utils.IsSynthetic(va) {
-			// 1. Update Cache
-			// Determine MetricsAvailable status for the cache.
-			// - hasAllocation is true when we successfully collected current replica metrics
-			//   for this variant during this loop (metrics pipeline is working).
-			// - hasDecision is true when the optimizer produced a scaling decision based on
-			//   saturation metrics in this run.
-			// - The accelerator must also be resolved: the replica scaling gauges are
-			//   always emitted (with an "unresolved" accelerator_type) so scaling is not
-			//   blocked, but the accelerator-dimensioned saturation/capacity metrics are
-			//   only emitted when the type is resolved. MetricsAvailable therefore tracks
-			//   full (accelerator-dimensioned) observability, and is False until the
-			//   accelerator resolves even though scaling itself proceeds.
-			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
-			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
-			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
-			if metricsAvailable {
-				metricsReason = llmdVariantAutoscalingV1alpha1.ReasonMetricsFound
-				metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
-			}
-
-			// Use the sanitized statusAccelerator (computed above) rather than the raw
-			// acceleratorName. The controller reads this cache entry and writes
-			// AcceleratorName verbatim into Status.DesiredOptimizedAlloc.Accelerator,
-			// so passing the sentinel here would leak it into the CRD status —
-			// violating the "never persist the sentinel to status" invariant.
-			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-				VariantName:       vaName,
-				Namespace:         va.Namespace,
-				TargetReplicas:    targetReplicas,
-				AcceleratorName:   statusAccelerator,
-				LastRunTime:       metav1.Now(),
-				CurrentAllocation: currentAllocations[vaName],
-				MetricsAvailable:  metricsAvailable,
-				MetricsReason:     metricsReason,
-				MetricsMessage:    metricsMessage,
-			})
-
-			// 2. Trigger Reconciler
-			common.DecisionTrigger <- event.GenericEvent{
-				Object: &updateVa,
-			}
-		}
+		// Metric emission above (act.EmitMetrics) is the sole output for
+		// annotation-sourced variants: KEDA/HPA reads wva_desired_replicas
+		// directly. There is no CRD status to patch, so no cache write or
+		// reconcile trigger is needed.
 
 		if hasDecision {
 			if decision.Action != interfaces.ActionNoChange {

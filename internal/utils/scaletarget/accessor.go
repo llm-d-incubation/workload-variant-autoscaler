@@ -30,7 +30,7 @@ type ScaleTargetAccessor interface {
 	// GetLeaderPodTemplateSpec returns the pod template for the leader/primary pod.
 	// For Deployment: the single pod template.
 	// For LWS: the leader template (falls back to worker template if not set).
-	// Use this for: vLLM args extraction (leader starts the API server),
+	// Use this for: engine args extraction (leader starts the API server),
 	// metrics port discovery, pod label matching.
 	GetLeaderPodTemplateSpec() *corev1.PodTemplateSpec
 

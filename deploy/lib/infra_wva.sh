@@ -118,8 +118,6 @@ EOF
         done
     fi
 
-    log_info "Installing WVA CRDs..."
-    kubectl apply -k "$WVA_PROJECT/config/base/crd/"
 
     log_info "Applying Kustomize overlay: $kustomize_overlay"
     kubectl apply -k "$tmp_overlay"
@@ -268,14 +266,14 @@ extract_openshift_prometheus_ca() {
         fi
     fi
 
-    # Method 3: Fallback to thanos-querier-tls secret (as per Helm README)
+    # Method 3: Fallback to thanos-querier-tls secret
     # Note: This extracts the server certificate, which may work if the cert chain includes the CA
     # but it's not ideal - we should use the Service CA instead.
     if [ ! -s "$PROM_CA_CERT_PATH" ]; then
         log_warning "Service CA not found, falling back to server certificate from thanos-querier-tls"
         log_warning "This may cause TLS verification issues - Service CA is preferred"
         if kubectl get secret "$PROMETHEUS_SECRET_NAME" -n "$PROMETHEUS_SECRET_NS" &> /dev/null; then
-            log_info "Extracting certificate from thanos-querier-tls secret (as per Helm README)"
+            log_info "Extracting certificate from thanos-querier-tls secret"
             kubectl get secret "$PROMETHEUS_SECRET_NAME" -n "$PROMETHEUS_SECRET_NS" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$PROM_CA_CERT_PATH"
             if [ -s "$PROM_CA_CERT_PATH" ]; then
                 log_success "Extracted certificate from thanos-querier-tls secret"

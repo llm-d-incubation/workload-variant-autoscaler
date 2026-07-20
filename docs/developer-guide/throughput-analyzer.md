@@ -148,23 +148,25 @@ per-pod query in this codebase.
 
 ---
 
-#### QueryVLLMRequestRate (`vllm_request_rate`)
+#### QueryRequestRate (`request_rate`)
 
 ```promql
 sum by (pod) (rate(vllm:request_generation_tokens_count{namespace="...",model_name="..."}[1m]))
 ```
 
-**What it measures:** vLLM-side request completion rate per pod (req/s), derived from the
-generation tokens histogram `_count` counter (increments once per completed request).
+**What it measures:** Engine-side request completion rate per pod (req/s), derived from the
+generation tokens histogram `_count` counter (increments once per completed request). Engine-
+agnostic — the vLLM example is shown above; the SGLang variant reads
+`sglang:generation_tokens_histogram_count`.
 
 **TA notation:** fallback λ_req — used when `ArrivalRate == 0` for all pods (EPP not deployed).
-The analyzer computes `λ_dec_fallback = Σ VLLMRequestRate_r × AvgOutputTokens_r`.
+The analyzer computes `λ_dec_fallback = Σ RequestRate_r × AvgOutputTokens_r`.
 
-**ReplicaMetrics field:** `VLLMRequestRate`
+**ReplicaMetrics field:** `RequestRate`
 
 **Note:** This also serves as a throughput proxy weight for histogram averaging. When computing
 variant-average IL, OL, and prefix hit rate across replicas, each replica is weighted by its
-`VLLMRequestRate` to prevent low-throughput replicas from distorting the shape estimate.
+`RequestRate` to prevent low-throughput replicas from distorting the shape estimate.
 
 **Important:** This measures *completed* (served) requests, not *arriving* requests. It
 undercounts when requests are queued in the scheduler. Use `ArrivalRate` (primary) first;
@@ -188,7 +190,7 @@ these fields directly rather than registering duplicate queries.
 | Q (scheduler queue size) | `SchedulerQueueMetrics.QueueSize` (model-level) | `QuerySchedulerQueueSize` | `RegisterSaturationQueries` |
 
 **λ_dec primary:** `Σ ArrivalRate_r × AvgOutputTokens_r` across all replicas (EPP deployed).  
-**λ_dec fallback:** `Σ VLLMRequestRate_r × AvgOutputTokens_r` (EPP absent, all ArrivalRate == 0).
+**λ_dec fallback:** `Σ RequestRate_r × AvgOutputTokens_r` (EPP absent, all ArrivalRate == 0).
 
 **Note on arrival rate:** `ArrivalRate` comes from `QuerySchedulerDispatchRate` which is per-pod,
 namespaced, and model-scoped — correctly isolating traffic to a specific variant. The TA sums
@@ -203,7 +205,7 @@ namespace filtering limitation of the scheduler metric.
 |---|---|---|---|---|
 | `QueryGenerationTokenRate` | vLLM | `sum by (pod)` | 1m rate | μ_dec^obs per pod (observability) |
 | `QueryKvUsageInstant` | vLLM | `max by (pod)` | instant | k* (no max_over_time) |
-| `QueryVLLMRequestRate` | vLLM | `sum by (pod)` | 1m rate | Fallback λ_req; histogram weight |
+| `QueryRequestRate` | vLLM | `sum by (pod)` | 1m rate | Fallback λ_req; histogram weight |
 | `TotalKvCapacityTokens` | `KvCacheConfigInfo` labels | derived | static | KV_max = blocks × block_size |
 | `AvgITL` | `QueryAvgITL` | `max by (pod)` | 1m rate | ITL_obs for OLS calibration |
 | `AvgOutputTokens` | `QueryAvgOutputTokens` | `max by (pod)` | 5m rate | OL for KV_req and λ_dec |
@@ -233,14 +235,14 @@ internal/engines/analyzers/throughput/
 
 **Query Registration (`internal/collector/registration/throughput_analyzer.go`)**  
 Registers three PromQL templates exclusive to the throughput analyzer:
-`QueryGenerationTokenRate`, `QueryKvUsageInstant`, `QueryVLLMRequestRate`.
+`QueryGenerationTokenRate`, `QueryKvUsageInstant`, `QueryRequestRate`.
 `RegisterThroughputAnalyzerQueries` must be called once at startup alongside
 `RegisterSaturationQueries` and `RegisterQueueingModelQueries`.
 
 **Metrics Collector (`internal/collector/replica_metrics.go`)**  
 Populates all `interfaces.ReplicaMetrics` fields in a single `Refresh()` call covering all
 12 registered queries. The three TA-exclusive fields are:
-`GenerationTokenRate`, `KvUsageInstant`, `VLLMRequestRate`.
+`GenerationTokenRate`, `KvUsageInstant`, `RequestRate`.
 The remaining TA fields (`TotalKvCapacityTokens`, `AvgITL`, `AvgOutputTokens`, `AvgInputTokens`,
 `PrefixCacheHitRate`, `ArrivalRate`) are populated by saturation and queueing model queries.
 
@@ -292,7 +294,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
   │                                                                               │
   │  []ReplicaMetrics (replicas of variant v)                                     │
   │        │                                                                      │
-  │        ├─(IL, OL, H%) [VLLMRequestRate-weighted]──► ShapeTracker              │
+  │        ├─(IL, OL, H%) [RequestRate-weighted]──► ShapeTracker              │
   │        │                                               │                      │
   │        │                                         KVreq, IL_eff                │
   │        │                                         shape change──► Window.Clear │
@@ -307,7 +309,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
   │        │                                        [ITL(k_sat) = A·k_sat + B]    │
   │        │                                        → μ_dec_sat, perReplicaSupply │
   │        │                                                                      │
-  │        ├─(ArrivalRate / VLLMRequestRate)─────► computeDemand                  │
+  │        ├─(ArrivalRate / RequestRate)─────► computeDemand                  │
   │        │                                         → λ_dec, isEPP               │
   │        │                                                                      │
   │        └─(GPS_obs, k*, KV_max)──────────────► checkVariantGPSMismatch         │
@@ -339,7 +341,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
 └──────┬─────┘
        │ vllm:request_generation_tokens_sum      (QueryGenerationTokenRate   → GenerationTokenRate)
        │ vllm:kv_cache_usage_perc                (QueryKvUsageInstant          → KvUsageInstant)
-       │ vllm:request_generation_tokens_count    (QueryVLLMRequestRate       → VLLMRequestRate)
+       │ vllm:request_generation_tokens_count    (QueryRequestRate           → RequestRate)
        │ vllm:cache_config_info                  (QueryCacheConfigInfo       → TotalKvCapacityTokens)
        │ vllm:inter_token_latency_seconds_*      (QueryAvgITL               → AvgITL)
        │ vllm:request_generation_tokens_*        (QueryAvgOutputTokens       → AvgOutputTokens)
@@ -362,7 +364,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
 │    ObservationWindow → (k*, ITL) pairs                   │
 │    ITLModel (tier-1 OLS or tier-2 constrained)           │
 │    supply: μ_dec_sat = k_sat×KV_max / KVreq / ITL(k_sat) │
-│    demand: EPP primary → vLLM fallback → k*-local        │
+│    demand: EPP primary → engine fallback → k*-local      │
 │                                                          │
 │  model-level:                                            │
 │    + queue demand from QueueSize / (factor×ITL)          │
@@ -457,16 +459,16 @@ If EPP is present but all `AvgOutputTokens == 0` (warm-up: scheduler is dispatch
 requests but no generation tokens have completed yet), this path yields zero and the
 cascade falls through. `isEPP` remains true so the engine is aware EPP is deployed.
 
-**2. vLLM fallback**  
-When EPP is absent **or** EPP is present but yielded zero (warm-up), and `VLLMRequestRate > 0`:
+**2. Engine-rate fallback**  
+When EPP is absent **or** EPP is present but yielded zero (warm-up), and `RequestRate > 0`:
 ```
-λ_dec = Σ VLLMRequestRate_r × AvgOutputTokens_r
+λ_dec = Σ RequestRate_r × AvgOutputTokens_r
 ```
-Same structure as primary but using the vLLM-side completion rate. The vLLM rate counts
+Same structure as primary but using the engine-side completion rate. The engine rate counts
 only served (completed) requests and undercounts arriving demand under load.
 
 **3. k\*-based local** (scale-up only)  
-When EPP and vLLM both yield zero (EPP absent or warm-up; vLLM rate also zero), demand
+When EPP and the engine rate both yield zero (EPP absent or warm-up; engine rate also zero), demand
 is derived from the current KV utilization:
 ```
 λ_local = Σ_r  k_r* × KV_max_r / KVreq / ITL(k_r*)

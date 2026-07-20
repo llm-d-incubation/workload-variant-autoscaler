@@ -13,7 +13,6 @@ Complete guide for deploying the Workload-Variant-Autoscaler (WVA) on Kubernetes
 - [Deployment Methods](#deployment-methods)
   - [Method 1: Automated Deployment Script](#method-1-automated-deployment-script-recommended)
   - [Method 2: Kustomize (direct controller install)](#method-2-kustomize-direct-controller-install)
-  - [Legacy: Helm Chart (Deprecated)](#legacy-helm-chart-deprecated)
 - [Platform-Specific Guides](#platform-specific-guides)
 - [Configuration Reference](#configuration-reference)
 - [Post-Deployment](#post-deployment)
@@ -122,7 +121,6 @@ If either requirement is missing, WVA will not make scaling decisions for the af
 
 - **HuggingFace Token** (for llm-d deployment): after getting access to a model, set a token on [HuggingFace](https://huggingface.co/settings/tokens)
   - Required for: Full deployment script with llm-d
-  - Not required for: Helm chart only deployment
 
 ## Deployment Methods
 
@@ -133,7 +131,7 @@ The deployment script provides a complete, automated setup including:
 - WVA controller with RBAC configuration
 - Prometheus stack (or connects to existing)
 - llm-d infrastructure (Gateway, Scheduler, vLLM)
-- Prometheus Adapter for external metrics
+- KEDA for external metrics (ScaledObject-driven)
 - ServiceMonitors for metric collection
 - VariantAutoscaling custom resources
 - HPA configuration
@@ -232,7 +230,7 @@ make deploy-e2e-infra ENVIRONMENT=kind-emulator IMG=localhost/llm-d-workload-var
 export DEPLOY_WVA=true
 export DEPLOY_PROMETHEUS=true
 export DEPLOY_OPERATIONAL_DASHBOARD=true
-export DEPLOY_PROMETHEUS_ADAPTER=true
+export SCALER_BACKEND=keda
 ./deploy/install.sh -e kubernetes
 ```
 
@@ -271,332 +269,6 @@ kubectl apply -k ../../overlays/namespace-scoped/openshift
 
 ```bash
 kubectl delete -k config/overlays/cluster-scoped/kubernetes    # or config/overlays/namespace-scoped/openshift
-```
-
-### Legacy: Helm Chart (Deprecated)
-
-> **This Helm chart is deprecated.** Use [Kustomize](#method-2-kustomize-direct-controller-install) instead.
-> The chart will be removed in the next minor release.
-
-The WVA can be deployed as a standalone using Helm, assuming you have:
-
-- Existing Prometheus server
-- Existing vLLM deployment
-- ServiceMonitors configured
-- Prometheus Adapter (optional, for HPA)
-
-This method is particularly useful when there is one (or more) existing llm-d infrastructure deployed
-
-#### Helm Chart Quick Start
-
-```bash
-# Add WVA Helm repository (if published)
-# helm repo add wva https://llm-d.github.io/workload-variant-autoscaler
-# helm repo update
-
-# Or install from local chart
-cd charts/workload-variant-autoscaler
-
-# Install with default values
-helm install workload-variant-autoscaler . \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace
-
-# Or install with custom values
-helm install workload-variant-autoscaler . \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace \
-  --values my-values.yaml
-```
-
-#### Helm Chart Configuration
-
-The Helm chart has several configurable parameters. Here's a comprehensive example based on the default values:
-
-**Create `my-values.yaml`**:
-
-```yaml
-# WVA Controller Configuration
-wva:
-  enabled: true
-
-  # Image configuration
-  image:
-    repository: ghcr.io/llm-d/llm-d-workload-variant-autoscaler
-    tag: latest
-  imagePullPolicy: Always
-
-  # Metrics configuration
-  metrics:
-    enabled: true
-    port: 8443      # Secure metrics port
-    secure: true    # Enable secure metrics endpoint
-
-  # Reconciliation interval
-  reconcileInterval: 60s
-
-  # Prometheus configuration
-  prometheus:
-    monitoringNamespace: workload-variant-autoscaler-monitoring
-    baseURL: "https://prometheus-k8s.monitoring.svc.cluster.local:9090"
-    
-    # TLS configuration
-    tls:
-      # CA certificate path inside container
-      caCertPath: "/etc/ssl/certs/prometheus-ca.crt"
-      # Set to true to skip TLS verification (not recommended for production)
-      insecureSkipVerify: false
-    
-    # Provide CA certificate directly
-    # caCert: |
-    #   -----BEGIN CERTIFICATE-----
-    #   YOUR_CA_CERTIFICATE_HERE
-    #   -----END CERTIFICATE-----
-
-  # Logging configuration
-  logging:
-    level: info  # debug, info, warn, error
-
-# llm-d Infrastructure Configuration
-llmd:
-  namespace: llm-d-optimized-baseline
-  modelName: optimized-baseline-nvidia-gpu-vllm-decode
-  modelID: "unsloth/Meta-Llama-3.1-8B"
-
-# VariantAutoscaling Configuration
-va:
-  enabled: true           # Create VariantAutoscaling CR
-  # accelerator: Optional. If not specified, it will be auto-discovered
-  # from target deployment. If specified, it will be used as fall-back value if it can't 
-  # be discovered.
-  accelerator: H100       # GPU type: A100, H100, L40S, etc.
-  sloTpot: 10            # Time per output token SLO (ms)
-  sloTtft: 1000          # Time to first token SLO (ms)
-
-# HPA Configuration
-hpa:
-  enabled: true           # Create HPA resource
-  maxReplicas: 10        # Maximum number of replicas
-  targetAverageValue: "1" # Target value for external metric
-  
-  # Scaling behavior configuration
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 240  # Wait 240s before scaling up (production default)
-      selectPolicy: Max                # Use maximum scale from policies
-      policies:
-        - type: Pods
-          value: 10                    # Scale up by max 10 pods
-          periodSeconds: 150           # Per 150 second period
-    scaleDown:
-      stabilizationWindowSeconds: 240  # Wait 240s before scaling down (production default)
-      selectPolicy: Max
-      policies:
-        - type: Pods
-          value: 10                    # Scale down by max 10 pods
-          periodSeconds: 150           # Per 150 second period
-
-# vLLM Service Configuration
-vllmService:
-  enabled: true           # Create Service for vLLM
-  nodePort: 30000        # NodePort for external access
-  interval: 15s          # ServiceMonitor scrape interval
-  scheme: http           # http or https
-```
-
-**Install with custom values**:
-
-```bash
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  --namespace workload-variant-autoscaler-system \
-  --create-namespace \
-  --values my-values.yaml
-```
-
-#### Minimal Helm Installation
-
-For a minimal installation (just the controller, no VariantAutoscaling or HPA):
-
-```bash
-# Create minimal values file
-cat > minimal-values.yaml <<EOF
-wva:
-  enabled: true
-  image:
-    tag: latest
-  imagePullPolicy: Always
-  
-  prometheus:
-    baseURL: "https://my-prometheus.monitoring.svc.cluster.local:9090"
-    monitoringNamespace: monitoring
-    tls:
-      insecureSkipVerify: true  # Only for dev/testing
-  
-  logging:
-    level: info
-
-# Disable auto-creation of resources
-va:
-  enabled: false
-
-hpa:
-  enabled: false
-
-vllmService:
-  enabled: false
-EOF
-
-# Install
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
-  -f minimal-values.yaml
-```
-
-#### Helm Chart with External Prometheus
-
-If you have an existing Prometheus (e.g., kube-prometheus-stack):
-
-```yaml
-# prometheus-values.yaml
-wva:
-  prometheus:
-    baseURL: "https://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
-    monitoringNamespace: monitoring
-    tls:
-      insecureSkipVerify: false  # Use proper TLS verification
-      caCertPath: "/etc/ssl/certs/prometheus-ca.crt"
-    # Provide CA cert via file
-    # caCert: |
-    #   -----BEGIN CERTIFICATE-----
-    #   ...
-    #   -----END CERTIFICATE-----
-  
-  metrics:
-    enabled: true
-    port: 8443
-    secure: true
-
-# Configure llm-d details
-llmd:
-  namespace: my-llm-namespace
-  modelName: my-vllm-deployment
-  modelID: "meta-llama/Llama-2-7b-hf"
-
-# Create VariantAutoscaling
-va:
-  enabled: true
-  # accelerator: Optional. If not specified, it will be auto-discovered
-  # from target deployment. If specified, it will be used as fall-back value if it can't 
-  # be discovered.
-  accelerator: A100
-  sloTpot: 10
-  sloTtft: 1000
-
-# Create HPA
-hpa:
-  enabled: true
-  maxReplicas: 10
-```
-
-```bash
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
-  -f prometheus-values.yaml
-```
-
-#### Installing with CA Certificate File
-
-If you need to provide a CA certificate for Prometheus TLS:
-
-```bash
-# Create a CA certificate file
-kubectl get secret prometheus-web-tls \
-  -n monitoring \
-  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/prometheus-ca.crt
-
-# Install with CA certificate
-helm install workload-variant-autoscaler ./charts/workload-variant-autoscaler \
-  -n workload-variant-autoscaler-system \
-  --create-namespace \
-  --set-file wva.prometheus.caCert=/tmp/prometheus-ca.crt \
-  --set wva.prometheus.baseURL="https://prometheus-k8s.monitoring.svc:9090" \
-  --set wva.prometheus.tls.insecureSkipVerify=false
-```
-
-#### Creating VariantAutoscaling Manually
-
-If you don't create VariantAutoscaling via Helm, create it manually:
-
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: llmd.ai/v1alpha1
-kind: VariantAutoscaling
-metadata:
-  name: my-vllm-deployment-decode
-  namespace: llm-d-optimized-baseline
-  labels:
-    inference.optimization/acceleratorName: A100
-spec:
-  # Model identifier
-  modelID: "unsloth/Meta-Llama-3.1-8B"
-EOF
-```
-
-> **Required**: Before creating the VA, ensure the `llm-d.ai/variant` label is set on your Deployment or LeaderWorkerSet pod template with value `my-vllm-deployment-decode` (matching the VA name above). See [Workload Requirements](#workload-requirements).
-
-#### Creating HPA Manually
-
-If using HPA with external metrics:
-
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: vllm-deployment-hpa
-  namespace: llm-d-optimized-baseline
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: my-vllm-deployment-decode
-  maxReplicas: 10
-  # minReplicas: 0  # Scale to zero is an alpha feature
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 0  # Tune based on your needs
-      policies:
-      - type: Pods
-        value: 10
-        periodSeconds: 15
-    scaleDown:
-      stabilizationWindowSeconds: 0  # Tune based on your needs
-      policies:
-      - type: Pods
-        value: 10
-        periodSeconds: 15
-  metrics:
-  - type: External
-    external:
-      metric:
-        name: wva_desired_replicas
-        selector:
-          matchLabels:
-            variant_name: my-vllm-deployment-decode
-            exported_namespace: $NAMESPACE
-      target:
-        type: AverageValue
-        averageValue: "1"
-EOF
-```
-
-#### Helm Uninstall
-
-```bash
-# Uninstall the release
-helm uninstall workload-variant-autoscaler -n workload-variant-autoscaler-system
 ```
 
 ## Platform-Specific Guides
@@ -649,10 +321,9 @@ Each guide includes platform-specific examples, troubleshooting, and quick start
 | `DEPLOY_PROMETHEUS` | Deploy Prometheus stack | `true` |
 | `DEPLOY_OPERATIONAL_DASHBOARD` | Deploy Grafana and operational dashboard | `true` |
 | `DEPLOY_WVA` | Deploy WVA controller | `true` |
-| `DEPLOY_PROMETHEUS_ADAPTER` | Deploy Prometheus Adapter (when `SCALER_BACKEND=prometheus-adapter`) | `true` |
 | `DEPLOY_LWS` | Deploy LeaderWorkerSet (needed only for full e2e suite; skip for smoke, benchmarks, or pre-installed clusters) | `false` |
 | `SKIP_CHECKS` | Skip prerequisite checks | `false` |
-| `SCALER_BACKEND` | `prometheus-adapter`, `keda`, or `none` | `prometheus-adapter` |
+| `SCALER_BACKEND` | `keda` or `none` (use a pre-installed backend) | `keda` |
 
 VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not controlled by `install.sh`; manage them via `kubectl apply` directly (see the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) for reference manifests).
 
@@ -662,8 +333,6 @@ VariantAutoscaling, HPA stabilization, and vLLM ModelService tuning are not cont
 |----------|-------------|---------|
 | `SKIP_TLS_VERIFY` | Skip TLS verification | Auto-detected |
 | `WVA_LOG_LEVEL` | WVA logging level | `info` |
-| `VLLM_SVC_ENABLED` | Enable vLLM Service in chart | `true` |
-| `VLLM_SVC_NODEPORT` | vLLM NodePort | `30000` |
 | `LWS_NAMESPACE` | Namespace for LeaderWorkerSet installation | `lws-system` |
 | `LWS_CHART_VERSION` | LeaderWorkerSet Helm chart version | `0.8.0` |
 
@@ -686,10 +355,11 @@ kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=wor
 kubectl get variantautoscaling -A
 kubectl describe variantautoscaling <name> -n <namespace>
 
-# HPA (if deployed)
+# ScaledObjects and the HPAs KEDA manages for them
+kubectl get scaledobject -A
 kubectl get hpa -A
 
-# External metrics (if Prometheus Adapter deployed)
+# External metrics (served by KEDA)
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1" | jq
 ```
 
@@ -707,7 +377,7 @@ kubectl port-forward -n <monitoring-namespace> svc/prometheus-k8s 9090:9090
 # 3. Verify WVA is collecting metrics
 kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=workload-variant-autoscaler | grep "Collected metrics"
 
-# 4. Verify external metrics API (if using HPA)
+# 4. Verify external metrics API (served by KEDA)
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/<namespace>/wva_desired_replicas" | jq
 ```
 
@@ -756,7 +426,6 @@ For rapid testing of autoscaling behavior, configure vLLM with a low `max-num-se
 
 ```bash
 # Deploy WVA infra, then tune vLLM max-num-seqs in the llm-d ModelService manifest
-export VLLM_MAX_NUM_SEQS=8
 make deploy-wva-on-k8s   # runs install.sh (WVA + monitoring + scaler + LWS)
 # Apply llm-d model serving manifests separately via kubectl apply or the llm-d guides
 ```
@@ -906,8 +575,8 @@ kubectl describe hpa <name> -n <namespace>
 # Check external metrics API on the specified namespace
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/<your-namespace>/wva_desired_replicas" | jq
 
-# Check Prometheus Adapter logs
-kubectl logs -n <monitoring-namespace> deployment/prometheus-adapter
+# Check KEDA operator logs
+kubectl logs -n keda-system -l app=keda-operator
 
 # Check if WVA is emitting the metric
 kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=workload-variant-autoscaler | \
@@ -916,9 +585,9 @@ kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=wor
 
 **Common causes**:
 
-- Prometheus Adapter not deployed
+- KEDA not deployed
 - External metrics API not registered
-- Metric selector doesn't match emitted labels
+- ScaledObject trigger query doesn't match emitted labels
 - WVA not emitting metrics (due to metrics unavailability)
 
 **Solutions**:
@@ -927,8 +596,8 @@ kubectl logs -n workload-variant-autoscaler-system -l app.kubernetes.io/name=wor
 # Verify external metrics API
 kubectl api-resources | grep external.metrics
 
-# Check Prometheus Adapter configuration
-kubectl get configmap prometheus-adapter -n <monitoring-namespace> -o yaml
+# Check ScaledObject status (Active / Ready conditions)
+kubectl describe scaledobject <name> -n <namespace>
 
 # Verify metric exists in Prometheus
 kubectl port-forward -n <monitoring-namespace> svc/prometheus-k8s 9090:9090
@@ -939,8 +608,8 @@ kubectl port-forward -n <monitoring-namespace> svc/prometheus-k8s 9090:9090
 
 If you encounter issues not covered here:
 
-1. **Check logs**: WVA, Prometheus, Prometheus Adapter, vLLM
-2. **Verify configuration**: VariantAutoscaling spec, ServiceMonitor, HPA
+1. **Check logs**: WVA, Prometheus, KEDA operator, vLLM
+2. **Verify configuration**: VariantAutoscaling spec, ServiceMonitor, ScaledObject
 3. **Test components individually**: Metrics exposure, Prometheus scraping, external metrics API
 4. **Review documentation**: Platform-specific READMEs
 5. **Open an issue**: Include logs, configuration, and environment details
@@ -963,14 +632,15 @@ kubectl get servicemonitor -A
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1" | jq
 kubectl port-forward -n <monitoring-namespace> svc/prometheus-k8s 9090:9090
 
-# === HPA ===
+# === ScaledObjects / HPA ===
+kubectl get scaledobject -A
+kubectl describe scaledobject <name> -n <namespace>
 kubectl get hpa -A
 kubectl describe hpa <name> -n <namespace>
-kubectl get hpa <name> -n <namespace> -o yaml
 
-# === Prometheus Adapter ===
-kubectl get pods -n <monitoring-namespace> | grep prometheus-adapter
-kubectl logs -n <monitoring-namespace> deployment/prometheus-adapter
+# === KEDA ===
+kubectl get pods -n keda-system
+kubectl logs -n keda-system -l app=keda-operator
 
 # === vLLM / Application ===
 kubectl get pods -n <app-namespace>
@@ -989,6 +659,5 @@ kubectl get configmap model-accelerator-data -n workload-variant-autoscaler-syst
 - **Kubernetes Guide**: [kubernetes/README.md](kubernetes/README.md)
 - **OpenShift Guide**: [openshift/README.md](openshift/README.md)
 - **Kustomize overlays**: [config/overlays/cluster-scoped/kubernetes](../config/overlays/cluster-scoped/kubernetes/), [config/overlays/namespace-scoped/openshift](../config/overlays/namespace-scoped/openshift/)
-- **Helm Chart (deprecated)**: [charts/workload-variant-autoscaler](../charts/workload-variant-autoscaler/)
 - **API Reference**: [api/v1alpha1](../api/v1alpha1/)
 - **Architecture**: [docs/design/modeling-optimization.md](../docs/design/modeling-optimization.md)

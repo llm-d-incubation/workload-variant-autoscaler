@@ -66,6 +66,39 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			Expect(dm["expensive"].TargetReplicas).To(Equal(1)) // unchanged
 		})
 
+		It("propagates observability fields (utilization/required/spare) from the analyzer result", func() {
+			// Regression guard for the greedy-by-score path, which shares
+			// buildDecisionsWithOptimizer with cost-aware. Without the copy the V2 gauges
+			// (wva_saturation_utilization / wva_required_capacity / wva_spare_capacity) read 0.
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				AnalyzedAt:       time.Now(),
+				RequiredCapacity: 5000,
+				SpareCapacity:    1200,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.42},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				}),
+			}
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: 10}}},
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, constraints))
+			Expect(dm["v1"].Utilization).To(Equal(0.42))
+			Expect(dm["v1"].RequiredCapacity).To(Equal(5000.0))
+			Expect(dm["v1"].SpareCapacity).To(Equal(1200.0))
+		})
+
 		It("should handle GPU exhaustion with partial allocation", func() {
 			r := &interfaces.AnalyzerResult{
 				RequiredCapacity: 50000,

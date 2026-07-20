@@ -241,5 +241,3 @@ spec:
 Ready-to-use samples are in:
 - `config/samples/hpa/annotations/` — annotation-based HPA
 - `config/samples/keda/annotations/` — annotation-based ScaledObject
-
-Legacy VA samples (for reference only) are archived in `config/samples/legacy/`.

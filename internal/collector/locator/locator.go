@@ -129,23 +129,6 @@ func (l *podLocator) Locate(ctx context.Context, namespace, podName string) (*Ma
 	return l.resolveScaler(ctx, target)
 }
 
-// TODO(va-removal): remove ResolveScaleTarget together with the CRD-based
-// dual-mode fallback in the collector when the VariantAutoscaling CRD is removed.
-func (l *podLocator) ResolveScaleTarget(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error) {
-	target, err := l.resolveTarget(ctx, namespace, podName)
-	if err != nil {
-		return autoscalingv2.CrossVersionObjectReference{}, false, err
-	}
-	if target == (chainNode{}) {
-		return autoscalingv2.CrossVersionObjectReference{}, false, nil
-	}
-	return autoscalingv2.CrossVersionObjectReference{
-		APIVersion: target.APIVersion,
-		Kind:       target.Kind,
-		Name:       target.Name,
-	}, true, nil
-}
-
 // resolveTarget runs Step 1 of resolution: pod → top-level scale-target
 // chainNode, memoized in the pod→target cache. Returns the zero chainNode
 // (with nil error) when the pod has no scaler-eligible ancestor or does not

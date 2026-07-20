@@ -248,6 +248,12 @@ func buildDecisionsWithOptimizer(
 	optimizerName string,
 ) []interfaces.VariantDecision {
 	decisions := make([]interfaces.VariantDecision, 0, len(targets))
+	// satEntry carries the model-level RequiredCapacity/SpareCapacity computed by
+	// applyUniversalThreshold; per-variant Utilization is on each VariantCapacity.
+	// These feed the saturation gauges (utilization/required/spare). SpareCapacity is
+	// additionally an input to the GPU limiter's GreedyBySaturation ordering, so setting
+	// it here also makes that ordering reflect real spare tokens on V2 (it was 0 before).
+	satEntry := saturationEntry(req.AnalyzerResults)
 	for name, target := range targets {
 		state := stateMap[name]
 		vc := vcMap[name]
@@ -285,6 +291,28 @@ func buildDecisionsWithOptimizer(
 		// SetDecisionReason is the single place that sets d.Action (avoids a
 		// redundant Action assignment in the struct literal above).
 		decision.SetDecisionReason(action, decisionReason, detailedReason)
+
+		// Observability fields consumed by RecordSaturationMetrics
+		// (wva_saturation_utilization / wva_required_capacity / wva_spare_capacity).
+		// Without these the three V2 gauges read zero. RequiredCapacity and
+		// SpareCapacity are the matched scale-up/scale-down token signals from
+		// applyUniversalThreshold; Utilization is the per-variant demand/capacity ratio.
+		// For P/D-disaggregated models use the variant's per-role capacity; otherwise
+		// fall back to the model-level totals.
+		decision.Utilization = vc.Utilization
+		if satEntry != nil {
+			reqCap, spareCap := satEntry.RequiredCapacity, satEntry.SpareCapacity
+			role := state.Role
+			if role == "" {
+				role = interfaces.RoleBoth
+			}
+			if rc, ok := satEntry.RoleCapacities[role]; ok {
+				reqCap, spareCap = rc.RequiredCapacity, rc.SpareCapacity
+			}
+			decision.RequiredCapacity = reqCap
+			decision.SpareCapacity = spareCap
+		}
+
 		decisions = append(decisions, decision)
 	}
 	return decisions

@@ -10,6 +10,9 @@ resources:
 - prometheus-cluster-monitoring-view-clusterrolebinding.yaml
 # Long-lived SA token referenced by the ServiceMonitor's bearerTokenSecret.
 - controller-manager-token-secret.yaml
+# Service-ca CA bundle used by the ServiceMonitor to verify the controller's
+# metrics serving certificate (replaces insecureSkipVerify).
+- metrics-server-ca-configmap.yaml
 
 patches:
 # Point WVA at the in-cluster Thanos Querier (OpenShift's user-workload-monitoring
@@ -24,6 +27,22 @@ patches:
   target:
     kind: Deployment
     name: controller-manager
+# Append the metrics cert path arg (JSON patch to avoid replacing the args list).
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --metrics-cert-path=/etc/k8s-metrics-server/serving-certs
+  target:
+    kind: Deployment
+    name: controller-manager
+# Request a service-ca serving cert for the metrics Service (metrics-server-cert Secret).
+- patch: |-
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: controller-manager-metrics-service
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: metrics-server-cert
 # Grant the WVA controller manager SA read access to its own /metrics endpoint
 # so the ServiceMonitor can scrape it.
 - patch: |-
@@ -53,6 +72,19 @@ patches:
         key: token
     - op: remove
       path: /spec/endpoints/0/bearerTokenFile
+    # Enable TLS verification of the metrics serving cert.
+    - op: replace
+      path: /spec/endpoints/0/tlsConfig/insecureSkipVerify
+      value: false
+    - op: add
+      path: /spec/endpoints/0/tlsConfig/serverName
+      value: wva-controller-manager-metrics-service.wva-system.svc
+    - op: add
+      path: /spec/endpoints/0/tlsConfig/ca
+      value:
+        configMap:
+          name: wva-metrics-server-ca
+          key: service-ca.crt
   target:
     kind: ServiceMonitor
     name: controller-manager-metrics-monitor

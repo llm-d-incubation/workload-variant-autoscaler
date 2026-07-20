@@ -16,8 +16,3 @@ resources:
 - epp-metrics-reader-clusterrole.yaml
 - epp-metrics-reader-clusterrolebinding.yaml
 - epp-metrics-token-secret.yaml
-# CRD helper roles (admin/editor/viewer) for cluster administrators.
-# Not used by the controller itself — comment out if not needed.
-- variantautoscaling-admin-clusterrole.yaml
-- variantautoscaling-editor-clusterrole.yaml
-- variantautoscaling-viewer-clusterrole.yaml

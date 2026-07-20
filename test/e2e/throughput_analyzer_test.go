@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -16,9 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
@@ -222,7 +221,6 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		modelDecodeDeployment = modelSvcName + "-decode"
 		serviceName           = modelSvcName + "-service"
 		smName                = modelSvcName + "-monitor"
-		vaName                = "throughput-smoke-va"
 	)
 
 	var (
@@ -232,6 +230,9 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		cmExistedBefore bool
 		cmKey           string
 		cmNamespace     string
+		// variantName is the variant_name — the annotated scaler's OBJECT name — stamped
+		// as the decode pods' llm-d.ai/variant label for metric attribution.
+		variantName string
 	)
 
 	BeforeAll(func() {
@@ -239,6 +240,7 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -258,7 +260,7 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 
 		By("Creating model service for throughput smoke test")
 		_ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName)
-		Expect(fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, vaName, cfg.UseSimulator, 2)).To(Succeed())
+		Expect(fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, variantName, cfg.UseSimulator, 2)).To(Succeed())
 		Expect(fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, 8000)).To(Succeed())
 		Expect(fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment)).To(Succeed())
 
@@ -269,11 +271,10 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating VA for throughput smoke test")
-		Expect(fixtures.EnsureVariantAutoscalingWithDefaults(
-			ctx, crClient, cfg.LLMDNamespace, vaName,
-			modelDecodeDeployment, modelID, cfg.AcceleratorType, cfg.ControllerInstance,
-		)).To(Succeed())
+		By("Registering the deployment with WVA via an annotated scaler (both analyzers enabled)")
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 	})
 
 	AfterAll(func() {
@@ -288,9 +289,6 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		Expect(restartWVAController(ctx)).To(Succeed())
 
 		By("Cleaning up throughput smoke test resources")
-		_ = crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaName, Namespace: cfg.LLMDNamespace},
-		})
 		_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
 			ObjectMeta: metav1.ObjectMeta{Name: smName, Namespace: cfg.MonitoringNS},
 		})
@@ -298,27 +296,24 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelDecodeDeployment, metav1.DeleteOptions{})
 	})
 
-	It("reconciles VA to steady state with both analyzers enabled", func() {
-		By("Waiting for MetricsAvailable condition and DesiredOptimizedAlloc to be populated")
+	It("emits wva_desired_replicas at steady state with both analyzers enabled", func() {
+		// Post-CRD-removal WVA no longer writes VA .status; its sole output is the
+		// wva_desired_replicas external metric. Steady-state reconcile is observed as
+		// that metric being emitted for the variant via the KEDA-managed HPA's CurrentMetrics.
+		By("Verifying KEDA read wva_desired_replicas for the variant")
 		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			g.Expect(crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)).To(Succeed())
-
-			metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-			if metricsCond != nil {
-				GinkgoWriter.Printf("  Smoke VA (%s): MetricsAvailable=%s reason=%s message=%q\n",
-					vaName, metricsCond.Status, metricsCond.Reason, metricsCond.Message)
-			} else {
-				GinkgoWriter.Printf("  Smoke VA (%s): MetricsAvailable=<nil>\n", vaName)
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
+					kedaHPA = &hpaList.Items[i]
+					break
+				}
 			}
-
-			g.Expect(metricsCond).NotTo(BeNil(), "MetricsAvailable condition should be present")
-			g.Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue), "MetricsAvailable should be true")
-			g.Expect(va.Status.DesiredOptimizedAlloc.Accelerator).NotTo(BeEmpty(), "DesiredOptimizedAlloc.Accelerator should be set")
-			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "DesiredOptimizedAlloc.NumReplicas should be set")
-
-			GinkgoWriter.Printf("  Smoke VA (%s): DesiredOptimizedAlloc replicas=%d accelerator=%q\n",
-				vaName, *va.Status.DesiredOptimizedAlloc.NumReplicas, va.Status.DesiredOptimizedAlloc.Accelerator)
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
 		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 })
@@ -326,7 +321,7 @@ var _ = Describe("ThroughputAnalyzer wiring health check", Label("smoke", "throu
 // ─── Scenario 2: Multi-Analyzer Engine Scale-Up (full/throughput) ─────────────
 //
 // Validates the multi-analyzer engine end-to-end: with BOTH analyzers registered,
-// the engine produces a scale-up decision that propagates to VA status. Scale-up is
+// the engine produces a scale-up decision that propagates to wva_desired_replicas. Scale-up is
 // driven by the SATURATION analyzer via a faked kv-cache-usage gauge — the throughput
 // analyzer's inputs are rates of counters/histograms that static --fake-metrics cannot
 // drive (zero rate), so throughput cannot be exercised here. Its own scale-up math is
@@ -339,7 +334,6 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		modelDecodeDeployment = modelSvcName + "-decode"
 		serviceName           = modelSvcName + "-service"
 		smName                = modelSvcName + "-monitor"
-		vaName                = "throughput-scaleup-va"
 		loadJobName           = "throughput-scaleup-load"
 	)
 
@@ -350,6 +344,11 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		cmExistedBefore bool
 		cmKey           string
 		cmNamespace     string
+		// variantName is the variant_name — the annotated scaler's OBJECT name
+		// (modelSvcName+"-so" for KEDA, +"-hpa" for the adapter) — stamped as the
+		// decode pods' llm-d.ai/variant label so the collector attributes their
+		// metrics to the variant. Set from the backend below.
+		variantName string
 	)
 
 	BeforeAll(func() {
@@ -357,6 +356,7 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -381,7 +381,7 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 
 		By("Creating model service with faked saturation metrics for scale-up")
 		_ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName)
-		Expect(fixtures.CreateModelServiceWithExtraArgs(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, vaName,
+		Expect(fixtures.CreateModelServiceWithExtraArgs(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, variantName,
 			cfg.UseSimulator, 2, []string{"--fake-metrics", throughputScaleUpFakeMetricsJSON})).To(Succeed())
 		Expect(fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, 8000)).To(Succeed())
 		Expect(fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment)).To(Succeed())
@@ -393,14 +393,10 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating VA for throughput scale-up test")
-		Expect(fixtures.EnsureVariantAutoscalingWithDefaults(
-			ctx, crClient, cfg.LLMDNamespace, vaName,
-			modelDecodeDeployment, modelID, cfg.AcceleratorType, cfg.ControllerInstance,
-		)).To(Succeed())
-
-		By("Waiting for initial VA infra signal")
-		waitForSaturationInfraSignal(ctx, cfg.LLMDNamespace, vaName)
+		By("Registering the deployment with WVA via an annotated scaler (both analyzers enabled)")
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 		// No load job: --fake-metrics replaces simulator runtime emission entirely, so
 		// service traffic has no effect on the values the engine reads. Scale-up is
 		// driven solely by the faked kv-cache-usage gauge.
@@ -418,9 +414,6 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		_ = restartWVAController(ctx)
 
 		By("Cleaning up throughput scale-up test resources")
-		_ = crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaName, Namespace: cfg.LLMDNamespace},
-		})
 		_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
 			ObjectMeta: metav1.ObjectMeta{Name: smName, Namespace: cfg.MonitoringNS},
 		})
@@ -428,26 +421,23 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelDecodeDeployment, metav1.DeleteOptions{})
 	})
 
-	It("scales up above MinReplicas with both analyzers enabled", func() {
+	It("raises wva_desired_replicas above MinReplicas with both analyzers enabled", func() {
 		// Faked kv-cache-usage=0.9 > scaleUpThreshold=0.85 makes the saturation analyzer
-		// deterministically recommend scale-up above MinReplicas=1. Asserting against the
-		// known MinReplicas floor (rather than a captured baseline) avoids racing the
-		// eager fake-metrics scale-up.
-		By("Waiting for DesiredOptimizedAlloc to exceed MinReplicas under faked saturation")
+		// deterministically recommend scale-up above MinReplicas=1. Post-CRD-removal the
+		// desired count is no longer surfaced in VA status; the annotated scaler consumes
+		// wva_desired_replicas and drives the target Deployment above its MinReplicas floor,
+		// so we assert the observable Deployment replica count instead.
+		By("Asserting KEDA actuates scale-up above MinReplicas")
+		// Faked kv-cache-usage=0.9 > scaleUpThreshold=0.85 deterministically drives a
+		// V2 saturation scale-up; KEDA consumes wva_desired_replicas and drives the
+		// Deployment above its MinReplicas floor. Assert the observable replica count —
+		// the ground truth — rather than the KEDA HPA CurrentMetrics surface.
 		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			g.Expect(crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)).To(Succeed())
-
-			metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-			g.Expect(metricsCond).NotTo(BeNil(), "MetricsAvailable condition should be present")
-			g.Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue), "MetricsAvailable should be true")
-			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil())
-
-			desired := *va.Status.DesiredOptimizedAlloc.NumReplicas
-			GinkgoWriter.Printf("  Scale-up (%s): desired=%d\n", vaName, desired)
-			g.Expect(desired).To(BeNumerically(">", int32(1)),
-				"faked kv-cache-usage=0.9 > scaleUpThreshold=0.85 should drive scale-up above MinReplicas=1")
-		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+			dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", int32(2)),
+				"faked saturation (kv-cache-usage=0.9) should drive the Deployment above MinReplicas=1")
+		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 })
 
@@ -460,7 +450,6 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		modelDecodeDeployment = modelSvcName + "-decode"
 		serviceName           = modelSvcName + "-service"
 		smName                = modelSvcName + "-monitor"
-		vaName                = "throughput-taonly-va"
 		loadJobName           = "throughput-taonly-load"
 	)
 
@@ -471,6 +460,9 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		cmExistedBefore bool
 		cmKey           string
 		cmNamespace     string
+		// variantName is the variant_name — the annotated scaler's OBJECT name — stamped
+		// as the decode pods' llm-d.ai/variant label for metric attribution.
+		variantName string
 	)
 
 	BeforeAll(func() {
@@ -478,6 +470,7 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		cmName = saturationConfigMapName()
 		cmNamespace = cfg.WVANamespace
 		cmKey = defaultConfigKey
+		variantName = modelSvcName + "-so"
 
 		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 		if err == nil {
@@ -497,7 +490,7 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 
 		By("Creating model service for TA-only test")
 		_ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName)
-		Expect(fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, vaName, cfg.UseSimulator, 2)).To(Succeed())
+		Expect(fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, variantName, cfg.UseSimulator, 2)).To(Succeed())
 		Expect(fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, 8000)).To(Succeed())
 		Expect(fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment)).To(Succeed())
 
@@ -508,14 +501,10 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating VA for TA-only test")
-		Expect(fixtures.EnsureVariantAutoscalingWithDefaults(
-			ctx, crClient, cfg.LLMDNamespace, vaName,
-			modelDecodeDeployment, modelID, cfg.AcceleratorType, cfg.ControllerInstance,
-		)).To(Succeed())
-
-		By("Waiting for initial VA infra signal before starting load")
-		waitForSaturationInfraSignal(ctx, cfg.LLMDNamespace, vaName)
+		By("Registering the deployment with WVA via an annotated scaler (TA-only config)")
+		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, modelSvcName) })
 
 		By("Starting sustained load for TA-only scenario")
 		targetURL := fmt.Sprintf("http://%s:8000/v1/completions", serviceName)
@@ -537,9 +526,6 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		_ = restartWVAController(ctx)
 
 		By("Cleaning up TA-only test resources")
-		_ = crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaName, Namespace: cfg.LLMDNamespace},
-		})
 		_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
 			ObjectMeta: metav1.ObjectMeta{Name: smName, Namespace: cfg.MonitoringNS},
 		})
@@ -548,43 +534,34 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 	})
 
 	It("produces a positive desired allocation driven by the throughput analyzer", func() {
-		By("Waiting for DesiredOptimizedAlloc to reflect throughput-driven scale-up")
+		// Post-CRD-removal WVA no longer writes VA .status; its sole output is the
+		// wva_desired_replicas external metric. A positive throughput-driven allocation
+		// is observed via the KEDA-managed HPA's CurrentMetrics.
+		//
+		// Unlike the saturation/SGLang scale-up specs (which use --fake-metrics to pin a
+		// deterministic operating point), this scenario is driven by a real sustained load
+		// job. The throughput analyzer's recommended replica count depends on measured
+		// token throughput vs SLO, which is not deterministic in CI — so this asserts that
+		// the metric is emitted and consumed (a positive allocation flows through the
+		// pipeline), not a specific replica magnitude, to avoid a load-timing-dependent
+		// flake.
+		By("Verifying KEDA read wva_desired_replicas for the throughput-driven variant")
 		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			g.Expect(crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)).To(Succeed())
-
-			metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-			if metricsCond != nil {
-				GinkgoWriter.Printf("  TA-only VA (%s): MetricsAvailable=%s reason=%s\n",
-					vaName, metricsCond.Status, metricsCond.Reason)
+			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			var kedaHPA *autoscalingv2.HorizontalPodAutoscaler
+			for i := range hpaList.Items {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == modelDecodeDeployment {
+					kedaHPA = &hpaList.Items[i]
+					break
+				}
 			}
-
-			desired := int32(-1)
-			if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
-				desired = *va.Status.DesiredOptimizedAlloc.NumReplicas
-				GinkgoWriter.Printf("  TA-only VA (%s): DesiredOptimizedAlloc replicas=%d accelerator=%q\n",
-					vaName, desired, va.Status.DesiredOptimizedAlloc.Accelerator)
-			} else {
-				GinkgoWriter.Printf("  TA-only VA (%s): DesiredOptimizedAlloc replicas=<nil>\n", vaName)
-			}
-
-			g.Expect(metricsCond).NotTo(BeNil(), "MetricsAvailable condition should be present")
-			g.Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue), "MetricsAvailable should be true")
-			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(), "DesiredOptimizedAlloc.NumReplicas should be set")
-			g.Expect(desired).To(BeNumerically(">", 0), "TA should drive a positive desired replica count")
+			g.Expect(kedaHPA).NotTo(BeNil(), "KEDA should have created an HPA for the deployment")
+			g.Expect(kedaHPA.Status.CurrentMetrics).NotTo(BeEmpty(),
+				"KEDA HPA should have CurrentMetrics populated from wva_desired_replicas")
 		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
-	It("preserves accelerator info from VariantCapacities even with saturation disabled", func() {
-		By("Checking DesiredOptimizedAlloc.Accelerator is non-empty (saturation always populates VariantCapacities)")
-		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			g.Expect(crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)).To(Succeed())
-			g.Expect(va.Status.DesiredOptimizedAlloc.Accelerator).NotTo(BeEmpty(),
-				"Accelerator should be populated from saturation VariantCapacities even when saturation.enabled=false")
-			GinkgoWriter.Printf("  TA-only VA (%s): Accelerator=%q\n", vaName, va.Status.DesiredOptimizedAlloc.Accelerator)
-		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-	})
 })
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────

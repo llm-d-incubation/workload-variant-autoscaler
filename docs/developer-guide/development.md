@@ -74,8 +74,6 @@ workload-variant-autoscaler/
 ├── test/                  # Tests
 │   ├── e2e/                  # E2E tests (consolidated suite: Kind, OpenShift)
 │   └── utils/                 # Test utilities
-└── charts/                # Helm charts
-    └── workload-variant-autoscaler/
 ```
 
 ## Development Workflow
@@ -97,7 +95,7 @@ make run
 CREATE_CLUSTER=true make deploy-e2e-infra
 ```
 
-This creates a Kind cluster with emulated GPUs, then deploys the WVA controller, llm-d EPP (GAIE standalone), Prometheus stack, and Prometheus Adapter. No model service is included.
+This creates a Kind cluster with emulated GPUs, then deploys the WVA controller, llm-d EPP (GAIE standalone), Prometheus stack, and KEDA (external metrics). No model service is included.
 
 If you already have a cluster running, omit `CREATE_CLUSTER=true`:
 
@@ -262,14 +260,6 @@ See [Testing Guide](testing.md) and [E2E Test Suite README](../../test/e2e/READM
 make manifests generate
 ```
 
-### Generate CRD Documentation
-
-```bash
-make crd-docs
-```
-
-Output will be in `docs/user-guide/crd-reference.md`.
-
 ## Debugging
 
 ### VSCode Launch Configuration
@@ -318,8 +308,7 @@ kubectl logs -n workload-variant-autoscaler-system \
 1. Modify `api/v1alpha1/variantautoscaling_types.go`
 2. Run `make manifests generate`
 3. Update tests
-4. Run `make crd-docs`
-5. Update user documentation
+4. Update user documentation
 
 ### Adding a New Metric
 
@@ -373,8 +362,8 @@ See [Agentic Workflows Guide](agentic-workflows.md) for detailed information on 
 See the [Release Process](release-process.md) guide for how to cut a release. It covers:
 
 - Pre-release checklist (changelog, optional version bumps, upstream pins)
-- Creating the tag and GitHub Release (which triggers image build and Helm chart publish)
-- What runs automatically: Docker image push, Helm chart version bump and publish to GHCR, and commit-back of chart files
+- Creating the tag and GitHub Release (which triggers the image build)
+- What runs automatically: Docker image build and push to GHCR
 - Post-release (required): update the llm-d [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide to the new WVA version
 - Enabling other team members to perform releases (permissions, secrets, documentation)
 
