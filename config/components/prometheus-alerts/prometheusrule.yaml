@@ -29,13 +29,13 @@ spec:
         description: "wva_models_processed has been 0 (or absent) over a 10-minute window, sustained for 15+ minutes. This is EXPECTED when no VariantAutoscaling resources are being managed (an idle controller). If you do have managed workloads, it can indicate the optimization loop is stalled/crashed or metric collection is failing — check controller pod status and logs, and Prometheus connectivity."
 
     - alert: WVAMetricsCollectionFailing
-      expr: sum by (query_type, reason) (rate(wva_metrics_collection_errors_total[5m])) > 0.5
+      expr: sum by (query_type, reason) (rate(wva_metrics_collection_errors_total[5m])) > 0.0833
       for: 5m
       labels:
         severity: warning
       annotations:
         summary: "WVA metrics collection failing for {{ $labels.query_type }}"
-        description: "Metrics collection query_type '{{ $labels.query_type }}' failing with reason '{{ $labels.reason }}' at {{ $value | printf \"%.2f\" }}/sec (>30/min threshold) sustained for 5+ minutes. Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
+        description: "Metrics collection query_type '{{ $labels.query_type }}' failing with reason '{{ $labels.reason }}' at {{ $value | printf \"%.2f\" }}/sec (>5/min threshold) sustained for 5+ minutes. Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
 
     - alert: WVAGPUResourceExhausted
       expr: wva_available_gpus == 0
