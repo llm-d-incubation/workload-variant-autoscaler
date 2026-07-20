@@ -198,6 +198,38 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 106 | 102 | 104 | 104 |
 | Cost (avg replicas × GPU/hr) | 7.41 | 7.37 | 7.49 | 7.42 |
 
+### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins (no flowControl)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 526,252 | 526,141 | 527,093 | 526,495 |
+| P99 ITL (ms/token) | 55.29 | 55.43 | 55.62 | 55.45 |
+| Avg replicas | 7.37 | 6.79 | 7.56 | 7.24 |
+| Max replicas | 10 | 9 | 10 | 10 |
+| Avg KV cache utilization | 68.7% | 69.7% | 67.9% | 68.8% |
+| Avg queue depth (EPP) | 107.7 | 117.2 | 113.3 | 112.7 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 108 | 97 | 98 | 101 |
+
+### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins with flowControl enabled
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 562,439 | 559,919 | 560,917 | 561,092 |
+| P99 ITL (ms/token) | 60.72 | 60.51 | 60.56 | 60.60 |
+| Avg replicas | 7.46 | 6.29 | 7.51 | 7.09 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 11.5% | 11.3% | 11.2% | 11.3% |
+| Avg queue depth (EPP) | 124.7 | 101.8 | 112.6 | 113.0 |
+| Error count | 65 | 65 | 76 | 69 |
+| Avg pod startup (s) | 98 | 100 | 97 | 98 |
+
 ## Decode Heavy Scenario
 
 ### Decode Heavy — Qwen/Qwen3-32B (600s)
@@ -327,6 +359,38 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 0 | 0 | 0 | 0 |
 | Avg pod startup (s) | 106 | 101 | 100 | 102 |
 | Cost (avg replicas × GPU/hr) | 10.00 | 7.32 | 7.34 | 8.22 |
+
+### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins (no flowControl)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 448,687 | 450,230 | 452,205 | 450,374 |
+| P99 ITL (ms/token) | 108.29 | 108.66 | 108.45 | 108.47 |
+| Avg replicas | 7.12 | 7.56 | 7.22 | 7.30 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 34.3% | 32.3% | 33.7% | 33.4% |
+| Avg queue depth (EPP) | 114.4 | 112.4 | 123.2 | 116.7 |
+| Error count | 1 | 0 | 0 | 0 |
+| Avg pod startup (s) | 125 | 98 | 114 | 112 |
+
+### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins with flowControl enabled
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 447,107 | 448,427 | 450,037 | 448,524 |
+| P99 ITL (ms/token) | 110.43 | 110.31 | 110.36 | 110.37 |
+| Avg replicas | 7.49 | 7.41 | 7.34 | 7.41 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 76.6% | 77.7% | 78.4% | 77.6% |
+| Avg queue depth (EPP) | 27.1 | 27.3 | 27.9 | 27.4 |
+| Error count | 3 | 3 | 3 | 3 |
+| Avg pod startup (s) | 99 | 100 | 97 | 99 |
 
 ## Bursty Scenario
 
@@ -511,6 +575,38 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 0 | 0 | 0 | 0 |
 | Avg pod startup (s) | 122 | 98 | 105 | 108 |
 | Cost (avg replicas × GPU/hr) | 7.17 | 7.62 | 7.57 | 7.45 |
+
+### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Saturation, Optimized Baseline Plugins, No flowControl, 600s)
+
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins (no flowControl)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 476,049 | 475,959 | 477,226 | 476,411 |
+| P99 ITL (ms/token) | 68.21 | 68.17 | 68.46 | 68.28 |
+| Avg replicas | 7.60 | 7.40 | 7.33 | 7.44 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 71.2% | 67.2% | 66.6% | 68.3% |
+| Avg queue depth (EPP) | 91.5 | 99.9 | 102.5 | 98.0 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 98 | 98 | 99 | 98 |
+
+### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Saturation + flowControl, 600s)
+
+**Workload:** 2500 prompt tokens, 2500 output tokens, 20 RPS, 600s duration
+**EPP Config:** Optimized baseline plugins with flowControl enabled
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 187,631 | 231,355 | 228,921 | 215,969 |
+| P99 ITL (ms/token) | 69.41 | 70.34 | 68.64 | 69.46 |
+| Avg replicas | 7.55 | 7.56 | 7.33 | 7.48 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 56.1% | 41.1% | 47.8% | 48.3% |
+| Avg queue depth (EPP) | 22.8 | 24.9 | 19.5 | 22.4 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 101 | 100 | 99 | 100 |
 
 ## Two-Variant Efficiency-Aware Scenario
 
