@@ -319,7 +319,7 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Number of models processed in the last optimization cycle. Metric is wva_models_processed.",
+      "description": "Number of models processed in the last optimization cycle. For a variant to be found, its ScaledObject must be properly annotated with llm-d.ai/managed and llm-d.ai/model-id. The ScaledObject must also set the label inference.optimization/acceleratorName. Metric is wva_models_processed.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1036,7 +1036,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 28
       },
       "id": 41,
       "options": {
@@ -1150,7 +1150,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 20
       },
       "id": 42,
       "options": {
@@ -1259,7 +1259,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 43
       },
       "id": 52,
       "options": {
@@ -1376,7 +1376,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 35
       },
       "id": 43,
       "options": {
@@ -1428,7 +1428,7 @@
         "type": "prometheus",
         "uid": "$datasource_uid"
       },
-      "description": "Average number of scaling decisions limited by constraints per optimization cycle (averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, there were 36 limited decisions total in the last hour for 30 seconds optimization interval, and there are 120 optimization cycles per hour (3600 seconds ÷ 30 seconds), then the average is 36 ÷ 120 = 0.3 decisions per cycle. The metric is wva_decisions_limited_total.",
+      "description": "Average number of scaling decisions limited by constraints per optimization cycle (averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, there were 36 limited decisions total in the last hour for 30 seconds optimization interval, and there are 120 optimization cycles per hour (3600 seconds \u00f7 30 seconds), then the average is 36 \u00f7 120 = 0.3 decisions per cycle. The metric is wva_decisions_limited_total.",
       "fieldConfig": {
         "defaults": {
           "color": {

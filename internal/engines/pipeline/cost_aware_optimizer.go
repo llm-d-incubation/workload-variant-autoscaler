@@ -327,12 +327,92 @@ func mergeConstraints(constraints []*ResourceConstraints) map[string]int {
 			continue
 		}
 		for accType, pool := range c.Pools {
+			if pool.Limit < 0 {
+				// Unlimited sentinel: no finite cap. Represent it as an
+				// unbounded budget (math.MaxInt) so the optimizer allocates the
+				// type up to the model's fair-share demand. Leaving it absent
+				// would let fairShareRolePick read a 0 budget and silently deny
+				// the type — inverting the -1 = unlimited semantic. A finite
+				// pool from any provider still wins via the min() below, since
+				// Available() < math.MaxInt; only set the sentinel when no finite
+				// budget is present yet.
+				if _, ok := merged[accType]; !ok {
+					merged[accType] = math.MaxInt
+				}
+				continue
+			}
 			if existing, ok := merged[accType]; !ok || pool.Available() < existing {
 				merged[accType] = pool.Available()
 			}
 		}
 	}
 	return merged
+}
+
+// mergeNamespaceConstraints merges the per-(namespace, accelerator type) pools
+// across providers into available-GPU budgets, taking the most restrictive
+// (minimum available) where providers overlap. Returns nil when no provider
+// carries namespace pools, so the per-type-only path is unaffected.
+//
+// A namespace present in any provider's NamespacePools is materialized in the
+// result even when its inner map is empty — its presence marks a CLOSED
+// allowlist (deny-all when empty) that the optimizer enforces by allocating
+// only the listed types. An unlimited (-1 sentinel) pool is carried through as
+// a negative budget so the optimizer can distinguish "unlimited" from a finite
+// cap; tighterBudget treats it as +infinity when taking the minimum.
+func mergeNamespaceConstraints(constraints []*ResourceConstraints) map[string]map[string]int {
+	var merged map[string]map[string]int
+	for _, c := range constraints {
+		if c == nil {
+			continue
+		}
+		for ns, perType := range c.NamespacePools {
+			if merged == nil {
+				merged = make(map[string]map[string]int)
+			}
+			inner, ok := merged[ns]
+			if !ok {
+				inner = make(map[string]int)
+				merged[ns] = inner // present (even if empty) marks a closed namespace
+			}
+			for accType, pool := range perType {
+				budget := nsPoolBudget(pool)
+				if existing, ok := inner[accType]; ok {
+					inner[accType] = tighterBudget(existing, budget)
+				} else {
+					inner[accType] = budget
+				}
+			}
+		}
+	}
+	return merged
+}
+
+// nsPoolBudget returns a namespace ResourcePool's remaining budget for the
+// optimizer — the available (not total) GPU count. A negative Limit is the
+// "unlimited" sentinel and is preserved as -1; any other Limit yields the
+// finite available count (Limit - Used, clamped to 0).
+func nsPoolBudget(pool ResourcePool) int {
+	if pool.Limit < 0 {
+		return -1
+	}
+	return pool.Available()
+}
+
+// tighterBudget returns the more restrictive of two namespace budgets, treating
+// a negative (unlimited) budget as +infinity. The result is unlimited only when
+// both inputs are unlimited.
+func tighterBudget(a, b int) int {
+	switch {
+	case a < 0:
+		return b
+	case b < 0:
+		return a
+	case b < a:
+		return b
+	default:
+		return a
+	}
 }
 
 // scaleDownRoleIterated removes replicas role-by-role using the generalized

@@ -203,8 +203,11 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		By("Registering the saturation-path deployment with WVA via an annotated ScaledObject")
 		// The ScaledObject's variantName matches the model service's variantName so the
 		// decode pods' llm-d.ai/variant label and wva_desired_replicas variant_name align.
+		// The 30 s scale-down stabilization window overrides the HPA default (300 s) so
+		// the "does not scale up" It can wait for minReplicas within EventuallyLongSec.
 		err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
-			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"),
+			fixtures.WithScaledObjectScaleDownStabilizationWindow(30))
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
 	})
@@ -267,18 +270,13 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 	})
 
 	It("does not scale the target deployment up for bounded below-threshold V1 traffic", func() {
-		var baseline int32
-
-		By("Capturing baseline target deployment replicas before below-threshold trigger")
-		Eventually(func(g Gomega) {
-			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
-			g.Expect(getErr).NotTo(HaveOccurred())
-			g.Expect(dep.Spec.Replicas).NotTo(BeNil())
-			baseline = *dep.Spec.Replicas
-			GinkgoWriter.Printf("  Negative-path baseline (%s): replicas=%d\n", modelDecodeDeployment, baseline)
-		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
 		By("Configuring conservative V1 thresholds to avoid scale-up")
+		// Set thresholds before capturing the baseline so WVA has time to reconcile
+		// while we wait for KEDA to settle. With the KEDA Prometheus query now using
+		// exported_namespace (fixed), KEDA can act on wva_desired_replicas from the
+		// prior It (which may have left a scale-up recommendation in Prometheus). We
+		// must wait for WVA to re-evaluate and KEDA to read the new value before the
+		// Consistently window starts — otherwise the HPA would fire a scale-up.
 		err := upsertSaturationConfigEntry(
 			ctx,
 			cmNamespace,
@@ -298,6 +296,49 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 
 		By("Verifying controller is using V1 analyzer path")
 		expectAnalyzerPathLog("V1", modelID)
+
+		By("Waiting for the pipeline to converge to a sustained minReplicas (drain any in-flight scale-up)")
+		// A single Spec.Replicas <= 1 reading is NOT proof of convergence: the deployment
+		// starts at minReplicas, so that check passes on the pre-existing state while a
+		// scale-up recommendation left in flight by the prior It (default config:
+		// queueLengthThreshold=1 vs faked queue=2 → V1 scale-up) is still working through
+		// WVA (≤15 s reconcile) → Prometheus → KEDA (5 s poll) → HPA. That stale
+		// recommendation actuates a scale-up mid-assertion unless it has fully drained.
+		//
+		// Require the deployment to HOLD at <=1 continuously for stableWindow before
+		// trusting it: any bump resets the stability clock, and stableWindow outlasts the
+		// full pipeline latency (reconcile + poll + the 30 s scale-down stabilization set
+		// on this ScaledObject) so the old recommendation is guaranteed drained.
+		const stableWindow = 45 * time.Second
+		var stableSince *time.Time
+		Eventually(func(g Gomega) {
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(dep.Spec.Replicas).NotTo(BeNil())
+			now := time.Now()
+			if *dep.Spec.Replicas > 1 {
+				stableSince = nil // reset the stability clock on any in-flight scale-up
+				GinkgoWriter.Printf("  Convergence (%s): replicas=%d (>1) — resetting stability clock\n", modelDecodeDeployment, *dep.Spec.Replicas)
+				g.Expect(*dep.Spec.Replicas).To(BeNumerically("<=", int32(1)),
+					"waiting for the in-flight scale-up recommendation to drain")
+				return
+			}
+			if stableSince == nil {
+				stableSince = &now
+			}
+			held := now.Sub(*stableSince)
+			GinkgoWriter.Printf("  Convergence (%s): replicas<=1 held for %s (need %s)\n", modelDecodeDeployment, held.Round(time.Second), stableWindow)
+			g.Expect(held).To(BeNumerically(">=", stableWindow),
+				"waiting for minReplicas to hold long enough to confirm the pipeline converged")
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+
+		By("Capturing baseline target deployment replicas before steady-state assertion")
+		var baseline int32
+		dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dep.Spec.Replicas).NotTo(BeNil())
+		baseline = *dep.Spec.Replicas
+		GinkgoWriter.Printf("  Negative-path baseline (%s): replicas=%d\n", modelDecodeDeployment, baseline)
 
 		By("Verifying the target deployment does not scale above baseline")
 		Consistently(func(g Gomega) {
@@ -346,14 +387,18 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		By("Verifying controller is using V1 analyzer path")
 		expectAnalyzerPathLog("V1", modelID)
 
-		By("Verifying WVA emits wva_desired_replicas for the scaled-up variant")
-		// The engine's scale-up decision is surfaced via wva_desired_replicas,
-		// decoupled from the separate scaler actuation loop. This verifies emission/consumption via
-		// the KEDA HPA surface; the numeric magnitude relative to baseline is not
-		// asserted here (the HPA surface does not expose it reliably).
+		By("Asserting KEDA actuates scale-up above baseline")
+		// Aggressive V1 thresholds (kvCache=0.05, queue=1) against faked metrics
+		// (kv=0.3, queue=2) deterministically drive a scale-up; KEDA consumes
+		// wva_desired_replicas and drives the Deployment above its baseline. Assert the
+		// observable Deployment replica count — the ground truth — rather than the KEDA
+		// HPA CurrentMetrics surface, which only proves the metric was consumed.
 		Eventually(func(g Gomega) {
-			expectWVADesiredReplicasConsumed(g, cfg.LLMDNamespace, modelDecodeDeployment)
-		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">", baseline),
+				"V1 above-threshold traffic should scale the target Deployment above baseline")
+		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
 })

@@ -28,6 +28,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
@@ -60,7 +61,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			Expect(engine.analyzers).To(HaveLen(1))
 			Expect(engine.analyzers[0].name).To(Equal(interfaces.SaturationAnalyzerName))
@@ -118,7 +119,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			Expect(engine.RegisterAnalyzer("throughput", &spyAnalyzer{name: "throughput"})).To(Succeed())
 			Expect(engine.RegisterAnalyzer("slo", &spyAnalyzer{name: "slo"})).To(Succeed())
@@ -143,7 +144,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			sourceRegistry := source.NewSourceRegistry()
 			Expect(sourceRegistry.Register("prometheus", source.NewNoOpSource())).To(Succeed())
 			testConfig := config.NewTestConfig()
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 			Expect(engine.RegisterAnalyzer("throughput", &spyAnalyzer{name: "throughput"})).To(Succeed())
 
 			startCtx, cancelStart := context.WithCancel(context.Background())

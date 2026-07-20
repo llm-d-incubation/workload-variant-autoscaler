@@ -3,10 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	flag "github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -28,6 +30,8 @@ var flagBindings = map[string]string{
 	"METRICS_CERT_PATH":              "metrics-cert-path",
 	"METRICS_CERT_NAME":              "metrics-cert-name",
 	"METRICS_CERT_KEY":               "metrics-cert-key",
+	"LIMITER_TYPE":                   "limiter-type",
+	"QUOTA_CONFIG_FILE":              "quota-config-file",
 }
 
 // Load loads and validates the unified configuration.
@@ -85,6 +89,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
 	v.SetDefault("EXPERIMENTAL_COORDINATOR_ENABLED", false)
 	v.SetDefault("COORDINATOR_INTERVAL", "15s")
+	v.SetDefault("LIMITER_TYPE", "inventory")
+	v.SetDefault("QUOTA_CONFIG_FILE", "")
 
 	// Load from config file (mounted in the container) — sits between env and defaults in precedence
 	if configFilePath != "" {
@@ -171,6 +177,45 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	cfg.prometheus.clientCertPath = v.GetString("PROMETHEUS_CLIENT_CERT_PATH")
 	cfg.prometheus.clientKeyPath = v.GetString("PROMETHEUS_CLIENT_KEY_PATH")
 	cfg.prometheus.serverName = v.GetString("PROMETHEUS_SERVER_NAME")
+
+	cfg.limiter = limiterConfig{
+		limiterType:     LimiterType(v.GetString("LIMITER_TYPE")),
+		quotaConfigFile: v.GetString("QUOTA_CONFIG_FILE"),
+	}
+	if err := loadQuotaLimiterEntries(&cfg.limiter); err != nil {
+		return fmt.Errorf("failed to load quota limiter entries: %w", err)
+	}
+	return nil
+}
+
+// loadQuotaLimiterEntries reads, parses, and validates the YAML file at
+// limiter.quotaConfigFile when limiterType == LimiterTypeQuota. The file
+// shape is QuotaLimiterEntries. Warnings are emitted to the controller
+// log; only hard errors abort startup.
+//
+// No-op when limiterType != LimiterTypeQuota or quotaConfigFile is empty —
+// validation that QUOTA_CONFIG_FILE is set when LIMITER_TYPE=quota lives
+// in Validate() so an operator gets a single coherent error message.
+func loadQuotaLimiterEntries(limiter *limiterConfig) error {
+	if limiter.limiterType != LimiterTypeQuota || limiter.quotaConfigFile == "" {
+		return nil
+	}
+	data, err := os.ReadFile(limiter.quotaConfigFile)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", limiter.quotaConfigFile, err)
+	}
+	var entries QuotaLimiterEntries
+	if err := yaml.Unmarshal(data, &entries); err != nil {
+		return fmt.Errorf("parse %q as quota limiter YAML: %w", limiter.quotaConfigFile, err)
+	}
+	warnings, err := entries.Validate()
+	if err != nil {
+		return fmt.Errorf("validate %q: %w", limiter.quotaConfigFile, err)
+	}
+	for _, w := range warnings {
+		ctrl.Log.Info("quota limiter config warning", "warning", w, "file", limiter.quotaConfigFile)
+	}
+	limiter.quotaEntries = entries.Limiters
 	return nil
 }
 

@@ -38,7 +38,6 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
@@ -188,10 +187,16 @@ type Engine struct {
 
 // NewEngine creates a new instance of the saturation engine.
 // Config must be non-nil (validated in main.go before engine creation).
-// Panics if cfg is nil to fail fast on programming errors.
-func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, cfg *config.Config) *Engine {
+// gpuLimiter is the operator-selected limiter built by
+// pipeline.NewLimiterFromConfig in main.go and must be non-nil — tests
+// that do not exercise the limiter path can pass pipeline.NewNoOpLimiter.
+// Panics if cfg or gpuLimiter is nil to fail fast on programming errors.
+func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, cfg *config.Config, gpuLimiter pipeline.Limiter) *Engine {
 	if cfg == nil {
 		panic("config is nil in NewEngine - this should not happen (validated in main.go before engine creation)")
+	}
+	if gpuLimiter == nil {
+		panic("gpuLimiter is nil in NewEngine - production callers must use pipeline.NewLimiterFromConfig; tests should pass pipeline.NewNoOpLimiter")
 	}
 	promSource := metricsRegistry.Get("prometheus") // assume prometheus source is registered
 
@@ -199,12 +204,6 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 	requestCountFunc := func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 		return registration.CollectModelRequestCount(ctx, promSource, modelID, namespace, retentionPeriod)
 	}
-
-	// Create GPU limiter with TypeInventory and GreedyBySaturation algorithm
-	gpuDiscovery := discovery.NewK8sWithGpuOperator(client)
-	gpuInventory := pipeline.NewTypeInventoryWithUsage("cluster-gpu-inventory", gpuDiscovery)
-	gpuAlgorithm := pipeline.NewGreedyBySaturation()
-	gpuLimiter := pipeline.NewDefaultLimiter("gpu-limiter", gpuInventory, gpuAlgorithm)
 
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
 	satV2 := saturation_v2.NewSaturationAnalyzer(capacityStore)
@@ -373,8 +372,15 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// Initialize vaEventTracker for this optimize cycle
 	e.vaEventTracker = make(map[string]bool)
 
-	// Collected accelerator inventory (only in limited mode)
-	if e.Config.LimitedModeEnabled() {
+	// Collect accelerator inventory (only in limited mode AND only when the
+	// operator selected the inventory-based limiter). When --limiter-type=quota,
+	// the controller deliberately runs without consulting physical capacity —
+	// listing Nodes here would defeat that contract (and trigger a
+	// controller-runtime Node informer for the lifetime of the process). The
+	// collected inventory is currently only logged anyway (see comment at
+	// internal/collector/collector.go), so skipping it in quota mode loses
+	// nothing of operational value.
+	if e.Config.LimitedModeEnabled() && shouldCollectClusterInventory(e.Config) {
 		inventory, err := collector.CollectInventoryK8S(ctx, e.client)
 		if err != nil {
 			logger.Error(err, "Failed to collect cluster inventory")
@@ -777,17 +783,37 @@ func (e *Engine) selectV2Optimizer(
 		return optimizer, nil
 	}
 
-	provider, ok := e.GPULimiter.(pipeline.ConstraintProvider)
-	if !ok {
+	// Collect constraints from every provider backing the GPU limiter: a single
+	// DefaultLimiter, or each constituent of a CompositeLimiter (so multi-entry
+	// quota configs are all consulted, and namespace-scoped providers contribute
+	// per-namespace caps via NamespacePools).
+	providers := gpuConstraintProviders(e.GPULimiter)
+	if len(providers) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
 	}
 
-	constraint, err := provider.ComputeConstraints(ctx, computeCurrentGPUUsage(requests))
-	if err != nil {
-		logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited (cost-aware) optimizer for this cycle")
+	currentUsage := computeCurrentGPUUsage(requests)
+	currentUsageByNS := computeCurrentGPUUsageByNamespace(requests)
+	var constraints []*pipeline.ResourceConstraints
+	for _, cp := range providers {
+		constraint, err := cp.ComputeConstraints(ctx, currentUsage, currentUsageByNS)
+		if err != nil {
+			logger.Error(err, "Failed to compute GPU constraints, skipping provider", "provider", cp.Name())
+			continue
+		}
+		constraints = append(constraints, constraint)
+	}
+
+	// GreedyByScore treats absent constraints as zero available capacity
+	// (deny-all), not as unlimited. When no provider could supply constraints
+	// (limiter is not constraint-backed, or every provider failed — e.g. GPU
+	// capacity cannot be discovered), fall back to the cost-aware optimizer, the
+	// engine's unlimited path, so scale-up proceeds instead of being silently
+	// blocked.
+	if len(constraints) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
 	}
-	return optimizer, []*pipeline.ResourceConstraints{constraint}
+	return optimizer, constraints
 }
 
 // optimizeV2 runs the V2 token-based optimizer path (saturation-token-based).

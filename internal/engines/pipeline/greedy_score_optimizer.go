@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"maps"
 	"math"
 	"sort"
 
@@ -95,6 +96,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 ) []interfaces.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	available := mergeConstraints(constraints)
+	availableByNS := mergeNamespaceConstraints(constraints)
 
 	var scaleUpWork []*modelWork
 	var otherRequests []ModelScalingRequest
@@ -118,7 +120,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		}
 	}
 
-	o.fairShareScaleUp(ctx, scaleUpWork, available)
+	o.fairShareScaleUp(ctx, scaleUpWork, available, availableByNS)
 
 	allDecisions := make([]interfaces.VariantDecision, 0, len(scaleUpWork))
 
@@ -178,6 +180,7 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 	ctx context.Context,
 	work []*modelWork,
 	available map[string]int,
+	availableByNS map[string]map[string]int,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -189,6 +192,13 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 
 		totalGPUs := 0
 		for _, v := range available {
+			// An unbounded (math.MaxInt) budget marks an unlimited quota type;
+			// saturate rather than overflow the sum, which is only used for the
+			// "== 0" stop check below.
+			if v == math.MaxInt {
+				totalGPUs = math.MaxInt
+				break
+			}
 			totalGPUs += v
 		}
 		if totalGPUs == 0 {
@@ -210,7 +220,7 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 			allocationMean = mean - (w.remaining / float64(len(active)))
 		}
 
-		allocated := o.allocateForModel(ctx, w, allocationMean, available)
+		allocated := o.allocateForModel(ctx, w, allocationMean, available, availableByNS)
 
 		if !allocated {
 			w.remaining = -1
@@ -235,6 +245,7 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 	w *modelWork,
 	mean float64,
 	available map[string]int,
+	availableByNS map[string]map[string]int,
 ) bool {
 	target := w.remaining - mean
 	if target <= 0 {
@@ -256,11 +267,54 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 		}
 	}
 
+	// This model belongs to one namespace, so its per-type budget is the
+	// minimum of the cluster-wide budget and this namespace's quota. The shared
+	// allocateForModelPaired only understands a flat per-type budget, so we pass
+	// the effective copy and reconcile consumption back to both budgets
+	// afterwards. A non-nil nsBudget means a closed namespace-quota allowlist
+	// (see effectiveAvailable); nil means the namespace is open (cluster-scope
+	// quota or an excluded namespace).
+	//
+	// nsBudget is a reference into the cycle-wide availableByNS map, shared by
+	// every model in this namespace; the reconcile below decrements it in place,
+	// so later same-namespace models correctly see the reduced remaining budget.
+	nsBudget := availableByNS[w.req.Namespace]
+	effAvail := effectiveAvailable(available, nsBudget)
+	beforeEff := maps.Clone(effAvail)
+
 	// Unified path: fairShareRolePick behind the RolePickFn interface.
 	// α logic removed in commit 3.
 	pick := fairShareRolePick(target, w.s, w.roles)
-	allocateForModelPaired(ctx, w.s, w.satEntry.VariantCapacities, stateMap, available,
+	allocateForModelPaired(ctx, w.s, w.satEntry.VariantCapacities, stateMap, effAvail,
 		w.targets, pick, ps, w.roles)
+
+	// Reconcile: apply what was consumed (before − after) to the cluster-wide
+	// budget and, where this namespace caps the type, to the namespace budget.
+	// Only decrement the cluster budget for types it actually constrains (a type
+	// present in `available`); a type bounded solely by the namespace must not
+	// drive the cluster budget negative and pollute the loop's totalGPUs check.
+	for accType, before := range beforeEff {
+		consumed := before - effAvail[accType]
+		if consumed <= 0 {
+			continue
+		}
+		// Decrement only a FINITE cluster budget. An unbounded (math.MaxInt)
+		// budget marks an unlimited-quota type and must stay exactly math.MaxInt:
+		// depleting it to MaxInt-consumed would (a) be meaningless (you cannot
+		// draw down infinity) and (b) defeat the fairShareScaleUp stop-check,
+		// whose `== math.MaxInt` guard would then miss it and let the totalGPUs
+		// sum overflow with two or more unlimited types.
+		if cur, clusterCapped := available[accType]; clusterCapped && cur != math.MaxInt {
+			available[accType] -= consumed
+		}
+		if nsBudget != nil {
+			// Decrement only finite namespace caps; the unlimited sentinel
+			// (negative) imposes no budget to draw down.
+			if nsCap, capped := nsBudget[accType]; capped && nsCap >= 0 {
+				nsBudget[accType] -= consumed
+			}
+		}
+	}
 
 	// Recompute w.remaining for fair-share ordering.
 	// For "both" (non-disag): use fresh ps so applyAllocation-decremented
@@ -273,6 +327,46 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 		w.remaining = fairShareValue(w.req.Priority, w.s, ps, w.roles)
 	}
 	return w.remaining < oldRemaining
+}
+
+// effectiveAvailable returns the per-type budget the optimizer may spend on a
+// model in this namespace, given the cluster-wide budget and the namespace's
+// quota. A budget value < 0 in nsBudget is the "unlimited" sentinel for that
+// (namespace, type); all other values are finite GPU counts.
+//
+// nsBudget == nil → the namespace is OPEN (a cluster-scope quota, or an
+// excluded namespace): the model is bound only by the cluster budget, so the
+// result is a copy of `available`.
+//
+// nsBudget != nil → the namespace is a CLOSED allowlist (namespace-scope
+// quota), mirroring the V1 tryAllocateNamespace contract: the model may use
+// ONLY the accelerator types the namespace lists. The result is therefore built
+// from nsBudget alone — a type the namespace does not list is absent, and the
+// optimizer's gpusAvail==0 check denies it (no fall-through to the cluster
+// aggregate, which previously let one namespace draw on another's quota). For a
+// listed type: a finite cap binds at min(cluster, cap); an unlimited cap binds
+// at the cluster budget for that type, or is unbounded (math.MaxInt) when the
+// cluster does not constrain it.
+func effectiveAvailable(available, nsBudget map[string]int) map[string]int {
+	if nsBudget == nil {
+		return maps.Clone(available)
+	}
+	eff := make(map[string]int, len(nsBudget))
+	for accType, nsAvail := range nsBudget {
+		if nsAvail < 0 { // unlimited for this (namespace, type)
+			if cv, ok := available[accType]; ok {
+				eff[accType] = cv
+			} else {
+				eff[accType] = math.MaxInt
+			}
+			continue
+		}
+		eff[accType] = nsAvail
+		if cv, ok := available[accType]; ok && cv < nsAvail {
+			eff[accType] = cv
+		}
+	}
+	return eff
 }
 
 // fairShareRolePick returns a RolePickFn for the unified allocateForModelPaired loop.

@@ -235,8 +235,7 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server 
 	fi
 
 
-# Deploy e2e infrastructure with KEDA as scaler backend (installs KEDA, skips Prometheus Adapter).
-# Runs a subset of smoke tests from the e2e suite.
+# Runs the smoke subset of the e2e suite. KEDA is the only scaler backend.
 .PHONY: test-e2e-smoke
 test-e2e-smoke: ## Run smoke e2e tests
 	@echo "Running smoke e2e tests..."
@@ -250,34 +249,10 @@ test-e2e-smoke: ## Run smoke e2e tests
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
-	SCALER_BACKEND=$(SCALER_BACKEND) \
-	MODEL_ID=$(MODEL_ID) \
-	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
-		-ginkgo.label-filter="smoke && !keda" $(FOCUS_ARGS) $(SKIP_ARGS); \
-	TEST_EXIT_CODE=$$?; \
-	echo ""; \
-	echo "=========================================="; \
-	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
-	echo "=========================================="; \
-	exit $$TEST_EXIT_CODE
-
-.PHONY: test-e2e-smoke-keda
-test-e2e-smoke-keda: ## Run KEDA smoke e2e tests (requires SCALER_BACKEND=keda infra)
-	@echo "Running KEDA smoke e2e tests..."
-	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
-	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
-	KUBECONFIG=$(KUBECONFIG) \
-	ENVIRONMENT=$(ENVIRONMENT) \
-	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
-	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
-	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
-	USE_SIMULATOR=$(USE_SIMULATOR) \
-	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
 	SCALER_BACKEND=keda \
 	MODEL_ID=$(MODEL_ID) \
 	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
-		-ginkgo.label-filter="smoke && keda" $(FOCUS_ARGS) $(SKIP_ARGS); \
+		-ginkgo.label-filter="smoke" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
 	echo "=========================================="; \
@@ -285,12 +260,7 @@ test-e2e-smoke-keda: ## Run KEDA smoke e2e tests (requires SCALER_BACKEND=keda i
 	echo "=========================================="; \
 	exit $$TEST_EXIT_CODE
 
-.PHONY: test-e2e-smoke-keda-with-setup
-test-e2e-smoke-keda-with-setup: ## Deploy KEDA infra and run KEDA smoke e2e tests
-	$(MAKE) deploy-e2e-infra SCALER_BACKEND=keda
-	$(MAKE) test-e2e-smoke-keda
-
-# Runs the complete e2e test suite (excluding flaky tests).
+# Runs the complete e2e test suite (KEDA backend, excluding smoke and flaky tests).
 .PHONY: test-e2e-full
 test-e2e-full: ## Run full e2e test suite
 	@echo "Running full e2e test suite..."
@@ -302,10 +272,11 @@ test-e2e-full: ## Run full e2e test suite
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
-	SCALER_BACKEND=$(SCALER_BACKEND) \
+	SCALER_BACKEND=keda \
+	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
 	MODEL_ID=$(MODEL_ID) \
 	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
-		-ginkgo.label-filter="full && !flaky && !keda" $(FOCUS_ARGS) $(SKIP_ARGS); \
+		-ginkgo.label-filter="full && !smoke && !flaky" $(FOCUS_ARGS) $(SKIP_ARGS); \
 	TEST_EXIT_CODE=$$?; \
 	echo ""; \
 	echo "=========================================="; \
@@ -315,10 +286,12 @@ test-e2e-full: ## Run full e2e test suite
 
 # Convenience targets for local e2e testing
 
-# Convenience target that deploys infra + runs smoke tests (HPA / Prometheus Adapter path).
+# Convenience target that deploys KEDA infra + runs smoke tests.
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
 .PHONY: test-e2e-smoke-with-setup
-test-e2e-smoke-with-setup: deploy-e2e-infra test-e2e-smoke
+test-e2e-smoke-with-setup:
+	$(MAKE) deploy-e2e-infra SCALER_BACKEND=keda
+	$(MAKE) test-e2e-smoke
 
 # Runs only the multi-controller (dual namespace-scoped) e2e tests.
 .PHONY: test-e2e-multi-controller
@@ -349,43 +322,13 @@ test-e2e-multi-controller: ## Run multi-controller e2e tests
 .PHONY: test-e2e-multi-controller-with-setup
 test-e2e-multi-controller-with-setup: deploy-e2e-infra test-e2e-multi-controller
 
-# Convenience target that deploys infra + runs full test suite.
+# Convenience target that deploys KEDA infra + runs full test suite.
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
 # LWS is installed because the full suite includes LeaderWorkerSet scale-from-zero tests.
 .PHONY: test-e2e-full-with-setup
 test-e2e-full-with-setup:
-	DEPLOY_LWS=true $(MAKE) deploy-e2e-infra
-	$(MAKE) test-e2e-full
-
-# Runs the full e2e suite against a KEDA backend (no Prometheus Adapter).
-# Label filter includes keda-labeled tests since KEDA is installed on the cluster.
-.PHONY: test-e2e-full-keda
-test-e2e-full-keda: ## Run full e2e test suite against KEDA backend
-	@echo "Running full e2e test suite (KEDA backend)..."
-	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
-	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
-	KUBECONFIG=$(KUBECONFIG) \
-	ENVIRONMENT=$(ENVIRONMENT) \
-	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
-	USE_SIMULATOR=$(USE_SIMULATOR) \
-	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
-	SCALER_BACKEND=keda \
-	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
-	MODEL_ID=$(MODEL_ID) \
-	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
-		-ginkgo.label-filter="full && !smoke && !flaky" $(FOCUS_ARGS) $(SKIP_ARGS); \
-	TEST_EXIT_CODE=$$?; \
-	echo ""; \
-	echo "=========================================="; \
-	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
-	echo "=========================================="; \
-	exit $$TEST_EXIT_CODE
-
-.PHONY: test-e2e-full-keda-with-setup
-test-e2e-full-keda-with-setup: ## Deploy KEDA infra and run full e2e test suite
 	DEPLOY_LWS=true SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
-	$(MAKE) test-e2e-full-keda
+	$(MAKE) test-e2e-full
 
 
 ##@ llm-d-benchmark CLI (standup / run / teardown)
@@ -480,10 +423,23 @@ benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPAC
 	exit $$rc
 
 .PHONY: benchmark-run
-benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, BENCHMARK_HARNESS=guidellm|inference-perf)
 	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
+	fi
+	@mkdir -p "$(BENCHMARK_SCENARIOS_DIR)"
+	@# Fetch workload from inference-perf catalog if not found locally and harness is inference-perf
+	@if [ "$(BENCHMARK_HARNESS)" = "inference-perf" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
+		echo "Fetching $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog..."; \
+		if curl -sfL "https://raw.githubusercontent.com/kubernetes-sigs/inference-perf/main/workload-catalog/$(BENCHMARK_WORKLOAD)/inference-perf.yaml" \
+			-o "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)"; then \
+			echo "Successfully fetched $(BENCHMARK_WORKLOAD)"; \
+		else \
+			echo "ERROR: Could not fetch $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog"; \
+			echo "Available workloads: interactive-chat, code-generation, deep-research, reasoning, batch-summarization-rag, batch-synthetic-data-generation"; \
+			exit 1; \
+		fi; \
 	fi
 	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
 		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \

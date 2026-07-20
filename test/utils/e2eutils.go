@@ -881,11 +881,11 @@ func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // GetPrometheusServiceInfoFromConfigMap reads the Prometheus service info from the WVA controller configmap.
-// It reads the workload-variant-autoscaler-variantautoscaling-config configmap and extracts
-// the service name, namespace, and port from PROMETHEUS_BASE_URL.
+// It reads the wva-manager-config configmap and extracts the service name, namespace, and port
+// from PROMETHEUS_BASE_URL.
 // Example URL: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
 func GetPrometheusServiceInfoFromConfigMap(ctx context.Context, k8sClient *kubernetes.Clientset, wvaNamespace string) (*PrometheusServiceInfo, error) {
-	configMapName := "workload-variant-autoscaler-variantautoscaling-config"
+	configMapName := "wva-manager-config"
 
 	cm, err := k8sClient.CoreV1().ConfigMaps(wvaNamespace).Get(ctx, configMapName, metav1.GetOptions{})
 	if err != nil {

@@ -26,6 +26,27 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("scale-from-zero max concurrency must be positive, got %d", cfg.ScaleFromZeroMaxConcurrency())
 	}
 
+	// Limiter selection: only the two supported values, and quota requires
+	// a config file. This is checked only at startup (config.Load → Validate);
+	// the limiter selection is not exposed via ConfigMap-backed live reload,
+	// so reconciler-time updates of other fields cannot change it.
+	switch cfg.LimiterMode() {
+	case LimiterTypeInventory:
+		// OK; the default. Ignore quota-config-file if accidentally set.
+	case LimiterTypeQuota:
+		if cfg.QuotaConfigFile() == "" {
+			return errors.New("limiter-type=quota requires --quota-config-file (or QUOTA_CONFIG_FILE env var) " +
+				"to point at a YAML file containing a QuotaLimiterEntries document")
+		}
+		if len(cfg.QuotaEntries()) == 0 {
+			return fmt.Errorf("quota config file %q parsed to an empty entries list; at least one entry is required",
+				cfg.QuotaConfigFile())
+		}
+	default:
+		return fmt.Errorf("limiter-type must be %q or %q, got %q",
+			LimiterTypeInventory, LimiterTypeQuota, cfg.LimiterMode())
+	}
+
 	return nil
 }
 

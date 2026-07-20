@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"math"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -400,6 +401,85 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			dm := decisionMap(decisions)
 
 			Expect(dm["v1"].TargetReplicas).To(Equal(1))
+		})
+
+		It("treats a cluster-scope unlimited (sentinel) pool like abundant capacity, not a deny", func() {
+			// Regression for the cluster-unlimited-under-V2 bug: a -1
+			// (config.QuotaUnlimited) cluster quota is emitted as a sentinel pool
+			// (Limit < 0), which mergeConstraints carries through as an unbounded
+			// budget. Before the fix the type was absent from the merged budget,
+			// so fairShareRolePick read a 0 budget and denied every scale-up —
+			// inverting -1 = unlimited into a hard deny.
+			newReq := func() []ModelScalingRequest {
+				r := &interfaces.AnalyzerResult{
+					ModelID:          "model-1",
+					Namespace:        "default",
+					AnalyzedAt:       time.Now(),
+					RequiredCapacity: 40000,
+					VariantCapacities: []interfaces.VariantCapacity{
+						{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+					},
+				}
+				return []ModelScalingRequest{
+					withSatEntry(r, ModelScalingRequest{
+						ModelID:   "model-1",
+						Namespace: "default",
+						VariantStates: []interfaces.VariantReplicaState{
+							{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
+						},
+					}),
+				}
+			}
+
+			// -1 is config.QuotaUnlimited; used as a literal here to avoid a config
+			// import in this optimizer-level test.
+			unlimited := decisionMap(optimizer.Optimize(ctx, newReq(),
+				[]*ResourceConstraints{{Pools: map[string]ResourcePool{"A100": {Limit: -1}}}}))
+			abundant := decisionMap(optimizer.Optimize(ctx, newReq(),
+				[]*ResourceConstraints{{Pools: map[string]ResourcePool{"A100": {Limit: 1000}}}}))
+
+			Expect(unlimited["v1"].Action).To(Equal(interfaces.ActionScaleUp), "unlimited cluster quota must not deny scale-up")
+			Expect(unlimited["v1"].TargetReplicas).To(BeNumerically(">", 1))
+			Expect(unlimited["v1"].TargetReplicas).To(Equal(abundant["v1"].TargetReplicas),
+				"unlimited behaves like abundant finite capacity")
+		})
+
+		It("scales a finite-type model even when unlimited types were consumed first", func() {
+			// Regression for the fairShareScaleUp stop-check overflow: two
+			// unlimited (sentinel) budgets are decremented during the round but
+			// must stay recognized as unbounded, so the totalGPUs sum cannot wrap
+			// to 0 and starve a model on an unrelated finite type.
+			mk := func(id, variant, accel string) ModelScalingRequest {
+				r := &interfaces.AnalyzerResult{
+					ModelID: id, Namespace: "default", AnalyzedAt: time.Now(),
+					RequiredCapacity: 25000,
+					VariantCapacities: []interfaces.VariantCapacity{
+						{VariantName: variant, AcceleratorName: accel, Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+					},
+				}
+				return withSatEntry(r, ModelScalingRequest{
+					ModelID: id, Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: variant, CurrentReplicas: 1, GPUsPerReplica: 1},
+					},
+				})
+			}
+			requests := []ModelScalingRequest{
+				mk("model-A", "a-v1", "A100"),
+				mk("model-B", "b-v1", "H100"),
+				mk("model-C", "c-v1", "L40S"),
+			}
+			// -1 is config.QuotaUnlimited for A100/H100; L40S is finite.
+			constraints := []*ResourceConstraints{
+				{Pools: map[string]ResourcePool{
+					"A100": {Limit: -1}, "H100": {Limit: -1}, "L40S": {Limit: 4},
+				}},
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, constraints))
+			Expect(dm["a-v1"].TargetReplicas).To(BeNumerically(">", 1), "unlimited A100 scales up")
+			Expect(dm["b-v1"].TargetReplicas).To(BeNumerically(">", 1), "unlimited H100 scales up")
+			Expect(dm["c-v1"].TargetReplicas).To(BeNumerically(">", 1), "finite L40S model is not starved by an overflowed stop-check")
 		})
 	})
 
@@ -1309,5 +1389,345 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			Expect(dm["pf"].TargetReplicas).To(Equal(2)) // 1+1
 			Expect(dm["dc"].TargetReplicas).To(Equal(4)) // 1+3
 		})
+	})
+
+	Context("Namespace-Scoped Quota", func() {
+
+		It("caps a model at its namespace budget even when cluster GPUs remain", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "m",
+				Namespace:        "team-a",
+				RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "m",
+					Namespace: "team-a",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2},
+					},
+				}),
+			}
+			// Cluster has plenty of A100, but team-a's quota leaves only 2 GPUs
+			// (cap 4 − 2 in use) = room for exactly one more 2-GPU replica.
+			constraints := []*ResourceConstraints{
+				{
+					Pools: map[string]ResourcePool{"A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{
+						"team-a": {"A100": {Limit: 4, Used: 2}},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["v"].TargetReplicas).To(Equal(2), "bounded by team-a quota (2 GPUs), not cluster (100)")
+		})
+
+		It("enforces independent per-namespace budgets across models", func() {
+			rA := &interfaces.AnalyzerResult{
+				ModelID: "mA", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "a", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			rB := &interfaces.AnalyzerResult{
+				ModelID: "mB", Namespace: "team-b", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "b", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(rA, ModelScalingRequest{
+					ModelID: "mA", Namespace: "team-a",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+				withSatEntry(rB, ModelScalingRequest{
+					ModelID: "mB", Namespace: "team-b",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			// Cluster is unconstrained relative to the quotas; team-a is capped
+			// to +1 replica (2 GPUs free) and team-b to +3 (6 GPUs free).
+			constraints := []*ResourceConstraints{
+				{
+					Pools: map[string]ResourcePool{"A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{
+						"team-a": {"A100": {Limit: 4, Used: 2}},
+						"team-b": {"A100": {Limit: 6, Used: 0}},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["a"].TargetReplicas).To(Equal(2), "team-a bounded to +1 by its 2-GPU quota")
+			Expect(dm["b"].TargetReplicas).To(BeNumerically(">", 2), "team-b has a larger quota, so it scales further")
+			Expect(dm["b"].TargetReplicas).To(BeNumerically("<=", 4), "but no further than its 6-GPU quota (+3)")
+		})
+
+		It("shares one namespace budget across same-namespace models, higher priority first", func() {
+			rHi := &interfaces.AnalyzerResult{
+				ModelID: "hi", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "hi-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			rLo := &interfaces.AnalyzerResult{
+				ModelID: "lo", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "lo-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(rHi, ModelScalingRequest{
+					ModelID: "hi", Namespace: "team-a", Priority: 10,
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+				withSatEntry(rLo, ModelScalingRequest{
+					ModelID: "lo", Namespace: "team-a", Priority: 1,
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			// Both models are in team-a, which has 4 free GPUs (cap 6 − 2 used) =
+			// 2 replicas to share. The cluster has far more, so the namespace cap
+			// is the binding constraint and the two models draw from one budget.
+			constraints := []*ResourceConstraints{
+				{
+					Pools: map[string]ResourcePool{"A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{
+						"team-a": {"A100": {Limit: 6, Used: 2}},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+			hiAdded := dm["hi-v"].TargetReplicas - 1
+			loAdded := dm["lo-v"].TargetReplicas - 1
+
+			Expect(hiAdded+loAdded).To(Equal(2), "the shared team-a budget (4 GPUs) bounds the sum across both models")
+			Expect(hiAdded).To(BeNumerically(">=", loAdded), "the higher-priority model gets at least as much of the shared budget")
+		})
+
+		It("gives a scarce shared namespace budget to the higher-priority model first", func() {
+			// Only 2 free GPUs in team-a (cap 4 − 2 used) = room for exactly ONE
+			// 2-GPU replica. With a 100x priority gap, the winner is deterministic:
+			// hi takes the single replica, lo gets nothing. A weaker >= assertion
+			// would not catch a priority inversion here.
+			rHi := &interfaces.AnalyzerResult{
+				ModelID: "hi", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "hi-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			rLo := &interfaces.AnalyzerResult{
+				ModelID: "lo", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "lo-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(rHi, ModelScalingRequest{
+					ModelID: "hi", Namespace: "team-a", Priority: 100,
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+				withSatEntry(rLo, ModelScalingRequest{
+					ModelID: "lo", Namespace: "team-a", Priority: 1,
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			constraints := []*ResourceConstraints{
+				{
+					Pools: map[string]ResourcePool{"A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{
+						"team-a": {"A100": {Limit: 4, Used: 2}},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["hi-v"].TargetReplicas).To(Equal(2), "hi (priority 100) wins the single shared replica")
+			Expect(dm["lo-v"].TargetReplicas).To(Equal(1), "lo (priority 1) gets nothing from the exhausted budget")
+		})
+
+		It("denies a type the namespace does not list instead of leaking another namespace's quota", func() {
+			// Heterogeneous config: team-a caps H100 only, team-b caps A100 only.
+			// A team-a model whose variant runs on A100 must be DENIED (A100 is
+			// not in team-a's allowlist) — it must NOT draw on team-b's A100
+			// quota via the cluster aggregate. This is the cross-namespace
+			// isolation breach the closed-allowlist model closes.
+			rA := &interfaces.AnalyzerResult{
+				ModelID: "mA", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "a", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			rB := &interfaces.AnalyzerResult{
+				ModelID: "mB", Namespace: "team-b", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "b", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(rA, ModelScalingRequest{
+					ModelID: "mA", Namespace: "team-a",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+				withSatEntry(rB, ModelScalingRequest{
+					ModelID: "mB", Namespace: "team-b",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			constraints := []*ResourceConstraints{
+				{
+					Pools: map[string]ResourcePool{"H100": {Limit: 100}, "A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{
+						"team-a": {"H100": {Limit: 10}}, // A100 unlisted → denied for team-a
+						"team-b": {"A100": {Limit: 6}},
+					},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["a"].TargetReplicas).To(Equal(1), "team-a's A100 model is denied — A100 is not in team-a's allowlist")
+			Expect(dm["b"].TargetReplicas).To(BeNumerically(">", 1), "team-b scales on its own A100 quota, unaffected")
+		})
+
+		It("denies all scale-up for a closed namespace with no listed types (deny-all)", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID: "m", Namespace: "team-x", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID: "m", Namespace: "team-x",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			// team-x is present (closed) but lists no types — a real deny-all.
+			constraints := []*ResourceConstraints{
+				{
+					Pools:          map[string]ResourcePool{"A100": {Limit: 100}},
+					NamespacePools: map[string]map[string]ResourcePool{"team-x": {}},
+				},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["v"].TargetReplicas).To(Equal(1), "deny-all namespace allocates nothing despite ample cluster GPUs")
+		})
+
+		It("honors an unlimited (-1) per-namespace cap, bounding only by the cluster budget", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID: "m", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID: "m", Namespace: "team-a",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			// team-a holds an unlimited A100 cap (sentinel Limit == -1) from a
+			// namespace-scope provider, composed with a separate cluster-scope
+			// provider supplying the only finite bound (100 A100). This mirrors
+			// production: a finite cluster Pools alongside an unlimited ns cap
+			// only arises from a distinct provider, never from
+			// aggregateNamespacePools (which skips unlimited). The model should
+			// scale to meet demand, not be denied (the bug would drop the
+			// unlimited entry and deny A100 as "unlisted").
+			constraints := []*ResourceConstraints{
+				{ProviderName: "ns-quota", NamespacePools: map[string]map[string]ResourcePool{
+					"team-a": {"A100": {Limit: -1}},
+				}},
+				{ProviderName: "cluster-quota", Pools: map[string]ResourcePool{"A100": {Limit: 100}}},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["v"].TargetReplicas).To(BeNumerically(">=", 4), "unlimited ns cap scales to demand, bounded only by the cluster budget")
+		})
+
+		It("does not scale a purely-unlimited namespace config with no finite cluster cap (documented V2 limitation)", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID: "m", Namespace: "team-a", RequiredCapacity: 50000,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID: "m", Namespace: "team-a",
+					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				}),
+			}
+			// All-unlimited ns config: aggregateNamespacePools yields an empty
+			// cluster Pools, so available is empty and fairShareScaleUp's
+			// totalGPUs==0 guard stops immediately. This is the documented
+			// under-provision boundary (not an isolation breach) — pinned here so
+			// it can't silently change. Pools is built via aggregateNamespacePools
+			// to stay faithful to what ComputeConstraints would emit.
+			nsPools := map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: -1}}}
+			constraints := []*ResourceConstraints{
+				{Pools: aggregateNamespacePools(nsPools), NamespacePools: nsPools},
+			}
+
+			decisions := optimizer.Optimize(ctx, requests, constraints)
+			dm := decisionMap(decisions)
+
+			Expect(dm["v"].TargetReplicas).To(Equal(1), "no finite cluster budget -> no V2 scaling (documented limitation)")
+		})
+	})
+})
+
+var _ = Describe("effectiveAvailable", func() {
+	It("returns a copy of the cluster budget when the namespace is open (nil nsBudget)", func() {
+		available := map[string]int{"A100": 8, "H100": 4}
+		eff := effectiveAvailable(available, nil)
+		Expect(eff).To(Equal(available))
+		eff["A100"] = 0 // mutate the copy
+		Expect(available["A100"]).To(Equal(8), "must be a copy, not an alias")
+	})
+
+	It("binds a listed finite type at min(cluster, namespace cap)", func() {
+		eff := effectiveAvailable(map[string]int{"A100": 8}, map[string]int{"A100": 3})
+		Expect(eff).To(HaveKeyWithValue("A100", 3))
+	})
+
+	It("denies a type the closed namespace does not list (absent => optimizer sees 0)", func() {
+		eff := effectiveAvailable(map[string]int{"A100": 8, "H100": 8}, map[string]int{"A100": 3})
+		Expect(eff).To(HaveKey("A100"))
+		Expect(eff).NotTo(HaveKey("H100"), "unlisted type is omitted so gpusAvail==0 denies it")
+	})
+
+	It("bounds an unlimited listed type by the cluster budget when the cluster caps it", func() {
+		eff := effectiveAvailable(map[string]int{"A100": 8}, map[string]int{"A100": -1})
+		Expect(eff).To(HaveKeyWithValue("A100", 8))
+	})
+
+	It("treats an unlimited listed type as unbounded when the cluster does not cap it", func() {
+		eff := effectiveAvailable(map[string]int{}, map[string]int{"A100": -1})
+		Expect(eff).To(HaveKeyWithValue("A100", math.MaxInt))
+	})
+
+	It("denies everything for a closed deny-all namespace (empty nsBudget)", func() {
+		eff := effectiveAvailable(map[string]int{"A100": 8}, map[string]int{})
+		Expect(eff).To(BeEmpty())
 	})
 })

@@ -35,6 +35,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -225,7 +226,7 @@ var _ = Describe("Saturation Engine", func() {
 				"default": {},
 			})
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -277,7 +278,7 @@ var _ = Describe("Saturation Engine", func() {
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
@@ -438,7 +439,7 @@ var _ = Describe("Saturation Engine", func() {
 				"default": {},
 			})
 			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -539,7 +540,7 @@ var _ = Describe("Saturation Engine", func() {
 					EnableLimiter: false,
 				},
 			})
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Running optimize() with EnableLimiter=false")
 			err := engine.optimize(ctx)

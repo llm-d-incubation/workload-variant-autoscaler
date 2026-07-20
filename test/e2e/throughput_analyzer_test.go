@@ -427,13 +427,17 @@ var _ = Describe("Multi-analyzer engine scale-up (saturation-driven, throughput 
 		// desired count is no longer surfaced in VA status; the annotated scaler consumes
 		// wva_desired_replicas and drives the target Deployment above its MinReplicas floor,
 		// so we assert the observable Deployment replica count instead.
-		By("Waiting for WVA to emit wva_desired_replicas under faked saturation")
-		// The engine's scale-up decision is surfaced via wva_desired_replicas,
-		// decoupled from the separate scaler actuation loop. This verifies emission/consumption via
-		// the KEDA HPA surface; the numeric magnitude is not asserted here.
+		By("Asserting KEDA actuates scale-up above MinReplicas")
+		// Faked kv-cache-usage=0.9 > scaleUpThreshold=0.85 deterministically drives a
+		// V2 saturation scale-up; KEDA consumes wva_desired_replicas and drives the
+		// Deployment above its MinReplicas floor. Assert the observable replica count —
+		// the ground truth — rather than the KEDA HPA CurrentMetrics surface.
 		Eventually(func(g Gomega) {
-			expectWVADesiredReplicasConsumed(g, cfg.LLMDNamespace, modelDecodeDeployment)
-		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+			dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", int32(2)),
+				"faked saturation (kv-cache-usage=0.9) should drive the Deployment above MinReplicas=1")
+		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 })
 
@@ -533,6 +537,14 @@ var _ = Describe("ThroughputAnalyzer TA-only mode", Label("full", "throughput"),
 		// Post-CRD-removal WVA no longer writes VA .status; its sole output is the
 		// wva_desired_replicas external metric. A positive throughput-driven allocation
 		// is observed via the KEDA-managed HPA's CurrentMetrics.
+		//
+		// Unlike the saturation/SGLang scale-up specs (which use --fake-metrics to pin a
+		// deterministic operating point), this scenario is driven by a real sustained load
+		// job. The throughput analyzer's recommended replica count depends on measured
+		// token throughput vs SLO, which is not deterministic in CI — so this asserts that
+		// the metric is emitted and consumed (a positive allocation flows through the
+		// pipeline), not a specific replica magnitude, to avoid a load-timing-dependent
+		// flake.
 		By("Verifying KEDA read wva_desired_replicas for the throughput-driven variant")
 		Eventually(func(g Gomega) {
 			hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})

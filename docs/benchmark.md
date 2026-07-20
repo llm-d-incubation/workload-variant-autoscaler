@@ -48,6 +48,25 @@ Summary of WVA benchmark runs with configuration details.
 | Scale-down policy | 10 Pods / 150s |
 | Metric source | External (`wva_desired_replicas`) |
 
+## EPP+KEDA Saturation Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **EPP** | |
+| Scorer weights | Default (queue=2, kv-cache=2, prefix-cache=3) |
+| Feature gates | Default (no flowControl) |
+| **KEDA ScaledObject** | |
+| KV cache target | 700m |
+| Queue depth target | 2 |
+| Min replicas | 1 |
+| Max replicas | 10 |
+| Polling interval | 15s |
+| Scale-up policy | 1 Pod / 180s, stabilization 0s |
+| Scale-down policy | 1 Pod / 300s, stabilization 300s |
+| **Benchmark** | |
+| Model | Qwen/Qwen3-32B |
+| Duration | 600s |
+
 
 ## Prefill Heavy Scenario
 
@@ -162,6 +181,23 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 67 | 64 | 66 | 66 |
 | Cost (avg replicas × GPU/hr) | 2.70 | 3.27 | 3.54 | 3.17 |
 
+### Prefill Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, 600s)
+
+**Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Setup:** See [EPP+KEDA Saturation Configuration](#eppkeda-saturation-configuration)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 526,612 | 498,804 | 495,336 | 506,917 |
+| P99 ITL (ms/token) | 58.83 | 58.29 | 58.92 | 58.68 |
+| Avg replicas | 7.41 | 7.37 | 7.49 | 7.42 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 67.0% | 65.6% | 69.5% | 67.4% |
+| Avg queue depth (EPP) | 108.7 | 118.6 | 108.2 | 111.8 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 106 | 102 | 104 | 104 |
+| Cost (avg replicas × GPU/hr) | 7.41 | 7.37 | 7.49 | 7.42 |
+
 ## Decode Heavy Scenario
 
 ### Decode Heavy — Qwen/Qwen3-32B (600s)
@@ -274,6 +310,23 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 2,610 | 3,207 | 1,743 | 2,520 |
 | Avg pod startup (s) | 64 | 68 | 67 | 66 |
 | Cost (avg replicas × GPU/hr) | 2.65 | 2.24 | 2.88 | 2.59 |
+
+### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Saturation, 600s)
+
+**Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
+**Setup:** See [EPP+KEDA Saturation Configuration](#eppkeda-saturation-configuration)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 327,058 | 448,772 | 448,750 | 408,193 |
+| P99 ITL (ms/token) | 104.08 | 108.32 | 108.34 | 106.91 |
+| Avg replicas | 10.00 | 7.32 | 7.34 | 8.22 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 88.7% | 33.3% | 32.3% | 51.4% |
+| Avg queue depth (EPP) | 40.4 | 123.2 | 116.7 | 93.4 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 106 | 101 | 100 | 102 |
+| Cost (avg replicas × GPU/hr) | 10.00 | 7.32 | 7.34 | 8.22 |
 
 ## Bursty Scenario
 
@@ -441,6 +494,23 @@ Summary of WVA benchmark runs with configuration details.
 | Error count | 0 | 52 | 0 | 17 |
 | Avg pod startup (s) | 62 | 64 | 67 | 64 |
 | Cost (avg replicas × GPU/hr) | 1.79 | 1.81 | 1.81 | 1.80 |
+
+### Symmetrical — Qwen/Qwen3-32B (EPP+KEDA Saturation, 600s)
+
+**Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
+**Setup:** See [EPP+KEDA Saturation Configuration](#eppkeda-saturation-configuration)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | 527,657 | 477,895 | 478,899 | 494,817 |
+| P99 ITL (ms/token) | 58.64 | 68.68 | 68.92 | 65.41 |
+| Avg replicas | 7.17 | 7.62 | 7.57 | 7.45 |
+| Max replicas | 10 | 10 | 10 | 10 |
+| Avg KV cache utilization | 64.0% | 68.6% | 66.9% | 66.5% |
+| Avg queue depth (EPP) | 129.5 | 90.7 | 93.2 | 104.5 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 122 | 98 | 105 | 108 |
+| Cost (avg replicas × GPU/hr) | 7.17 | 7.62 | 7.57 | 7.45 |
 
 ## Two-Variant Efficiency-Aware Scenario
 

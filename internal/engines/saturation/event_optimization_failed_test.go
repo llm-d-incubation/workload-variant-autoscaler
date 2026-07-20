@@ -33,6 +33,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
@@ -84,7 +85,7 @@ func TestRecordOptimizationFailedEvent(t *testing.T) {
 
 			testConfig := config.NewTestConfig()
 
-			engine := NewEngine(k8sClient, k8sClient, scheme, fakeRecorder, sourceRegistry, testConfig)
+			engine := NewEngine(k8sClient, k8sClient, scheme, fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			variantAutoscalings := make([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling, 0, tt.numVAs)
 			for i := 0; i < tt.numVAs; i++ {
@@ -150,7 +151,7 @@ func TestRecordOptimizationFailedEvent_NilRecorder(t *testing.T) {
 	testConfig := config.NewTestConfig()
 
 	// Create engine with nil recorder
-	engine := NewEngine(k8sClient, k8sClient, scheme, nil, sourceRegistry, testConfig)
+	engine := NewEngine(k8sClient, k8sClient, scheme, nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 	variantAutoscalings := []llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
 		{

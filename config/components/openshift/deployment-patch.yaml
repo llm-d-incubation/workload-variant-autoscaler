@@ -18,3 +18,12 @@ spec:
           value: ""
         - name: PROMETHEUS_SERVER_NAME
           value: "thanos-querier.openshift-monitoring.svc"
+        volumeMounts:
+        - name: metrics-serving-cert
+          mountPath: /etc/k8s-metrics-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: metrics-serving-cert
+        secret:
+          secretName: metrics-server-cert
+          defaultMode: 420

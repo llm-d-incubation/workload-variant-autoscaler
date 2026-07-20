@@ -166,7 +166,7 @@ jobs:
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |
-          make test-e2e-smoke-keda-with-setup
+          make test-e2e-smoke-with-setup
 
   # Full Kind E2E - runs automatically on every PR with code changes.
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
@@ -223,4 +223,4 @@ jobs:
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |
-          make test-e2e-full-keda-with-setup
+          make test-e2e-full-with-setup
