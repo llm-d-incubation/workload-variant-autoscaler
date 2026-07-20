@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -76,9 +77,7 @@ type PodLocator interface {
 	ResolveScaleTarget(ctx context.Context, namespace, podName string) (ref autoscalingv2.CrossVersionObjectReference, ok bool, err error)
 
 	// GetPodLabels returns the labels for the specified pod. This reuses the
-	// same pod fetch that Locate performs, so calling both methods for the
-	// same pod results in only one API read (the pod→target resolution is cached).
-	// Returns nil if the pod does not exist or on error.
+	// same pod fetch that Locate performs. Returns nil if the pod does not exist or on error.
 	GetPodLabels(ctx context.Context, namespace, podName string) map[string]string
 }
 
@@ -194,11 +193,19 @@ func (l *podLocator) GetPodLabels(ctx context.Context, namespace, podName string
 	// Not in cache, fetch the pod
 	pod := &corev1.Pod{}
 	if err := l.apiReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: podName}, pod); err != nil {
+		if !apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).Error(err, "GetPodLabels: failed to get pod", "namespace", namespace, "pod", podName)
+		}
 		return nil
 	}
 
-	// Resolve the target to populate the cache (so subsequent Locate calls don't refetch)
-	target, _ := l.resolveScaleTarget(ctx, pod, namespace)
+	// Resolve the target to populate the cache (so subsequent Locate calls don't refetch).
+	// Skip caching on error to avoid a permanent negative entry from a transient failure.
+	target, err := l.resolveScaleTarget(ctx, pod, namespace)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "GetPodLabels: resolveScaleTarget failed, skipping cache", "namespace", namespace, "pod", podName)
+		return pod.Labels
+	}
 	l.cache.add(key, target, pod.Labels)
 
 	return pod.Labels

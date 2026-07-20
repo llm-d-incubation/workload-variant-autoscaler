@@ -39,7 +39,7 @@ const RolePrefill = "prefill"
 // and the queueing model analyzer. Saturation analysis uses KV cache, queue, and
 // token-capacity fields, while the queueing model analyzer uses
 // ArrivalRate and MaxBatchSize to model queue dynamics and estimate optimal capacity.
-// For LWS, ReplicasMetrics only holds leader pods (leaderworkerset.sigs.k8s.io/worker-index=0 label)
+// For LWS, ReplicaMetrics only holds leader pods (leaderworkerset.sigs.k8s.io/worker-index=0 label)
 // which emit vLLM metrics representing an LWS replica, as such len(ReplicaMetrics) == len(LWS replicas).
 type ReplicaMetrics struct {
 	PodName         string

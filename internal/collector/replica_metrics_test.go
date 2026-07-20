@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -1044,24 +1045,24 @@ func TestIsLWSWorker(t *testing.T) {
 		{
 			name: "LWS leader pod (worker-index=0)",
 			podLabels: map[string]string{
-				"app":                         "test",
-				constants.LWSWorkerIndexLabel: "0",
+				"app":                     "test",
+				lwsv1.WorkerIndexLabelKey: "0",
 			},
 			want: false, // leaders are not workers
 		},
 		{
 			name: "LWS worker pod (worker-index=1)",
 			podLabels: map[string]string{
-				"app":                         "test",
-				constants.LWSWorkerIndexLabel: "1",
+				"app":                     "test",
+				lwsv1.WorkerIndexLabelKey: "1",
 			},
 			want: true,
 		},
 		{
 			name: "LWS worker pod (worker-index=2)",
 			podLabels: map[string]string{
-				"app":                         "test",
-				constants.LWSWorkerIndexLabel: "2",
+				"app":                     "test",
+				lwsv1.WorkerIndexLabelKey: "2",
 			},
 			want: true,
 		},
@@ -1139,8 +1140,8 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 			name:       "leader-only emits (ideal case)",
 			metricPods: []string{"leader-0", "leader-1"},
 			podLabels: map[string]map[string]string{
-				"leader-0": {constants.LWSWorkerIndexLabel: "0"},
-				"leader-1": {constants.LWSWorkerIndexLabel: "0"},
+				"leader-0": {lwsv1.WorkerIndexLabelKey: "0"},
+				"leader-1": {lwsv1.WorkerIndexLabelKey: "0"},
 			},
 			expectedFilter: []string{"leader-0", "leader-1"},
 		},
@@ -1151,12 +1152,12 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 				"leader-1", "worker-1-1", "worker-1-2",
 			},
 			podLabels: map[string]map[string]string{
-				"leader-0":   {constants.LWSWorkerIndexLabel: "0"},
-				"worker-0-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-0-2": {constants.LWSWorkerIndexLabel: "2"},
-				"leader-1":   {constants.LWSWorkerIndexLabel: "0"},
-				"worker-1-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-1-2": {constants.LWSWorkerIndexLabel: "2"},
+				"leader-0":   {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-0-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-0-2": {lwsv1.WorkerIndexLabelKey: "2"},
+				"leader-1":   {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-1-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-1-2": {lwsv1.WorkerIndexLabelKey: "2"},
 			},
 			expectedFilter: []string{"leader-0", "leader-1"},
 		},
@@ -1168,11 +1169,11 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 				"leader-1", "worker-1-1", "worker-1-2",
 			},
 			podLabels: map[string]map[string]string{
-				"worker-0-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-0-2": {constants.LWSWorkerIndexLabel: "2"},
-				"leader-1":   {constants.LWSWorkerIndexLabel: "0"},
-				"worker-1-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-1-2": {constants.LWSWorkerIndexLabel: "2"},
+				"worker-0-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-0-2": {lwsv1.WorkerIndexLabelKey: "2"},
+				"leader-1":   {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-1-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-1-2": {lwsv1.WorkerIndexLabelKey: "2"},
 			},
 			// Workers filtered out even though leader-0 is missing
 			expectedFilter: []string{"leader-1"},
@@ -1188,12 +1189,12 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 				"worker-2-1", "worker-2-2",
 			},
 			podLabels: map[string]map[string]string{
-				"leader-0":   {constants.LWSWorkerIndexLabel: "0"},
-				"worker-0-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-0-2": {constants.LWSWorkerIndexLabel: "2"},
-				"leader-1":   {constants.LWSWorkerIndexLabel: "0"},
-				"worker-2-1": {constants.LWSWorkerIndexLabel: "1"},
-				"worker-2-2": {constants.LWSWorkerIndexLabel: "2"},
+				"leader-0":   {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-0-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-0-2": {lwsv1.WorkerIndexLabelKey: "2"},
+				"leader-1":   {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-2-1": {lwsv1.WorkerIndexLabelKey: "1"},
+				"worker-2-2": {lwsv1.WorkerIndexLabelKey: "2"},
 			},
 			expectedFilter: []string{"leader-0", "leader-1"},
 		},
@@ -1204,8 +1205,8 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 				"regular-pod-1", "regular-pod-2", // non-LWS pods
 			},
 			podLabels: map[string]map[string]string{
-				"leader-0":      {constants.LWSWorkerIndexLabel: "0"},
-				"worker-0-1":    {constants.LWSWorkerIndexLabel: "1"},
+				"leader-0":      {lwsv1.WorkerIndexLabelKey: "0"},
+				"worker-0-1":    {lwsv1.WorkerIndexLabelKey: "1"},
 				"regular-pod-1": {}, // no worker-index label
 				"regular-pod-2": {}, // no worker-index label
 			},
@@ -1216,8 +1217,8 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 			name:       "single leader, no workers (size=1 LWS)",
 			metricPods: []string{"leader-0", "leader-1"},
 			podLabels: map[string]map[string]string{
-				"leader-0": {constants.LWSWorkerIndexLabel: "0"},
-				"leader-1": {constants.LWSWorkerIndexLabel: "0"},
+				"leader-0": {lwsv1.WorkerIndexLabelKey: "0"},
+				"leader-1": {lwsv1.WorkerIndexLabelKey: "0"},
 			},
 			expectedFilter: []string{"leader-0", "leader-1"},
 		},
@@ -1326,9 +1327,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "leader-0",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "0", // leader
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "0", // leader
 				},
 			},
 			Status: corev1.PodStatus{
@@ -1342,9 +1343,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "worker-0-1",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "1", // worker
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "1", // worker
 				},
 			},
 			Status: corev1.PodStatus{
@@ -1358,9 +1359,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "worker-0-2",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "2", // worker
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "2", // worker
 				},
 			},
 			Status: corev1.PodStatus{
@@ -1374,9 +1375,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "leader-1",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "0", // leader
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "0", // leader
 				},
 			},
 			Status: corev1.PodStatus{
@@ -1390,9 +1391,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "worker-1-1",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "1", // worker
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "1", // worker
 				},
 			},
 			Status: corev1.PodStatus{
@@ -1406,9 +1407,9 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 				Name:      "worker-1-2",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"app":                         "lws-app",
-					constants.VariantLabelKey:     vaName,
-					constants.LWSWorkerIndexLabel: "2", // worker
+					"app":                     "lws-app",
+					constants.VariantLabelKey: vaName,
+					lwsv1.WorkerIndexLabelKey: "2", // worker
 				},
 			},
 			Status: corev1.PodStatus{

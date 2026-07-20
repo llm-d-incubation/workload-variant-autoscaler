@@ -51,6 +51,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
@@ -297,17 +298,16 @@ func (c *ReplicaMetricsCollector) isLWSWorker(ctx context.Context, namespace, po
 
 	labels := c.locator.GetPodLabels(ctx, namespace, podName)
 	if labels == nil {
+		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("isLWSWorker: nil labels, treating pod as non-worker",
+			"pod", podName, "namespace", namespace)
 		return false
 	}
 
-	workerIndex, hasLabel := labels[constants.LWSWorkerIndexLabel]
+	workerIndex, hasLabel := labels[lwsv1.WorkerIndexLabelKey]
 	if !hasLabel {
-		// Not an LWS pod
 		return false
 	}
 
-	// LWS workers have worker-index != "0"
-	// LWS leaders have worker-index == "0"
 	return workerIndex != "0"
 }
 

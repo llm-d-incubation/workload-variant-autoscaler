@@ -102,8 +102,6 @@ const (
 	LeaderWorkerSetKind       = "LeaderWorkerSet"
 	LeaderWorkerSetAPIVersion = "leaderworkerset.x-k8s.io/v1"
 
-	// LeaderWorkerSet labels
-	LWSWorkerIndexLabel = "leaderworkerset.sigs.k8s.io/worker-index"
 	// KEDA ScaledObject identity, used to recognize the HPA KEDA generates per
 	// ScaledObject (the child HPA inherits the ScaledObject's annotations).
 	ScaledObjectKind     = "ScaledObject"
