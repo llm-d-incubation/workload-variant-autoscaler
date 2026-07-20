@@ -112,8 +112,7 @@ Summary of WVA benchmark runs with configuration details.
 
 **Model:** Qwen/Qwen3-32B
 **Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
-**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s) ([#1220](https://github.com/llm-d/llm-d-workload-variant-autoscaler/pull/1220))
-
+**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s)
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 557,065 | 553,972 | 555,602 | 555,546 |
@@ -131,8 +130,7 @@ Summary of WVA benchmark runs with configuration details.
 **llm-d Release:** main (includes v0.7.0 WVA)
 **Model:** Qwen/Qwen3-32B
 **Workload:** 4000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
-**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
-
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 553,930 | 552,625 | 559,358 | 555,305 |
@@ -257,8 +255,7 @@ Summary of WVA benchmark runs with configuration details.
 
 **Model:** Qwen/Qwen3-32B
 **Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
-**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s) ([#1220](https://github.com/llm-d/llm-d-workload-variant-autoscaler/pull/1220))
-
+**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s)
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 356,636 | 357,012 | 356,991 | 356,880 |
@@ -276,8 +273,7 @@ Summary of WVA benchmark runs with configuration details.
 **llm-d Release:** main (includes v0.7.0 WVA)
 **Model:** Qwen/Qwen3-32B
 **Workload:** 1000 prompt tokens, 4000 output tokens, 20 RPS, 600s duration
-**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
-
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 357,610 | 356,292 | 355,795 | 356,566 |
@@ -475,8 +471,7 @@ Summary of WVA benchmark runs with configuration details.
 
 **Model:** Qwen/Qwen3-32B
 **Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
-**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s) ([#1220](https://github.com/llm-d/llm-d-workload-variant-autoscaler/pull/1220))
-
+**Setup:** HPA Saturation V1 (KV cache target=700m, queue depth target=2, min=1, max=10 replicas, scaleUp=180s, scaleDown=300s)
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 517,882 | 518,167 | 518,893 | 518,314 |
@@ -494,8 +489,7 @@ Summary of WVA benchmark runs with configuration details.
 **llm-d Release:** main (includes v0.7.0 WVA)
 **Model:** Qwen/Qwen3-32B
 **Workload:** 1000 prompt tokens, 1000 output tokens, 20 RPS, 600s duration
-**Setup:** WVA disabled, HPA deleted, 2 constant replicas ([#1139](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1139))
-
+**Setup:** WVA disabled, HPA deleted, 2 constant replicas
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
 | P99 TTFT (ms) | 492,921 | 515,307 | 514,286 | 507,504 |
