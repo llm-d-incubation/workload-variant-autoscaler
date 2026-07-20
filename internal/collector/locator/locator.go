@@ -204,6 +204,22 @@ func (l *podLocator) GetPodLabels(ctx context.Context, namespace, podName string
 	return pod.Labels
 }
 
+// ResolveScaleTarget returns the top-level scale target for the given pod.
+func (l *podLocator) ResolveScaleTarget(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error) {
+	target, err := l.resolveTarget(ctx, namespace, podName)
+	if err != nil {
+		return autoscalingv2.CrossVersionObjectReference{}, false, err
+	}
+	if target == (chainNode{}) {
+		return autoscalingv2.CrossVersionObjectReference{}, false, nil
+	}
+	return autoscalingv2.CrossVersionObjectReference{
+		APIVersion: target.APIVersion,
+		Kind:       target.Kind,
+		Name:       target.Name,
+	}, true, nil
+}
+
 // resolveScaleTarget walks the pod's ownerReferences and returns the first
 // ancestor that is a Deployment or LWS. Returns the zero chainNode if no
 // such ancestor exists.
