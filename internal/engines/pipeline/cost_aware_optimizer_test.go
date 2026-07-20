@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"math"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,6 +72,97 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// cheap is more efficient → ceil(5000/10000) = 1 replica added
 			Expect(dm["cheap"].TargetReplicas).To(Equal(3))
 			Expect(dm["expensive"].TargetReplicas).To(Equal(1))
+		})
+
+		It("populates decision observability fields (utilization/required/spare) from the analyzer result", func() {
+			// Regression: these three feed wva_saturation_utilization / wva_required_capacity /
+			// wva_spare_capacity. If buildDecisionsWithOptimizer stops copying them, the gauges read 0.
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 5000,
+				SpareCapacity:    1200,
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000, Utilization: 0.42},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v1", CurrentReplicas: 2},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["v1"].Utilization).To(Equal(0.42))
+			Expect(dm["v1"].RequiredCapacity).To(Equal(5000.0)) // model-level (no RoleCapacities)
+			Expect(dm["v1"].SpareCapacity).To(Equal(1200.0))    // tokens, companion to required
+		})
+
+		It("uses per-role required/spare capacity for P/D-disaggregated models", func() {
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 9999, // model-level; must NOT be used for role-scoped variants
+				SpareCapacity:    8888,
+				RoleCapacities: map[string]interfaces.RoleCapacity{
+					"prefill": {Role: "prefill", RequiredCapacity: 100, SpareCapacity: 10},
+					"decode":  {Role: "decode", RequiredCapacity: 200, SpareCapacity: 20},
+				},
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "p", Role: "prefill", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.3},
+					{VariantName: "d", Role: "decode", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.6},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "p", Role: "prefill", CurrentReplicas: 1},
+						{VariantName: "d", Role: "decode", CurrentReplicas: 1},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["p"].RequiredCapacity).To(Equal(100.0))
+			Expect(dm["p"].SpareCapacity).To(Equal(10.0))
+			Expect(dm["d"].RequiredCapacity).To(Equal(200.0))
+			Expect(dm["d"].SpareCapacity).To(Equal(20.0))
+		})
+
+		It("maps an empty-role variant to the \"both\" RoleCapacities entry", func() {
+			// Role "" normalizes to RoleBoth, so the "both" entry (not the model-level
+			// totals) must be used. Model-level 9999/8888 are decoys.
+			r := &interfaces.AnalyzerResult{
+				ModelID:          "model-1",
+				Namespace:        "default",
+				RequiredCapacity: 9999,
+				SpareCapacity:    8888,
+				RoleCapacities: map[string]interfaces.RoleCapacity{
+					"both": {Role: "both", RequiredCapacity: 300, SpareCapacity: 30},
+				},
+				VariantCapacities: []interfaces.VariantCapacity{
+					{VariantName: "v", Role: "", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.5},
+				},
+			}
+			requests := []ModelScalingRequest{
+				withSatEntry(r, ModelScalingRequest{
+					ModelID:   "model-1",
+					Namespace: "default",
+					VariantStates: []interfaces.VariantReplicaState{
+						{VariantName: "v", Role: "", CurrentReplicas: 1},
+					},
+				}),
+			}
+
+			dm := decisionMap(optimizer.Optimize(ctx, requests, nil))
+			Expect(dm["v"].RequiredCapacity).To(Equal(300.0)) // "both" entry, not model-level 9999
+			Expect(dm["v"].SpareCapacity).To(Equal(30.0))     // "both" entry, not model-level 8888
 		})
 
 		It("should not skip variants with pending replicas", func() {
@@ -861,6 +953,37 @@ var _ = Describe("CostAwareOptimizer", func() {
 			Expect(merged["A100"]).To(Equal(6))
 			Expect(merged["H100"]).To(Equal(4))
 		})
+
+		It("mergeConstraints carries an unlimited (negative) pool through as an unbounded budget", func() {
+			merged := mergeConstraints([]*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: -1}, "H100": {Limit: 4}}},
+			})
+
+			// Unlimited must be present as an unbounded budget, NOT absent: an
+			// absent type reads as 0 in fairShareRolePick and is silently denied,
+			// which would invert the -1 = unlimited semantic.
+			Expect(merged["A100"]).To(Equal(math.MaxInt), "unlimited => unbounded budget")
+			Expect(merged["H100"]).To(Equal(4))
+		})
+
+		It("mergeConstraints lets a finite pool win over an unlimited sentinel regardless of provider order", func() {
+			// This pins the min()-across-providers ordering property (the
+			// sentinel-carry regression itself is guarded by the math.MaxInt
+			// assertion above); a finite cap must beat unlimited either way.
+			// finite before sentinel
+			m1 := mergeConstraints([]*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: 5}}},
+				{Pools: map[string]ResourcePool{"A100": {Limit: -1}}},
+			})
+			Expect(m1["A100"]).To(Equal(5), "finite cap is more restrictive than unlimited")
+
+			// sentinel before finite
+			m2 := mergeConstraints([]*ResourceConstraints{
+				{Pools: map[string]ResourcePool{"A100": {Limit: -1}}},
+				{Pools: map[string]ResourcePool{"A100": {Limit: 5}}},
+			})
+			Expect(m2["A100"]).To(Equal(5), "finite cap wins even when the sentinel is seen first")
+		})
 	})
 })
 
@@ -871,3 +994,113 @@ func decisionMap(decisions []interfaces.VariantDecision) map[string]interfaces.V
 	}
 	return m
 }
+
+var _ = Describe("namespace constraint merge helpers", func() {
+	Describe("nsPoolBudget", func() {
+		It("preserves the unlimited sentinel as -1", func() {
+			Expect(nsPoolBudget(ResourcePool{Limit: -1})).To(Equal(-1))
+		})
+		It("returns the available count for a finite pool", func() {
+			Expect(nsPoolBudget(ResourcePool{Limit: 6, Used: 2})).To(Equal(4))
+		})
+		It("clamps a finite over-used pool to 0", func() {
+			Expect(nsPoolBudget(ResourcePool{Limit: 2, Used: 5})).To(Equal(0))
+		})
+	})
+
+	Describe("tighterBudget", func() {
+		It("returns the smaller of two finite budgets", func() {
+			Expect(tighterBudget(4, 2)).To(Equal(2))
+			Expect(tighterBudget(2, 4)).To(Equal(2))
+		})
+		It("treats a negative (unlimited) input as +infinity", func() {
+			Expect(tighterBudget(-1, 4)).To(Equal(4), "unlimited vs finite -> finite")
+			Expect(tighterBudget(4, -1)).To(Equal(4), "finite vs unlimited -> finite")
+		})
+		It("stays unlimited only when both inputs are unlimited", func() {
+			Expect(tighterBudget(-1, -1)).To(Equal(-1))
+		})
+	})
+
+	Describe("mergeNamespaceConstraints", func() {
+		It("returns nil when no provider carries namespace pools", func() {
+			Expect(mergeNamespaceConstraints([]*ResourceConstraints{{Pools: map[string]ResourcePool{"A100": {Limit: 4}}}})).To(BeNil())
+		})
+
+		It("materializes a present-but-empty namespace as a closed (deny-all) marker", func() {
+			merged := mergeNamespaceConstraints([]*ResourceConstraints{
+				{NamespacePools: map[string]map[string]ResourcePool{"team-x": {}}},
+			})
+			Expect(merged).To(HaveKey("team-x"))
+			Expect(merged["team-x"]).To(BeEmpty())
+			Expect(merged["team-x"]).NotTo(BeNil(), "non-nil empty map signals a closed namespace, not 'open'")
+		})
+
+		It("carries the unlimited sentinel through as -1", func() {
+			merged := mergeNamespaceConstraints([]*ResourceConstraints{
+				{NamespacePools: map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: -1}}}},
+			})
+			Expect(merged["team-a"]).To(HaveKeyWithValue("A100", -1))
+		})
+
+		It("takes the tighter budget across two providers for the same (ns,type)", func() {
+			merged := mergeNamespaceConstraints([]*ResourceConstraints{
+				{NamespacePools: map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: 8, Used: 1}}}}, // avail 7
+				{NamespacePools: map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: 4}}}},          // avail 4
+			})
+			Expect(merged["team-a"]).To(HaveKeyWithValue("A100", 4), "min(7,4)")
+		})
+
+		It("lets a finite provider win over an unlimited one for the same (ns,type)", func() {
+			merged := mergeNamespaceConstraints([]*ResourceConstraints{
+				{NamespacePools: map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: -1}}}},
+				{NamespacePools: map[string]map[string]ResourcePool{"team-a": {"A100": {Limit: 5}}}},
+			})
+			Expect(merged["team-a"]).To(HaveKeyWithValue("A100", 5))
+		})
+	})
+
+	Describe("aggregateNamespacePools", func() {
+		It("sums only finite per-(ns,type) pools across namespaces", func() {
+			agg := aggregateNamespacePools(map[string]map[string]ResourcePool{
+				"team-a": {"A100": {Limit: 4, Used: 1}},
+				"team-b": {"A100": {Limit: 2}, "H100": {Limit: 3}},
+			})
+			Expect(agg["A100"]).To(Equal(ResourcePool{Limit: 6, Used: 1}))
+			Expect(agg["H100"]).To(Equal(ResourcePool{Limit: 3}))
+		})
+
+		It("skips unlimited (negative) pools so an all-unlimited config yields an empty map", func() {
+			agg := aggregateNamespacePools(map[string]map[string]ResourcePool{
+				"team-a": {"A100": {Limit: -1}},
+				"team-b": {"H100": {Limit: -1}},
+			})
+			Expect(agg).To(BeEmpty(), "unlimited types impose no finite cluster cap")
+		})
+
+		It("includes finite types but drops unlimited ones in a mixed namespace", func() {
+			agg := aggregateNamespacePools(map[string]map[string]ResourcePool{
+				"team-a": {"A100": {Limit: 4}, "H100": {Limit: -1}},
+			})
+			Expect(agg).To(HaveKey("A100"))
+			Expect(agg).NotTo(HaveKey("H100"))
+		})
+	})
+
+	Describe("poolTotals", func() {
+		It("sums limit/used and returns available", func() {
+			limit, used, avail := poolTotals(map[string]ResourcePool{
+				"A100": {Limit: 8, Used: 3},
+				"H100": {Limit: 4, Used: 1},
+			})
+			Expect(limit).To(Equal(12))
+			Expect(used).To(Equal(4))
+			Expect(avail).To(Equal(8))
+		})
+
+		It("clamps available to 0 when usage exceeds limit", func() {
+			_, _, avail := poolTotals(map[string]ResourcePool{"A100": {Limit: 2, Used: 5}})
+			Expect(avail).To(Equal(0))
+		})
+	})
+})

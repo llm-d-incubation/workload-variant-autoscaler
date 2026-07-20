@@ -23,6 +23,7 @@ import (
 	goflag "flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,7 +49,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
@@ -60,6 +60,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/coordinator/plugins/gpurebalance"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/throughput"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/scalefromzero"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -84,7 +85,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(llmdVariantAutoscalingV1alpha1.AddToScheme(scheme))
 	utilruntime.Must(promoperator.AddToScheme(scheme))
 	utilruntime.Must(inferencePoolV1.Install(scheme))
 	utilruntime.Must(inferencePoolV1alpha2.Install(scheme))
@@ -138,8 +138,6 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.String("metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.String("metrics-cert-key", "tls.key", "The name of the metrics key file.")
-	flag.Bool("enable-http2", false,
-		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.String("watch-namespace", "",
 		"Namespace to watch for updates. If unspecified, all namespaces are watched.")
 
@@ -158,6 +156,15 @@ func main() {
 	flag.Duration("rest-client-timeout", 60*time.Second,
 		"The timeout for REST API calls to the Kubernetes API server. "+
 			"Increased from default ~30s to 60s for better resilience against network latency.")
+
+	flag.String("limiter-type", "inventory",
+		"GPU limiter implementation: 'inventory' (default; physical-capacity-based) or "+
+			"'quota' (operator-declared per-GPU-type quotas at cluster and/or namespace scope). "+
+			"When 'quota' is selected, --quota-config-file must point at a YAML file "+
+			"containing a QuotaLimiterEntries document.")
+	flag.String("quota-config-file", "",
+		"Path to a YAML file declaring QuotaLimiterEntries. Required when --limiter-type=quota. "+
+			"See docs/developer-guide/quota-limiter.md for the schema and examples.")
 
 	opts := ctrlzap.Options{
 		Development: true,
@@ -201,18 +208,7 @@ func main() {
 		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
 	}
 
-	vaCRDEnabled, err := crd.CheckVariantAutoscalingCRD(restConfig, setupLog)
-	if err != nil {
-		setupLog.Error(err, "failed to determine VariantAutoscaling CRD availability")
-		os.Exit(1)
-	}
-	if vaCRDEnabled {
-		setupLog.Info("VariantAutoscaling CRD detected - support enabled")
-	} else {
-		setupLog.Info("VariantAutoscaling CRD not found - VA reconciler disabled; annotation-based discovery remains enabled")
-	}
-
-	// Detect KEDA for annotation-based ScaledObject discovery (dual-mode, Phase 1)
+	// Detect KEDA for annotation-based ScaledObject discovery
 	kedaEnabled := crd.CheckKEDACRD(restConfig, setupLog)
 	if kedaEnabled {
 		setupLog.Info("KEDA ScaledObject CRD detected - annotation-based ScaledObject discovery enabled")
@@ -223,20 +219,10 @@ func main() {
 	// the saturation engine goroutine constructs its locator.
 	locator.SetKEDAEnabled(kedaEnabled)
 
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities. More specifically, disabling http/2 will
-	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
-	}
-
-	var tlsOpts []func(*tls.Config)
-	if !cfg.EnableHTTP2() {
-		tlsOpts = append(tlsOpts, disableHTTP2)
+	tlsOpts := []func(*tls.Config){
+		func(c *tls.Config) {
+			c.NextProtos = []string{"h2", "http/1.1"}
+		},
 	}
 
 	// Create watchers for metrics and webhooks certificates
@@ -393,9 +379,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup custom indexes for lookups on VariantAutoscalings
+	// Setup custom indexes for lookups on HPAs and ScaledObjects
 	setupLog.Info("Setting up indexes")
-	if err := indexers.SetupIndexes(context.Background(), mgr, vaCRDEnabled, kedaEnabled); err != nil {
+	if err := indexers.SetupIndexes(context.Background(), mgr, kedaEnabled); err != nil {
 		setupLog.Error(err, "unable to setup indexes")
 		os.Exit(1)
 	}
@@ -432,15 +418,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Always validate TLS configuration since HTTPS is required
+	// Validate Prometheus transport configuration before creating the client.
 	if err := utils.ValidateTLSConfig(cfg); err != nil {
-		setupLog.Error(err, "TLS configuration validation failed - HTTPS is required")
+		setupLog.Error(err, "Prometheus transport configuration validation failed")
 		os.Exit(1)
 	}
 
+	promURL, _ := url.Parse(cfg.PrometheusBaseURL()) // already validated above
 	setupLog.Info("Initializing Prometheus client",
-		"address", cfg.PrometheusBaseURL(),
-		"tlsEnabled", true,
+		"address", promURL.Redacted(),
+		"tlsEnabled", utils.IsHTTPS(cfg.PrometheusBaseURL()),
+		"allowHTTP", cfg.PrometheusAllowHTTP(),
 	)
 
 	// Create Prometheus client with TLS support
@@ -484,6 +472,54 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Build the GPU limiter selected by --limiter-type. Validation in
+		// config.Validate already guarantees the chosen type is supported
+		// and (for quota) that the YAML loaded into a non-empty entries list.
+		gpuLimiter, err := pipeline.NewLimiterFromConfig(cfg, mgr.GetClient())
+		if err != nil {
+			setupLog.Error(err, "failed to build GPU limiter")
+			return err
+		}
+		setupLog.Info("GPU limiter constructed", "type", cfg.LimiterMode(), "name", gpuLimiter.Name())
+
+		// The GPU limiter is only consulted on the limited optimizer path, which
+		// the engine selects per-model when enableLimiter is true in the
+		// saturation-scaling ConfigMap. That flag lives in a different ConfigMap
+		// than the quota config and is not visible to config.Validate at startup,
+		// so warn explicitly: choosing --limiter-type=quota alone does NOT enforce
+		// quotas unless enableLimiter is also set.
+		if cfg.LimiterMode() == config.LimiterTypeQuota {
+			setupLog.Info("Quota limiter selected; quota caps are enforced ONLY when " +
+				"enableLimiter: true is set in the saturation-scaling ConfigMap. " +
+				"With the default enableLimiter: false the engine runs the unlimited " +
+				"optimizer and quota caps are not applied.")
+		}
+
+		// Symmetric guard for the reverse misconfiguration: a quota file set while
+		// limiter-type stays at the default 'inventory' is silently ignored (the
+		// file is never parsed). QUOTA_CONFIG_FILE exported but --limiter-type=quota
+		// forgotten is an easy mistake, so warn loudly rather than starting in
+		// inventory mode as if quotas were active.
+		if cfg.LimiterMode() == config.LimiterTypeInventory && cfg.QuotaConfigFile() != "" {
+			setupLog.Info("A quota config file is set but --limiter-type is 'inventory'; "+
+				"the quota file is IGNORED and no quota caps are enforced. "+
+				"Set --limiter-type=quota (or LIMITER_TYPE=quota) to activate quota enforcement.",
+				"quotaConfigFile", cfg.QuotaConfigFile())
+		}
+
+		// Quota mode means "no physical-capacity discovery" — including the
+		// inventory-collection call in the saturation engine. We honor that
+		// at the call site (see saturation.shouldCollectClusterInventory),
+		// but warn loudly here so an operator who explicitly enabled
+		// WVA_LIMITED_MODE sees that their inventory log will be suppressed.
+		if cfg.LimiterMode() == config.LimiterTypeQuota && cfg.LimitedModeEnabled() {
+			setupLog.Info("Quota limiter mode is active; cluster inventory collection is disabled "+
+				"despite WVA_LIMITED_MODE=true (no Node API access in quota mode). "+
+				"To re-enable cluster inventory logging, switch to --limiter-type=inventory.",
+				"limiterType", cfg.LimiterMode(),
+				"limitedModeEnabled", cfg.LimitedModeEnabled())
+		}
+
 		engine := saturation.NewEngine(
 			mgr.GetClient(),
 			mgr.GetAPIReader(),
@@ -491,6 +527,7 @@ func main() {
 			mgr.GetEventRecorderFor("workload-variant-autoscaler-saturation-engine"),
 			sourceRegistry,
 			cfg, // Pass unified Config to engine
+			gpuLimiter,
 		)
 		if throughputAnalyzerEnabled(cfg) {
 			registration.RegisterThroughputAnalyzerQueries(sourceRegistry)
@@ -521,24 +558,6 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to add optimization engine loop to manager")
 		os.Exit(1)
-	}
-
-	if vaCRDEnabled {
-		// Create the reconciler with unified Config and datastore
-		reconciler := controller.NewVariantAutoscalingReconciler(
-			mgr.GetClient(),
-			mgr.GetScheme(),
-			mgr.GetEventRecorderFor("workload-variant-autoscaler-controller-manager"),
-			cfg,
-			ds,
-			lwsEnabled,
-		)
-
-		// Setup the controller with the manager
-		if err = reconciler.SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller")
-			os.Exit(1)
-		}
 	}
 
 	// HPAReconciler: tracks namespaces for annotation-based discovery (always registered).

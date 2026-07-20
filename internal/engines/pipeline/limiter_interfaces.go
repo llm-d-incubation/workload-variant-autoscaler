@@ -148,6 +148,13 @@ type ResourcePool struct {
 
 // Available returns the number of allocatable resources (Limit - Used),
 // clamped to a minimum of 0.
+//
+// Available is only meaningful for a FINITE pool (Limit >= 0). A pool carrying
+// the unlimited sentinel (Limit < 0, emitted per-(namespace, type) by
+// NamespaceResourcePools) would clamp to 0 here, which reads as "deny" —
+// the opposite of "unlimited". Callers that may see the sentinel must branch on
+// Limit < 0 first (see nsPoolBudget and mergeConstraints); do not call
+// Available on such a pool.
 func (p ResourcePool) Available() int {
 	avail := p.Limit - p.Used
 	if avail < 0 {
@@ -161,9 +168,15 @@ func (p ResourcePool) Available() int {
 type ResourceConstraints struct {
 	ProviderName string                  // e.g., "gpu-limiter", "quota-limiter"
 	Pools        map[string]ResourcePool // accelerator type → pool
-	TotalLimit   int
-	TotalUsed    int
-	TotalAvail   int
+	// NamespacePools carries per-(namespace, accelerator type) caps for
+	// namespace-scoped providers (e.g. a namespace-scoped quota limiter).
+	// Outer key: namespace; inner key: accelerator type. Nil for providers
+	// that only impose cluster/per-type constraints. The optimizer caps a
+	// model's allocation at min(per-type pool, this namespace's pool).
+	NamespacePools map[string]map[string]ResourcePool
+	TotalLimit     int
+	TotalUsed      int
+	TotalAvail     int
 }
 
 // ConstraintProvider exposes hard constraints for the optimizer.
@@ -177,8 +190,12 @@ type ConstraintProvider interface {
 	Name() string
 
 	// ComputeConstraints refreshes resource data and returns hard constraints.
-	// currentUsage maps accelerator type → GPUs currently in use.
-	ComputeConstraints(ctx context.Context, currentUsage map[string]int) (*ResourceConstraints, error)
+	// usageByType maps accelerator type → GPUs currently in use (cluster-wide).
+	// usageByNamespace maps namespace → accelerator type → GPUs in use, and its
+	// keys also define the set of active namespaces for which namespace-scoped
+	// caps are materialized (so a namespace with a quota but zero current usage
+	// is still constrained). It may be nil for providers that ignore namespaces.
+	ComputeConstraints(ctx context.Context, usageByType map[string]int, usageByNamespace map[string]map[string]int) (*ResourceConstraints, error)
 }
 
 // Inventory provides resource availability and creates allocators.
@@ -230,4 +247,42 @@ type Inventory interface {
 	// GetResourcePools returns per-type resource availability.
 	// Each key is an accelerator type (e.g., "A100", "H100").
 	GetResourcePools() map[string]ResourcePool
+}
+
+// NamespaceAwareInventory is an Inventory whose constraints depend on the
+// namespace of the decision, not just the accelerator type. Implementations
+// bucket usage by namespace in addition to type; the chain orchestrator is
+// expected to feed them the per-namespace usage map alongside the per-type
+// map.
+//
+// Use feature detection at the chain level:
+//
+//	if nai, ok := inv.(NamespaceAwareInventory); ok {
+//	    nai.SetUsedByNamespace(usedByNS)
+//	}
+//	inv.SetUsed(usedByType) // always safe; namespace-only inventories ignore it
+//
+// Implementations should remain valid Inventory values: SetUsed must not
+// panic when called on a namespace-scoped inventory (it may simply be a
+// no-op).
+type NamespaceAwareInventory interface {
+	Inventory
+
+	// SetUsedByNamespace updates the per-namespace usage map.
+	// Outer key: namespace; inner key: accelerator type.
+	// Should be called before CreateAllocator, alongside SetUsed.
+	SetUsedByNamespace(usedByNS map[string]map[string]int)
+
+	// NamespaceResourcePools returns per-(namespace, accelerator type) pools
+	// for the given active namespaces as a CLOSED allowlist, resolving each
+	// namespace's caps via the inventory's lookup rules (e.g. explicit entry →
+	// default fall-through → exclude). Outer key: namespace; inner key:
+	// accelerator type. A namespace that is unconstrained (excluded) is omitted,
+	// signalling "open" — bound only by the cluster/per-type constraint. Every
+	// other active namespace is present (a closed allowlist; an empty inner map
+	// is a deny-all). A listed type with an unlimited cap is emitted as a
+	// sentinel pool with Limit < 0 (so it stays distinct from a type the
+	// namespace does not list, which the optimizer must deny). SetUsedByNamespace
+	// should be called first so the returned pools carry current usage.
+	NamespaceResourcePools(activeNamespaces []string) map[string]map[string]ResourcePool
 }

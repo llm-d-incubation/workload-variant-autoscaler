@@ -6,286 +6,169 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
 // GPU Limiter test validates that the WVA controller respects GPU resource constraints
 // and doesn't recommend scaling beyond available GPU capacity.
 //
-// This test creates VAs with different accelerator requirements and verifies that
-// the limiter correctly constrains scale-up decisions based on GPU availability.
+// This test creates two annotated scalers (discovery sources) for two deployments with
+// different variant costs and verifies that the limiter correctly constrains scale-up
+// decisions. With the VariantAutoscaling CRD removed, WVA derives the accelerator from
+// the scale target's node placement rather than from a variant object; the two variants
+// are differentiated here by their annotation cost, and the limiter outcome is observed
+// through Deployment replica counts and the wva_desired_replicas metric surface.
 var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 	var (
 		poolA         = "limiter-pool-a"
 		poolB         = "limiter-pool-b"
 		modelServiceA = "limiter-ms-a"
 		modelServiceB = "limiter-ms-b"
-		vaA           = "limiter-va-nvidia"
-		vaB           = "limiter-va-amd"
-		hpaA          = "limiter-hpa-nvidia"
-		hpaB          = "limiter-hpa-amd"
+		// variantA/variantB are the annotated scalers' object names; WVA uses them as
+		// the variant_name label on wva_desired_replicas. They are also passed to the
+		// model-service creation as the llm-d.ai/variant pod label value.
+		variantA = "limiter-va-nvidia"
+		variantB = "limiter-va-amd"
+		hpaA     = "limiter-hpa-nvidia"
+		hpaB     = "limiter-hpa-amd"
+		ns       string
 	)
 
 	BeforeAll(func() {
-		// Note: InferencePools should already exist from infra-only deployment
-		// We no longer create InferencePools in individual tests
+		nsObj, err := k8sClient.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "limiter-"},
+		}, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred(), "Failed to create isolated test namespace")
+		ns = nsObj.Name
+		By("Using isolated test namespace " + ns)
+		DeferCleanup(func() {
+			By("Deleting isolated namespace " + ns)
+			if err := k8sClient.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{}); err != nil {
+				GinkgoWriter.Printf("Warning: failed to delete namespace %s: %v\n", ns, err)
+			}
+		})
 
 		By("Creating two model services with different accelerator requirements")
 
 		// Pool A - NVIDIA GPUs
-		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceA, poolA, cfg.ModelID, vaA, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err = fixtures.EnsureModelService(ctx, k8sClient, ns, modelServiceA, poolA, cfg.ModelID, variantA, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service A")
 
-		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceA, modelServiceA+"-decode", 8000)
+		err = fixtures.EnsureService(ctx, k8sClient, ns, modelServiceA, modelServiceA+"-decode", 8000)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create service A")
 
 		By("Creating ServiceMonitor for service A")
-		err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceA, modelServiceA+"-decode")
+		err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, ns, modelServiceA, modelServiceA+"-decode")
 		Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceMonitor A")
 
-		// Register cleanup for ServiceMonitor A
 		DeferCleanup(func() {
-			serviceMonitorName := modelServiceA + "-monitor"
-			cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
-				func() error {
-					return crClient.Delete(ctx, &promoperator.ServiceMonitor{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      serviceMonitorName,
-							Namespace: cfg.MonitoringNS,
-						},
-					})
+			_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      modelServiceA + "-monitor",
+					Namespace: cfg.MonitoringNS,
 				},
-				func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
-					return errors.IsNotFound(err)
-				})
+			})
 		})
 
 		// Pool B - AMD GPUs
-		err = fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, poolB, cfg.ModelID, vaB, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err = fixtures.EnsureModelService(ctx, k8sClient, ns, modelServiceB, poolB, cfg.ModelID, variantB, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service B")
 
-		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceB, modelServiceB+"-decode", 8000)
+		err = fixtures.EnsureService(ctx, k8sClient, ns, modelServiceB, modelServiceB+"-decode", 8000)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create service B")
 
 		By("Creating ServiceMonitor for service B")
-		err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceB, modelServiceB+"-decode")
+		err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, ns, modelServiceB, modelServiceB+"-decode")
 		Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceMonitor B")
 
-		// Register cleanup for ServiceMonitor B
 		DeferCleanup(func() {
-			serviceMonitorName := modelServiceB + "-monitor"
-			cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
-				func() error {
-					return crClient.Delete(ctx, &promoperator.ServiceMonitor{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      serviceMonitorName,
-							Namespace: cfg.MonitoringNS,
-						},
-					})
+			_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      modelServiceB + "-monitor",
+					Namespace: cfg.MonitoringNS,
 				},
-				func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
-					return errors.IsNotFound(err)
-				})
+			})
 		})
 
 		By("Waiting for both model services to be ready")
 		Eventually(func(g Gomega) {
-			depA, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceA+"-decode", metav1.GetOptions{})
+			depA, err := k8sClient.AppsV1().Deployments(ns).Get(ctx, modelServiceA+"-decode", metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(depA.Status.ReadyReplicas).To(Equal(int32(1)))
 
-			depB, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceB+"-decode", metav1.GetOptions{})
+			depB, err := k8sClient.AppsV1().Deployments(ns).Get(ctx, modelServiceB+"-decode", metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(depB.Status.ReadyReplicas).To(Equal(int32(1)))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating VAs with different accelerator types")
+		By("Creating annotated ScaledObjects (discovery sources) for both deployments, with distinct variant costs")
+		err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaA, modelServiceA+"-decode", variantA, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "30.0"))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject A")
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaA) })
 
-		// VA A - NVIDIA accelerator
-		err = fixtures.EnsureVariantAutoscaling(
-			ctx, crClient, cfg.LLMDNamespace, vaA,
-			modelServiceA+"-decode", cfg.ModelID, "H100", 30.0,
-			cfg.ControllerInstance,
-		)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create VA A")
+		err = fixtures.EnsureScaledObject(ctx, crClient, ns, hpaB, modelServiceB+"-decode", variantB, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(cfg.ModelID, "40.0"))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject B")
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, ns, hpaB) })
 
-		// VA B - AMD accelerator
-		err = fixtures.EnsureVariantAutoscaling(
-			ctx, crClient, cfg.LLMDNamespace, vaB,
-			modelServiceB+"-decode", cfg.ModelID, "MI300X", 40.0,
-			cfg.ControllerInstance,
-		)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create VA B")
-
-		By("Creating scalers for both deployments (HPA or ScaledObject per backend)")
-		if cfg.ScalerBackend == scalerBackendKeda {
-			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaA+"-hpa", metav1.DeleteOptions{})
-			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaB+"-hpa", metav1.DeleteOptions{})
-			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10, cfg.MonitoringNS)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject A")
-			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaB, modelServiceB+"-decode", vaB, 1, 10, cfg.MonitoringNS)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject B")
-		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaA, modelServiceA+"-decode", vaA, 1, 10)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA A")
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaB, modelServiceB+"-decode", vaB, 1, 10)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA B")
-		}
-
-		GinkgoWriter.Println("GPU Limiter test setup complete with two VAs (NVIDIA and AMD accelerators)")
+		GinkgoWriter.Println("GPU Limiter test setup complete with two annotated scalers (distinct variant costs)")
 	})
 
-	AfterAll(func() {
-		By("Cleaning up GPU limiter test resources")
+	Context("Annotated scaler discovery", func() {
+		It("should discover both variants via their annotated scalers", func() {
+			// Both annotated ScaledObjects are the discovery sources; KEDA creates a
+			// managed HPA for each. Verify both scale targets have a corresponding HPA,
+			// which is the observable signal that WVA discovered the variant and the
+			// scaler is wired.
+			By("Verifying KEDA created a managed HPA for each deployment")
+			Eventually(func(g Gomega) {
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				var foundA, foundB bool
+				for i := range hpaList.Items {
+					switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
+					case modelServiceA + "-decode":
+						foundA = true
+					case modelServiceB + "-decode":
+						foundB = true
+					}
+				}
+				g.Expect(foundA).To(BeTrue(), "KEDA should have created an HPA for deployment A")
+				g.Expect(foundB).To(BeTrue(), "KEDA should have created an HPA for deployment B")
+			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		// Delete in reverse dependency order: scaler -> VA -> Service -> Deployment
-		// ServiceMonitor cleanup is handled by DeferCleanup registered in BeforeAll
-
-		if cfg.ScalerBackend == scalerBackendKeda {
-			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaA)
-			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaB)
-		} else {
-			hpaNameA := hpaA + "-hpa"
-			hpaNameB := hpaB + "-hpa"
-			cleanupResource(ctx, "HPA", cfg.LLMDNamespace, hpaNameA,
-				func() error {
-					return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaNameA, metav1.DeleteOptions{})
-				},
-				func() bool {
-					_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaNameA, metav1.GetOptions{})
-					return errors.IsNotFound(err)
-				})
-			cleanupResource(ctx, "HPA", cfg.LLMDNamespace, hpaNameB,
-				func() error {
-					return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaNameB, metav1.DeleteOptions{})
-				},
-				func() bool {
-					_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaNameB, metav1.GetOptions{})
-					return errors.IsNotFound(err)
-				})
-		}
-
-		// Delete VAs
-		vaAObj := &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaA, Namespace: cfg.LLMDNamespace},
-		}
-		cleanupResource(ctx, "VA", cfg.LLMDNamespace, vaA,
-			func() error {
-				return crClient.Delete(ctx, vaAObj)
-			},
-			func() bool {
-				err := crClient.Get(ctx, client.ObjectKey{Name: vaA, Namespace: cfg.LLMDNamespace}, vaAObj)
-				return errors.IsNotFound(err)
-			})
-		vaBObj := &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaB, Namespace: cfg.LLMDNamespace},
-		}
-		cleanupResource(ctx, "VA", cfg.LLMDNamespace, vaB,
-			func() error {
-				return crClient.Delete(ctx, vaBObj)
-			},
-			func() bool {
-				err := crClient.Get(ctx, client.ObjectKey{Name: vaB, Namespace: cfg.LLMDNamespace}, vaBObj)
-				return errors.IsNotFound(err)
-			})
-
-		// Delete services
-		serviceNameA := modelServiceA + "-service"
-		serviceNameB := modelServiceB + "-service"
-		cleanupResource(ctx, "Service", cfg.LLMDNamespace, serviceNameA,
-			func() error {
-				return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, serviceNameA, metav1.DeleteOptions{})
-			},
-			func() bool {
-				_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, serviceNameA, metav1.GetOptions{})
-				return errors.IsNotFound(err)
-			})
-		cleanupResource(ctx, "Service", cfg.LLMDNamespace, serviceNameB,
-			func() error {
-				return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, serviceNameB, metav1.DeleteOptions{})
-			},
-			func() bool {
-				_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, serviceNameB, metav1.GetOptions{})
-				return errors.IsNotFound(err)
-			})
-
-		// Delete deployments
-		deploymentNameA := modelServiceA + "-decode"
-		deploymentNameB := modelServiceB + "-decode"
-		cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentNameA,
-			func() error {
-				return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentNameA, metav1.DeleteOptions{})
-			},
-			func() bool {
-				_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentNameA, metav1.GetOptions{})
-				return errors.IsNotFound(err)
-			})
-		cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentNameB,
-			func() error {
-				return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentNameB, metav1.DeleteOptions{})
-			},
-			func() bool {
-				_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentNameB, metav1.GetOptions{})
-				return errors.IsNotFound(err)
-			})
-	})
-
-	Context("VA creation and reconciliation", func() {
-		It("should have both VAs created with different accelerators", func() {
-			By("Verifying VA A (NVIDIA)")
-			vaAObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			err := crClient.Get(ctx, client.ObjectKey{
-				Namespace: cfg.LLMDNamespace,
-				Name:      vaA,
-			}, vaAObj)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vaAObj.Labels[utils.AcceleratorNameLabel]).To(Equal("H100"))
-
-			By("Verifying VA B (AMD)")
-			vaBObj := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			err = crClient.Get(ctx, client.ObjectKey{
-				Namespace: cfg.LLMDNamespace,
-				Name:      vaB,
-			}, vaBObj)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vaBObj.Labels[utils.AcceleratorNameLabel]).To(Equal("MI300X"))
-
-			GinkgoWriter.Printf("VA A accelerator: %s, VA B accelerator: %s\n",
-				vaAObj.Labels[utils.AcceleratorNameLabel], vaBObj.Labels[utils.AcceleratorNameLabel])
+			GinkgoWriter.Println("Both variants discovered via their annotated scalers")
 		})
 
-		It("should reconcile both VAs successfully", func() {
-			By("Checking VA A status")
+		It("should emit wva_desired_replicas for both variants", func() {
+			// WVA's sole output is the wva_desired_replicas metric. Verify KEDA has
+			// consumed it by checking each managed HPA's CurrentMetrics (populated only
+			// after a successful Prometheus query).
+			By("Verifying KEDA read wva_desired_replicas for both deployments")
 			Eventually(func(g Gomega) {
-				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err := crClient.Get(ctx, client.ObjectKey{
-					Name:      vaA,
-					Namespace: cfg.LLMDNamespace,
-				}, va)
+				hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(va.Status.Conditions).NotTo(BeEmpty())
-			}).Should(Succeed())
-
-			By("Checking VA B status")
-			Eventually(func(g Gomega) {
-				va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err := crClient.Get(ctx, client.ObjectKey{
-					Name:      vaB,
-					Namespace: cfg.LLMDNamespace,
-				}, va)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(va.Status.Conditions).NotTo(BeEmpty())
-			}).Should(Succeed())
-
-			GinkgoWriter.Println("Both VAs reconciled successfully")
+				var hpaForA, hpaForB *autoscalingv2.HorizontalPodAutoscaler
+				for i := range hpaList.Items {
+					switch hpaList.Items[i].Spec.ScaleTargetRef.Name {
+					case modelServiceA + "-decode":
+						hpaForA = &hpaList.Items[i]
+					case modelServiceB + "-decode":
+						hpaForB = &hpaList.Items[i]
+					}
+				}
+				g.Expect(hpaForA).NotTo(BeNil(), "KEDA should have an HPA for deployment A")
+				g.Expect(hpaForB).NotTo(BeNil(), "KEDA should have an HPA for deployment B")
+				g.Expect(hpaForA.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"KEDA HPA A should have CurrentMetrics populated from wva_desired_replicas")
+				g.Expect(hpaForB.Status.CurrentMetrics).NotTo(BeEmpty(),
+					"KEDA HPA B should have CurrentMetrics populated from wva_desired_replicas")
+			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 		})
 	})
 
@@ -294,10 +177,10 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			By("Checking deployment replicas don't exceed expected limits")
 
 			// Get deployment replica counts
-			depA, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceA+"-decode", metav1.GetOptions{})
+			depA, err := k8sClient.AppsV1().Deployments(ns).Get(ctx, modelServiceA+"-decode", metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			depB, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceB+"-decode", metav1.GetOptions{})
+			depB, err := k8sClient.AppsV1().Deployments(ns).Get(ctx, modelServiceB+"-decode", metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
 			replicasA := depA.Status.Replicas
@@ -306,7 +189,10 @@ var _ = Describe("GPU Limiter Feature", Label("full"), Ordered, func() {
 			GinkgoWriter.Printf("Deployment A (NVIDIA) replicas: %d\n", replicasA)
 			GinkgoWriter.Printf("Deployment B (AMD) replicas: %d\n", replicasB)
 
-			// In emulated environment, deployments should still respect HPA maxReplicas
+			// The GPU limiter must not let a variant scale beyond what GPU capacity
+			// allows; in the emulated environment that ceiling is the scaler's
+			// maxReplicas. Observe the constraint through the Deployment replica counts
+			// rather than a VA status field.
 			Expect(replicasA).To(BeNumerically("<=", 10), "Deployment A should not exceed maxReplicas")
 			Expect(replicasB).To(BeNumerically("<=", 10), "Deployment B should not exceed maxReplicas")
 

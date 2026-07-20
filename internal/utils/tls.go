@@ -14,8 +14,23 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
+// IsHTTPS reports whether rawURL uses the https scheme.
+// url.Parse normalizes the scheme to lowercase before comparison, so HTTPS:// is treated the same as https://.
+func IsHTTPS(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == schemeHTTPS
+}
+
 // CreateTLSConfig creates a TLS configuration from getter-based Prometheus config.
-// TLS is always enabled for HTTPS-only support. The configuration supports:
+// TLS is applied only for https:// endpoints. The configuration supports:
 // - Server certificate validation via CA certificate
 // - Mutual TLS authentication via client certificates
 // - Insecure certificate verification (development/testing only)
@@ -34,6 +49,7 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 		InsecureSkipVerify: insecureSkipVerify,
 		ServerName:         serverName,
 		MinVersion:         tls.VersionTLS12, // Enforce minimum TLS version - https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/security_and_compliance/tls-security-profiles#:~:text=requires%20a%20minimum-,TLS%20version%20of%201.2,-.
+		NextProtos:         []string{"h2", "http/1.1"},
 	}
 
 	if insecureSkipVerify {
@@ -71,8 +87,9 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	return config, nil
 }
 
-// ValidateTLSConfig validates TLS configuration.
-// Ensures HTTPS is used and certificate files exist when verification is enabled.
+// ValidateTLSConfig validates the Prometheus transport configuration.
+// Ensures the URL scheme is supported, and that certificate files exist when
+// HTTPS verification is enabled.
 func ValidateTLSConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
@@ -80,14 +97,41 @@ func ValidateTLSConfig(cfg *config.Config) error {
 
 	baseURL := cfg.PrometheusBaseURL()
 	insecureSkipVerify := cfg.PrometheusInsecureSkipVerify()
+	allowHTTP := cfg.PrometheusAllowHTTP()
 	caCertPath := cfg.PrometheusCACertPath()
 	clientCertPath := cfg.PrometheusClientCertPath()
 	clientKeyPath := cfg.PrometheusClientKeyPath()
 
-	// Validate that the URL uses HTTPS (TLS is always required)
 	u, err := url.Parse(baseURL)
-	if err != nil || u.Scheme != "https" {
-		return fmt.Errorf("HTTPS is required - URL must use https:// scheme: %s", baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid Prometheus URL %q: %w", baseURL, err)
+	}
+
+	// Reject credentials embedded in the URL for any scheme: they leak through
+	// process listings, config dumps, redirect Referer headers, and any log that
+	// doesn't redact the URL — even over TLS. Use PROMETHEUS_BEARER_TOKEN or
+	// PROMETHEUS_TOKEN_PATH (over https) instead.
+	if u.User != nil {
+		return fmt.Errorf("refusing to use Prometheus URL with embedded credentials %q; use PROMETHEUS_BEARER_TOKEN or PROMETHEUS_TOKEN_PATH instead", u.Redacted())
+	}
+
+	switch u.Scheme {
+	case schemeHTTPS:
+		// Continue with the HTTPS-specific validation below.
+	case schemeHTTP:
+		if !allowHTTP {
+			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
+		}
+		if cfg.PrometheusBearerToken() != "" || cfg.PrometheusTokenPath() != "" {
+			return fmt.Errorf("refusing to send bearer token authentication over plain HTTP Prometheus URL %q", baseURL)
+		}
+		if insecureSkipVerify || caCertPath != "" || clientCertPath != "" || clientKeyPath != "" || cfg.PrometheusServerName() != "" {
+			return fmt.Errorf("TLS-related settings are not supported with plain HTTP Prometheus URL %q; remove them or use an https:// URL", baseURL)
+		}
+		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", u.Redacted())
+		return nil
+	default:
+		return fmt.Errorf("unsupported Prometheus URL scheme %q in %q; expected http or https", u.Scheme, baseURL)
 	}
 
 	// If InsecureSkipVerify is true, we don't need to validate certificate files

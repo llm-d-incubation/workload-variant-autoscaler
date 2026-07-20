@@ -176,7 +176,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 			store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
 				AcceleratorName: "H100",
 				GpuCount:        1,
-				VLLMParams: &VLLMEngineParams{
+				EngineParams: &EngineParams{
 					EffectiveMaxBatchedTokens: 2048,
 					MaxNumSeqs:                256,
 					ChunkedPrefillEnabled:     true,
@@ -293,7 +293,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				AcceleratorName:   "A100",
 				GpuCount:          1,
 				EffectiveCapacity: 8192, // conservative fallback from LoadFromDeployment
-				VLLMParams: &VLLMEngineParams{
+				EngineParams: &EngineParams{
 					EffectiveMaxBatchedTokens: 8192,
 					MaxNumSeqs:                256,
 				},
@@ -328,7 +328,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should bound k2 estimate by compatible variant's live EffectiveCapacity", func() {
 			// variant-b is a new deployment on the same H100 hardware as variant-a
-			defaultParams := &VLLMEngineParams{
+			defaultParams := &EngineParams{
 				GpuMemoryUtilization:      0.9,
 				BlockSize:                 16,
 				KvCacheDtype:              "auto",
@@ -340,7 +340,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				AcceleratorName:   "H100",
 				GpuCount:          1,
 				EffectiveCapacity: 8192,
-				VLLMParams:        defaultParams,
+				EngineParams:      defaultParams,
 				LearnedFrom:       "deployment",
 			})
 
@@ -350,7 +350,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				GpuCount:              1,
 				TotalKvCapacityTokens: 50000,
 				EffectiveCapacity:     40000, // observed min(k1, k2) = 40000
-				VLLMParams:            defaultParams,
+				EngineParams:          defaultParams,
 				LearnedFrom:           "live",
 			})
 
@@ -382,7 +382,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				GpuCount:              1,
 				EffectiveCapacity:     8192,
 				TotalKvCapacityTokens: 30000, // from num_gpu_blocks_override
-				VLLMParams: &VLLMEngineParams{
+				EngineParams: &EngineParams{
 					EffectiveMaxBatchedTokens: 8192,
 					MaxNumSeqs:                256,
 					NumGpuBlocksOverride:      1875,
@@ -421,7 +421,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				AcceleratorName:   "H100",
 				GpuCount:          1,
 				EffectiveCapacity: 8192,
-				VLLMParams: &VLLMEngineParams{
+				EngineParams: &EngineParams{
 					EffectiveMaxBatchedTokens: 8192,
 					MaxNumSeqs:                256,
 				},
@@ -445,7 +445,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 	Describe("estimateCapacityFromParams", func() {
 		It("should compute k2 from B, S, I, O", func() {
-			params := &VLLMEngineParams{
+			params := &EngineParams{
 				EffectiveMaxBatchedTokens: 4096,
 				MaxNumSeqs:                256,
 			}
@@ -456,7 +456,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should cap N_steady at MaxNumSeqs", func() {
-			params := &VLLMEngineParams{
+			params := &EngineParams{
 				EffectiveMaxBatchedTokens: 8192,
 				MaxNumSeqs:                64,
 			}
@@ -467,7 +467,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should return 0 when avgOutput is 0", func() {
-			params := &VLLMEngineParams{
+			params := &EngineParams{
 				EffectiveMaxBatchedTokens: 8192,
 				MaxNumSeqs:                256,
 			}

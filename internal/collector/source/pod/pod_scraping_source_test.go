@@ -690,6 +690,18 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			for _, value := range results1["all_metrics"].Values {
 				Expect(value.Labels["pod"]).To(Equal("epp-pod-1"))
 			}
+
+			// Verify per-metric keys are also present in the result map.
+			Expect(results1).To(HaveKey("vllm_kv_cache_usage_perc"))
+			Expect(results1).To(HaveKey("vllm_num_requests_waiting"))
+			Expect(results1["vllm_kv_cache_usage_perc"].Values).To(HaveLen(1))
+			Expect(results1["vllm_num_requests_waiting"].Values).To(HaveLen(1))
+
+			// Verify Get returns per-metric values after Refresh.
+			cachedKV := source1.Get("vllm_kv_cache_usage_perc", nil)
+			Expect(cachedKV).NotTo(BeNil())
+			Expect(cachedKV.Result.Values).To(HaveLen(1))
+			Expect(cachedKV.Result.Values[0].Value).To(Equal(0.75))
 		})
 
 		It("should handle unreachable pods gracefully", func() {
@@ -861,6 +873,78 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 		})
 	})
 
+	Describe("splitByMetricName", func() {
+		It("should group values by __name__ label", func() {
+			now := time.Now()
+			aggregated := &sourcepkg.MetricResult{
+				QueryName:   "all_metrics",
+				CollectedAt: now,
+				Values: []sourcepkg.MetricValue{
+					{Value: 0.75, Labels: map[string]string{"__name__": "vllm_kv_cache_usage_perc", "pod": "pod-1"}},
+					{Value: 0.50, Labels: map[string]string{"__name__": "vllm_kv_cache_usage_perc", "pod": "pod-2"}},
+					{Value: 5.0, Labels: map[string]string{"__name__": "vllm_num_requests_waiting", "pod": "pod-1"}},
+				},
+			}
+
+			result := splitByMetricName(aggregated)
+			Expect(result).To(HaveLen(2))
+
+			kvCache := result["vllm_kv_cache_usage_perc"]
+			Expect(kvCache).NotTo(BeNil())
+			Expect(kvCache.QueryName).To(Equal("vllm_kv_cache_usage_perc"))
+			Expect(kvCache.Values).To(HaveLen(2))
+			Expect(kvCache.CollectedAt).To(Equal(now))
+
+			waiting := result["vllm_num_requests_waiting"]
+			Expect(waiting).NotTo(BeNil())
+			Expect(waiting.QueryName).To(Equal("vllm_num_requests_waiting"))
+			Expect(waiting.Values).To(HaveLen(1))
+			Expect(waiting.Values[0].Value).To(Equal(5.0))
+		})
+
+		It("should skip values with no __name__ label", func() {
+			aggregated := &sourcepkg.MetricResult{
+				QueryName:   "all_metrics",
+				CollectedAt: time.Now(),
+				Values: []sourcepkg.MetricValue{
+					{Value: 1.0, Labels: map[string]string{"pod": "pod-1"}},           // no __name__
+					{Value: 2.0, Labels: map[string]string{"__name__": "vllm_queue"}}, // has __name__
+				},
+			}
+
+			result := splitByMetricName(aggregated)
+			Expect(result).To(HaveLen(1))
+			Expect(result).To(HaveKey("vllm_queue"))
+		})
+
+		It("should skip values whose __name__ is the reserved 'all_metrics'", func() {
+			aggregated := &sourcepkg.MetricResult{
+				QueryName:   "all_metrics",
+				CollectedAt: time.Now(),
+				Values: []sourcepkg.MetricValue{
+					{Value: 1.0, Labels: map[string]string{"__name__": "all_metrics"}}, // reserved — skip
+					{Value: 2.0, Labels: map[string]string{"__name__": "vllm_queue"}},
+				},
+			}
+
+			result := splitByMetricName(aggregated)
+			Expect(result).To(HaveLen(1))
+			Expect(result).To(HaveKey("vllm_queue"))
+			Expect(result).NotTo(HaveKey("all_metrics"))
+		})
+
+		It("should return empty map for aggregated with no values", func() {
+			aggregated := &sourcepkg.MetricResult{
+				QueryName:   "all_metrics",
+				CollectedAt: time.Now(),
+				Values:      []sourcepkg.MetricValue{},
+			}
+
+			result := splitByMetricName(aggregated)
+			Expect(result).To(BeEmpty())
+		})
+	})
+
 	Describe("Get", func() {
 		var source *PodScrapingSource
 
@@ -881,6 +965,11 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			Expect(cached).To(BeNil())
 		})
 
+		It("should return nil for uncached per-metric query", func() {
+			cached := source.Get("vllm:queue_size", nil)
+			Expect(cached).To(BeNil())
+		})
+
 		It("should return cached value if fresh", func() {
 			// Manually set cache
 			cacheKey := sourcepkg.BuildCacheKey("all_metrics", nil)
@@ -895,6 +984,25 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			Expect(cached).NotTo(BeNil())
 			Expect(cached.Result.QueryName).To(Equal("all_metrics"))
 			Expect(cached.Result.Values).To(HaveLen(1))
+		})
+
+		It("should return per-metric cached value for individual metric name", func() {
+			// Simulate what Refresh does: store a per-metric cache entry.
+			cacheKey := sourcepkg.BuildCacheKey("vllm:queue_size", nil)
+			result := sourcepkg.MetricResult{
+				QueryName: "vllm:queue_size",
+				Values: []sourcepkg.MetricValue{
+					{Value: 3.0, Labels: map[string]string{"__name__": "vllm:queue_size", "pod": "pod-1"}},
+				},
+				CollectedAt: time.Now(),
+			}
+			source.cache.Set(cacheKey, result, 1*time.Hour)
+
+			cached := source.Get("vllm:queue_size", nil)
+			Expect(cached).NotTo(BeNil())
+			Expect(cached.Result.QueryName).To(Equal("vllm:queue_size"))
+			Expect(cached.Result.Values).To(HaveLen(1))
+			Expect(cached.Result.Values[0].Value).To(Equal(3.0))
 		})
 
 		It("should return nil for expired cache", func() {

@@ -157,6 +157,7 @@ func (a *Analyzer) analyzeVariant(
 
 	var totalSpareKv float64
 	var totalSpareQueue float64
+	var totalKvUsage float64
 	var nonSaturatedCount int
 
 	for _, metric := range metrics {
@@ -176,10 +177,11 @@ func (a *Analyzer) analyzeVariant(
 			nonSaturatedCount++
 		}
 
-		// Track max usage
+		// Track max usage and total usage across all replicas
 		if metric.KvCacheUsage > analysis.MaxKvCacheUsage {
 			analysis.MaxKvCacheUsage = metric.KvCacheUsage
 		}
+		totalKvUsage += metric.KvCacheUsage
 		if metric.QueueLength > analysis.MaxQueueLength {
 			analysis.MaxQueueLength = metric.QueueLength
 		}
@@ -191,6 +193,11 @@ func (a *Analyzer) analyzeVariant(
 	if nonSaturatedCount > 0 {
 		analysis.AvgSpareKvCapacity = totalSpareKv / float64(nonSaturatedCount)
 		analysis.AvgSpareQueueLength = totalSpareQueue / float64(nonSaturatedCount)
+	}
+
+	// Calculate mean KV cache usage across all replicas for Utilization field
+	if len(metrics) > 0 {
+		analysis.AvgKvCacheUsage = totalKvUsage / float64(len(metrics))
 	}
 
 	return analysis

@@ -1,0 +1,20 @@
+# [REQUIRED]
+{% set base_dir = base_dir | default('../') -%}
+base_dir: {{ base_dir }}
+
+# [REQUIRED]
+values_file:
+  path: {{ base_dir }}/config/templates/values/defaults.yaml
+
+# [REQUIRED]
+template_dir:
+  path: {{ base_dir }}/config/templates/jinja
+
+# [OPTIONAL]
+scenario_file:
+  path: {{ base_dir }}/config/scenarios/guides/two-variant-wva.yaml
+
+# Same model deployed as two variants with different variantCost values
+# under one shared WVA controller. The cheaper variant absorbs load before
+# the expensive one scales up. Pass BENCHMARK_MODEL_ID=unsloth/Meta-Llama-3.1-8B
+# (or any compatible model id) when invoking `make benchmark-standup`.

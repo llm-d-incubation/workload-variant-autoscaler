@@ -12,9 +12,9 @@ for ns in "$LLMD_NAMESPACE" "$WVA_NAMESPACE"; do
     echo ""
     echo "=== Cleaning up namespace: $ns ==="
     # Delete WVA resources in this namespace
-    echo "  Removing HPAs and VAs..."
+    echo "  Removing HPAs and ScaledObjects..."
     kubectl delete hpa -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
-    kubectl delete variantautoscaling -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found || true
+    kubectl delete scaledobject -n "$ns" -l app.kubernetes.io/name=workload-variant-autoscaler --ignore-not-found 2>/dev/null || true
     # Uninstall all helm releases in the namespace
     for release in $(helm list -n "$ns" -q 2>/dev/null); do
       echo "  Uninstalling helm release: $release"

@@ -44,6 +44,30 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.OptimizationInterval() != 60*time.Second {
 		t.Errorf("Expected OptimizationInterval default 60s, got %v", cfg.OptimizationInterval())
 	}
+	if cfg.PrometheusAllowHTTP() {
+		t.Error("Expected PrometheusAllowHTTP default to be false")
+	}
+}
+
+func TestLoad_PrometheusAllowHTTPFromEnv(t *testing.T) {
+	_ = os.Setenv("PROMETHEUS_BASE_URL", "http://prometheus-env:9090")
+	_ = os.Setenv("PROMETHEUS_ALLOW_HTTP", "true")
+	defer func() {
+		_ = os.Unsetenv("PROMETHEUS_BASE_URL")
+		_ = os.Unsetenv("PROMETHEUS_ALLOW_HTTP")
+	}()
+
+	cfg, err := Load(nil, "")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.PrometheusBaseURL() != "http://prometheus-env:9090" {
+		t.Errorf("Expected Prometheus BaseURL from env, got %q", cfg.PrometheusBaseURL())
+	}
+	if !cfg.PrometheusAllowHTTP() {
+		t.Error("Expected PrometheusAllowHTTP to be true from env")
+	}
 }
 
 func TestLoad_FlagsPrecedence(t *testing.T) {

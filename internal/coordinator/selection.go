@@ -5,19 +5,11 @@ import (
 
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
-
-// scaledObjectGroup is the API group reported on OwnerReferences for KEDA
-// ScaledObjects, used to recognize KEDA-generated HPAs.
-const scaledObjectGroup = "keda.sh"
-
-// scaledObjectKind is the OwnerReference Kind reported by KEDA for the HPA
-// it generates per ScaledObject.
-const scaledObjectKind = "ScaledObject"
 
 // IsHPAUnderControl reports whether an HPA is under Coordinator control.
 //
@@ -42,7 +34,7 @@ func IsHPAUnderControl(hpa *autoscalingv2.HorizontalPodAutoscaler) bool {
 	if hpaHasWVADesiredReplicasMetric(hpa) {
 		return false
 	}
-	if isOwnedByKEDAScaledObject(hpa) {
+	if utils.IsOwnedByKEDAScaledObject(hpa) {
 		return false
 	}
 	return true
@@ -84,24 +76,6 @@ func hpaHasWVADesiredReplicasMetric(hpa *autoscalingv2.HorizontalPodAutoscaler) 
 		}
 	}
 	return false
-}
-
-// isOwnedByKEDAScaledObject returns true if obj has a controller
-// OwnerReference whose APIVersion is in the keda.sh API group and whose
-// Kind is "ScaledObject".
-func isOwnedByKEDAScaledObject(obj metav1.Object) bool {
-	ctrl := metav1.GetControllerOf(obj)
-	if ctrl == nil {
-		return false
-	}
-	if ctrl.Kind != scaledObjectKind {
-		return false
-	}
-	// APIVersion is "<group>/<version>"; match the group prefix.
-	if i := strings.IndexByte(ctrl.APIVersion, '/'); i > 0 {
-		return ctrl.APIVersion[:i] == scaledObjectGroup
-	}
-	return ctrl.APIVersion == scaledObjectGroup
 }
 
 // scaledObjectHasWVADesiredReplicasTrigger returns true if any Prometheus

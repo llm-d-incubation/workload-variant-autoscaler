@@ -21,11 +21,11 @@ import (
 	"fmt"
 	"strconv"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	ctrlutils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -264,7 +264,6 @@ var _ = Describe("Actuator", func() {
 		})
 
 		AfterEach(func() {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, va))).To(Succeed())
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).To(Succeed())
 		})
 
@@ -360,13 +359,11 @@ var _ = Describe("Actuator", func() {
 			}
 
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
-			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(4))
 			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 		})
 
 		AfterEach(func() {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, va))).To(Succeed())
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).To(Succeed())
 		})
 
@@ -479,7 +476,6 @@ var _ = Describe("Actuator", func() {
 			}
 
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
-			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(3))
 			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 
@@ -487,7 +483,6 @@ var _ = Describe("Actuator", func() {
 
 		AfterEach(func() {
 			// Cleanup resources with proper error handling
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, va))).To(Succeed())
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).To(Succeed())
 		})
 
@@ -540,9 +535,7 @@ var _ = Describe("Actuator", func() {
 				},
 			}
 
-			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			defer func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, va))).To(Succeed())
 			}()
 			fmt.Printf("Emitting metrics for variantAutoscaling - name: %s\n numReplicas: %s\n", va.Name, fmtNumReplicas(va.Status.DesiredOptimizedAlloc.NumReplicas))
 			err := actuator.EmitMetrics(ctx, va)
@@ -610,7 +603,6 @@ var _ = Describe("Actuator", func() {
 			}
 
 			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
-			Expect(k8sClient.Create(ctx, va)).To(Succeed())
 			va.Status.DesiredOptimizedAlloc.NumReplicas = ctrlutils.Ptr(int32(5))
 			va.Status.DesiredOptimizedAlloc.Accelerator = testAcceleratorA100
 
@@ -618,7 +610,6 @@ var _ = Describe("Actuator", func() {
 
 		AfterEach(func() {
 			// Cleanup resources with proper error handling
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, va))).To(Succeed())
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).To(Succeed())
 		})
 

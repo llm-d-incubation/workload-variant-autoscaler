@@ -30,16 +30,14 @@ import (
 	infextv1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 	// +kubebuilder:scaffold:imports
 )
 
 const (
-	scalerBackendKeda = "keda"
-	envKindEmulator   = "kind-emulator"
-	envKind           = "kind"
-	boolTrue          = "true"
+	envKindEmulator = "kind-emulator"
+	envKind         = "kind"
+	boolTrue        = "true"
 )
 
 var (
@@ -55,46 +53,6 @@ var (
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "E2E Test Suite")
-}
-
-// restartPrometheusAdapterPods forces a rollout by deleting adapter pods, then waits for readiness.
-func restartPrometheusAdapterPods() {
-	By("Restarting prometheus-adapter pods")
-	podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-	})
-	Expect(err).NotTo(HaveOccurred(), "Failed to list prometheus-adapter pods")
-	for _, pod := range podList.Items {
-		deleteErr := k8sClient.CoreV1().Pods(cfg.MonitoringNS).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-			GinkgoWriter.Printf("Warning: Failed to delete prometheus-adapter pod %s: %v\n", pod.Name, deleteErr)
-		} else {
-			GinkgoWriter.Printf("Deleted prometheus-adapter pod: %s\n", pod.Name)
-		}
-	}
-	By("Waiting for prometheus-adapter pods to be ready")
-	tm := time.Duration(cfg.EventuallyLongSec) * time.Second
-	poll := time.Duration(cfg.PollIntervalSec) * time.Second
-	Eventually(func(g Gomega) {
-		pods, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-		})
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(pods.Items).NotTo(BeEmpty(), "At least one prometheus-adapter pod should exist")
-		ready := 0
-		for _, pod := range pods.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-						ready++
-						break
-					}
-				}
-			}
-		}
-		g.Expect(ready).To(BeNumerically(">", 0), "At least one prometheus-adapter pod should be ready")
-	}, tm, poll).Should(Succeed())
-	GinkgoWriter.Println("prometheus-adapter pods restarted and ready")
 }
 
 var _ = BeforeSuite(func() {
@@ -141,8 +99,6 @@ var _ = BeforeSuite(func() {
 	s := runtime.NewScheme()
 	err = clientgoscheme.AddToScheme(s)
 	Expect(err).NotTo(HaveOccurred(), "Failed to add client-go scheme")
-	err = variantautoscalingv1alpha1.AddToScheme(s)
-	Expect(err).NotTo(HaveOccurred(), "Failed to add VA scheme")
 	// Add prometheus-operator scheme for ServiceMonitor support
 	err = promoperator.AddToScheme(s)
 	Expect(err).NotTo(HaveOccurred(), "Failed to add prometheus-operator scheme")
@@ -196,65 +152,17 @@ var _ = BeforeSuite(func() {
 		g.Expect(pods.Items).NotTo(BeEmpty(), "Prometheus pod not found")
 	}).Should(Succeed(), "Prometheus should be running")
 
-	// RESTART_PROMETHEUS_ADAPTER: false (never), true (always delete pods), auto (default: probe then restart only if needed).
-	if cfg.ScalerBackend == "prometheus-adapter" && cfg.Environment == envKindEmulator {
-		mode := strings.ToLower(strings.TrimSpace(os.Getenv("RESTART_PROMETHEUS_ADAPTER")))
-		if mode == "" {
-			mode = "auto"
-		}
-		switch mode {
-		case "false":
-			GinkgoWriter.Println("RESTART_PROMETHEUS_ADAPTER=false: skipping prometheus-adapter restart")
-		case boolTrue:
-			restartPrometheusAdapterPods()
-		default:
-			probe := time.Duration(cfg.PrometheusAdapterProbeSec) * time.Second
-			probeErr := wait.PollUntilContextTimeout(ctx, 5*time.Second, probe, true, func(_ context.Context) (bool, error) {
-				podList, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
-					LabelSelector: "app.kubernetes.io/name=prometheus-adapter",
-				})
-				if err != nil || len(podList.Items) == 0 {
-					return false, nil
-				}
-				ready := 0
-				for _, pod := range podList.Items {
-					if pod.Status.Phase == corev1.PodRunning {
-						for _, condition := range pod.Status.Conditions {
-							if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-								ready++
-								break
-							}
-						}
-					}
-				}
-				if ready == 0 {
-					return false, nil
-				}
-				_, discErr := k8sClient.Discovery().ServerResourcesForGroupVersion("external.metrics.k8s.io/v1beta1")
-				return discErr == nil, nil
-			})
-			if probeErr != nil {
-				GinkgoWriter.Printf("prometheus-adapter probe failed within %v (%v); restarting pods\n", probe, probeErr)
-				restartPrometheusAdapterPods()
-			} else {
-				GinkgoWriter.Println("prometheus-adapter ready and external.metrics API registered; skipping restart")
-			}
-		}
-	}
-
-	if cfg.ScalerBackend == scalerBackendKeda {
-		By("Verifying KEDA is available (ScaledObject CRD)")
-		Eventually(func(g Gomega) {
-			gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
-			_, err := dynamicClient.Resource(gvr).Namespace(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{Limit: 1})
-			g.Expect(err).NotTo(HaveOccurred(), "KEDA ScaledObject CRD should be installed when SCALER_BACKEND=keda")
-		}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
-	}
+	By("Verifying KEDA is available (ScaledObject CRD)")
+	Eventually(func(g Gomega) {
+		gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+		_, err := dynamicClient.Resource(gvr).Namespace(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{Limit: 1})
+		g.Expect(err).NotTo(HaveOccurred(), "KEDA ScaledObject CRD should be installed")
+	}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
 
 	GinkgoWriter.Println("BeforeSuite completed successfully - infrastructure ready")
 })
 
-// ReportAfterEach dumps controller logs and VA status after a failed test.
+// ReportAfterEach dumps controller logs and managed scaler state after a failed test.
 // This makes E2E failures self-contained and easier to debug (why scaling happened / didn't happen).
 var _ = ReportAfterEach(func(report SpecReport) {
 	if !report.Failed() {
@@ -266,7 +174,7 @@ var _ = ReportAfterEach(func(report SpecReport) {
 
 	GinkgoWriter.Printf("\n=== Failure diagnostics: %s ===\n", report.FullText())
 	utils.DumpControllerLogs(context.Background(), k8sClient, cfg.WVANamespace, GinkgoWriter)
-	utils.DumpVAStatus(context.Background(), crClient, GinkgoWriter)
+	utils.DumpManagedScalers(context.Background(), k8sClient, GinkgoWriter)
 })
 
 var _ = AfterSuite(func() {
@@ -337,22 +245,6 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 	// Helper function to check if resource name matches test patterns
 	isTestResource := func(name string) bool {
 		return strings.HasPrefix(name, "test-") || strings.HasPrefix(name, "smoke-") || strings.HasPrefix(name, "saturation-") || strings.HasPrefix(name, "error-test-") || strings.HasPrefix(name, "target-condition-") || strings.HasPrefix(name, "scale-from-zero-")
-	}
-
-	// List and delete test VAs
-	vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
-	if err := crClient.List(ctx, vaList, client.InNamespace(namespace)); err == nil {
-		for _, va := range vaList.Items {
-			if isTestResource(va.Name) {
-				GinkgoWriter.Printf("Cleaning up leftover VA: %s\n", va.Name)
-				deleteResourceWithVerification(ctx, func() error {
-					return crClient.Delete(ctx, &va)
-				}, func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: va.Name, Namespace: namespace}, &va)
-					return errors.IsNotFound(err)
-				}, "VA", va.Name)
-			}
-		}
 	}
 
 	// Clean up test HPAs
@@ -515,4 +407,32 @@ func deleteResourceWithVerification(ctx context.Context, deleteFunc func() error
 // This is a convenience wrapper for common cleanup patterns
 func cleanupResource(ctx context.Context, resourceType, _ /* namespace */, name string, deleteFunc func() error, verifyFunc func() bool) {
 	deleteResourceWithVerification(ctx, deleteFunc, verifyFunc, resourceType, name)
+}
+
+// expectWVADesiredReplicasConsumed asserts that WVA emitted wva_desired_replicas
+// for scaleTargetDeployment and that KEDA consumed it, by checking that the
+// KEDA-managed HPA for that deployment has a non-empty external CurrentMetrics
+// entry. KEDA only populates CurrentMetrics after successfully reading the metric
+// from Prometheus, so this proves the engine's decision was emitted and consumed.
+//
+// Note: this does NOT assert the numeric magnitude of the recommendation. The
+// KEDA HPA surface exposes the consumed value but not reliably enough to gate a
+// ">= N" assertion here; callers that need magnitude must query Prometheus
+// directly. The caller wraps this in Eventually.
+func expectWVADesiredReplicasConsumed(g Gomega, namespace, scaleTargetDeployment string) {
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+	var consumed bool
+	for i := range hpaList.Items {
+		if hpaList.Items[i].Spec.ScaleTargetRef.Name != scaleTargetDeployment {
+			continue
+		}
+		for _, m := range hpaList.Items[i].Status.CurrentMetrics {
+			if m.External != nil {
+				consumed = true
+			}
+		}
+	}
+	g.Expect(consumed).To(BeTrue(),
+		"KEDA HPA for %s should have an external CurrentMetrics entry, proving wva_desired_replicas was emitted and consumed", scaleTargetDeployment)
 }

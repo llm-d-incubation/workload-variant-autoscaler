@@ -97,8 +97,6 @@ workload-variant-autoscaler/
 │   ├── e2e/             # End-to-end tests
 │   └── utils/           # Test utilities
 ├── hack/                 # Dev scripts (e.g. hack/burst_load_generator.sh for manual load)
-└── charts/               # Helm charts
-    └── workload-variant-autoscaler/
 ```
 
 ## WVA-Specific Development Tasks
@@ -144,12 +142,7 @@ If you modify the `VariantAutoscaling` CRD in `api/v1alpha1/`:
    make manifests generate
    ```
 
-2. **Update CRD documentation:**
-   ```bash
-   make crd-docs
-   ```
-
-3. **Verify CRD changes:**
+2. **Verify CRD changes:**
    ```bash
    kubectl explain variantautoscaling.spec
    ```
@@ -281,7 +274,6 @@ Before submitting your PR, ensure:
 - [ ] `make lint` passes (fix issues with `make lint-fix`)
 - [ ] `make test-e2e-smoke` passes (if controller logic changed; use `make test-e2e-full` for full suite)
 - [ ] Documentation updated (if user-facing changes)
-- [ ] CRD docs regenerated (if CRD changed): `make crd-docs`
 - [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org/)
 - [ ] PR description clearly explains the change
 

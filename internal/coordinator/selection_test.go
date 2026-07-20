@@ -52,7 +52,7 @@ func otherExternalMetric() autoscalingv2.MetricSpec {
 func kedaOwnerRef() metav1.OwnerReference {
 	return metav1.OwnerReference{
 		APIVersion: "keda.sh/v1alpha1",
-		Kind:       scaledObjectKind,
+		Kind:       constants.ScaledObjectKind,
 		Name:       "my-so",
 		UID:        "uid-1",
 		Controller: ptr.To(true),

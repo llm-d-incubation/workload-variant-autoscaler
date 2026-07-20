@@ -1,28 +1,8 @@
 name: CI - PR Checks
 
 # Cancel previous runs on the same PR when new commits are pushed
-# Group by PR number for pull_request and /ok-to-test comment triggers
-# Regular comments get a unique group (run_id) so they don't cancel in-progress test runs
-# workflow_dispatch falls back to run_id (no PR number available)
-#
-# Logic:
-# - Regular comments (not /ok-to-test): unique group prevents cancellation of real tests
-# - pull_request / /ok-to-test comments: group 'ci-pr-checks-{pr_number}' (can cancel previous runs for same PR)
-# - workflow_dispatch: group 'ci-pr-checks-{run_id}' (unique per run)
-# - Fallback chain for ID: pull_request.number -> issue.number -> run_id
-#
-# NOTE: Accepted command (/ok-to-test) must stay in sync with check-full-tests job validation
 concurrency:
-  group: >-
-    ${{
-      github.event_name == 'issue_comment' &&
-      !contains(github.event.comment.body, '/ok-to-test')
-      && format('comment-isolated-{0}', github.run_id)
-      || format('ci-pr-checks-{0}',
-           github.event.pull_request.number
-           || github.event.issue.number
-           || github.run_id)
-    }}
+  group: ci-pr-checks-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 on:
@@ -30,7 +10,6 @@ on:
     branches:
       - main
       - dev
-  # Allow manual triggering of full e2e tests
   workflow_dispatch:
     inputs:
       run_full_tests:
@@ -38,9 +17,6 @@ on:
         required: false
         default: false
         type: boolean
-  # Allow triggering via /ok-to-test PR comment
-  issue_comment:
-    types: [created]
 
 jobs:
   # Check if PR contains code changes (not just docs/metadata)
@@ -48,47 +24,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read  # For reading PR details when triggered via issue_comment
+      pull-requests: read
     outputs:
       has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
-      pr_head_sha: ${{ steps.pr-info.outputs.pr_head_sha }}
-      pr_head_repo: ${{ steps.pr-info.outputs.pr_head_repo }}
     steps:
-      - name: Get PR number for issue_comment events
-        id: pr-info
-        if: github.event_name == 'issue_comment'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issue = context.payload.issue;
-            if (!issue.pull_request) {
-              core.setOutput('pr_number', '');
-              return;
-            }
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: issue.number
-            });
-            const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
-            const headRepo = pr.head.repo ? pr.head.repo.full_name : baseRepo;
-            core.setOutput('pr_number', issue.number.toString());
-            core.setOutput('pr_head_sha', pr.head.sha);
-            core.setOutput('pr_head_repo', headRepo);
-
       - name: Checkout source
         uses: actions/checkout@v6
-        with:
-          # For issue_comment on a fork PR: checkout from head repo so the commit exists
-          repository: ${{ steps.pr-info.outputs.pr_head_repo || github.repository }}
-          ref: ${{ github.event_name == 'issue_comment' && steps.pr-info.outputs.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
 
       - name: Check for code changes
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         id: filter
-        continue-on-error: true  # Don't fail if paths-filter can't determine changes (e.g., issue_comment without PR context)
         with:
           predicate-quantifier: 'every'
           filters: |
@@ -101,24 +47,18 @@ jobs:
               - '!OWNERS'
               - '!PROJECT'
 
-      - name: Set output with default
+      - name: Set output
         id: set-output
         run: |
-          # Use filter output if available, otherwise default to 'true' for issue_comment events
-          # This ensures comment triggers work even if PR context is unclear
-          FILTER_OUTPUT="${{ steps.filter.outputs.code }}"
-          if [ "${{ github.event_name }}" == "issue_comment" ] && [ -z "$FILTER_OUTPUT" ]; then
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "has_code_changes=true" >> $GITHUB_OUTPUT
-          elif [ -n "$FILTER_OUTPUT" ]; then
-            echo "has_code_changes=$FILTER_OUTPUT" >> $GITHUB_OUTPUT
+          elif [ -n "${{ steps.filter.outputs.code }}" ]; then
+            echo "has_code_changes=${{ steps.filter.outputs.code }}" >> $GITHUB_OUTPUT
           else
             echo "has_code_changes=true" >> $GITHUB_OUTPUT
           fi
 
-  # lint-and-test already runs on pull_request events; skip for issue_comment
-  # to avoid untrusted commenters triggering execution of PR code
   lint-and-test:
-    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -156,7 +96,6 @@ jobs:
           make test
 
   kustomize-build:
-    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -174,120 +113,12 @@ jobs:
       - name: Build namespace-scoped kubernetes overlay
         run: bin/kustomize build config/overlays/namespace-scoped/kubernetes > /dev/null
 
-  # Check if full e2e tests should run (via workflow_dispatch or comment trigger)
-  check-full-tests:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write  # For posting comments and reactions on PRs
-    outputs:
-      run_full: ${{ steps.check.outputs.run_full }}
-    steps:
-      - name: Check if full tests requested
-        id: check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Helper to check if user has write access
-            async function hasWriteAccess(username) {
-              try {
-                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  username: username
-                });
-                const privilegedRoles = ['admin', 'maintain', 'write'];
-                return privilegedRoles.includes(permission.permission);
-              } catch (e) {
-                console.log(`Could not get permissions for ${username}: ${e.message}`);
-                return false;
-              }
-            }
-
-            // Same-repo pull_request: always run full tests
-            if (context.eventName === 'pull_request') {
-              const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
-              const headRepo = context.payload.pull_request.head.repo?.full_name ?? baseRepo;
-              core.setOutput('run_full', headRepo === baseRepo ? 'true' : 'false');
-              return;
-            }
-
-            // Check workflow_dispatch input
-            const workflowInput = '${{ github.event.inputs.run_full_tests }}';
-            // Handle both boolean and string inputs
-            if (workflowInput === 'true' || workflowInput === true || workflowInput === 'True') {
-              core.setOutput('run_full', 'true');
-              return;
-            }
-
-            // Check for /ok-to-test comment trigger
-            if (context.eventName === 'issue_comment') {
-              const comment = context.payload.comment.body.trim();
-              const issue = context.payload.issue;
-
-              // Only process /ok-to-test comments on PRs
-              if (!issue.pull_request) {
-                console.log('Comment is not on a PR, skipping');
-                core.setOutput('run_full', 'false');
-                return;
-              }
-
-              // Accept /ok-to-test (same command triggers both Kind full E2E and OpenShift E2E)
-              const validCommands = ['/ok-to-test'];
-              if (!validCommands.includes(comment)) {
-                console.log(`Comment "${comment}" is not a valid trigger command, skipping`);
-                core.setOutput('run_full', 'false');
-                return;
-              }
-
-              // Check if commenter has write access
-              const commenter = context.payload.comment.user.login;
-              const hasAccess = await hasWriteAccess(commenter);
-              if (!hasAccess) {
-                console.log(`User ${commenter} does not have write access, ignoring ${comment}`);
-                core.setOutput('run_full', 'false');
-                return;
-              }
-
-              // Get PR details
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: issue.number
-              });
-
-              console.log(`${comment} approved by ${commenter} for PR #${issue.number}`);
-              console.log(`PR head SHA: ${pr.head.sha}`);
-
-              // Add reaction to acknowledge
-              await github.rest.reactions.createForIssueComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: context.payload.comment.id,
-                content: 'rocket'
-              });
-
-              // Post comment with link to the workflow run
-              const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: `🚀 **Kind E2E (full)** triggered by \`/ok-to-test\`\n\n[View the Kind E2E workflow run](${runUrl})`
-              });
-
-              core.setOutput('run_full', 'true');
-              return;
-            }
-
-            core.setOutput('run_full', 'false');
-
-  # E2E smoke tests - run automatically on every PR with code changes
-  # Skip if PR only contains docs/metadata changes
+  # E2E smoke tests - run automatically on every PR with code changes.
+  # Skip if PR only contains docs/metadata changes.
   e2e-tests-smoke:
     runs-on: ubuntu-latest
-    needs: [lint-and-test, check-code-changes, check-full-tests]
-    if: github.event_name == 'pull_request' && needs.check-code-changes.result == 'success' && needs.check-code-changes.outputs.has_code_changes == 'true'
+    needs: [lint-and-test, check-code-changes]
+    if: github.event_name == 'pull_request' && needs.check-code-changes.outputs.has_code_changes == 'true'
     timeout-minutes: 60
     permissions:
       contents: read
@@ -316,7 +147,7 @@ jobs:
       - name: Build WVA image locally
         id: build-image
         env:
-          CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: deploy/ci-pr-checks/build-wva-image-local.sh
 
       - name: Run e2e tests (smoke)
@@ -326,71 +157,30 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "false"
           CREATE_CLUSTER: "true"
-          # Emulated Kind: llm-d model serving is deployed by install-epp.sh (llm-d-router-standalone chart + simulator).
+          SCALER_BACKEND: keda
           LLM_D_ROUTER_VERSION: "v0.9.0"
-          # Dual-controller smoke installs a secondary controller via Kustomize; overlay path must be explicit in CI.
           WVA_E2E_SECONDARY_OVERLAY_PATH: ${{ github.workspace }}/test/e2e/testdata/secondary-controller
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
-          PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: "true"
-          # Lower saturation thresholds for simulator mode — the simulator's
-          # KV-cache and queue metrics are modest, so default thresholds
-          # (kvSpareTrigger=0.1, queueSpareTrigger=3) are too high to trigger
-          # scale-up reliably. These values trigger when kvUsage > 0.30 or
-          # queueLength > 0.5, which the simulator produces under load.
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |
           make test-e2e-smoke-with-setup
 
-  # Full Kind E2E - runs on same-repo pull_request events, /ok-to-test comments, or workflow_dispatch.
+  # Full Kind E2E - runs automatically on every PR with code changes.
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
-  # and must run and pass before merge (shows as "Expected" until triggered).
+  # and must run and pass before merge.
   e2e-tests-full:
     runs-on: ubuntu-latest
-    needs: [lint-and-test, check-code-changes, check-full-tests]
-    if: >-
-      always() && needs.check-full-tests.outputs.run_full == 'true' && needs.check-code-changes.result == 'success'
-      && needs.lint-and-test.result != 'failure'
-      && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
-          || github.event_name == 'pull_request')
-    timeout-minutes: 60
+    needs: [lint-and-test, check-code-changes]
+    if: needs.check-code-changes.outputs.has_code_changes == 'true'
+    timeout-minutes: 90
     permissions:
       contents: read
-      statuses: write
     steps:
-      - name: Set pending status on PR head
-        if: github.event_name == 'issue_comment' && needs.check-code-changes.outputs.pr_head_sha != ''
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: '${{ needs.check-code-changes.outputs.pr_head_sha }}',
-              state: 'pending',
-              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              description: 'Full E2E tests running...',
-              context: '${{ github.workflow }} / e2e (comment trigger)'
-            });
-
-      - name: Validate PR head SHA for issue_comment events
-        if: github.event_name == 'issue_comment'
-        run: |
-          if [ -z "${{ needs.check-code-changes.outputs.pr_head_sha }}" ]; then
-            echo "::error::pr_head_sha is empty — refusing to fall back to main"
-            exit 1
-          fi
-          echo "Checkout will use PR head SHA: ${{ needs.check-code-changes.outputs.pr_head_sha }}"
-          echo "PR head repo: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}"
-
       - name: Checkout source
         uses: actions/checkout@v6
-        with:
-          repository: ${{ needs.check-code-changes.outputs.pr_head_repo || github.repository }}
-          ref: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Go version from go.mod
         run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
@@ -413,7 +203,7 @@ jobs:
       - name: Build WVA image locally
         id: build-image
         env:
-          CHECKOUT_SHA: ${{ needs.check-code-changes.outputs.pr_head_sha || github.sha }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: deploy/ci-pr-checks/build-wva-image-local.sh
 
       - name: Run e2e tests (full)
@@ -423,64 +213,14 @@ jobs:
           USE_SIMULATOR: "true"
           SCALE_TO_ZERO_ENABLED: "true"
           CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
           LLM_D_ROUTER_VERSION: "v0.9.0"
           DEPLOY_LWS: "true"
           IMG: ${{ steps.build-image.outputs.image }}
           SKIP_BUILD: "true"
-          PROMETHEUS_ADAPTER_WAIT: "false"
           DELETE_CLUSTER: "false"
           # Same simulator saturation tuning as smoke — defaults are too high for reliable scale-up signals.
           KV_SPARE_TRIGGER: "0.5"
           QUEUE_SPARE_TRIGGER: "4.5"
         run: |
           make test-e2e-full-with-setup
-
-  # Report status back to PR for issue_comment triggered runs
-  # This ensures fork PRs show the correct status after /ok-to-test runs complete
-  report-status:
-    runs-on: ubuntu-latest
-    needs: [check-code-changes, check-full-tests, e2e-tests-full]
-    if: always() && github.event_name == 'issue_comment' && needs.check-full-tests.outputs.run_full == 'true'
-    permissions:
-      statuses: write
-    steps:
-      - name: Report status to PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const prHeadSha = '${{ needs.check-code-changes.outputs.pr_head_sha }}';
-            const e2eResult = '${{ needs.e2e-tests-full.result }}';
-
-            if (!prHeadSha) {
-              console.log('No PR head SHA available, skipping status report');
-              return;
-            }
-
-            let state, description;
-            if (e2eResult === 'success') {
-              state = 'success';
-              description = 'E2E tests passed';
-            } else if (e2eResult === 'skipped') {
-              state = 'failure';
-              description = 'E2E tests did not run (prerequisite failed or skipped)';
-            } else if (e2eResult === 'cancelled') {
-              state = 'failure';
-              description = 'E2E tests cancelled';
-            } else {
-              state = 'failure';
-              description = 'E2E tests failed';
-            }
-
-            console.log(`Reporting status to PR commit ${prHeadSha}: ${state} - ${description}`);
-
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: prHeadSha,
-              state: state,
-              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              description: description,
-              context: '${{ github.workflow }} / e2e (comment trigger)'
-            });
-
-            console.log('Status reported successfully');

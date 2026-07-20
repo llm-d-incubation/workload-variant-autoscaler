@@ -37,7 +37,7 @@ This deploys:
 - Kind cluster with 3 nodes, emulated GPUs (mixed vendors)
 - WVA controller
 - llm-d EPP (llm-d-router-standalone chart)
-- Prometheus monitoring + Prometheus Adapter
+- Prometheus monitoring + KEDA (external metrics)
 
 To also deploy a simulator model service for manual testing:
 
@@ -65,7 +65,6 @@ export ITL_AVERAGE_LATENCY_MS=20            # Average inter-token latency for th
 export TTFT_AVERAGE_LATENCY_MS=200          # Average time-to-first-token for the llm-d-inference-sim
 
 # Performance tuning (optional)
-export VLLM_MAX_NUM_SEQS=64                 # vLLM max concurrent sequences (batch size)
 export HPA_STABILIZATION_SECONDS=240        # HPA stabilization window
 
 # Image load (optional; auto-detected if unset)
@@ -78,7 +77,7 @@ export KIND_IMAGE_PLATFORM=linux/amd64      # Single platform for kind load (avo
 export DEPLOY_PROMETHEUS=true               # Deploy Prometheus stack
 export DEPLOY_OPERATIONAL_DASHBOARD=true    # Deploy Grafana and operational dashboard
 export DEPLOY_WVA=true                      # Deploy WVA controller
-export DEPLOY_PROMETHEUS_ADAPTER=true       # Deploy Prometheus Adapter
+export SCALER_BACKEND=keda                  # Deploy KEDA for external metrics
 # llm-d: deploy model serving separately via the llm-d guides after install.sh
 ```
 

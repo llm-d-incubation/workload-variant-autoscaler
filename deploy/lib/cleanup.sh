@@ -2,7 +2,7 @@
 #
 # Undeploy and cleanup helpers for deploy/install.sh.
 # Requires vars: KEDA_NAMESPACE, MONITORING_NAMESPACE, LLMD_NS, WVA_NS, WVA_PROJECT.
-# Requires funcs: stop_apiservice_guard(), containsElement(),
+# Requires funcs: containsElement(),
 # undeploy_prometheus_stack(), delete_namespaces(), undeploy_epp(), log_*().
 #
 
@@ -21,22 +21,6 @@ undeploy_keda() {
     kubectl delete namespace "$KEDA_NAMESPACE" --ignore-not-found --timeout=120s 2>/dev/null || true
     log_success "KEDA uninstalled"
 }
-
-undeploy_prometheus_adapter() {
-    log_info "Uninstalling Prometheus Adapter..."
-
-    # Stop the APIService guard if running
-    stop_apiservice_guard
-
-    helm uninstall "$PROMETHEUS_ADAPTER_RELEASE_NAME" -n "$MONITORING_NAMESPACE" 2>/dev/null || \
-        log_warning "Prometheus Adapter not found or already uninstalled"
-
-    kubectl delete configmap "$PROMETHEUS_CA_CONFIGMAP_NAME" -n "$MONITORING_NAMESPACE" --ignore-not-found
-    # Cleanup is handled by the values files in config/samples
-
-    log_success "Prometheus Adapter uninstalled"
-}
-
 
 undeploy_wva_controller() {
     log_info "Uninstalling Workload-Variant-Autoscaler..."
@@ -77,19 +61,21 @@ cleanup() {
     log_info "======================================"
     echo ""
 
-    # Stop the APIService guard if running (safety net)
-    stop_apiservice_guard
-
     # Undeploy environment-specific components (Prometheus, etc.)
     if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
         undeploy_prometheus_stack
     fi
 
-    # Undeploy scaler backend (KEDA or Prometheus Adapter)
+    # Undeploy scaler backend (KEDA or none). Mirror deploy_scaler_backend()'s
+    # supported-value check so an unknown SCALER_BACKEND is surfaced rather than
+    # silently leaving a previously-installed backend orphaned. Warn (not error)
+    # so the rest of the teardown still runs.
     if [ "$SCALER_BACKEND" = "keda" ]; then
         undeploy_keda
-    elif [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ]; then
-        undeploy_prometheus_adapter
+    elif [ "$SCALER_BACKEND" = "none" ]; then
+        log_info "Skipping scaler backend undeployment (SCALER_BACKEND=none)"
+    else
+        log_warning "Unsupported SCALER_BACKEND: $SCALER_BACKEND (supported: keda, none); skipping scaler backend undeployment — any installed backend may be left behind"
     fi
 
     # EPP (llm-d-router-standalone chart) is torn down via undeploy_epp() from infra_epp.sh.
@@ -115,7 +101,6 @@ cleanup() {
     echo ""
     echo "Removed components:"
     [ "$SCALER_BACKEND" = "keda" ] && echo "✓ KEDA"
-    [ "$DEPLOY_PROMETHEUS_ADAPTER" = "true" ] && echo "✓ Prometheus Adapter"
     [ "$DEPLOY_WVA" = "true" ] && echo "✓ WVA Controller"
     [ "$DEPLOY_PROMETHEUS" = "true" ] && echo "✓ Prometheus Stack"
 

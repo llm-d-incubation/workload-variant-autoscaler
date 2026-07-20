@@ -1,6 +1,6 @@
 # Analyzer checklists
 
-This document defines the benchmark-based checklists that will enable a analyzer to be graduated. The new analyzer could be expected to work with existing analyzers in turn provide value to WVA by improving latency or cost or both. the **current default analyzer's** results recorded in [`docs/benchmark.md`](../benchmark.md) in general the expectation is that the new analyzer(s) should improve over the reported baselines for specific scenarion(s) that the analyzer targets.
+This document defines the benchmark-based checklists that will enable a analyzer to be graduated. The new analyzer could be expected to work with existing analyzers in turn provide value to WVA by improving latency or cost or both. the **current default analyzer's** results recorded in [`docs/benchmark.md`](../benchmark.md) in general the expectation is that the new analyzer(s) should improve over the reported baselines for specific scenario(s) that the analyzer targets.
 
 ## Reference Workloads
 

@@ -33,6 +33,7 @@ llm-d-infra/
 llm-d-benchmark/
 # llmdbenchmark workspace directories (created by benchmark runs)
 *-*-*-*-*-*/
+biran-*/
 llmd/
 llmd-infra/
 

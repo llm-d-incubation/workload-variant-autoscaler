@@ -178,7 +178,7 @@ WVA uses Kubernetes event watches to trigger reconciliation. Understanding how e
 Add the `-v=2` flag to see debug-level event logs:
 
 ```yaml
-# In deployment manifest or via Helm
+# In deployment manifest
 args:
 - --health-probe-bind-address=:8081
 - --metrics-bind-address=:8443

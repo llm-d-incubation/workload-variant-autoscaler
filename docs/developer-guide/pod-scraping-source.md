@@ -23,7 +23,7 @@
    - `get`, `list`, `watch` on `services`
    - `get`, `list`, `watch` on `pods`
    - `get` on `secrets` (if using authentication)
-   - For EPP metrics: `get` on non-resource URLs `/metrics` and `/debug/pprof/*` (see [official RBAC guide](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/site-src/guides/metrics-and-observability.md#scrape-metrics--pprof-profiles))
+   - For EPP metrics: `get` on non-resource URLs `/metrics`
 5. **Authentication Secret** (optional): If metrics endpoint requires authentication
    - For EPP: Typically `inference-gateway-sa-metrics-reader-secret` (see [official authentication guide](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/site-src/guides/metrics-and-observability.md#scrape-metrics--pprof-profiles))
 

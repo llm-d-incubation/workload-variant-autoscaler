@@ -134,18 +134,28 @@ func (p *PodScrapingSource) Refresh(ctx context.Context, spec source.RefreshSpec
 	// Aggregate results
 	aggregated := p.aggregateResults(results)
 
-	// Cache the result
+	// Cache the aggregated result under the canonical "all_metrics" key.
 	cacheKey := source.BuildCacheKey("all_metrics", nil)
 	p.cache.Set(cacheKey, *aggregated, p.config.DefaultTTL)
+
+	// Also cache per-metric slices keyed by __name__ so that
+	// Get("vllm:queue_size", nil) returns only the relevant values.
+	perMetric := splitByMetricName(aggregated)
+
+	out := make(map[string]*source.MetricResult, len(perMetric)+1)
+	out["all_metrics"] = aggregated
+	for name, mr := range perMetric {
+		out[name] = mr
+		p.cache.Set(source.BuildCacheKey(name, nil), *mr, p.config.DefaultTTL)
+	}
 
 	logger.V(logging.DEBUG).Info("Scraped metrics from pods",
 		"podCount", len(pods),
 		"successCount", len(results),
-		"metricCount", len(aggregated.Values))
+		"metricCount", len(aggregated.Values),
+		"distinctMetrics", len(perMetric))
 
-	return map[string]*source.MetricResult{
-		"all_metrics": aggregated,
-	}, nil
+	return out, nil
 }
 
 // Get retrieves cached metrics.
@@ -395,6 +405,30 @@ func (p *PodScrapingSource) parsePrometheusMetrics(reader io.Reader, podName str
 		Values:      values,
 		CollectedAt: now,
 	}, nil
+}
+
+// splitByMetricName groups aggregated values by their "__name__" label,
+// returning one MetricResult per distinct metric name.
+// Values without a "__name__" label and the reserved name "all_metrics" are skipped.
+func splitByMetricName(aggregated *source.MetricResult) map[string]*source.MetricResult {
+	grouped := make(map[string][]source.MetricValue)
+	for _, v := range aggregated.Values {
+		name := v.Labels["__name__"]
+		if name == "" || name == "all_metrics" {
+			continue
+		}
+		grouped[name] = append(grouped[name], v)
+	}
+
+	out := make(map[string]*source.MetricResult, len(grouped))
+	for name, vals := range grouped {
+		out[name] = &source.MetricResult{
+			QueryName:   name,
+			Values:      vals,
+			CollectedAt: aggregated.CollectedAt,
+		}
+	}
+	return out
 }
 
 // aggregateResults combines metrics from all pods.

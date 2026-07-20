@@ -12,4 +12,4 @@ resources:
 images:
 - name: controller
   newName: ghcr.io/llm-d/llm-d-workload-variant-autoscaler
-  newTag: v0.7.0
+  newTag: main

@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 )
 
 // DumpControllerLogs fetches and prints the controller manager logs for debugging.
@@ -46,31 +42,25 @@ func DumpControllerLogs(ctx context.Context, k8sClient *kubernetes.Clientset, co
 	}
 }
 
-// DumpVAStatus fetches and prints all VariantAutoscaling resources for debugging.
-func DumpVAStatus(ctx context.Context, crClient client.Client, w io.Writer) {
-	_, _ = fmt.Fprintf(w, "\n=== VariantAutoscaling Status ===\n")
+// DumpManagedScalers fetches and prints the HorizontalPodAutoscalers in every
+// namespace for debugging. WVA discovers variants from annotated HPAs (and KEDA
+// ScaledObjects, which KEDA in turn manages via HPAs), so the HPA list plus its
+// currentMetrics is the observable annotation-discovery surface.
+func DumpManagedScalers(ctx context.Context, k8sClient *kubernetes.Clientset, w io.Writer) {
+	_, _ = fmt.Fprintf(w, "\n=== Managed HorizontalPodAutoscalers ===\n")
 
-	vaList := &v1alpha1.VariantAutoscalingList{}
-	if err := crClient.List(ctx, vaList); err != nil {
-		_, _ = fmt.Fprintf(w, "Failed to list VAs: %v\n", err)
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "Failed to list HPAs: %v\n", err)
 		return
 	}
 
-	for _, va := range vaList.Items {
-		_, _ = fmt.Fprintf(w, "\nVA: %s/%s\n", va.Namespace, va.Name)
-		_, _ = fmt.Fprintf(w, "  ModelID: %s\n", va.Spec.ModelID)
-		_, _ = fmt.Fprintf(w, "  Labels: %v\n", va.Labels)
-		_, _ = fmt.Fprintf(w, "  DesiredOptimizedAlloc:\n")
-		_, _ = fmt.Fprintf(w, "    Accelerator: %s\n", va.Status.DesiredOptimizedAlloc.Accelerator)
-		replicas := "<nil>"
-		if nr := va.Status.DesiredOptimizedAlloc.NumReplicas; nr != nil {
-			replicas = strconv.Itoa(int(*nr))
-		}
-		_, _ = fmt.Fprintf(w, "    NumReplicas: %s\n", replicas)
-		_, _ = fmt.Fprintf(w, "    LastRunTime: %v\n", va.Status.DesiredOptimizedAlloc.LastRunTime)
-		_, _ = fmt.Fprintf(w, "  Conditions:\n")
-		for _, cond := range va.Status.Conditions {
-			_, _ = fmt.Fprintf(w, "    - Type: %s, Status: %s, Reason: %s, Message: %q\n", cond.Type, cond.Status, cond.Reason, cond.Message)
-		}
+	for i := range hpaList.Items {
+		hpa := &hpaList.Items[i]
+		_, _ = fmt.Fprintf(w, "\nHPA: %s/%s\n", hpa.Namespace, hpa.Name)
+		_, _ = fmt.Fprintf(w, "  ScaleTargetRef: %s/%s\n", hpa.Spec.ScaleTargetRef.Kind, hpa.Spec.ScaleTargetRef.Name)
+		_, _ = fmt.Fprintf(w, "  Annotations: %v\n", hpa.Annotations)
+		_, _ = fmt.Fprintf(w, "  DesiredReplicas: %d\n", hpa.Status.DesiredReplicas)
+		_, _ = fmt.Fprintf(w, "  CurrentMetrics: %v\n", hpa.Status.CurrentMetrics)
 	}
 }

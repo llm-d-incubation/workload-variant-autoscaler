@@ -19,6 +19,7 @@ Welcome to the WVA documentation! This directory contains comprehensive guides f
 - **[Unified Configuration System](developer-guide/configuration.md)** - Configuration reference for all WVA components
 - **[Metrics & Health Monitoring](developer-guide/metrics-health-monitoring.md)** - Exposed metrics and health check endpoints
 - **[Saturation Scaling Configuration](developer-guide/saturation-scaling-config.md)** - Tuning the saturation-based scaling algorithm
+- **[Quota Limiter](developer-guide/quota-limiter.md)** - Operator-declared per-accelerator GPU caps (cluster/namespace scope)
 - **[Throughput Analyzer](developer-guide/throughput-analyzer.md)** - How the throughput analyzer works
 - **[Queue Model Analyzer](developer-guide/slo-queuemodel.md)** - SLO-aware queueing model
 - **[Pod Scraping Source](developer-guide/pod-scraping-source.md)** - Direct pod metric scraping

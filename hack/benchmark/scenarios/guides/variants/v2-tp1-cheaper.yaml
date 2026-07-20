@@ -1,0 +1,21 @@
+# Secondary variant: TP=1 (1 GPU per pod), half the variantCost of the
+# primary TP=2 (5.0 vs 10.0).
+#
+# Note on efficiency: with the cost ratio (10/5) equal to the GPU/TP
+# ratio (2/1), both variants cost the same per GPU. A TP=2 replica
+# shards the weights across both GPUs, leaving more KV headroom per GPU,
+# so it yields >2x a TP=1 replica's capacity — i.e. the primary is the
+# MORE efficient variant at this pricing. WVA's saturation-V2 cost-aware
+# optimizer therefore scales the primary up first under load and uses
+# this cheaper TP=1 variant as spillover. v2 becomes the more efficient
+# pick only if priced below its proportional GPU share (cost ratio > TP
+# ratio) or for low-rate / short-output workloads where TP=2 never
+# realizes its capacity edge.
+suffix: v2
+variantCost: "5.0"
+minReplicas: 1
+maxReplicas: 10
+parallelism:
+  tensor: 1
+resources:
+  nvidia.com/gpu: 1

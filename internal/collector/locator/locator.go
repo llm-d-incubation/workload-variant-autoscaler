@@ -60,20 +60,6 @@ type PodLocator interface {
 	// metadata.name). Use this for shadow-pod layouts where the pod's
 	// ownerReferences chain does not reach the scaler's scaleTargetRef.
 	LocateByVariant(ctx context.Context, namespace, variantName string) (*ManagedScaler, error)
-
-	// ResolveScaleTarget returns the top-level Deployment / LWS scale target
-	// in the pod's ownerReferences chain, independent of whether a managed
-	// scaler controls it. ok is false when the pod has no scaler-eligible
-	// ancestor (shadow pod, unknown chain) or does not exist. Reuses the
-	// pod→target cache, so a call following Locate for the same pod issues
-	// no extra API reads. Use this to attribute metrics for scale targets
-	// fronted by an unmanaged scaler (e.g. a KServe-created HPA without
-	// llm-d.ai/managed=true), where Locate returns (nil, nil).
-	//
-	// TODO(va-removal): this method exists only for the CRD-based dual-mode
-	// fallback in the collector (buildInstanceKey). Remove it when the
-	// VariantAutoscaling CRD is removed.
-	ResolveScaleTarget(ctx context.Context, namespace, podName string) (ref autoscalingv2.CrossVersionObjectReference, ok bool, err error)
 }
 
 // New constructs a PodLocator.
@@ -121,23 +107,6 @@ func (l *podLocator) Locate(ctx context.Context, namespace, podName string) (*Ma
 	// Step 2: scale target → managed scaler. NOT cached; field-index reads
 	// are cheap and reflect the current annotation / scaleTargetRef state.
 	return l.resolveScaler(ctx, target)
-}
-
-// TODO(va-removal): remove ResolveScaleTarget together with the CRD-based
-// dual-mode fallback in the collector when the VariantAutoscaling CRD is removed.
-func (l *podLocator) ResolveScaleTarget(ctx context.Context, namespace, podName string) (autoscalingv2.CrossVersionObjectReference, bool, error) {
-	target, err := l.resolveTarget(ctx, namespace, podName)
-	if err != nil {
-		return autoscalingv2.CrossVersionObjectReference{}, false, err
-	}
-	if target == (chainNode{}) {
-		return autoscalingv2.CrossVersionObjectReference{}, false, nil
-	}
-	return autoscalingv2.CrossVersionObjectReference{
-		APIVersion: target.APIVersion,
-		Kind:       target.Kind,
-		Name:       target.Name,
-	}, true, nil
 }
 
 // resolveTarget runs Step 1 of resolution: pod → top-level scale-target

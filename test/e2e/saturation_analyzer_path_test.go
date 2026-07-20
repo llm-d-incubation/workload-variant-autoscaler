@@ -13,9 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
@@ -88,9 +86,8 @@ func buildSaturationConfigYAMLWithThresholds(analyzerName string, kvCacheThresho
 
 // saturationConfigMapName resolves the active saturation ConfigMap name from controller runtime env.
 func saturationConfigMapName() string {
-	// Match the controller's runtime config map name. Helm deployments often
-	// override SATURATION_CONFIG_MAP_NAME with a release-prefixed value and can
-	// also change the controller deployment name, so discover it by label first.
+	// Match the controller's runtime config map name; discover by label first
+	// since the deployment name can vary across overlays.
 	deps, err := k8sClient.AppsV1().Deployments(cfg.WVANamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "control-plane=controller-manager",
 	})
@@ -129,108 +126,6 @@ func expectAnalyzerPathLog(mode, modelID string) {
 	}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 }
 
-// waitForPositiveDesiredAllocation logs VA progress and waits for a positive desired replica recommendation.
-func waitForPositiveDesiredAllocation(ctx context.Context, namespace, vaName string) {
-	GinkgoHelper()
-	Eventually(func(g Gomega) {
-		va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-		getErr := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: namespace}, va)
-		g.Expect(getErr).NotTo(HaveOccurred())
-
-		metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-		if metricsCond != nil {
-			GinkgoWriter.Printf(
-				"  VA progress (%s): MetricsAvailable=%s reason=%s message=%q\n",
-				vaName,
-				metricsCond.Status,
-				metricsCond.Reason,
-				metricsCond.Message,
-			)
-		} else {
-			GinkgoWriter.Printf("  VA progress (%s): MetricsAvailable=<nil>\n", vaName)
-		}
-
-		desired := int32(-1)
-		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
-			desired = *va.Status.DesiredOptimizedAlloc.NumReplicas
-			GinkgoWriter.Printf(
-				"  VA progress (%s): DesiredOptimizedAlloc replicas=%d accelerator=%q\n",
-				vaName,
-				desired,
-				va.Status.DesiredOptimizedAlloc.Accelerator,
-			)
-		} else {
-			GinkgoWriter.Printf("  VA progress (%s): DesiredOptimizedAlloc replicas=<nil>\n", vaName)
-		}
-
-		g.Expect(metricsCond).NotTo(BeNil())
-		g.Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue))
-		g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil())
-		g.Expect(desired).To(BeNumerically(">", 0))
-	}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-}
-
-// expectNoScaleUpAboveBaseline asserts that desired replicas do not exceed baseline for a bounded window.
-func expectNoScaleUpAboveBaseline(ctx context.Context, namespace, vaName string, baseline int32, windowSec int) {
-	GinkgoHelper()
-	Consistently(func(g Gomega) {
-		va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-		getErr := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: namespace}, va)
-		g.Expect(getErr).NotTo(HaveOccurred())
-
-		metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-		if metricsCond != nil {
-			GinkgoWriter.Printf(
-				"  Negative-path progress (%s): MetricsAvailable=%s reason=%s\n",
-				vaName,
-				metricsCond.Status,
-				metricsCond.Reason,
-			)
-		}
-
-		current := int32(0)
-		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
-			current = *va.Status.DesiredOptimizedAlloc.NumReplicas
-		}
-		GinkgoWriter.Printf(
-			"  Negative-path progress (%s): DesiredOptimizedAlloc replicas=%d baseline=%d\n",
-			vaName,
-			current,
-			baseline,
-		)
-		g.Expect(current).To(BeNumerically("<=", baseline),
-			"V1 bounded below-threshold traffic should not increase desired replicas above baseline")
-	}, time.Duration(windowSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-}
-
-// waitForSaturationInfraSignal ensures the VA has begun controller-driven status reporting
-// before the bounded threshold trigger runs. This avoids firing traffic before the control
-// loop and metrics pipeline have any observable signal for this VA.
-func waitForSaturationInfraSignal(ctx context.Context, namespace, vaName string) {
-	GinkgoHelper()
-	Eventually(func(g Gomega) {
-		va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-		getErr := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: namespace}, va)
-		g.Expect(getErr).NotTo(HaveOccurred())
-
-		targetResolved := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeTargetResolved)
-		if targetResolved != nil {
-			GinkgoWriter.Printf(
-				"  Infra preflight (%s): TargetResolved=%s reason=%s message=%q\n",
-				vaName,
-				targetResolved.Status,
-				targetResolved.Reason,
-				targetResolved.Message,
-			)
-		} else {
-			GinkgoWriter.Printf("  Infra preflight (%s): TargetResolved=<nil>\n", vaName)
-		}
-
-		g.Expect(targetResolved).NotTo(BeNil(), "TargetResolved should be present before threshold trigger")
-		g.Expect(targetResolved.Status).To(Equal(metav1.ConditionTrue), "TargetResolved should be true before threshold trigger")
-	}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-}
-
 var _ = Describe("Saturation analyzer path and status propagation", Label("full"), Ordered, func() {
 	const (
 		poolName     = "saturation-path-pool"
@@ -240,7 +135,15 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		modelDecodeDeployment = modelSvcName + "-decode"
 		serviceName           = modelSvcName + "-service"
 		smName                = modelSvcName + "-monitor"
-		vaName                = "saturation-path-va"
+		// scalerBaseName is the annotated scaler's logical base. WVA discovers the
+		// scaler and uses its OBJECT name as the variant_name label on
+		// wva_desired_replicas — that is base+"-so" for a KEDA ScaledObject and
+		// base+"-hpa" for an HPA. The decode pods must carry
+		// llm-d.ai/variant=<scaler object name> for metric attribution, so variantName is
+		// derived from the backend below.
+		scalerBaseName = "saturation-path"
+		hpaObjectName  = scalerBaseName + "-hpa"
+		soObjectName   = scalerBaseName + "-so"
 	)
 
 	var (
@@ -250,6 +153,10 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		cmExistedBefore bool
 		cmKey           string
 		cmNamespace     string
+		// variantName is the variant_name — the scaler's object name — stamped as the
+		// decode pods' llm-d.ai/variant label so the collector attributes their
+		// metrics to the variant. Set from the backend in BeforeAll.
+		variantName string
 	)
 
 	BeforeAll(func() {
@@ -257,6 +164,8 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 			Skip("This suite needs the simulator runtime: set USE_SIMULATOR=true. " +
 				"The suite uses llm-d-inference-sim's --fake-metrics flag, which real vLLM rejects.")
 		}
+
+		variantName = soObjectName
 
 		modelID = cfg.ModelID
 		cmName = saturationConfigMapName()
@@ -276,7 +185,7 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 
 		By("Creating model service + service + ServiceMonitor for saturation path test")
 		_ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName)
-		err = fixtures.CreateModelServiceWithExtraArgs(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, vaName,
+		err = fixtures.CreateModelServiceWithExtraArgs(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, poolName, modelID, variantName,
 			cfg.UseSimulator, cfg.MaxNumSeqs, []string{"--fake-metrics", v1FakeMetricsJSON})
 		Expect(err).NotTo(HaveOccurred())
 		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelSvcName, modelDecodeDeployment, 8000)
@@ -291,12 +200,16 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Creating VA for dedicated saturation analyzer path model")
-		err = fixtures.EnsureVariantAutoscalingWithDefaults(
-			ctx, crClient, cfg.LLMDNamespace, vaName,
-			modelDecodeDeployment, modelID, cfg.AcceleratorType, cfg.ControllerInstance,
-		)
+		By("Registering the saturation-path deployment with WVA via an annotated ScaledObject")
+		// The ScaledObject's variantName matches the model service's variantName so the
+		// decode pods' llm-d.ai/variant label and wva_desired_replicas variant_name align.
+		// The 30 s scale-down stabilization window overrides the HPA default (300 s) so
+		// the "does not scale up" It can wait for minReplicas within EventuallyLongSec.
+		err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName, modelDecodeDeployment, variantName, 1, 10, cfg.MonitoringNS,
+			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"),
+			fixtures.WithScaledObjectScaleDownStabilizationWindow(30))
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, scalerBaseName) })
 	})
 
 	AfterAll(func() {
@@ -320,9 +233,6 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		}
 
 		By("Cleaning up saturation analyzer path resources")
-		_ = crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{Name: vaName, Namespace: cfg.LLMDNamespace},
-		})
 		_ = crClient.Delete(ctx, &promoperator.ServiceMonitor{
 			ObjectMeta: metav1.ObjectMeta{Name: smName, Namespace: cfg.MonitoringNS},
 		})
@@ -348,40 +258,25 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		expectAnalyzerPathLog("V1", modelID)
 	})
 
-	It("propagates saturation results into VA desired allocation and metrics condition", func() {
-		By("Waiting for DesiredOptimizedAlloc and MetricsAvailable to be populated")
+	It("propagates saturation results into wva_desired_replicas for the variant", func() {
+		// WVA no longer writes VA .status; its sole output is wva_desired_replicas.
+		// expectWVADesiredReplicasConsumed observes that through the KEDA-managed
+		// HPA's CurrentMetrics, which KEDA populates only after reading the metric
+		// from Prometheus.
+		By("Verifying wva_desired_replicas was emitted and consumed for the saturation-path variant")
 		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
-			g.Expect(err).NotTo(HaveOccurred())
-
-			metricsCond := variantautoscalingv1alpha1.GetCondition(va, variantautoscalingv1alpha1.TypeMetricsAvailable)
-			g.Expect(metricsCond).NotTo(BeNil(), "MetricsAvailable condition should exist")
-			g.Expect(metricsCond.Status).To(Equal(metav1.ConditionTrue), "MetricsAvailable should be true once metrics are collected")
-
-			g.Expect(va.Status.DesiredOptimizedAlloc.Accelerator).NotTo(BeEmpty(),
-				"DesiredOptimizedAlloc.Accelerator should be set")
-			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil(),
-				"DesiredOptimizedAlloc.NumReplicas should be set")
-			g.Expect(*va.Status.DesiredOptimizedAlloc.NumReplicas).To(BeNumerically(">=", 0),
-				"DesiredOptimizedAlloc.NumReplicas should be non-negative")
+			expectWVADesiredReplicasConsumed(g, cfg.LLMDNamespace, modelDecodeDeployment)
 		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
-	It("does not recommend additional scale-up for bounded below-threshold V1 traffic", func() {
-		var baseline int32
-
-		By("Capturing baseline desired replicas before below-threshold trigger")
-		Eventually(func(g Gomega) {
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{}
-			getErr := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
-			g.Expect(getErr).NotTo(HaveOccurred())
-			g.Expect(va.Status.DesiredOptimizedAlloc.NumReplicas).NotTo(BeNil())
-			baseline = *va.Status.DesiredOptimizedAlloc.NumReplicas
-			GinkgoWriter.Printf("  Negative-path baseline (%s): desired=%d\n", vaName, baseline)
-		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
+	It("does not scale the target deployment up for bounded below-threshold V1 traffic", func() {
 		By("Configuring conservative V1 thresholds to avoid scale-up")
+		// Set thresholds before capturing the baseline so WVA has time to reconcile
+		// while we wait for KEDA to settle. With the KEDA Prometheus query now using
+		// exported_namespace (fixed), KEDA can act on wva_desired_replicas from the
+		// prior It (which may have left a scale-up recommendation in Prometheus). We
+		// must wait for WVA to re-evaluate and KEDA to read the new value before the
+		// Consistently window starts — otherwise the HPA would fire a scale-up.
 		err := upsertSaturationConfigEntry(
 			ctx,
 			cmNamespace,
@@ -402,14 +297,75 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		By("Verifying controller is using V1 analyzer path")
 		expectAnalyzerPathLog("V1", modelID)
 
-		By("Preflighting VA controller signal before asserting no scale-up")
-		waitForSaturationInfraSignal(ctx, cfg.LLMDNamespace, vaName)
+		By("Waiting for the pipeline to converge to a sustained minReplicas (drain any in-flight scale-up)")
+		// A single Spec.Replicas <= 1 reading is NOT proof of convergence: the deployment
+		// starts at minReplicas, so that check passes on the pre-existing state while a
+		// scale-up recommendation left in flight by the prior It (default config:
+		// queueLengthThreshold=1 vs faked queue=2 → V1 scale-up) is still working through
+		// WVA (≤15 s reconcile) → Prometheus → KEDA (5 s poll) → HPA. That stale
+		// recommendation actuates a scale-up mid-assertion unless it has fully drained.
+		//
+		// Require the deployment to HOLD at <=1 continuously for stableWindow before
+		// trusting it: any bump resets the stability clock, and stableWindow outlasts the
+		// full pipeline latency (reconcile + poll + the 30 s scale-down stabilization set
+		// on this ScaledObject) so the old recommendation is guaranteed drained.
+		const stableWindow = 45 * time.Second
+		var stableSince *time.Time
+		Eventually(func(g Gomega) {
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(dep.Spec.Replicas).NotTo(BeNil())
+			now := time.Now()
+			if *dep.Spec.Replicas > 1 {
+				stableSince = nil // reset the stability clock on any in-flight scale-up
+				GinkgoWriter.Printf("  Convergence (%s): replicas=%d (>1) — resetting stability clock\n", modelDecodeDeployment, *dep.Spec.Replicas)
+				g.Expect(*dep.Spec.Replicas).To(BeNumerically("<=", int32(1)),
+					"waiting for the in-flight scale-up recommendation to drain")
+				return
+			}
+			if stableSince == nil {
+				stableSince = &now
+			}
+			held := now.Sub(*stableSince)
+			GinkgoWriter.Printf("  Convergence (%s): replicas<=1 held for %s (need %s)\n", modelDecodeDeployment, held.Round(time.Second), stableWindow)
+			g.Expect(held).To(BeNumerically(">=", stableWindow),
+				"waiting for minReplicas to hold long enough to confirm the pipeline converged")
+		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
-		By("Verifying desired allocation does not increase above baseline")
-		expectNoScaleUpAboveBaseline(ctx, cfg.LLMDNamespace, vaName, baseline, cfg.EventuallyMediumSec)
+		By("Capturing baseline target deployment replicas before steady-state assertion")
+		var baseline int32
+		dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dep.Spec.Replicas).NotTo(BeNil())
+		baseline = *dep.Spec.Replicas
+		GinkgoWriter.Printf("  Negative-path baseline (%s): replicas=%d\n", modelDecodeDeployment, baseline)
+
+		By("Verifying the target deployment does not scale above baseline")
+		Consistently(func(g Gomega) {
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			current := int32(0)
+			if dep.Spec.Replicas != nil {
+				current = *dep.Spec.Replicas
+			}
+			GinkgoWriter.Printf("  Negative-path progress (%s): replicas=%d baseline=%d\n", modelDecodeDeployment, current, baseline)
+			g.Expect(current).To(BeNumerically("<=", baseline),
+				"V1 bounded below-threshold traffic should not scale the target deployment above baseline")
+		}, time.Duration(cfg.EventuallyMediumSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
-	It("crosses V1 threshold with bounded requests and recommends scale-up", func() {
+	It("crosses V1 threshold with bounded requests and raises wva_desired_replicas", func() {
+		var baseline int32
+
+		By("Capturing baseline target deployment replicas before scale-up trigger")
+		Eventually(func(g Gomega) {
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(dep.Spec.Replicas).NotTo(BeNil())
+			baseline = *dep.Spec.Replicas
+			GinkgoWriter.Printf("  Scale-up baseline (%s): replicas=%d\n", modelDecodeDeployment, baseline)
+		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+
 		By("Configuring aggressive V1 thresholds and unsetting analyzerName")
 		err := upsertSaturationConfigEntry(
 			ctx,
@@ -431,11 +387,18 @@ var _ = Describe("Saturation analyzer path and status propagation", Label("full"
 		By("Verifying controller is using V1 analyzer path")
 		expectAnalyzerPathLog("V1", modelID)
 
-		By("Preflighting VA controller signal before asserting scale-up")
-		waitForSaturationInfraSignal(ctx, cfg.LLMDNamespace, vaName)
-
-		By("Verifying desired allocation recommends a positive replica count")
-		waitForPositiveDesiredAllocation(ctx, cfg.LLMDNamespace, vaName)
+		By("Asserting KEDA actuates scale-up above baseline")
+		// Aggressive V1 thresholds (kvCache=0.05, queue=1) against faked metrics
+		// (kv=0.3, queue=2) deterministically drive a scale-up; KEDA consumes
+		// wva_desired_replicas and drives the Deployment above its baseline. Assert the
+		// observable Deployment replica count — the ground truth — rather than the KEDA
+		// HPA CurrentMetrics surface, which only proves the metric was consumed.
+		Eventually(func(g Gomega) {
+			dep, getErr := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelDecodeDeployment, metav1.GetOptions{})
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">", baseline),
+				"V1 above-threshold traffic should scale the target Deployment above baseline")
+		}, time.Duration(cfg.ScaleUpTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 	})
 
 })

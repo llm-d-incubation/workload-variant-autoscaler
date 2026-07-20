@@ -7,13 +7,13 @@ import (
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // runV2AnalysisOnly runs the V2 saturation analyzer and returns the raw AnalyzerResult
@@ -320,6 +320,67 @@ func computeCurrentGPUUsage(requests []pipeline.ModelScalingRequest) map[string]
 		}
 	}
 	return usage
+}
+
+// computeCurrentGPUUsageByNamespace mirrors computeCurrentGPUUsage but buckets
+// usage by namespace, then accelerator type. Every request's namespace is
+// represented (with at least an empty per-type map) so namespaces carrying a
+// quota but zero current usage are still surfaced as active namespaces to the
+// constraint providers (and therefore still constrained).
+func computeCurrentGPUUsageByNamespace(requests []pipeline.ModelScalingRequest) map[string]map[string]int {
+	usage := make(map[string]map[string]int)
+	for _, req := range requests {
+		perType, ok := usage[req.Namespace]
+		if !ok {
+			perType = make(map[string]int)
+			usage[req.Namespace] = perType
+		}
+		var satEntry *interfaces.AnalyzerResult
+		for _, e := range req.AnalyzerResults {
+			if e.Name == interfaces.SaturationAnalyzerName {
+				satEntry = e.Result
+				break
+			}
+		}
+		if satEntry == nil {
+			continue
+		}
+		stateMap := make(map[string]interfaces.VariantReplicaState, len(req.VariantStates))
+		for _, s := range req.VariantStates {
+			stateMap[s.VariantName] = s
+		}
+		for _, vc := range satEntry.VariantCapacities {
+			state := stateMap[vc.VariantName]
+			gpusPerReplica := state.GPUsPerReplica
+			if gpusPerReplica <= 0 {
+				gpusPerReplica = 1
+			}
+			perType[vc.AcceleratorName] += state.CurrentReplicas * gpusPerReplica
+		}
+	}
+	return usage
+}
+
+// gpuConstraintProviders returns the ConstraintProvider(s) backing the GPU
+// limiter for the V2 optimizer path. A limiter that is itself a
+// ConstraintProvider (a *DefaultLimiter) contributes itself; a CompositeLimiter
+// contributes each constituent that is a ConstraintProvider, so multi-entry
+// quota configs are all consulted. Other limiter shapes (e.g. NoOpLimiter)
+// contribute nothing.
+func gpuConstraintProviders(l pipeline.Limiter) []pipeline.ConstraintProvider {
+	switch lim := l.(type) {
+	case pipeline.ConstraintProvider:
+		return []pipeline.ConstraintProvider{lim}
+	case *pipeline.CompositeLimiter:
+		var providers []pipeline.ConstraintProvider
+		for _, c := range lim.Constituents() {
+			if cp, ok := c.(pipeline.ConstraintProvider); ok {
+				providers = append(providers, cp)
+			}
+		}
+		return providers
+	}
+	return nil
 }
 
 // collectV2ModelRequest performs V2 analysis for a single model and returns

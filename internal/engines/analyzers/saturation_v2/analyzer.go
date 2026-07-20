@@ -164,9 +164,9 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	k1 := int64(float64(rm.TotalKvCapacityTokens) * config.KvCacheThreshold)
 
 	// k2: compute-bound capacity
-	var vllmParams *VLLMEngineParams
+	var engineParams *EngineParams
 	if rec := a.capacityStore.Get(namespace, modelID, rm.VariantName); rec != nil {
-		vllmParams = rec.VLLMParams
+		engineParams = rec.EngineParams
 	}
 	k2, k2Priority := a.computeK2(
 		modelID, rm.AcceleratorName,
@@ -174,7 +174,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		rm.QueueLength, rm.TokensInUse,
 		rm.AvgOutputTokens, rm.AvgInputTokens,
 		config.QueueLengthThreshold,
-		vllmParams,
+		engineParams,
 		k1,
 	)
 
@@ -185,11 +185,11 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 
 	isSaturated := replicaDemand >= effectiveCapacity
 
-	// Update capacity store with live data, preserving VLLMParams from any
+	// Update capacity store with live data, preserving EngineParams from any
 	// existing record (parsed from deployment args and needed for FindCompatible).
-	var existingParams *VLLMEngineParams
-	if existing := a.capacityStore.Get(namespace, modelID, rm.VariantName); existing != nil && existing.VLLMParams != nil {
-		existingParams = existing.VLLMParams
+	var existingParams *EngineParams
+	if existing := a.capacityStore.Get(namespace, modelID, rm.VariantName); existing != nil && existing.EngineParams != nil {
+		existingParams = existing.EngineParams
 	}
 	a.capacityStore.Update(namespace, modelID, rm.VariantName, CapacityRecord{
 		AcceleratorName:       rm.AcceleratorName,
@@ -198,7 +198,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		BlockSize:             rm.BlockSize,
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
 		EffectiveCapacity:     effectiveCapacity,
-		VLLMParams:            existingParams,
+		EngineParams:          existingParams,
 		LearnedFrom:           learnedFromLive,
 	})
 
@@ -279,7 +279,7 @@ func (a *SaturationAnalyzer) computeK2(
 	queueLen int, tokensInUse int64,
 	avgOutput, avgInput float64,
 	queueThreshold float64,
-	vllmParams *VLLMEngineParams,
+	engineParams *EngineParams,
 	k1 int64,
 ) (int64, k2Source) {
 	outputBucket := classifyOutputLength(avgOutput)
@@ -312,7 +312,7 @@ func (a *SaturationAnalyzer) computeK2(
 	}
 
 	// Priority 3: Derived from deployment args
-	if k2Derived := estimateCapacityFromParams(vllmParams, avgInput, avgOutput); k2Derived > 0 {
+	if k2Derived := estimateCapacityFromParams(engineParams, avgInput, avgOutput); k2Derived > 0 {
 		return k2Derived, k2SrcDerived
 	}
 
@@ -462,17 +462,17 @@ func (a *SaturationAnalyzer) aggregateByRole(
 }
 
 // lookupCompatibleCapacity searches the capacity store for a record from
-// another variant with matching hardware and vLLM parameters. This enables
+// another variant with matching hardware and engine parameters. This enables
 // capacity estimation for zero-replica variants that have no prior data.
 // The search is cross-namespace since capacity depends on hardware + config,
 // not namespace.
 func (a *SaturationAnalyzer) lookupCompatibleCapacity(namespace, modelID, variantName, accelerator string, gpuCount int) *CapacityRecord {
-	// Get VLLMParams for this variant (from deployment-derived record)
+	// Get EngineParams for this variant (from deployment-derived record)
 	rec := a.capacityStore.Get(namespace, modelID, variantName)
-	if rec == nil || rec.VLLMParams == nil {
+	if rec == nil || rec.EngineParams == nil {
 		return nil
 	}
-	return a.capacityStore.FindCompatible(modelID, accelerator, gpuCount, rec.VLLMParams)
+	return a.capacityStore.FindCompatible(modelID, accelerator, gpuCount, rec.EngineParams)
 }
 
 // estimateStoredCapacity returns a capacity estimate for a zero-replica variant
@@ -496,8 +496,8 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 	}
 
 	// For deployment-derived records, try k2 derivation with workload data
-	if rec.VLLMParams != nil && modelAvgOutput > 0 {
-		if derived := estimateCapacityFromParams(rec.VLLMParams, modelAvgInput, modelAvgOutput); derived > 0 {
+	if rec.EngineParams != nil && modelAvgOutput > 0 {
+		if derived := estimateCapacityFromParams(rec.EngineParams, modelAvgInput, modelAvgOutput); derived > 0 {
 			bounded := derived
 
 			// Bound by own k1 if TotalKvCapacityTokens is known (num_gpu_blocks_override)
@@ -509,7 +509,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 			}
 
 			// Bound by compatible variant's live EffectiveCapacity (already min(k1,k2))
-			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.VLLMParams); compatible != nil && compatible.LearnedFrom == learnedFromLive && compatible.EffectiveCapacity > 0 {
+			if compatible := a.capacityStore.FindCompatible(modelID, rec.AcceleratorName, rec.GpuCount, rec.EngineParams); compatible != nil && compatible.LearnedFrom == learnedFromLive && compatible.EffectiveCapacity > 0 {
 				if compatible.EffectiveCapacity < bounded {
 					bounded = compatible.EffectiveCapacity
 				}
@@ -528,7 +528,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(rec *CapacityRecord, modelID
 // Used by computeK2 (Priority 3) for per-replica estimation and by
 // estimateStoredCapacity for zero-replica variants with model-level workload averages.
 // Returns 0 if estimation is not possible.
-func estimateCapacityFromParams(params *VLLMEngineParams, avgInput, avgOutput float64) int64 {
+func estimateCapacityFromParams(params *EngineParams, avgInput, avgOutput float64) int64 {
 	if params == nil || params.EffectiveMaxBatchedTokens <= 0 || avgOutput <= 0 {
 		return 0
 	}
@@ -582,7 +582,7 @@ type schedulerQueueDemand struct {
 // in the llm-d inference scheduler's flow control layer, with per-role
 // attribution for P/D disaggregated models.
 //
-// These requests have not yet reached any vLLM pod, so we estimate their
+// These requests have not yet reached any engine pod, so we estimate their
 // token footprint using two independent signals:
 //
 //	inputTokens = max(queueBytes / BytesPerToken, queueSize * avgInputTokens)
@@ -597,8 +597,9 @@ type schedulerQueueDemand struct {
 //
 // The prefix cache hit rate reduces expected input token KV demand because
 // a fraction of prompt tokens will hit the prefix cache and reuse existing
-// KV blocks. This does NOT apply to the local vLLM queue (num_requests_waiting)
-// because those requests have not yet had prefix cache lookup performed.
+// KV blocks. This does NOT apply to the local engine queue
+// (vllm:num_requests_waiting / sglang:num_queue_reqs) because those requests
+// have not yet had prefix cache lookup performed.
 func estimateSchedulerQueueDemand(
 	sq *interfaces.SchedulerQueueMetrics,
 	replicaMetrics []interfaces.ReplicaMetrics,

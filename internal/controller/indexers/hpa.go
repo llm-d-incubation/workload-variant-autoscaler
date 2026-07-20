@@ -6,6 +6,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -26,6 +27,14 @@ func scaleTargetKindSupported(kind string) bool {
 func HPAByScaleTargetIndexFunc(o client.Object) []string {
 	hpa := o.(*autoscalingv2.HorizontalPodAutoscaler)
 	if !annotations.IsManaged(hpa) {
+		return nil
+	}
+	// Exclude KEDA-generated child HPAs. KEDA creates an HPA per ScaledObject and
+	// propagates the ScaledObject's annotations (including llm-d.ai/managed) onto it,
+	// so the child HPA looks managed too. The ScaledObject is the real managed scaler;
+	// indexing its child HPA would make the locator match two managed scalers for one
+	// target and fail with "ambiguous scale target".
+	if utils.IsOwnedByKEDAScaledObject(hpa) {
 		return nil
 	}
 	ref := hpa.Spec.ScaleTargetRef

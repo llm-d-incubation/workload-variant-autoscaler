@@ -1,9 +1,9 @@
 # Proposal: Remove the VariantAutoscaling CRD
 
 **Authors:** [TBD]
-**Status:** Draft
+**Status:** Implemented
 **Created:** 2026-05-05
-**Last Updated:** 2026-05-06
+**Last Updated:** 2026-07-07
 
 ---
 

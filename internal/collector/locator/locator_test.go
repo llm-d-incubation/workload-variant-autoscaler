@@ -184,7 +184,7 @@ func TestLocateByVariant_UnmanagedHPA(t *testing.T) {
 	}
 }
 
-func TestLocateByVariant_AmbiguousHPAandSO(t *testing.T) {
+func TestLocateByVariant_AmbiguousHPAndSO(t *testing.T) {
 	ns := testNamespace
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: ns,
@@ -334,97 +334,5 @@ func TestLocateByVariant_KEDADisabledSkipsScaledObject(t *testing.T) {
 	}
 	if got == nil || got.HPA == nil || got.HPA.Name != "v" {
 		t.Fatalf("got=%v, want HPA=v", got)
-	}
-}
-
-// TODO(va-removal): the TestResolveScaleTarget_* tests below cover the method
-// added for the CRD-based dual-mode fallback. Remove them when the
-// VariantAutoscaling CRD (and ResolveScaleTarget) are removed.
-
-// TestResolveScaleTarget_UnmanagedDeployment is the locator-side counterpart to
-// the KServe regression: the Deployment is fronted by no managed scaler (the
-// same shape as TestLocate_UnmanagedReturnsNil), yet ResolveScaleTarget still
-// returns the Deployment ref so the collector can fall back to a VA lookup.
-func TestResolveScaleTarget_UnmanagedDeployment(t *testing.T) {
-	ns := testNamespace
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "d", Namespace: ns, UID: "uid-d"}}
-	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "rs", Namespace: ns, UID: "uid-rs",
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "d", UID: "uid-d", Controller: ptr.To(true)}}}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: ns,
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: "uid-rs", Controller: ptr.To(true)}}}}
-
-	cached, apiReader := newClients(t, deploy, rs, pod)
-	loc, _ := locator.New(cached, apiReader)
-
-	ref, ok, err := loc.ResolveScaleTarget(context.Background(), ns, "p")
-	if err != nil {
-		t.Fatalf("ResolveScaleTarget: %v", err)
-	}
-	if !ok {
-		t.Fatalf("ok=false, want true (chain reaches Deployment d)")
-	}
-	if ref.Kind != "Deployment" || ref.Name != "d" || ref.APIVersion != "apps/v1" {
-		t.Errorf("ref=%+v, want apps/v1 Deployment d", ref)
-	}
-}
-
-func TestResolveScaleTarget_NoScalerEligibleAncestor(t *testing.T) {
-	ns := testNamespace
-	// Pod with no controller owner → no Deployment/LWS ancestor.
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: ns}}
-	cached, apiReader := newClients(t, pod)
-	loc, _ := locator.New(cached, apiReader)
-
-	ref, ok, err := loc.ResolveScaleTarget(context.Background(), ns, "p")
-	if err != nil {
-		t.Fatalf("ResolveScaleTarget: %v", err)
-	}
-	if ok {
-		t.Errorf("ok=true, want false; ref=%+v", ref)
-	}
-}
-
-func TestResolveScaleTarget_PodNotFound(t *testing.T) {
-	cached, apiReader := newClients(t)
-	loc, _ := locator.New(cached, apiReader)
-
-	_, ok, err := loc.ResolveScaleTarget(context.Background(), testNamespace, "missing")
-	if err != nil {
-		t.Fatalf("ResolveScaleTarget: %v", err)
-	}
-	if ok {
-		t.Errorf("ok=true, want false for a missing pod")
-	}
-}
-
-// TestResolveScaleTarget_ReusesLocateCache verifies the pod→target step is
-// memoized across Locate and ResolveScaleTarget: after Locate warms the cache,
-// deleting the pod from apiReader does not prevent ResolveScaleTarget from
-// resolving the same Deployment.
-func TestResolveScaleTarget_ReusesLocateCache(t *testing.T) {
-	ns := testNamespace
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "d", Namespace: ns, UID: "uid-d"}}
-	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "rs", Namespace: ns, UID: "uid-rs",
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "d", UID: "uid-d", Controller: ptr.To(true)}}}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: ns,
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: "uid-rs", Controller: ptr.To(true)}}}}
-
-	cached, apiReader := newClients(t, deploy, rs, pod)
-	loc, _ := locator.New(cached, apiReader)
-
-	// Warm the pod→target cache via Locate (no managed scaler, returns nil).
-	if _, err := loc.Locate(context.Background(), ns, "p"); err != nil {
-		t.Fatalf("Locate: %v", err)
-	}
-	// Delete the pod; a cache hit means ResolveScaleTarget never reads it.
-	if err := apiReader.Delete(context.Background(), pod); err != nil {
-		t.Fatalf("delete pod: %v", err)
-	}
-	ref, ok, err := loc.ResolveScaleTarget(context.Background(), ns, "p")
-	if err != nil {
-		t.Fatalf("ResolveScaleTarget: %v", err)
-	}
-	if !ok || ref.Name != "d" {
-		t.Errorf("cache miss: ok=%v ref=%+v, want ok=true Deployment d", ok, ref)
 	}
 }

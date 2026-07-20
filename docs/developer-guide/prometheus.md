@@ -54,6 +54,7 @@ spec:
 | Variable | Required | Description | Default |
 |----------|----------|-------------|---------|
 | `PROMETHEUS_BASE_URL` | Yes | Prometheus server URL (HTTPS only in production) | - |
+| `PROMETHEUS_ALLOW_HTTP` | No | Allow a plain `http://` `PROMETHEUS_BASE_URL` (dev/test only; cannot be combined with TLS settings or bearer token auth) | `false` |
 | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` | No | Skip TLS certificate verification (dev/test only) | `false` |
 | `PROMETHEUS_CA_CERT_PATH` | No | Path to CA certificate for TLS verification | - |
 | `PROMETHEUS_CLIENT_CERT_PATH` | No | Path to client certificate for mutual TLS | - |
@@ -132,6 +133,14 @@ spec:
   export PROMETHEUS_BASE_URL=https://127.0.0.1:9091
   export PROMETHEUS_TLS_INSECURE_SKIP_VERIFY=true
   ```
+- If your Prometheus is only reachable over plain HTTP (e.g. `kube-prometheus-stack`'s
+  default in-cluster service), set `PROMETHEUS_ALLOW_HTTP=true` and use an
+  `http://` `PROMETHEUS_BASE_URL` instead of standing up a TLS-terminating proxy.
+  This cannot be combined with `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`,
+  `PROMETHEUS_SERVER_NAME`, any `PROMETHEUS_CA_CERT_PATH`/client cert settings, or
+  bearer token auth — WVA refuses to start if those are set alongside a plain HTTP
+  URL. Note that credentials and metrics are sent in cleartext, so use this only
+  on a trusted network (dev/test or a secured in-cluster path).
 
 ### PromQL Injection Prevention
 
@@ -534,19 +543,19 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 
 ### `wva_spare_capacity`
 - **Type**: Gauge
-- **Description**: Per-variant spare KV-cache capacity (0.0-1.0) from saturation analysis. V1 path: threshold-relative spare (kvCacheThreshold - avg KV usage). V2 path: 1.0 - utilization.
+- **Description**: Spare capacity; >0 indicates scale-down headroom (per-role for P/D-disaggregated models, model-level otherwise). Use the `unit` label to interpret the value: `continuous` → **token surplus** from the **Token-based analyzer** (`max(0, TotalSupply - TotalDemand/scaleDownBoundary)`); empty → a 0.0-1.0 threshold-relative fraction from the **Percentage-based analyzer** (`kvCacheThreshold - avg KV usage`).
 - **Labels**:
   - `variant_name`: Name of the variant
   - `namespace`: Kubernetes namespace
   - `model_name`: Model name served by the variant
-  - `accelerator_type`: Type of accelerator being used
+  - `unit`: `continuous` (Token-based analyzer — a token magnitude) or empty (Percentage-based analyzer — 0.0-1.0 fraction)
 - **Use Case**: Track available capacity headroom to prevent saturation and optimize resource allocation
 - **Example**:
   ```
   {
     "metric": {
       "__name__": "wva_spare_capacity",
-      "accelerator_type": "H100",
+      "unit": "continuous",
       "container": "manager",
       "endpoint": "https",
       "exported_namespace": "llm-d-sim-dual",
@@ -560,19 +569,19 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
     },
     "value": [
       1778846184.925,
-      "0.8"
+      "12000"
     ]
   }
   ```
 
 ### `wva_required_capacity`
 - **Type**: Gauge
-- **Description**: Model-level required capacity; >0 indicates scale-up needed. Use the `unit` label to interpret the value: `binary` → 0/1 scale-up signal (V1), `continuous` → token demand (V2).
+- **Description**: Required capacity; >0 indicates scale-up needed (per-role for P/D-disaggregated models, model-level otherwise). Use the `unit` label to interpret the value: `continuous` → **token demand** from the **Token-based analyzer**; `binary` → 0/1 scale-up signal from the **Percentage-based analyzer**.
 - **Labels**:
   - `variant_name`: Name of the variant
   - `namespace`: Kubernetes namespace
   - `model_name`: Model name served by the variant
-  - `unit`: Interpretation of the value (`binary` or `continuous`)
+  - `unit`: `continuous` (Token-based analyzer — a token magnitude) or `binary` (Percentage-based analyzer — 0/1 signal)
 - **Use Case**: Identify when additional capacity is needed and understand the magnitude of demand
 - **Example**:
   ```
@@ -896,7 +905,7 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 
 ### `wva_errors_total`
 - **Type**: Counter
-- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the compoments currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
+- **Description**: Total number of errors by component. The components are "collector", "analyzer", "optimizer", "limiter", "enforcer", and "controller". Some of the components currently may not have any `wva_errors_total` metrics. They may be available in future WVA versions.
 - **Labels**:
   - `component`: Component where the error occurred
   - `error_type`: Type or category of the error
@@ -960,8 +969,12 @@ wva_saturation_utilization
 # Variants requiring scale-up (V1 binary signal)
 wva_required_capacity{unit="binary"} > 0
 
-# Spare capacity below threshold (potential scale-up needed)
-wva_spare_capacity < 0.2
+# High utilization — scale-up likely (V1 and V2)
+wva_saturation_utilization > 0.85
+
+# Low spare capacity, V1 fractional signal only.
+# On V2 wva_spare_capacity is an absolute token count, not a 0-1 ratio — use utilization above.
+wva_spare_capacity{unit=""} < 0.2
 
 # Models processed over time
 wva_models_processed

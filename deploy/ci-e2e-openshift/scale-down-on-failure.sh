@@ -13,6 +13,6 @@ for ns in "$LLMD_NAMESPACE"; do
     kubectl get deployment -n "$ns" -o name 2>/dev/null | grep decode | while read -r deploy; do
       echo "  Scaling down: $deploy"
       kubectl scale "$deploy" -n "$ns" --replicas=0 || true
-    done
+    done || true
   fi
 done
