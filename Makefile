@@ -295,9 +295,8 @@ test-e2e-full: ## Run full e2e test suite
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
 .PHONY: test-e2e-smoke-with-setup
 test-e2e-smoke-with-setup:
-	$(MAKE) DEPLOY_ALERTING_RULES=true SCALER_BACKEND=keda deploy-e2e-infra
-	$(MAKE) DEPLOY_ALERTING_RULES=true test-e2e-smoke
-	$(MAKE) test-e2e-smoke
+	$(MAKE) deploy-e2e-infra DEPLOY_ALERTING_RULES=true SCALER_BACKEND=keda
+	$(MAKE) test-e2e-smoke DEPLOY_ALERTING_RULES=true
 
 # Runs only the multi-controller (dual namespace-scoped) e2e tests.
 .PHONY: test-e2e-multi-controller
