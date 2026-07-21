@@ -202,14 +202,14 @@ Summary of WVA benchmark runs with configuration details.
 
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 562,439 | 559,919 | 560,917 | 561,092 |
-| P99 ITL (ms/token) | 60.72 | 60.51 | 60.56 | 60.60 |
-| Avg replicas | 7.46 | 6.29 | 7.51 | 7.09 |
+| P99 TTFT (ms) | 564,206 | 562,166 | 563,143 | 563,172 |
+| P99 ITL (ms/token) | 61.09 | 60.77 | 60.83 | 60.90 |
+| Avg replicas | 7.46 | 7.37 | 7.51 | 7.45 |
 | Max replicas | 10 | 10 | 10 | 10 |
-| Avg KV cache utilization | 11.5% | 11.3% | 11.2% | 11.3% |
-| Avg queue depth (EPP) | 124.7 | 101.8 | 112.6 | 113.0 |
-| Error count | 65 | 65 | 76 | 69 |
-| Avg pod startup (s) | 98 | 100 | 97 | 98 |
+| Avg KV cache utilization | 11.3% | 11.5% | 11.2% | 11.3% |
+| Avg queue depth (EPP) | 83.6 | 62.0 | 60.0 | 68.5 |
+| Error count | 76 | 65 | 65 | 69 |
+| Avg pod startup (s) | 96 | 100 | 99 | 98 |
 
 ## Decode Heavy Scenario
 
@@ -345,14 +345,14 @@ Summary of WVA benchmark runs with configuration details.
 
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 447,107 | 448,427 | 450,037 | 448,524 |
-| P99 ITL (ms/token) | 110.43 | 110.31 | 110.36 | 110.37 |
-| Avg replicas | 7.49 | 7.41 | 7.34 | 7.41 |
+| P99 TTFT (ms) | 361,590 | 361,472 | 451,996 | 391,686 |
+| P99 ITL (ms/token) | 110.52 | 110.62 | 111.18 | 110.77 |
+| Avg replicas | 7.38 | 7.43 | 7.57 | 7.46 |
 | Max replicas | 10 | 10 | 10 | 10 |
-| Avg KV cache utilization | 76.6% | 77.7% | 78.4% | 77.6% |
-| Avg queue depth (EPP) | 27.1 | 27.3 | 27.9 | 27.4 |
-| Error count | 3 | 3 | 3 | 3 |
-| Avg pod startup (s) | 99 | 100 | 97 | 99 |
+| Avg KV cache utilization | 73.4% | 75.1% | 75.1% | 74.5% |
+| Avg queue depth (EPP) | 26.8 | 26.7 | 26.8 | 26.8 |
+| Error count | 4 | 4 | 4 | 4 |
+| Avg pod startup (s) | 101 | 99 | 101 | 100 |
 
 ## Bursty Scenario
 
@@ -542,14 +542,14 @@ Summary of WVA benchmark runs with configuration details.
 
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 187,631 | 231,355 | 228,921 | 215,969 |
-| P99 ITL (ms/token) | 69.41 | 70.34 | 68.64 | 69.46 |
-| Avg replicas | 7.55 | 7.56 | 7.33 | 7.48 |
+| P99 TTFT (ms) | 187,595 | 232,901 | 231,040 | 217,179 |
+| P99 ITL (ms/token) | 70.90 | 68.23 | 69.44 | 69.52 |
+| Avg replicas | 7.60 | 7.44 | 7.56 | 7.53 |
 | Max replicas | 10 | 10 | 10 | 10 |
-| Avg KV cache utilization | 56.1% | 41.1% | 47.8% | 48.3% |
-| Avg queue depth (EPP) | 22.8 | 24.9 | 19.5 | 22.4 |
+| Avg KV cache utilization | 56.1% | 53.5% | 48.4% | 52.7% |
+| Avg queue depth (EPP) | 18.3 | 15.6 | 21.4 | 18.4 |
 | Error count | 0 | 0 | 0 | 0 |
-| Avg pod startup (s) | 101 | 100 | 99 | 100 |
+| Avg pod startup (s) | 97 | 100 | 99 | 99 |
 
 ## Two-Variant Efficiency-Aware Scenario
 
