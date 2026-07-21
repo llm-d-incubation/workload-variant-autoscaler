@@ -329,14 +329,14 @@ Summary of WVA benchmark runs with configuration details.
 
 | Metric | Run 1 | Run 2 | Run 3 | Avg |
 |--------|-------|-------|-------|-----|
-| P99 TTFT (ms) | 448,687 | 450,230 | 452,205 | 450,374 |
-| P99 ITL (ms/token) | 108.29 | 108.66 | 108.45 | 108.47 |
-| Avg replicas | 7.12 | 7.56 | 7.22 | 7.30 |
+| P99 TTFT (ms) | 450,114 | 450,098 | 449,761 | 449,991 |
+| P99 ITL (ms/token) | 108.63 | 108.62 | 108.53 | 108.59 |
+| Avg replicas | 7.51 | 7.56 | 7.56 | 7.54 |
 | Max replicas | 10 | 10 | 10 | 10 |
-| Avg KV cache utilization | 34.3% | 32.3% | 33.7% | 33.4% |
-| Avg queue depth (EPP) | 114.4 | 112.4 | 123.2 | 116.7 |
-| Error count | 1 | 0 | 0 | 0 |
-| Avg pod startup (s) | 125 | 98 | 114 | 112 |
+| Avg KV cache utilization | 32.9% | 31.6% | 32.6% | 32.4% |
+| Avg queue depth (EPP) | 110.5 | 103.5 | 110.1 | 108.0 |
+| Error count | 0 | 0 | 0 | 0 |
+| Avg pod startup (s) | 98 | 99 | 98 | 98 |
 
 ### Decode Heavy — Qwen/Qwen3-32B (EPP+KEDA Inference Pool Saturation + flowControl, 600s)
 
