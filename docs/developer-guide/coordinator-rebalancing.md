@@ -12,7 +12,7 @@ multi-model-gateway (nginx, port 9002)
   /model-b/...  →  model-b EPP  →  InferencePool model-b  →  llm-d-sim B  ← HPA B
 
 Prometheus  ←  ServiceMonitor per EPP
-              ←  inference_extension_flow_control_queue_size{inference_pool="model-a|b"}
+              ←  inference_extension_flow_control_queue_size{inference_pool="model-a|b",namespace="llm-d-sim"}
 HPA  ←  external metric via Prometheus Adapter
 WVA Coordinator  →  patches HPA spec.maxReplicas proportionally to queue depth
 ```
@@ -129,13 +129,17 @@ Scale-down completes within ~15s of the queue clearing.
 The Coordinator runs a 15-second loop. On each tick it:
 
 1. Reads the namespace `ResourceQuota` GPU budget
-2. Queries each EPP's `inference_extension_flow_control_queue_size` metric
+2. Queries each EPP's `inference_extension_flow_control_queue_size` metric by
+   inference pool and namespace
 3. Patches each HPA's `spec.maxReplicas` proportionally:
 
 ```
 maxReplicas(pool) = round( queue(pool) / sum(all queues) × gpu_quota )
                     clamped to [minReplicas, absolute_max]
 ```
+
+If any scoped queue metric is unavailable, the Coordinator skips that namespace
+for the current tick and preserves its existing `maxReplicas` values.
 
 The `llm-d.ai/epp-inference-pool` annotation on each HPA is the on/off gate:
 - annotation absent → Coordinator skips the HPA
@@ -159,7 +163,7 @@ conflict the Coordinator re-reads the object and re-applies its computed target
 | n HPAs > quota | TODO | When more HPAs exist than GPU slots, every pool is clamped to 1 and total allocation exceeds quota. Top-N ranking by queue depth is needed. |
 | Wobble | TODO | Noisy queue readings cause 1-replica flips every tick. A minimum-delta guard and per-HPA cooldown (or EWMA smoothing) are needed. |
 | Stale patch | Done | Ceiling patches use `MergeFromWithOptimisticLock` with a bounded conflict retry, so a concurrent `maxReplicas` change is no longer silently overwritten. |
-| Pool name collision | TODO | Queue query has no namespace label; pools with the same name in different namespaces inflate each other's readings. |
+| Pool name collision | Done | The queue query filters by `namespace`, so same-named pools in different namespaces no longer inflate each other's readings. The EPP metric does not emit this label; the metrics scraping or service-discovery configuration must attach it. If a scoped query returns no series, the Coordinator preserves the namespace's current allocations instead of treating the result as a zero queue. |
 
 ## Files
 

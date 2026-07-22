@@ -22,7 +22,7 @@ import (
 const (
 	AnnotationInferencePool = "llm-d.ai/epp-inference-pool"
 	gpuQuotaResource        = "requests.nvidia.com/gpu"
-	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q})`
+	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q,namespace=%q})`
 	displayKindHPA          = "HorizontalPodAutoscaler"
 	displayKindScaledObject = "ScaledObject"
 )
@@ -142,15 +142,22 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 		return nil
 	}
 
-	// Query EPP queue depth per pool (best-effort; default to 0 on error).
+	// Query EPP queue depth per pool. Preserve the current allocations when any
+	// queue metric is unavailable rather than treating missing data as a real 0.
 	queues := make([]float64, len(entries))
 	for i, e := range entries {
-		q, err := p.queryQueue(ctx, e.pool)
+		q, found, err := p.queryQueue(ctx, ns, e.pool)
 		if err != nil {
-			log.V(1).Info("Queue query failed, using 0", "pool", e.pool, "err", err)
-		} else {
-			queues[i] = q
+			log.V(1).Info("Queue metric query failed; preserving current allocations",
+				"namespace", ns, "pool", e.pool, "err", err)
+			return nil
 		}
+		if !found {
+			log.V(1).Info("Queue metric unavailable; preserving current allocations",
+				"namespace", ns, "pool", e.pool)
+			return nil
+		}
+		queues[i] = q
 	}
 
 	// Weights: proportional to queue depth, equal when all queues are zero.
@@ -246,23 +253,27 @@ func (p *Plugin) namespaceGPUQuota(ctx context.Context, ns string) (int64, error
 	return 0, nil
 }
 
-func (p *Plugin) queryQueue(ctx context.Context, inferencePool string) (float64, error) {
-	// TODO: the query filters only by inference_pool name with no namespace label.
-	// If two namespaces each have a pool with the same name (e.g. "model-a"), the
-	// sum includes both, inflating the queue reading for each namespace's allocation
-	// decision. Fix: include a namespace label in the query if the EPP emits one,
-	// or scope the metric series by passing the namespace as an additional matcher.
-
-	query := fmt.Sprintf(eppQueueMetric, inferencePool)
+// queryQueue returns the total EPP flow-control queue depth for the given
+// (namespace, inferencePool) pair. The EPP metric does not emit the namespace
+// label, so the metrics scraping or service-discovery configuration must attach
+// it (for example, through Prometheus Operator relabeling). If the scoped query
+// returns no series, found is false so the caller can preserve the namespace's
+// current allocations rather than treating missing data as a real queue depth
+// of 0.
+func (p *Plugin) queryQueue(ctx context.Context, namespace, inferencePool string) (value float64, found bool, err error) {
+	query := fmt.Sprintf(eppQueueMetric, inferencePool, namespace)
 	result, _, err := p.promAPI.Query(ctx, query, time.Now())
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	vec, ok := result.(model.Vector)
-	if !ok || len(vec) == 0 {
-		return 0, nil
+	if !ok {
+		return 0, false, fmt.Errorf("unexpected Prometheus result type %T", result)
 	}
-	return float64(vec[0].Value), nil
+	if len(vec) == 0 {
+		return 0, false, nil
+	}
+	return float64(vec[0].Value), true, nil
 }
 
 // setMaxReplicas patches the scaler's max-replica ceiling to target under

@@ -3,7 +3,7 @@ package gpurebalance
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"testing"
 	"time"
 
@@ -24,24 +24,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-// stubPromAPI implements promv1.API with only Query stubbed.
-// Pool→queue values are matched by searching the query string for the pool name.
+// stubPromAPI implements promv1.API with query-keyed results and errors.
 type stubPromAPI struct {
 	promv1.API
-	queues map[string]float64
-	errs   map[string]error
+	queues  map[string]float64
+	errs    map[string]error
+	queries []string
+}
+
+// queueQuery returns the scoped PromQL used for a namespace and pool.
+func queueQuery(namespace, pool string) string {
+	return fmt.Sprintf(eppQueueMetric, pool, namespace)
 }
 
 func (s *stubPromAPI) Query(_ context.Context, query string, _ time.Time, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
-	for pool, err := range s.errs {
-		if strings.Contains(query, pool) {
-			return nil, nil, err
-		}
+	s.queries = append(s.queries, query)
+	if err, ok := s.errs[query]; ok {
+		return nil, nil, err
 	}
-	for pool, q := range s.queues {
-		if strings.Contains(query, pool) {
-			return model.Vector{{Value: model.SampleValue(q)}}, nil, nil
-		}
+	if q, ok := s.queues[query]; ok {
+		return model.Vector{{Value: model.SampleValue(q)}}, nil, nil
 	}
 	return model.Vector{}, nil, nil
 }
@@ -211,7 +213,7 @@ func TestTick_SkipsUnsupportedObjects(t *testing.T) {
 // llm-d.ai/epp-inference-pool annotation is skipped and never patched.
 func TestTick_SkipsUnannotatedHPA(t *testing.T) {
 	hpa := makeHPA("model-a", "ns", "" /* no pool */, 10)
-	p, c := newPlugin(t, map[string]float64{"model-a": 100}, nil, hpa, makeGPUQuota("q", "ns", 10))
+	p, c := newPlugin(t, map[string]float64{queueQuery("ns", "model-a"): 100}, nil, hpa, makeGPUQuota("q", "ns", 10))
 
 	if err := p.Tick(context.Background(), []client.Object{hpa}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -225,7 +227,7 @@ func TestTick_SkipsUnannotatedHPA(t *testing.T) {
 // the llm-d.ai/epp-inference-pool annotation is skipped and never patched.
 func TestTick_SkipsUnannotatedScaledObject(t *testing.T) {
 	so := makeScaledObject("model-a", "" /* no pool */, 10)
-	p, c := newPlugin(t, map[string]float64{"model-a": 100}, nil, so, makeGPUQuota("q", "ns", 10))
+	p, c := newPlugin(t, map[string]float64{queueQuery("ns", "model-a"): 100}, nil, so, makeGPUQuota("q", "ns", 10))
 
 	if err := p.Tick(context.Background(), []client.Object{so}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -240,7 +242,7 @@ func TestTick_SkipsUnannotatedScaledObject(t *testing.T) {
 func TestTick_NoQuota_Skips(t *testing.T) {
 	hpa := makeHPA("model-a", "ns", "model-a", 10)
 	// No ResourceQuota added to the cluster.
-	p, c := newPlugin(t, map[string]float64{"model-a": 100}, nil, hpa)
+	p, c := newPlugin(t, map[string]float64{queueQuery("ns", "model-a"): 100}, nil, hpa)
 
 	if err := p.Tick(context.Background(), []client.Object{hpa}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -255,7 +257,7 @@ func TestTick_NoQuota_Skips(t *testing.T) {
 func TestRebalance_SinglePool(t *testing.T) {
 	hpa := makeHPA("model-a", "ns", "model-a", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 100},
+		map[string]float64{queueQuery("ns", "model-a"): 100},
 		nil,
 		hpa, makeGPUQuota("q", "ns", 10),
 	)
@@ -274,7 +276,7 @@ func TestRebalance_EqualQueues(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 1)
 	hpaB := makeHPA("model-b", "ns", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 100, "model-b": 100},
+		map[string]float64{queueQuery("ns", "model-a"): 100, queueQuery("ns", "model-b"): 100},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -296,7 +298,7 @@ func TestRebalance_ProportionalQueues(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 1)
 	hpaB := makeHPA("model-b", "ns", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 70, "model-b": 30},
+		map[string]float64{queueQuery("ns", "model-a"): 70, queueQuery("ns", "model-b"): 30},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -318,7 +320,7 @@ func TestRebalance_AllQueuesZero(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 1)
 	hpaB := makeHPA("model-b", "ns", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 0, "model-b": 0},
+		map[string]float64{queueQuery("ns", "model-a"): 0, queueQuery("ns", "model-b"): 0},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -334,27 +336,62 @@ func TestRebalance_AllQueuesZero(t *testing.T) {
 	}
 }
 
-// TestRebalance_QueryError_TreatedAsZero verifies that a Prometheus query
-// failure for a pool is treated as queue depth 0 — the pool still receives
-// the minimum 1 replica and the other pool gets the remaining quota.
-func TestRebalance_QueryError_TreatedAsZero(t *testing.T) {
-	hpaA := makeHPA("model-a", "ns", "model-a", 10)
-	hpaB := makeHPA("model-b", "ns", "model-b", 10)
+// TestRebalance_QueryErrorPreservesAllocations verifies that a Prometheus
+// query failure leaves every scaler in the namespace unchanged.
+func TestRebalance_QueryErrorPreservesAllocations(t *testing.T) {
+	hpaA := makeHPA("model-a", "ns", "model-a", 6)
+	hpaB := makeHPA("model-b", "ns", "model-b", 4)
 	p, c := newPlugin(t,
-		map[string]float64{"model-b": 100},
-		map[string]error{"model-a": errors.New("prometheus unreachable")},
+		map[string]float64{queueQuery("ns", "model-b"): 100},
+		map[string]error{queueQuery("ns", "model-a"): errors.New("prometheus unreachable")},
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
 
 	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Reserve one replica for each pool, then give the remaining eight to model-b.
-	if got := getMaxReplicas(t, c, hpaA); got != 1 {
-		t.Errorf("model-a maxReplicas = %d, want 1 (query error → treated as 0, clamped to min)", got)
+	if got := getMaxReplicas(t, c, hpaA); got != 6 {
+		t.Errorf("model-a maxReplicas = %d, want 6 (query error must preserve allocation)", got)
 	}
-	if got := getMaxReplicas(t, c, hpaB); got != 9 {
-		t.Errorf("model-b maxReplicas = %d, want 9 (all remaining quota)", got)
+	if got := getMaxReplicas(t, c, hpaB); got != 4 {
+		t.Errorf("model-b maxReplicas = %d, want 4 (query error must preserve allocation)", got)
+	}
+}
+
+// TestRebalance_MissingMetricDoesNotBlockOtherNamespaces verifies that an
+// unavailable queue metric preserves that namespace's allocations without
+// blocking healthy namespaces in the same Tick.
+func TestRebalance_MissingMetricDoesNotBlockOtherNamespaces(t *testing.T) {
+	missingA := makeHPA("missing-a", "ns-missing", "model-a", 6)
+	missingB := makeHPA("missing-b", "ns-missing", "model-b", 4)
+	healthyA := makeHPA("healthy-a", "ns-healthy", "model-a", 5)
+	healthyB := makeHPA("healthy-b", "ns-healthy", "model-b", 5)
+	p, c := newPlugin(t,
+		map[string]float64{
+			queueQuery("ns-missing", "model-b"): 100,
+			queueQuery("ns-healthy", "model-a"): 20,
+			queueQuery("ns-healthy", "model-b"): 80,
+		},
+		nil,
+		missingA, missingB, healthyA, healthyB,
+		makeGPUQuota("q-missing", "ns-missing", 10),
+		makeGPUQuota("q-healthy", "ns-healthy", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{missingA, missingB, healthyA, healthyB}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := getMaxReplicas(t, c, missingA); got != 6 {
+		t.Errorf("ns-missing/model-a maxReplicas = %d, want 6", got)
+	}
+	if got := getMaxReplicas(t, c, missingB); got != 4 {
+		t.Errorf("ns-missing/model-b maxReplicas = %d, want 4", got)
+	}
+	if got := getMaxReplicas(t, c, healthyA); got != 2 {
+		t.Errorf("ns-healthy/model-a maxReplicas = %d, want 2", got)
+	}
+	if got := getMaxReplicas(t, c, healthyB); got != 8 {
+		t.Errorf("ns-healthy/model-b maxReplicas = %d, want 8", got)
 	}
 }
 
@@ -369,7 +406,7 @@ func TestRebalance_RemainderToHighestWeight(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 1)
 	hpaB := makeHPA("model-b", "ns", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 7, "model-b": 4},
+		map[string]float64{queueQuery("ns", "model-a"): 7, queueQuery("ns", "model-b"): 4},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -393,7 +430,7 @@ func TestRebalance_NoChangeWhenAlreadyCorrect(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 5)
 	hpaB := makeHPA("model-b", "ns", "model-b", 5)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 50, "model-b": 50},
+		map[string]float64{queueQuery("ns", "model-a"): 50, queueQuery("ns", "model-b"): 50},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -415,7 +452,7 @@ func TestRebalance_ScaledObjects(t *testing.T) {
 	soA := makeScaledObject("model-a", "model-a", 1)
 	soB := makeScaledObject("model-b", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 70, "model-b": 30},
+		map[string]float64{queueQuery("ns", "model-a"): 70, queueQuery("ns", "model-b"): 30},
 		nil,
 		soA, soB, makeGPUQuota("q", "ns", 10),
 	)
@@ -437,7 +474,7 @@ func TestRebalance_MixedHPAAndScaledObject(t *testing.T) {
 	hpaA := makeHPA("model-a", "ns", "model-a", 1)
 	soB := makeScaledObject("model-b", "model-b", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 20, "model-b": 80},
+		map[string]float64{queueQuery("ns", "model-a"): 20, queueQuery("ns", "model-b"): 80},
 		nil,
 		hpaA, soB, makeGPUQuota("q", "ns", 10),
 	)
@@ -458,7 +495,7 @@ func TestRebalance_ReservesHPAMinimum(t *testing.T) {
 	hpaA.Spec.MinReplicas = ptr.To[int32](5)
 	hpaB := makeHPA("model-b", "ns", "model-b", 10)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 50, "model-b": 50},
+		map[string]float64{queueQuery("ns", "model-a"): 50, queueQuery("ns", "model-b"): 50},
 		nil,
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
@@ -479,7 +516,7 @@ func TestRebalance_ReservesScaledObjectMinimum(t *testing.T) {
 	soA.Spec.MinReplicaCount = ptr.To[int32](5)
 	soB := makeScaledObject("model-b", "model-b", 10)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 50, "model-b": 50},
+		map[string]float64{queueQuery("ns", "model-a"): 50, queueQuery("ns", "model-b"): 50},
 		nil,
 		soA, soB, makeGPUQuota("q", "ns", 10),
 	)
@@ -501,7 +538,7 @@ func TestRebalance_ReservesMixedMinimums(t *testing.T) {
 	soB := makeScaledObject("model-b", "model-b", 10)
 	soB.Spec.MinReplicaCount = ptr.To[int32](4)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 20, "model-b": 80},
+		map[string]float64{queueQuery("ns", "model-a"): 20, queueQuery("ns", "model-b"): 80},
 		nil,
 		hpaA, soB, makeGPUQuota("q", "ns", 12),
 	)
@@ -529,9 +566,9 @@ func TestRebalance_AllocationNeverExceedsQuota(t *testing.T) {
 	hpaC := makeHPA("model-c", "ns", "model-c", 20)
 	p, c := newPlugin(t,
 		map[string]float64{
-			"model-a": 10,
-			"model-b": 10,
-			"model-c": 80,
+			queueQuery("ns", "model-a"): 10,
+			queueQuery("ns", "model-b"): 10,
+			queueQuery("ns", "model-c"): 80,
 		},
 		nil,
 		hpaA, soB, hpaC, makeGPUQuota("q", "ns", quota),
@@ -565,7 +602,7 @@ func TestRebalance_InfeasibleMinimumsLeaveNamespaceUnchanged(t *testing.T) {
 	soB := makeScaledObject("model-b", "model-b", 9)
 	soB.Spec.MinReplicaCount = ptr.To[int32](3)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 90, "model-b": 10},
+		map[string]float64{queueQuery("ns", "model-a"): 90, queueQuery("ns", "model-b"): 10},
 		nil,
 		hpaA, soB, makeGPUQuota("q", "ns", 6),
 	)
@@ -591,7 +628,12 @@ func TestRebalance_MultiNamespace(t *testing.T) {
 	hpaC := makeHPA("model-c", "ns-y", "model-c", 1)
 	hpaD := makeHPA("model-d", "ns-y", "model-d", 1)
 	p, c := newPlugin(t,
-		map[string]float64{"model-a": 30, "model-b": 70, "model-c": 50, "model-d": 50},
+		map[string]float64{
+			queueQuery("ns-x", "model-a"): 30,
+			queueQuery("ns-x", "model-b"): 70,
+			queueQuery("ns-y", "model-c"): 50,
+			queueQuery("ns-y", "model-d"): 50,
+		},
 		nil,
 		hpaA, hpaB, hpaC, hpaD,
 		makeGPUQuota("q-x", "ns-x", 10),
@@ -714,5 +756,75 @@ func TestSetMaxReplicas_GivesUpAfterMaxRetries(t *testing.T) {
 	}
 	if got := getMaxReplicas(t, c, hpa); got != 5 {
 		t.Errorf("maxReplicas = %d, want 5 (unchanged)", got)
+	}
+}
+
+// TestQueryQueue_IncludesNamespaceLabel is a focused regression test for
+// ensuring that the PromQL query carries both the inference_pool and namespace
+// label matchers.
+func TestQueryQueue_IncludesNamespaceLabel(t *testing.T) {
+	stub := &stubPromAPI{queues: map[string]float64{queueQuery("ns-1", "model-a"): 1}}
+	p := New(nil, stub)
+
+	if _, _, err := p.queryQueue(context.Background(), "ns-1", "model-a"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.queries) != 1 {
+		t.Fatalf("expected 1 query captured, got %d", len(stub.queries))
+	}
+	if got, want := stub.queries[0], `sum(inference_extension_flow_control_queue_size{inference_pool="model-a",namespace="ns-1"})`; got != want {
+		t.Errorf("query = %q, want %q", got, want)
+	}
+}
+
+// TestQueryQueue_MetricWithoutNamespaceLabelIsNotFound verifies that queue data
+// lacking a namespace label does not satisfy the namespace-scoped query.
+func TestQueryQueue_MetricWithoutNamespaceLabelIsNotFound(t *testing.T) {
+	p := New(nil, &stubPromAPI{queues: map[string]float64{
+		`sum(inference_extension_flow_control_queue_size{inference_pool="model-a"})`: 90,
+	}})
+
+	queue, found, err := p.queryQueue(context.Background(), "ns-1", "model-a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if queue != 0 {
+		t.Errorf("queue = %v, want 0", queue)
+	}
+	if found {
+		t.Error("found = true, want false for an unscoped metric")
+	}
+}
+
+// TestRebalance_NamespaceIsolation verifies that a same-named pool in another
+// namespace does not affect the local allocation.
+func TestRebalance_NamespaceIsolation(t *testing.T) {
+	hpaA := makeHPA("model-a", "ns1", "model-a", 1)
+	hpaB := makeHPA("model-b", "ns1", "model-b", 1)
+	hpaA2 := makeHPA("model-a", "ns2", "model-a", 1)
+	p, c := newPlugin(t,
+		map[string]float64{
+			queueQuery("ns1", "model-a"): 50,
+			queueQuery("ns1", "model-b"): 50,
+			queueQuery("ns2", "model-a"): 200,
+		},
+		nil,
+		hpaA, hpaB, hpaA2,
+		makeGPUQuota("q1", "ns1", 10),
+		makeGPUQuota("q2", "ns2", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB, hpaA2}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := getMaxReplicas(t, c, hpaA); got != 5 {
+		t.Errorf("ns1/model-a maxReplicas = %d, want 5", got)
+	}
+	if got := getMaxReplicas(t, c, hpaB); got != 5 {
+		t.Errorf("ns1/model-b maxReplicas = %d, want 5", got)
+	}
+	if got := getMaxReplicas(t, c, hpaA2); got != 10 {
+		t.Errorf("ns2/model-a maxReplicas = %d, want 10", got)
 	}
 }
