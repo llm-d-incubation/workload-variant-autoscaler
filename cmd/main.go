@@ -389,8 +389,7 @@ func main() {
 
 	// Initialize metrics
 	setupLog.Info("Creating metrics emitter instance")
-	// Force initialization of metrics by creating a metrics emitter
-	_ = metrics.NewMetricsEmitter()
+	metricsEmitter := metrics.NewMetricsEmitter()
 	setupLog.Info("Metrics emitter created successfully")
 
 	// Create ConfigMap reconciler for configuration management.
@@ -562,8 +561,9 @@ func main() {
 
 	// HPAReconciler: tracks namespaces for annotation-based discovery (always registered).
 	if err = (&controller.HPAReconciler{
-		Client:    mgr.GetClient(),
-		Datastore: ds,
+		Client:         mgr.GetClient(),
+		Datastore:      ds,
+		MetricsEmitter: metricsEmitter,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create HPA controller")
 		os.Exit(1)
@@ -572,8 +572,9 @@ func main() {
 	// ScaledObjectReconciler: registered only when KEDA CRD is present.
 	if kedaEnabled {
 		if err = (&controller.ScaledObjectReconciler{
-			Client:    mgr.GetClient(),
-			Datastore: ds,
+			Client:         mgr.GetClient(),
+			Datastore:      ds,
+			MetricsEmitter: metricsEmitter,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create ScaledObject controller")
 			os.Exit(1)
