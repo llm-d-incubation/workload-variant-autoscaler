@@ -158,7 +158,7 @@ type QuotaLimiterEntries struct {
 // Validate checks an entries block for structural correctness. It
 // returns nil only when every entry parses cleanly. When multiple entries
 // (or multiple fields within an entry) are broken, all errors are
-// accumulated and joined with errors.Join — an operator fixing a misformed
+// accumulated and joined with errors.Join — an operator fixing a malformed
 // ConfigMap sees every problem in one pass instead of one-per-rebuild.
 // Error messages name the failing entry by index and field so the bad row
 // is easy to locate.
