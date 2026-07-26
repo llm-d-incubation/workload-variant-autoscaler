@@ -183,6 +183,58 @@ make test-e2e-full
 
 See the [E2E Test Suite README](../../test/e2e/README.md) for full configuration options and examples.
 
+### Direct KEDA+EPP guide contract
+
+`test-e2e-keda-epp-guide` is a narrow, controller-free contract for the
+canonical KEDA+EPP guide in the `llm-d/llm-d` repository. It observes resources
+that the caller already installed; it does not create a replacement
+`ScaledObject`, deploy the WVA controller, or provide a generic guide runner.
+
+Before invoking the target, the caller must create a fresh disposable Kind
+cluster and install the following from the matching llm-d checkout:
+
+- GAIE CRDs and the guide's CPU-only inference simulator overlay;
+- the low-resource kube-prometheus-stack values, HTTPS server certificate, and
+  `llm-d-monitoring/prometheus-web-tls` Secret;
+- stock KEDA and the guide's Kind-only operator-wide CA values;
+- the router chart with the canonical guide values layering;
+- the guide Kustomize output, including its own `TriggerAuthentication` and
+  `ScaledObject`.
+
+The target uses the canonical guide inputs directly:
+
+| Input | Required value |
+|-------|----------------|
+| Environment | `kind-emulator` |
+| WVA controller | disabled with `DEPLOY_WVA=false` |
+| llm-d namespace | `llm-d-optimized-baseline` |
+| Prometheus namespace | `llm-d-monitoring` |
+| KEDA namespace | `keda` |
+| EPP Service | `optimized-baseline-epp` |
+| Model | `Qwen/Qwen3-32B` |
+
+Run only the direct-KEDA spec with the kubeconfig for that disposable cluster:
+
+```bash
+make test-e2e-keda-epp-guide KUBECONFIG=/path/to/disposable-kind.kubeconfig
+```
+
+The target selects only Ginkgo label `keda-epp-guide`; WVA smoke,
+scale-from-zero, and controller-dependent specs are excluded. Its 40-minute Go
+test timeout covers the bounded guide assertions and reserves time for failure
+diagnostics and best-effort request-Pod cleanup. Infrastructure setup is
+outside that timeout and must be budgeted separately by the caller.
+
+Within the spec, individual Kubernetes API calls are bounded at 10 seconds and each request client is bounded at 900 seconds; the existing readiness and scale-up waits remain bounded by the shared e2e configuration.
+
+The fresh uniquely named Kind cluster is the final cleanup boundary. The
+caller must always delete only that cluster on success, failure, or interruption
+and must never target a pre-existing cluster.
+
+This contract deliberately excludes nightly or stable-promotion qualification,
+sustained or performance load, scale-down, post-scale inference, real models,
+GPUs, and OpenShift behavior.
+
 ### Quick Start
 
 ```bash

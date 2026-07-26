@@ -264,6 +264,27 @@ test-e2e-smoke: ## Run smoke e2e tests
 	echo "=========================================="; \
 	exit $$TEST_EXIT_CODE
 
+# Runs only the direct KEDA+EPP guide contract against resources already applied
+# from the llm-d repository. The WVA controller is intentionally not required.
+# The guide's bounded inner waits total less than 30m; 40m reserves time for diagnostics and cleanup.
+.PHONY: test-e2e-keda-epp-guide
+test-e2e-keda-epp-guide: ## Run the llm-d KEDA+EPP guide contract
+	@echo "Running direct KEDA+EPP guide contract..."
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=kind-emulator \
+	DEPLOY_WVA=false \
+	WVA_NAMESPACE=workload-variant-autoscaler-system \
+	LLMD_NAMESPACE=llm-d-optimized-baseline \
+	MONITORING_NAMESPACE=llm-d-monitoring \
+	KEDA_NAMESPACE=keda \
+	EPP_SERVICE_NAME=optimized-baseline-epp \
+	USE_SIMULATOR=true \
+	SCALE_TO_ZERO_ENABLED=false \
+	SCALER_BACKEND=keda \
+	MODEL_ID=Qwen/Qwen3-32B \
+	go test ./test/e2e/ -timeout 40m -v -ginkgo.v \
+		-ginkgo.label-filter="keda-epp-guide"
+
 # Runs the complete e2e test suite (KEDA backend, excluding smoke and flaky tests).
 .PHONY: test-e2e-full
 test-e2e-full: ## Run full e2e test suite

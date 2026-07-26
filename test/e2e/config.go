@@ -10,6 +10,8 @@ type E2EConfig struct {
 	testconfig.SharedConfig
 
 	// Feature gates
+	// DeployWVA: env DEPLOY_WVA — require the WVA controller for this suite run.
+	DeployWVA bool
 	// ScaleToZeroEnabled: env SCALE_TO_ZERO_ENABLED — assume native HPA may use minReplicas=0
 	// ("scale-to-zero" via HPAScaleToZero). Distinct from scale-from-zero (scale up from zero replicas).
 	ScaleToZeroEnabled bool
@@ -36,6 +38,7 @@ func LoadConfigFromEnv() E2EConfig {
 	cfg := E2EConfig{
 		SharedConfig: testconfig.LoadSharedConfig(),
 
+		DeployWVA:          testconfig.GetEnvBool("DEPLOY_WVA", true),
 		ScaleToZeroEnabled: testconfig.GetEnvBool("SCALE_TO_ZERO_ENABLED", false),
 
 		PodReadyTimeout: testconfig.GetEnvInt("POD_READY_TIMEOUT", 300), // 5 minutes
