@@ -2,6 +2,7 @@
 #
 # Scaler backend deployment/runtime helpers for deploy/install.sh.
 # Requires vars: MONITORING_NAMESPACE, KEDA_NAMESPACE, KEDA_CHART_VERSION.
+# Optional vars: KEDA_HELM_VALUES, KEDA_HELM_TIMEOUT.
 # Requires funcs: log_info/log_warning/log_success/log_error,
 # should_skip_helm_repo_update().
 #
@@ -65,16 +66,24 @@ deploy_keda() {
         helm repo update
     fi
 
-    if ! helm upgrade -i "$KEDA_RELEASE_NAME" kedacore/keda \
-        --version "$KEDA_CHART_VERSION" \
-        -n "$KEDA_NAMESPACE" \
-        --set prometheus.metricServer.enabled=true \
-        --set prometheus.operator.enabled=true \
-        --wait \
-        --timeout=5m; then
+    local helm_args=(
+        upgrade -i "$KEDA_RELEASE_NAME" kedacore/keda
+        --version "$KEDA_CHART_VERSION"
+        -n "$KEDA_NAMESPACE"
+    )
+    if [ -n "${KEDA_HELM_VALUES:-}" ]; then
+        helm_args+=(--values "$KEDA_HELM_VALUES")
+    fi
+    helm_args+=(
+        --set prometheus.metricServer.enabled=true
+        --set prometheus.operator.enabled=true
+        --wait
+        --timeout="${KEDA_HELM_TIMEOUT:-5m}"
+    )
+
+    if ! helm "${helm_args[@]}"; then
         log_error "KEDA Helm installation failed (SCALER_BACKEND=keda)"
     else
         log_success "KEDA deployed in $KEDA_NAMESPACE"
     fi
 }
-

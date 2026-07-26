@@ -25,8 +25,8 @@ WVA_PROJECT=${WVA_PROJECT:-$PWD}
 NAMESPACE_SUFFIX="sim"
 
 # Namespaces
-LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
-MONITORING_NAMESPACE="workload-variant-autoscaler-monitoring"
+LLMD_NS=${LLMD_NS:-"llm-d-$NAMESPACE_SUFFIX"}
+MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"workload-variant-autoscaler-monitoring"}
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 
 # Simulator image — must match defaultModelServiceSimulatorImage in test/e2e/fixtures/model_service_conventions.go
@@ -37,7 +37,7 @@ WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconci
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
 # Prometheus Configuration
-PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
+PROMETHEUS_SVC_NAME=${PROMETHEUS_SVC_NAME:-"kube-prometheus-stack-prometheus"}
 PROMETHEUS_BASE_URL="https://$PROMETHEUS_SVC_NAME.$MONITORING_NAMESPACE.svc.cluster.local"
 PROMETHEUS_PORT="9090"
 PROMETHEUS_URL="$PROMETHEUS_BASE_URL:$PROMETHEUS_PORT"
@@ -104,8 +104,12 @@ check_specific_prerequisites() {
     fi
     log_success "Using KIND cluster '${CLUSTER_NAME}'"
 
-    # Load WVA image into KIND cluster
-    load_image
+    # Load the WVA image only when the controller is part of this deployment.
+    if [ "${DEPLOY_WVA:-true}" = "true" ]; then
+        load_image
+    else
+        log_info "Skipping WVA image load (DEPLOY_WVA=false)"
+    fi
 
     # Pre-load the simulator image so tests don't pull it cold (avoids PodReadyTimeout).
     load_sim_image

@@ -3,12 +3,19 @@
 # Shared kube-prometheus-stack install for Kubernetes-like environments
 # (vanilla Kubernetes, Kind emulator, etc.). Sourced by deploy/*/install.sh.
 # Requires vars: MONITORING_NAMESPACE, PROMETHEUS_SECRET_NAME,
-# PROMETHEUS_PORT, PROMETHEUS_URL.
+# PROMETHEUS_SVC_NAME, PROMETHEUS_PORT, PROMETHEUS_URL.
+# Optional vars: PROMETHEUS_RELEASE_NAME, PROMETHEUS_CHART_VERSION,
+# PROMETHEUS_HELM_VALUES, PROMETHEUS_TLS_SECRET_PRECREATED.
 # Requires funcs: log_info/log_warning/log_success.
 #
 
 deploy_prometheus_kube_stack() {
     log_info "Deploying kube-prometheus-stack with TLS..."
+
+    local release_name="${PROMETHEUS_RELEASE_NAME:-kube-prometheus-stack}"
+    local chart_version="${PROMETHEUS_CHART_VERSION:-}"
+    local helm_values="${PROMETHEUS_HELM_VALUES:-}"
+    local tls_secret_precreated="${PROMETHEUS_TLS_SECRET_PRECREATED:-false}"
 
     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
     if [ "${SKIP_HELM_REPO_UPDATE:-}" = "true" ]; then
@@ -17,23 +24,28 @@ deploy_prometheus_kube_stack() {
         helm repo update
     fi
 
-    log_info "Creating self-signed TLS certificate for Prometheus"
-    openssl req -x509 -newkey rsa:2048 -nodes \
-        -keyout /tmp/prometheus-tls.key \
-        -out /tmp/prometheus-tls.crt \
-        -days 365 \
-        -subj "/CN=prometheus" \
-        -addext "subjectAltName=DNS:kube-prometheus-stack-prometheus.${MONITORING_NAMESPACE}.svc.cluster.local,DNS:kube-prometheus-stack-prometheus.${MONITORING_NAMESPACE}.svc,DNS:prometheus,DNS:localhost" \
-        &> /dev/null
+    if [ "$tls_secret_precreated" = "true" ]; then
+        log_info "Using caller-provided Prometheus TLS Secret '$PROMETHEUS_SECRET_NAME'"
+        kubectl get secret "$PROMETHEUS_SECRET_NAME" -n "$MONITORING_NAMESPACE" >/dev/null
+    else
+        log_info "Creating self-signed TLS certificate for Prometheus"
+        openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/prometheus-tls.key \
+            -out /tmp/prometheus-tls.crt \
+            -days 365 \
+            -subj "/CN=prometheus" \
+            -addext "subjectAltName=DNS:${PROMETHEUS_SVC_NAME}.${MONITORING_NAMESPACE}.svc.cluster.local,DNS:${PROMETHEUS_SVC_NAME}.${MONITORING_NAMESPACE}.svc,DNS:prometheus,DNS:localhost" \
+            &> /dev/null
 
-    log_info "Creating Kubernetes secret for Prometheus TLS"
-    kubectl create secret tls "$PROMETHEUS_SECRET_NAME" \
-        --cert=/tmp/prometheus-tls.crt \
-        --key=/tmp/prometheus-tls.key \
-        -n "$MONITORING_NAMESPACE" \
-        --dry-run=client -o yaml | kubectl apply -f - &> /dev/null
+        log_info "Creating Kubernetes secret for Prometheus TLS"
+        kubectl create secret tls "$PROMETHEUS_SECRET_NAME" \
+            --cert=/tmp/prometheus-tls.crt \
+            --key=/tmp/prometheus-tls.key \
+            -n "$MONITORING_NAMESPACE" \
+            --dry-run=client -o yaml | kubectl apply -f - &> /dev/null
 
-    rm -f /tmp/prometheus-tls.key /tmp/prometheus-tls.crt
+        rm -f /tmp/prometheus-tls.key /tmp/prometheus-tls.crt
+    fi
 
     log_info "Installing kube-prometheus-stack with TLS configuration"
     # Create the wva-operation-dashboard ConfigMap from the JSON file with Grafana sidecar label
@@ -47,30 +59,42 @@ deploy_prometheus_kube_stack() {
         kubectl apply -f -
     fi
 
-    helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-        -n "$MONITORING_NAMESPACE" \
-        --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-        --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
-        --set prometheus.service.type=ClusterIP \
-        --set prometheus.service.port="$PROMETHEUS_PORT" \
-        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.name="$PROMETHEUS_SECRET_NAME" \
-        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.key=tls.crt \
-        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.name="$PROMETHEUS_SECRET_NAME" \
-        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.key=tls.key \
-        --set grafana.enabled="$DEPLOY_OPERATIONAL_DASHBOARD" \
-        --set grafana.sidecar.dashboards.enabled=true \
-        --set grafana.sidecar.dashboards.label=grafana_dashboard \
-        --set 'grafana.datasources.datasources\.yaml.apiVersion=1' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].name=Prometheus' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].type=prometheus' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].url=https://kube-prometheus-stack-prometheus.'"$MONITORING_NAMESPACE"'.svc.cluster.local:9090' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].access=proxy' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.httpMethod=POST' \
-        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.timeInterval=30s' \
-        --set 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.tlsSkipVerify=true' \
-        --set alertmanager.enabled=false \
-        --timeout=10m \
+    local helm_args=(
+        upgrade --install "$release_name" prometheus-community/kube-prometheus-stack
+    )
+    if [ -n "$chart_version" ]; then
+        helm_args+=(--version "$chart_version")
+    fi
+    if [ -n "$helm_values" ]; then
+        helm_args+=(--values "$helm_values")
+    fi
+    helm_args+=(
+        -n "$MONITORING_NAMESPACE"
+        --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+        --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false
+        --set prometheus.service.type=ClusterIP
+        --set prometheus.service.port="$PROMETHEUS_PORT"
+        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.name="$PROMETHEUS_SECRET_NAME"
+        --set prometheus.prometheusSpec.web.tlsConfig.cert.secret.key=tls.crt
+        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.name="$PROMETHEUS_SECRET_NAME"
+        --set prometheus.prometheusSpec.web.tlsConfig.keySecret.key=tls.key
+        --set grafana.enabled="$DEPLOY_OPERATIONAL_DASHBOARD"
+        --set grafana.sidecar.dashboards.enabled=true
+        --set grafana.sidecar.dashboards.label=grafana_dashboard
+        --set 'grafana.datasources.datasources\.yaml.apiVersion=1'
+        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].name=Prometheus'
+        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].type=prometheus'
+        --set-string "grafana.datasources.datasources\\.yaml.datasources[0].url=https://${PROMETHEUS_SVC_NAME}.${MONITORING_NAMESPACE}.svc.cluster.local:${PROMETHEUS_PORT}"
+        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].access=proxy'
+        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.httpMethod=POST'
+        --set-string 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.timeInterval=30s'
+        --set 'grafana.datasources.datasources\.yaml.datasources[0].jsonData.tlsSkipVerify=true'
+        --set alertmanager.enabled=false
+        --timeout=10m
         --wait
+    )
+
+    helm "${helm_args[@]}"
 
     log_success "kube-prometheus-stack deployed with TLS"
     log_info "Prometheus URL: $PROMETHEUS_URL"
@@ -79,10 +103,13 @@ deploy_prometheus_kube_stack() {
 undeploy_prometheus_kube_stack() {
     log_info "Uninstalling kube-prometheus-stack..."
 
-    helm uninstall kube-prometheus-stack -n "$MONITORING_NAMESPACE" 2>/dev/null || \
+    local release_name="${PROMETHEUS_RELEASE_NAME:-kube-prometheus-stack}"
+    helm uninstall "$release_name" -n "$MONITORING_NAMESPACE" 2>/dev/null || \
         log_warning "Prometheus stack not found or already uninstalled"
 
-    kubectl delete secret "$PROMETHEUS_SECRET_NAME" -n "$MONITORING_NAMESPACE" --ignore-not-found
+    if [ "${PROMETHEUS_TLS_SECRET_PRECREATED:-false}" != "true" ]; then
+        kubectl delete secret "$PROMETHEUS_SECRET_NAME" -n "$MONITORING_NAMESPACE" --ignore-not-found
+    fi
 
     log_success "Prometheus stack uninstalled"
 }
