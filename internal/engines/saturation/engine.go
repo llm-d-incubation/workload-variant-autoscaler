@@ -506,10 +506,10 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 // It mirrors the analyzer selection in optimize's switch statement.
 func modeLabelForAnalyzer(analyzerName string) string {
 	switch analyzerName {
-	case interfaces.QueueingModelAnalyzerName:
-		return interfaces.QueueingModelAnalyzerName
-	case interfaces.SaturationAnalyzerName:
-		return interfaces.SaturationAnalyzerName
+	case domain.QueueingModelAnalyzerName:
+		return domain.QueueingModelAnalyzerName
+	case domain.SaturationAnalyzerName:
+		return domain.SaturationAnalyzerName
 	default:
 		return "saturation-only"
 	}

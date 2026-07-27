@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // TestModeLabelForAnalyzer ensures the "Optimization completed successfully" log
@@ -17,8 +17,8 @@ func TestModeLabelForAnalyzer(t *testing.T) {
 		analyzerName string
 		wantMode     string
 	}{
-		{"queueing model analyzer", interfaces.QueueingModelAnalyzerName, interfaces.QueueingModelAnalyzerName},
-		{"V2 saturation analyzer", interfaces.SaturationAnalyzerName, interfaces.SaturationAnalyzerName},
+		{"queueing model analyzer", domain.QueueingModelAnalyzerName, domain.QueueingModelAnalyzerName},
+		{"V2 saturation analyzer", domain.SaturationAnalyzerName, domain.SaturationAnalyzerName},
 		{"unset analyzer name falls back to V1 saturation-only", "", "saturation-only"},
 		{"unrecognized analyzer name falls back to V1 saturation-only", "not-a-real-analyzer", "saturation-only"},
 	}
