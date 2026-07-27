@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
@@ -21,10 +22,9 @@ const NamespaceLimiterName = "namespace-inventory"
 // type cluster-wide, because the Inventory.SetUsed contract cannot carry the
 // namespace dimension.
 //
-// It applies to the V1 (Limit) path only; the V2 constraint path
-// (ComputeConstraints / GreedyByScoreOptimizer) is type-keyed and cannot
-// express per-namespace partitioning, so the engine keeps the cluster-wide
-// TypeInventory limiter there.
+// It serves both scaling paths: Limit caps decisions in place on the V1
+// saturation path, and ComputeConstraints exposes the same per-namespace pools
+// to the V2 optimizer via ResourceConstraints.NamespacePools.
 type NamespaceLimiter struct {
 	name           string
 	inventory      *NamespaceInventory
@@ -173,5 +173,51 @@ func (l *NamespaceLimiter) buildStepReason(d *domain.VariantDecision) string {
 	return fmt.Sprintf("allocated %d GPUs for +%d replicas", d.GPUsAllocated, replicaChange)
 }
 
-// Ensure NamespaceLimiter implements Limiter.
-var _ Limiter = (*NamespaceLimiter)(nil)
+// ComputeConstraints implements ConstraintProvider, the V2 counterpart of
+// Limit: instead of capping decisions in place it exposes the per-namespace GPU
+// pools so the optimizer can partition capacity per tenant. usageByType is
+// unused because per-namespace usage carries the same totals with the namespace
+// dimension intact.
+//
+// The cluster per-type aggregate in Pools is derived from the ACTIVE namespace
+// pools, never from the static all-buckets GetResourcePools sum, so the budget
+// the optimizer partitions matches the per-namespace budgets exactly. Reporting
+// the static sum would advertise capacity in buckets no active namespace can
+// draw from, and would feed an over-broad cluster cap into any later
+// intersection with another provider.
+//
+// The one exception is when every active namespace is excluded: this limiter
+// then constrains nothing, and the binding limit really is the physical cluster
+// capacity, so the full aggregate is reported deliberately.
+func (l *NamespaceLimiter) ComputeConstraints(ctx context.Context, _ map[string]int, usageByNamespace map[string]map[string]int) (*ResourceConstraints, error) {
+	if err := l.inventory.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("failed to refresh namespace inventory: %w", err)
+	}
+	l.inventory.SetUsedByNamespace(usageByNamespace)
+
+	// The keys of usageByNamespace define the active set, so a namespace with a
+	// pool but no current usage is still materialized and constrained.
+	active := make([]string, 0, len(usageByNamespace))
+	for ns := range usageByNamespace {
+		active = append(active, ns)
+	}
+	sort.Strings(active)
+
+	rc := &ResourceConstraints{ProviderName: l.name}
+	nsPools := l.inventory.NamespaceResourcePools(active)
+	if len(nsPools) == 0 {
+		rc.Pools = l.inventory.GetResourcePools()
+	} else {
+		rc.NamespacePools = nsPools
+		rc.Pools = aggregateNamespacePools(nsPools)
+	}
+	rc.TotalLimit, rc.TotalUsed, rc.TotalAvail = poolTotals(rc.Pools)
+	return rc, nil
+}
+
+// Ensure NamespaceLimiter implements Limiter and, on the V2 path,
+// ConstraintProvider.
+var (
+	_ Limiter            = (*NamespaceLimiter)(nil)
+	_ ConstraintProvider = (*NamespaceLimiter)(nil)
+)

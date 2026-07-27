@@ -91,6 +91,12 @@ type NamespaceInventory struct {
 	// usedByBucketType maps bucket -> accelerator type -> GPUs in use, set by
 	// SetUsedByBucket. Used to compute available capacity in CreateAllocator.
 	usedByBucketType map[string]map[string]int
+	// usedByNamespace maps workload namespace -> accelerator type -> GPUs in
+	// use, set by SetUsedByNamespace on the V2 constraint path. Retained
+	// alongside usedByBucketType because per-namespace pools must report each
+	// namespace's own usage, which the bucket aggregate cannot recover once
+	// several namespaces share the default bucket.
+	usedByNamespace map[string]map[string]int
 }
 
 // NewNamespaceInventory creates a NamespaceInventory.
@@ -121,6 +127,7 @@ func NewNamespaceInventory(name string, disc discovery.NodeDiscovery, exclude se
 		},
 		limitByBucketType: make(map[string]map[string]int),
 		usedByBucketType:  make(map[string]map[string]int),
+		usedByNamespace:   make(map[string]map[string]int),
 	}
 }
 
@@ -170,8 +177,10 @@ func (i *NamespaceInventory) Refresh(ctx context.Context) error {
 
 	i.mu.Lock()
 	i.limitByBucketType = limitByBucketType
-	// Reset usage; the limiter re-supplies it via SetUsedByBucket each cycle.
+	// Reset usage; the limiter re-supplies it each cycle via SetUsedByBucket
+	// (V1) or SetUsedByNamespace (V2).
 	i.usedByBucketType = make(map[string]map[string]int)
+	i.usedByNamespace = make(map[string]map[string]int)
 	i.mu.Unlock()
 	return nil
 }
@@ -224,6 +233,138 @@ func (i *NamespaceInventory) SetUsedByBucket(usedByBucketType map[string]map[str
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.usedByBucketType = copyNestedIntMap(usedByBucketType)
+}
+
+// SetUsedByNamespace implements NamespaceAwareInventory for the V2 constraint
+// path. It keeps each namespace's own usage and additionally remaps usage onto
+// inventory buckets via chargeBucket, so V2 charges usage exactly as the V1
+// Limit path does: an excluded namespace bypasses the cap, but its running
+// replicas still occupy physical GPUs in the pool they draw from and therefore
+// still debit that pool. Copies the input.
+func (i *NamespaceInventory) SetUsedByNamespace(usedByNS map[string]map[string]int) {
+	perNamespace := make(map[string]map[string]int, len(usedByNS))
+	byBucket := make(map[string]map[string]int)
+	for ns, byType := range usedByNS {
+		cp := make(map[string]int, len(byType))
+		for t, n := range byType {
+			cp[t] = n
+		}
+		perNamespace[ns] = cp
+
+		bucket, ok := i.resolver.chargeBucket(ns)
+		if !ok {
+			// No selector match and no default: the usage belongs to no pool.
+			continue
+		}
+		if byBucket[bucket] == nil {
+			byBucket[bucket] = make(map[string]int)
+		}
+		for t, n := range byType {
+			byBucket[bucket][t] += n
+		}
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.usedByNamespace = perNamespace
+	i.usedByBucketType = byBucket
+}
+
+// NamespaceResourcePools implements NamespaceAwareInventory, exposing each
+// active namespace's GPU pool as a CLOSED allowlist so the V2 optimizer
+// enforces the same partitioning the V1 allocator does:
+//
+//   - An excluded namespace is OMITTED, signalling "open" (bound only by the
+//     cluster per-type constraint), matching the V1 allocator's pass-through.
+//   - Every other active namespace is present. A namespace with no matching
+//     selector and no default gets an empty inner map, a real deny-all, matching
+//     V1's zero-inventory outcome.
+//   - Each type in the namespace's pool is emitted with its finite capacity. A
+//     type absent from the pool means the namespace's nodes hold none of it and
+//     is denied, never falling through to the cluster aggregate.
+//
+// Physical inventory is always finite, so the unlimited sentinel (Limit < 0)
+// that a quota provider may emit is never produced here: absent means deny, and
+// every present pool carries a real GPU count.
+//
+// SetUsedByNamespace must be called first so the pools carry current usage.
+func (i *NamespaceInventory) NamespaceResourcePools(activeNamespaces []string) map[string]map[string]ResourcePool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	out := make(map[string]map[string]ResourcePool, len(activeNamespaces))
+	// Namespaces without an explicit selector all draw from the single shared
+	// default bucket, so they are collected and partitioned together below.
+	var sharedDefault []string
+
+	for _, ns := range activeNamespaces {
+		bucket, excluded, hasPool := i.resolver.resolve(ns)
+		switch {
+		case excluded:
+			continue
+		case !hasPool:
+			out[ns] = map[string]ResourcePool{}
+		case bucket == DefaultSelectorKey:
+			sharedDefault = append(sharedDefault, ns)
+		default:
+			// A named bucket is 1:1 with its namespace, so its pool maps across
+			// exactly.
+			perType := make(map[string]ResourcePool, len(i.limitByBucketType[bucket]))
+			for t, limit := range i.limitByBucketType[bucket] {
+				perType[t] = ResourcePool{Limit: limit, Used: i.usedByBucketType[bucket][t]}
+			}
+			out[ns] = perType
+		}
+	}
+
+	if len(sharedDefault) > 0 {
+		i.partitionDefaultLocked(sharedDefault, out)
+	}
+	return out
+}
+
+// partitionDefaultLocked splits the shared default bucket across the namespaces
+// that fall through to it, writing their pools into out. Callers must hold i.mu.
+//
+// The default bucket is one physical node pool shared by every namespace without
+// an explicit selector, whereas the V2 optimizer consumes a static budget per
+// namespace. Handing each namespace the whole pool would let them all allocate it
+// independently, and would inflate the cluster aggregate that callers derive by
+// summing the per-namespace pools. So the pool's REMAINING capacity is split
+// evenly and each namespace is reported as its own usage plus its share: the
+// pool's Available is then exactly that share, and the shares sum to the bucket's
+// remaining capacity, so the shared pool can never be over-allocated.
+//
+// This is where V2 necessarily diverges from V1: the V1 allocator decrements one
+// live shared counter (first-come-first-served between namespaces), which a
+// static per-namespace budget cannot express. A named selector gives a namespace
+// its own bucket and avoids the split entirely.
+func (i *NamespaceInventory) partitionDefaultLocked(namespaces []string, out map[string]map[string]ResourcePool) {
+	// Sorted so the remainder is distributed deterministically across cycles.
+	slices.Sort(namespaces)
+
+	limits := i.limitByBucketType[DefaultSelectorKey]
+	used := i.usedByBucketType[DefaultSelectorKey]
+	for _, ns := range namespaces {
+		out[ns] = make(map[string]ResourcePool, len(limits))
+	}
+
+	n := len(namespaces)
+	for t, limit := range limits {
+		remaining := limit - used[t]
+		if remaining < 0 {
+			remaining = 0
+		}
+		share, extra := remaining/n, remaining%n
+		for idx, ns := range namespaces {
+			s := share
+			if idx < extra {
+				s++
+			}
+			own := i.usedByNamespace[ns][t]
+			out[ns][t] = ResourcePool{Limit: own + s, Used: own}
+		}
+	}
 }
 
 // CreateAllocator returns a namespaceTypeAllocator that allocates from
@@ -383,8 +524,12 @@ func (a *namespaceTypeAllocator) Remaining() int {
 	return a.totalRemaining
 }
 
-// Ensure NamespaceInventory implements Inventory.
-var _ Inventory = (*NamespaceInventory)(nil)
+// Ensure NamespaceInventory implements Inventory and, for the V2 constraint
+// path, NamespaceAwareInventory.
+var (
+	_ Inventory               = (*NamespaceInventory)(nil)
+	_ NamespaceAwareInventory = (*NamespaceInventory)(nil)
+)
 
 // Ensure namespaceTypeAllocator implements ResourceAllocator.
 var _ ResourceAllocator = (*namespaceTypeAllocator)(nil)

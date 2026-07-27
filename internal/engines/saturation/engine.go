@@ -168,12 +168,6 @@ type Engine struct {
 	limiterSig     string
 	limiterMu      sync.Mutex
 
-	// nsInventoryV2Warn emits a one-time warning when the namespace-inventory
-	// limiter is active under a V2 analyzer: the V2 constraint path
-	// (ComputeConstraints/GreedyByScoreOptimizer) is type-keyed and cannot
-	// enforce per-namespace partitioning, so isolation applies to V1 only.
-	nsInventoryV2Warn sync.Once
-
 	// metricsRegistry is used to access metrics sources for request count queries
 	metricsRegistry *source.SourceRegistry
 
@@ -963,9 +957,11 @@ func (e *Engine) selectV2Optimizer(
 	}
 
 	// Collect constraints from every provider backing the GPU limiter: a single
-	// DefaultLimiter, or each constituent of a CompositeLimiter (so multi-entry
-	// quota configs are all consulted, and namespace-scoped providers contribute
-	// per-namespace caps via NamespacePools).
+	// DefaultLimiter or NamespaceLimiter, or each constituent of a
+	// CompositeLimiter (so multi-entry quota configs are all consulted, and
+	// namespace-scoped providers contribute per-namespace caps via NamespacePools).
+	// The selected mode is already the limiter here, so namespace-inventory
+	// contributes its per-namespace pools without any special-casing.
 	providers := gpuConstraintProviders(e.currentGPULimiter())
 	if len(providers) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
@@ -1099,17 +1095,7 @@ func (e *Engine) optimizeV2(
 		return nil
 	}
 
-	// Stage 2: Compute GPU constraints and call optimizer.
-	// Namespace-scoped inventory is not yet enforced on the V2 constraint path:
-	// ResourceConstraints is type-keyed and cannot express per-namespace
-	// partitioning, so per-namespace isolation currently applies only to the V1
-	// saturation analyzer. Warn once so operators relying on it aren't misled.
-	// Enabling per-namespace enforcement on V2 is the tracked follow-up.
-	if e.Config.EffectiveLimiterMode() == config.LimiterTypeNamespaceInventory {
-		e.nsInventoryV2Warn.Do(func() {
-			logger.Info("namespace-scoped GPU inventory is configured but NOT enforced on the V2 optimizer path; per-namespace isolation applies only to the V1 saturation analyzer. GPU constraints on this path are cluster-wide.")
-		})
-	}
+	// Stage 2: Compute GPU constraints and call optimizer
 	optimizer, constraints := e.selectV2Optimizer(ctx, requests)
 	// Scope-coupled rescale enablement (cluster + per-namespace) is resolved from
 	// config and handed to the GPU-aware optimizer for this cycle.
