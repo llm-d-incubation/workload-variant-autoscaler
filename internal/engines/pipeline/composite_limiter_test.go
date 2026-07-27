@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // recordingLimiter is a test double that records each invocation and can
@@ -20,7 +20,7 @@ type recordingLimiter struct {
 }
 
 func (r *recordingLimiter) Name() string { return r.name }
-func (r *recordingLimiter) Limit(_ context.Context, decisions []*interfaces.VariantDecision) error {
+func (r *recordingLimiter) Limit(_ context.Context, decisions []*domain.VariantDecision) error {
 	r.invocations++
 	if r.err != nil {
 		return r.err
@@ -61,7 +61,7 @@ var _ = Describe("CompositeLimiter", func() {
 
 	It("is a no-op when given no constituents", func() {
 		c := NewCompositeLimiter("composite", nil)
-		decisions := []*interfaces.VariantDecision{{TargetReplicas: 5}}
+		decisions := []*domain.VariantDecision{{TargetReplicas: 5}}
 		Expect(c.Limit(ctx, decisions)).To(Succeed())
 		Expect(decisions[0].TargetReplicas).To(Equal(5))
 	})
@@ -72,7 +72,7 @@ var _ = Describe("CompositeLimiter", func() {
 		c := &recordingLimiter{name: "c"}
 		comp := NewCompositeLimiter("composite", []Limiter{a, b, c})
 
-		decisions := []*interfaces.VariantDecision{{TargetReplicas: 10}}
+		decisions := []*domain.VariantDecision{{TargetReplicas: 10}}
 		Expect(comp.Limit(ctx, decisions)).To(Succeed())
 
 		Expect(a.invocations).To(Equal(1))
@@ -88,7 +88,7 @@ var _ = Describe("CompositeLimiter", func() {
 		b := &recordingLimiter{name: "namespace-quota", cap: 2}
 		comp := NewCompositeLimiter("composite", []Limiter{a, b})
 
-		decisions := []*interfaces.VariantDecision{{TargetReplicas: 10}}
+		decisions := []*domain.VariantDecision{{TargetReplicas: 10}}
 		Expect(comp.Limit(ctx, decisions)).To(Succeed())
 		Expect(decisions[0].TargetReplicas).To(Equal(2))
 		Expect(decisions[0].WasLimited).To(BeTrue())
@@ -100,7 +100,7 @@ var _ = Describe("CompositeLimiter", func() {
 		c := &recordingLimiter{name: "c"}
 		comp := NewCompositeLimiter("composite", []Limiter{a, b, c})
 
-		err := comp.Limit(ctx, []*interfaces.VariantDecision{{TargetReplicas: 1}})
+		err := comp.Limit(ctx, []*domain.VariantDecision{{TargetReplicas: 1}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`constituent[1] ("b")`))
 		Expect(err.Error()).To(ContainSubstring("boom"))
@@ -116,7 +116,7 @@ var _ = Describe("CompositeLimiter", func() {
 		b := &recordingLimiter{name: "b", err: errors.New("boom")}
 		comp := NewCompositeLimiter("composite", []Limiter{a, b})
 
-		decisions := []*interfaces.VariantDecision{{TargetReplicas: 10}}
+		decisions := []*domain.VariantDecision{{TargetReplicas: 10}}
 		err := comp.Limit(ctx, decisions)
 		Expect(err).To(HaveOccurred())
 

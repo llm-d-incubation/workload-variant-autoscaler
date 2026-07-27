@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 var _ = Describe("SaturationAnalyzer", func() {
@@ -32,11 +32,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 	Describe("k1/k2 interaction", func() {
 		It("should use k1 (memory-bound) when k2 is unknown", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -50,12 +50,12 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should use k2 (compute-bound) when queue is saturated", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					// Queue >= threshold (5), tokensInUse = 8000
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						8000, 16000, 6, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -69,12 +69,12 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should detect compute-bound when k2 < k1 with high queue and low KV", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					// Low KV usage but saturated queue
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						4000, 16000, 10, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -89,11 +89,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 	Describe("k2 history", func() {
 		It("should store k2 observation in rolling average", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						8000, 16000, 6, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -111,11 +111,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 		It("should use historical k2 when queue drops below threshold", func() {
 			// First call: queue saturated → observes k2
 			input1 := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						8000, 16000, 6, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -124,11 +124,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			// Second call: queue below threshold → uses historical k2
 			input2 := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						6000, 16000, 2, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -143,11 +143,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 		It("should use different k2 history buckets for different output lengths", func() {
 			// Short output workload: k2 observation
 			input1 := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						8000, 16000, 6, 100, 50), // avgOutput=50 → "short"
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -155,11 +155,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			// Long output workload: no history yet
 			input2 := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						6000, 16000, 2, 100, 600), // avgOutput=600 → "long"
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -185,12 +185,12 @@ var _ = Describe("SaturationAnalyzer", func() {
 			})
 
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					// Queue below threshold, no history → uses derived k2
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 2, 500, 100), // I=500, O=100
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -208,11 +208,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should fall back to k1 when no batch/queue/history data exists", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 0, 0), // no avg tokens
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -227,11 +227,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 	Describe("Pending replicas", func() {
 		It("should include pending replicas in anticipated supply for scale-up", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						10000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 2, PendingReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -246,11 +246,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should NOT include pending replicas in scale-down calculation", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						1000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 3, PendingReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -274,8 +274,8 @@ var _ = Describe("SaturationAnalyzer", func() {
 			})
 
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{}, // no pods
-				[]interfaces.VariantReplicaState{
+				[]domain.ReplicaMetrics{}, // no pods
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 0, GPUsPerReplica: 1},
 				},
 			)
@@ -302,11 +302,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			// Another variant has live pods providing workload data
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 500, 100), // I=500, O=100
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 					{VariantName: "variant-b", CurrentReplicas: 0, GPUsPerReplica: 1},
 				},
@@ -356,11 +356,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			// variant-a provides workload data
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 50000, 0, 500, 100), // I=500, O=100
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 					{VariantName: "variant-b", CurrentReplicas: 0, GPUsPerReplica: 1},
 				},
@@ -393,11 +393,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 			// Another variant provides workload data (different accelerator, won't be compatible)
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-x", "L40S", 5.0,
 						5000, 16000, 0, 500, 100),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-x", CurrentReplicas: 1, GPUsPerReplica: 1},
 					{VariantName: "variant-a", CurrentReplicas: 0, GPUsPerReplica: 1},
 				},
@@ -429,8 +429,8 @@ var _ = Describe("SaturationAnalyzer", func() {
 			})
 
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{}, // no live pods at all
-				[]interfaces.VariantReplicaState{
+				[]domain.ReplicaMetrics{}, // no live pods at all
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 0, GPUsPerReplica: 1},
 				},
 			)
@@ -482,11 +482,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 	Describe("Scaling signals", func() {
 		It("should signal scale-up when demand exceeds threshold", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						11000, 16000, 3, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -501,13 +501,13 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should signal scale-down when utilization is below boundary", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						1000, 16000, 0, 100, 50),
 					makeReplicaMetrics("pod-2", "variant-a", "H100", 10.0,
 						1000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 2, GPUsPerReplica: 1},
 				},
 			)
@@ -524,11 +524,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 		It("should signal steady state when utilization is between thresholds", func() {
 			// Supply ~ demand / 0.77 (between 0.70 boundary and 0.85 threshold)
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						10000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -544,15 +544,15 @@ var _ = Describe("SaturationAnalyzer", func() {
 	Describe("Scheduler queue demand", func() {
 		It("should add scheduler queue demand to total demand", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
-			input.SchedulerQueue = &interfaces.SchedulerQueueMetrics{
+			input.SchedulerQueue = &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 8000,
 			}
@@ -572,11 +572,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should not add demand when scheduler queue is nil", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
@@ -589,7 +589,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should reduce input tokens by prefix cache hit rate", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					{
 						PodName: "pod-1", VariantName: "variant-a",
 						AcceleratorName: "H100", Cost: 10.0,
@@ -599,11 +599,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 						PrefixCacheHitRate: 0.5, // 50% cache hit rate
 					},
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
-			input.SchedulerQueue = &interfaces.SchedulerQueueMetrics{
+			input.SchedulerQueue = &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 4000, // 4000/4 = 1000 tokens from bytes
 			}
@@ -624,15 +624,15 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 		It("should use max of bytes and count estimates for input tokens", func() {
 			input := makeAnalyzerInput(
-				[]interfaces.ReplicaMetrics{
+				[]domain.ReplicaMetrics{
 					makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 						5000, 16000, 0, 100, 50),
 				},
-				[]interfaces.VariantReplicaState{
+				[]domain.VariantReplicaState{
 					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
 			)
-			input.SchedulerQueue = &interfaces.SchedulerQueueMetrics{
+			input.SchedulerQueue = &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 20000, // 20000/4 = 5000 >> 10*100=1000
 			}
@@ -651,12 +651,12 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 	Describe("Scheduler queue demand role attribution", func() {
 		It("should attribute inputTokens to prefill and inputTokens+outputTokens to decode", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 					5000, 16000, 0, 100, 50),
 			}
 			activeRoles := map[string]bool{"prefill": true, "decode": true}
-			sq := &interfaces.SchedulerQueueMetrics{
+			sq := &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 0, // use count-based estimation only
 			}
@@ -675,12 +675,12 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should attribute full demand to 'both' role", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 					5000, 16000, 0, 100, 50),
 			}
 			activeRoles := map[string]bool{"both": true}
-			sq := &interfaces.SchedulerQueueMetrics{
+			sq := &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 0,
 			}
@@ -692,11 +692,11 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should return empty byRole when nil activeRoles", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 					5000, 16000, 0, 100, 50),
 			}
-			sq := &interfaces.SchedulerQueueMetrics{
+			sq := &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 0,
 			}
@@ -708,7 +708,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should return zero for nil scheduler queue", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				makeReplicaMetrics("pod-1", "variant-a", "H100", 10.0,
 					5000, 16000, 0, 100, 50),
 			}
@@ -721,7 +721,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should apply prefix cache hit rate to per-role input tokens", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{
 					PodName: "pod-1", VariantName: "variant-a",
 					AcceleratorName: "H100", Cost: 10.0,
@@ -732,7 +732,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 				},
 			}
 			activeRoles := map[string]bool{"prefill": true, "decode": true}
-			sq := &interfaces.SchedulerQueueMetrics{
+			sq := &domain.SchedulerQueueMetrics{
 				QueueSize:  10,
 				QueueBytes: 0,
 			}
@@ -751,10 +751,10 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		It("should add queue demand to role capacities in end-to-end analysis", func() {
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:   "test-model",
 				Namespace: "test-ns",
-				ReplicaMetrics: []interfaces.ReplicaMetrics{
+				ReplicaMetrics: []domain.ReplicaMetrics{
 					{
 						PodName: "prefill-pod", VariantName: "prefill-v",
 						AcceleratorName: "H100", Cost: 10.0,
@@ -772,7 +772,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 						ModelID: "test-model", Namespace: "test-ns",
 					},
 				},
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 1, Role: "prefill"},
 					{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 1, Role: "decode"},
 				},
@@ -783,7 +783,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 					ScaleUpThreshold:     0.85,
 					ScaleDownBoundary:    0.70,
 				},
-				SchedulerQueue: &interfaces.SchedulerQueueMetrics{
+				SchedulerQueue: &domain.SchedulerQueueMetrics{
 					QueueSize:  10,
 					QueueBytes: 0,
 				},
@@ -836,9 +836,9 @@ var _ = Describe("SaturationAnalyzer", func() {
 
 // makeAnalyzerInput creates a standard AnalyzerInput with default config.
 func makeAnalyzerInput(
-	metrics []interfaces.ReplicaMetrics,
-	states []interfaces.VariantReplicaState,
-) interfaces.AnalyzerInput {
+	metrics []domain.ReplicaMetrics,
+	states []domain.VariantReplicaState,
+) domain.AnalyzerInput {
 	config := &config.SaturationScalingConfig{
 		KvCacheThreshold:     0.8,
 		QueueLengthThreshold: 5,
@@ -848,7 +848,7 @@ func makeAnalyzerInput(
 		ScaleUpThreshold:     0.85,
 		ScaleDownBoundary:    0.70,
 	}
-	return interfaces.AnalyzerInput{
+	return domain.AnalyzerInput{
 		ModelID:        "test-model",
 		Namespace:      "test-ns",
 		ReplicaMetrics: metrics,
@@ -864,7 +864,7 @@ func makeReplicaMetrics(
 	tokensInUse, totalCapacity int64,
 	queueLen int,
 	avgInput, avgOutput float64,
-) interfaces.ReplicaMetrics {
+) domain.ReplicaMetrics {
 	var kvUsage float64
 	if totalCapacity > 0 {
 		kvUsage = float64(tokensInUse) / float64(totalCapacity)
@@ -872,7 +872,7 @@ func makeReplicaMetrics(
 	blockSize := int64(16)
 	numBlocks := totalCapacity / blockSize
 
-	return interfaces.ReplicaMetrics{
+	return domain.ReplicaMetrics{
 		PodName:               podName,
 		VariantName:           variantName,
 		AcceleratorName:       accelerator,
@@ -899,7 +899,7 @@ var _ = Describe("aggregateByRole", func() {
 	})
 
 	It("should return nil when all variants are role 'both'", func() {
-		vcs := []interfaces.VariantCapacity{
+		vcs := []domain.VariantCapacity{
 			{VariantName: "v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 			{VariantName: "v2", Role: "", TotalCapacity: 20000, TotalDemand: 10000, ReplicaCount: 1, PerReplicaCapacity: 20000},
 		}
@@ -908,7 +908,7 @@ var _ = Describe("aggregateByRole", func() {
 	})
 
 	It("should compute per-role capacities for P/D disaggregated model", func() {
-		vcs := []interfaces.VariantCapacity{
+		vcs := []domain.VariantCapacity{
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 5000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
@@ -936,7 +936,7 @@ var _ = Describe("aggregateByRole", func() {
 	})
 
 	It("should handle mixed roles including 'both'", func() {
-		vcs := []interfaces.VariantCapacity{
+		vcs := []domain.VariantCapacity{
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 9000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 			{VariantName: "both-v1", Role: "both", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PerReplicaCapacity: 10000},
 		}
@@ -948,7 +948,7 @@ var _ = Describe("aggregateByRole", func() {
 	})
 
 	It("should add scheduler queue demand to per-role totals", func() {
-		vcs := []interfaces.VariantCapacity{
+		vcs := []domain.VariantCapacity{
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 2000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 			{VariantName: "decode-v1", Role: "decode", TotalCapacity: 20000, TotalDemand: 3000, ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
@@ -969,7 +969,7 @@ var _ = Describe("aggregateByRole", func() {
 	})
 
 	It("should skip queue demand for roles with no variants", func() {
-		vcs := []interfaces.VariantCapacity{
+		vcs := []domain.VariantCapacity{
 			{VariantName: "prefill-v1", Role: "prefill", TotalCapacity: 10000, TotalDemand: 5000, ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 10000},
 		}
 		// Queue demand for decode, but no decode variants exist
@@ -1007,7 +1007,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 	})
 
 	It("should return nil when capacity store has no record", func() {
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1025,7 +1025,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:      "pod-1",
 			VariantName:  "variant-a",
 			KvCacheUsage: 0.5,
@@ -1043,7 +1043,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1067,7 +1067,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1092,7 +1092,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1119,7 +1119,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1144,7 +1144,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1168,7 +1168,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		rm := interfaces.ReplicaMetrics{
+		rm := domain.ReplicaMetrics{
 			PodName:               "pod-1",
 			VariantName:           "variant-a",
 			AcceleratorName:       "H100",
@@ -1213,10 +1213,10 @@ var _ = Describe("Analyze with fallback (no cache_config_info)", func() {
 			LearnedFrom:       "deployment",
 		})
 
-		input := interfaces.AnalyzerInput{
+		input := domain.AnalyzerInput{
 			ModelID:   "test-model",
 			Namespace: "test-ns",
-			ReplicaMetrics: []interfaces.ReplicaMetrics{
+			ReplicaMetrics: []domain.ReplicaMetrics{
 				{
 					PodName:               "pod-1",
 					VariantName:           "variant-a",
@@ -1232,7 +1232,7 @@ var _ = Describe("Analyze with fallback (no cache_config_info)", func() {
 					AvgOutputTokens:       50,
 				},
 			},
-			VariantStates: []interfaces.VariantReplicaState{
+			VariantStates: []domain.VariantReplicaState{
 				{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 			},
 			Config: &config.SaturationScalingConfig{
@@ -1262,10 +1262,10 @@ var _ = Describe("Analyze with fallback (no cache_config_info)", func() {
 	})
 
 	It("should skip replicas with no store data and no cache_config_info", func() {
-		input := interfaces.AnalyzerInput{
+		input := domain.AnalyzerInput{
 			ModelID:   "test-model",
 			Namespace: "test-ns",
-			ReplicaMetrics: []interfaces.ReplicaMetrics{
+			ReplicaMetrics: []domain.ReplicaMetrics{
 				{
 					PodName:               "pod-1",
 					VariantName:           "variant-a",
@@ -1277,7 +1277,7 @@ var _ = Describe("Analyze with fallback (no cache_config_info)", func() {
 					TotalKvCapacityTokens: 0,
 				},
 			},
-			VariantStates: []interfaces.VariantReplicaState{
+			VariantStates: []domain.VariantReplicaState{
 				{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1},
 			},
 			Config: &config.SaturationScalingConfig{
@@ -1371,12 +1371,12 @@ var _ = Describe("aggregateByVariant capacity Reason", func() {
 		})
 		a := NewSaturationAnalyzer(store)
 
-		input := interfaces.AnalyzerInput{
+		input := domain.AnalyzerInput{
 			ModelID:   "m",
 			Namespace: "ns",
 			// No ReplicaMetrics — store path will fire.
 			ReplicaMetrics: nil,
-			VariantStates: []interfaces.VariantReplicaState{
+			VariantStates: []domain.VariantReplicaState{
 				{VariantName: "v1", CurrentReplicas: 0, PendingReplicas: 0},
 			},
 			Config: &config.SaturationScalingConfig{KvCacheThreshold: 0.9, KvSpareTrigger: 0.2, QueueLengthThreshold: 5},
@@ -1391,11 +1391,11 @@ var _ = Describe("aggregateByVariant capacity Reason", func() {
 		store := NewCapacityKnowledgeStore()
 		a := NewSaturationAnalyzer(store)
 
-		input := interfaces.AnalyzerInput{
+		input := domain.AnalyzerInput{
 			ModelID:        "m",
 			Namespace:      "ns",
 			ReplicaMetrics: nil,
-			VariantStates: []interfaces.VariantReplicaState{
+			VariantStates: []domain.VariantReplicaState{
 				{VariantName: "v1", CurrentReplicas: 0, PendingReplicas: 0},
 			},
 			Config: &config.SaturationScalingConfig{KvCacheThreshold: 0.9, KvSpareTrigger: 0.2, QueueLengthThreshold: 5},

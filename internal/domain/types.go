@@ -1,4 +1,4 @@
-package interfaces
+package domain
 
 type ServiceClassEntry struct {
 	Model   string `yaml:"model"`

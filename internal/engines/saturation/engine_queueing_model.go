@@ -6,9 +6,9 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -23,8 +23,8 @@ import (
 func (e *Engine) optimizeQueueingModel(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
-) []interfaces.VariantDecision {
+	currentAllocations map[string]*domain.Allocation,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// update analyzer given current models
@@ -78,7 +78,7 @@ func (e *Engine) optimizeQueueingModel(
 			ModelID:   modelID,
 			Namespace: namespace,
 			AnalyzerResults: []pipeline.NamedAnalyzerResult{{
-				Name:      interfaces.SaturationAnalyzerName,
+				Name:      domain.SaturationAnalyzerName,
 				Result:    result,
 				Score:     1.0, // QM path: single analyzer, no per-entry score config
 				Remaining: result.RequiredCapacity,
@@ -121,13 +121,13 @@ func (e *Engine) optimizeQueueingModel(
 func (e *Engine) runQueueingModelAnalysis(
 	ctx context.Context,
 	modelID, namespace string,
-	replicaMetrics []interfaces.ReplicaMetrics,
+	replicaMetrics []domain.ReplicaMetrics,
 	config *queueingmodel.QMConfig,
-	variantStates []interfaces.VariantReplicaState,
-) (*interfaces.AnalyzerResult, error) {
+	variantStates []domain.VariantReplicaState,
+) (*domain.AnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
-	input := interfaces.AnalyzerInput{
+	input := domain.AnalyzerInput{
 		ModelID:        modelID,
 		Namespace:      namespace,
 		ReplicaMetrics: replicaMetrics,
@@ -157,7 +157,7 @@ func (e *Engine) runQueueingModelAnalysis(
 // sloMultiplier, tuningEnabled, and provide explicit SLO targets (targetTTFT/targetITL).
 // Falls back to defaults when fields are zero/nil.
 func buildQMConfig(
-	allConfigs map[string]interfaces.QueueingModelScalingConfig,
+	allConfigs map[string]domain.QueueingModelScalingConfig,
 	namespace, modelID string,
 ) *queueingmodel.QMConfig {
 	cfg := &queueingmodel.QMConfig{

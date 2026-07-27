@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 func newClusterQuotaInv(quotas map[string]int) *QuotaInventory {
@@ -29,8 +29,8 @@ func newNamespaceQuotaInv(quotas map[string]map[string]int, exclude []string) *Q
 	})
 }
 
-func quotaDecisionFor(namespace, accType string) *interfaces.VariantDecision {
-	return &interfaces.VariantDecision{
+func quotaDecisionFor(namespace, accType string) *domain.VariantDecision {
+	return &domain.VariantDecision{
 		Namespace:       namespace,
 		AcceleratorName: accType,
 		VariantName:     "v",

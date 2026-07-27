@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // These tests answer: does the fair-share optimizer (GreedyByScore) produce the
@@ -41,7 +41,7 @@ var _ = Describe("GreedyByScore vs CostAware when GPUs are unconstrained", func(
 		return []*ResourceConstraints{{Pools: pools}}
 	}
 
-	targets := func(decisions []interfaces.VariantDecision) map[string]int {
+	targets := func(decisions []domain.VariantDecision) map[string]int {
 		m := make(map[string]int, len(decisions))
 		for _, d := range decisions {
 			m[d.VariantName] = d.TargetReplicas
@@ -63,15 +63,15 @@ var _ = Describe("GreedyByScore vs CostAware when GPUs are unconstrained", func(
 
 	It("single model, single variant: identical", func() {
 		build := func() []ModelScalingRequest {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: "m", Namespace: "ns", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", AcceleratorName: "A100", Cost: 5, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			return []ModelScalingRequest{withSatEntry(r, ModelScalingRequest{
 				ModelID: "m", Namespace: "ns", Priority: 1,
-				VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+				VariantStates: []domain.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 			})}
 		}
 		ca, gs := run(build, "A100")
@@ -84,16 +84,16 @@ var _ = Describe("GreedyByScore vs CostAware when GPUs are unconstrained", func(
 
 	It("single model, multiple variants (cost-efficiency selection): identical", func() {
 		build := func() []ModelScalingRequest {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: "m", Namespace: "ns", RequiredCapacity: 25000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "pricey", AcceleratorName: "H100", Cost: 15, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
 			}
 			return []ModelScalingRequest{withSatEntry(r, ModelScalingRequest{
 				ModelID: "m", Namespace: "ns", Priority: 1,
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "cheap", CurrentReplicas: 1, GPUsPerReplica: 1},
 					{VariantName: "pricey", CurrentReplicas: 1, GPUsPerReplica: 1},
 				},
@@ -111,15 +111,15 @@ var _ = Describe("GreedyByScore vs CostAware when GPUs are unconstrained", func(
 
 	It("multiple models scaling up at once: report both", func() {
 		mk := func(id, variant, accel string, req float64, prio float64) ModelScalingRequest {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: id, Namespace: "ns", RequiredCapacity: req,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: variant, AcceleratorName: accel, Cost: 5, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			return withSatEntry(r, ModelScalingRequest{
 				ModelID: id, Namespace: "ns", Priority: prio,
-				VariantStates: []interfaces.VariantReplicaState{{VariantName: variant, CurrentReplicas: 1, GPUsPerReplica: 1}},
+				VariantStates: []domain.VariantReplicaState{{VariantName: variant, CurrentReplicas: 1, GPUsPerReplica: 1}},
 			})
 		}
 		build := func() []ModelScalingRequest {

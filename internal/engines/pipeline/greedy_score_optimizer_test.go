@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 var _ = Describe("GreedyByScoreOptimizer", func() {
@@ -30,12 +30,12 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("Single-Model Scale-Up", func() {
 
 		It("should allocate replicas to cheapest variant within GPU budget", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				AnalyzedAt:       time.Now(),
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -44,7 +44,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 1, GPUsPerReplica: 2},
 						{VariantName: "expensive", CurrentReplicas: 1, GPUsPerReplica: 4},
 					},
@@ -63,7 +63,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// cheap is most cost-efficient (5/10000 vs 15/20000)
 			// ceil(20000/10000) = 2 replicas, needs 4 A100 GPUs (2 per replica)
 			Expect(dm["cheap"].TargetReplicas).To(Equal(3)) // 1 + 2
-			Expect(dm["cheap"].Action).To(Equal(interfaces.ActionScaleUp))
+			Expect(dm["cheap"].Action).To(Equal(domain.ActionScaleUp))
 			Expect(dm["expensive"].TargetReplicas).To(Equal(1)) // unchanged
 		})
 
@@ -71,13 +71,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// Regression guard for the greedy-by-score path, which shares
 			// buildDecisionsWithOptimizer with cost-aware. Without the copy the V2 gauges
 			// (wva_saturation_utilization / wva_required_capacity / wva_spare_capacity) read 0.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				AnalyzedAt:       time.Now(),
 				RequiredCapacity: 5000,
 				SpareCapacity:    1200,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.42},
 				},
 			}
@@ -85,7 +85,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -101,9 +101,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should handle GPU exhaustion with partial allocation", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -111,7 +111,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -127,22 +127,22 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 
 			// Only 4 GPUs / 2 per replica = 2 replicas max
 			Expect(dm["v1"].TargetReplicas).To(Equal(3)) // 1 + 2
-			Expect(dm["v1"].Action).To(Equal(interfaces.ActionScaleUp))
+			Expect(dm["v1"].Action).To(Equal(domain.ActionScaleUp))
 		})
 	})
 
 	Context("Multi-Model Fair-Share", func() {
 
 		It("should give GPUs to most starved model first", func() {
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
 			}
@@ -150,14 +150,14 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(rA, ModelScalingRequest{
 					ModelID:   "model-A",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
 				withSatEntry(rB, ModelScalingRequest{
 					ModelID:   "model-B",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -177,21 +177,21 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should verify 3-model walkthrough from design doc", func() {
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				RequiredCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
 			}
-			rC := &interfaces.AnalyzerResult{
+			rC := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "c-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
 			}
@@ -199,21 +199,21 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(rA, ModelScalingRequest{
 					ModelID:   "model-A",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
 				withSatEntry(rB, ModelScalingRequest{
 					ModelID:   "model-B",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
 				withSatEntry(rC, ModelScalingRequest{
 					ModelID:   "model-C",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "c-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -233,15 +233,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should distribute evenly with equal RequiredCapacity", func() {
-			rX := &interfaces.AnalyzerResult{
+			rX := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "x-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rY := &interfaces.AnalyzerResult{
+			rY := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "y-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -249,14 +249,14 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(rX, ModelScalingRequest{
 					ModelID:   "model-X",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "x-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
 				withSatEntry(rY, ModelScalingRequest{
 					ModelID:   "model-Y",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "y-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -278,15 +278,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("GPU Constraints", func() {
 
 		It("should respect per-accelerator-type limits", func() {
-			rH := &interfaces.AnalyzerResult{
+			rH := &domain.AnalyzerResult{
 				RequiredCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "h100-v", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
 			}
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a100-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -294,14 +294,14 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(rH, ModelScalingRequest{
 					ModelID:   "model-h100",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "h100-v", CurrentReplicas: 1, GPUsPerReplica: 4},
 					},
 				}),
 				withSatEntry(rA, ModelScalingRequest{
 					ModelID:   "model-a100",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a100-v", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -321,9 +321,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should handle mixed accelerator types across variants", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a100-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "h100-v", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -332,7 +332,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-mixed",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a100-v", CurrentReplicas: 1, GPUsPerReplica: 2},
 						{VariantName: "h100-v", CurrentReplicas: 1, GPUsPerReplica: 4},
 					},
@@ -353,9 +353,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should not allocate when zero GPU budget", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -363,7 +363,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -381,9 +381,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should not allocate when nil constraints", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -391,7 +391,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -411,12 +411,12 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// so fairShareRolePick read a 0 budget and denied every scale-up —
 			// inverting -1 = unlimited into a hard deny.
 			newReq := func() []ModelScalingRequest {
-				r := &interfaces.AnalyzerResult{
+				r := &domain.AnalyzerResult{
 					ModelID:          "model-1",
 					Namespace:        "default",
 					AnalyzedAt:       time.Now(),
 					RequiredCapacity: 40000,
-					VariantCapacities: []interfaces.VariantCapacity{
+					VariantCapacities: []domain.VariantCapacity{
 						{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					},
 				}
@@ -424,7 +424,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					withSatEntry(r, ModelScalingRequest{
 						ModelID:   "model-1",
 						Namespace: "default",
-						VariantStates: []interfaces.VariantReplicaState{
+						VariantStates: []domain.VariantReplicaState{
 							{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 						},
 					}),
@@ -438,7 +438,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			abundant := decisionMap(optimizer.Optimize(ctx, newReq(),
 				[]*ResourceConstraints{{Pools: map[string]ResourcePool{"A100": {Limit: 1000}}}}))
 
-			Expect(unlimited["v1"].Action).To(Equal(interfaces.ActionScaleUp), "unlimited cluster quota must not deny scale-up")
+			Expect(unlimited["v1"].Action).To(Equal(domain.ActionScaleUp), "unlimited cluster quota must not deny scale-up")
 			Expect(unlimited["v1"].TargetReplicas).To(BeNumerically(">", 1))
 			Expect(unlimited["v1"].TargetReplicas).To(Equal(abundant["v1"].TargetReplicas),
 				"unlimited behaves like abundant finite capacity")
@@ -450,16 +450,16 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// must stay recognized as unbounded, so the totalGPUs sum cannot wrap
 			// to 0 and starve a model on an unrelated finite type.
 			mk := func(id, variant, accel string) ModelScalingRequest {
-				r := &interfaces.AnalyzerResult{
+				r := &domain.AnalyzerResult{
 					ModelID: id, Namespace: "default", AnalyzedAt: time.Now(),
 					RequiredCapacity: 25000,
-					VariantCapacities: []interfaces.VariantCapacity{
+					VariantCapacities: []domain.VariantCapacity{
 						{VariantName: variant, AcceleratorName: accel, Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					},
 				}
 				return withSatEntry(r, ModelScalingRequest{
 					ModelID: id, Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: variant, CurrentReplicas: 1, GPUsPerReplica: 1},
 					},
 				})
@@ -486,9 +486,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("Scale-Down", func() {
 
 		It("should apply role-iterated scale-down for scale-down models", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 15000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 				},
@@ -497,7 +497,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 3},
 						{VariantName: "expensive", CurrentReplicas: 2},
 					},
@@ -512,15 +512,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should handle mixed scale-up and scale-down models", func() {
-			rUp := &interfaces.AnalyzerResult{
+			rUp := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "up-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rDown := &interfaces.AnalyzerResult{
+			rDown := &domain.AnalyzerResult{
 				SpareCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "down-v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
 			}
@@ -528,14 +528,14 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(rUp, ModelScalingRequest{
 					ModelID:   "model-up",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "up-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
 				withSatEntry(rDown, ModelScalingRequest{
 					ModelID:   "model-down",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "down-v1", CurrentReplicas: 2},
 					},
 				}),
@@ -550,19 +550,19 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			dm := decisionMap(decisions)
 
 			Expect(dm["up-v1"].TargetReplicas).To(Equal(2))
-			Expect(dm["up-v1"].Action).To(Equal(interfaces.ActionScaleUp))
+			Expect(dm["up-v1"].Action).To(Equal(domain.ActionScaleUp))
 
 			Expect(dm["down-v1"].TargetReplicas).To(Equal(1))
-			Expect(dm["down-v1"].Action).To(Equal(interfaces.ActionScaleDown))
+			Expect(dm["down-v1"].Action).To(Equal(domain.ActionScaleDown))
 		})
 	})
 
 	Context("Pending Replicas", func() {
 
 		It("should allocate to most cost-efficient variant regardless of pending replicas", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap-pending", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "expensive-ready", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -571,7 +571,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap-pending", CurrentReplicas: 2, PendingReplicas: 1, GPUsPerReplica: 2},
 						{VariantName: "expensive-ready", CurrentReplicas: 1, PendingReplicas: 0, GPUsPerReplica: 2},
 					},
@@ -603,9 +603,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should skip variants with zero capacity", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "zero-cap", AcceleratorName: "A100", Cost: 1.0, ReplicaCount: 0, PerReplicaCapacity: 0},
 					{VariantName: "normal", AcceleratorName: "A100", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -614,7 +614,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "zero-cap", CurrentReplicas: 0, GPUsPerReplica: 2},
 						{VariantName: "normal", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
@@ -634,10 +634,10 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should handle steady state (no scaling needed)", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 0,
 				SpareCapacity:    0,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
 			}
@@ -645,7 +645,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 2},
 					},
 				}),
@@ -654,7 +654,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, nil)
 
 			Expect(decisions).To(HaveLen(1))
-			Expect(decisions[0].Action).To(Equal(interfaces.ActionNoChange))
+			Expect(decisions[0].Action).To(Equal(domain.ActionNoChange))
 			Expect(decisions[0].TargetReplicas).To(Equal(2))
 		})
 
@@ -664,9 +664,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should default GPUsPerReplica to 1 when not specified", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -674,7 +674,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 0},
 					},
 				}),
@@ -695,9 +695,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("Decision Metadata", func() {
 
 		It("should set correct model ID, namespace, and cost on decisions", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -705,7 +705,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "ns-1",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -726,9 +726,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should contain greedy-by-score in reason strings", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -736,7 +736,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -757,15 +757,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("Score-Based Priority", func() {
 
 		It("should give GPUs to higher-score model first", func() {
-			rLow := &interfaces.AnalyzerResult{
+			rLow := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "low-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rHigh := &interfaces.AnalyzerResult{
+			rHigh := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "high-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -774,7 +774,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					ModelID:   "low-priority",
 					Namespace: "default",
 					Priority:  1.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "low-v", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -782,7 +782,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					ModelID:   "high-priority",
 					Namespace: "default",
 					Priority:  5.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "high-v", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -814,15 +814,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// B (fsv=100000) should always get served first.
 			// Strict assertions require Score to be populated; Score=0 fallback
 			// produces equal fsv and non-deterministic ordering.
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -832,13 +832,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace: "default",
 					Priority:  1.0,
 					AnalyzerResults: []NamedAnalyzerResult{{
-						Name:      interfaces.SaturationAnalyzerName,
+						Name:      domain.SaturationAnalyzerName,
 						Result:    rA,
 						Score:     1.0, // explicit: mirrors engine-populated value
 						Remaining: rA.RequiredCapacity,
 						Spare:     rA.SpareCapacity,
 					}},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				},
@@ -847,13 +847,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace: "default",
 					Priority:  5.0,
 					AnalyzerResults: []NamedAnalyzerResult{{
-						Name:      interfaces.SaturationAnalyzerName,
+						Name:      domain.SaturationAnalyzerName,
 						Result:    rB,
 						Score:     1.0, // explicit: mirrors engine-populated value
 						Remaining: rB.RequiredCapacity,
 						Spare:     rB.SpareCapacity,
 					}},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				},
@@ -884,15 +884,15 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			//   fsv(B) = 1.0 × (20000×1.0) = 20000
 			// With 4 A100 GPUs (2 GPUs/replica): A (higher fsv) gets both
 			// available replicas; B gets none.
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b-v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -913,11 +913,11 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 							Score: 2.0,
 							// throughput shares rA's variant capacity for simplicity;
 							// its RC signal adds to the fair-share weight.
-							Result:    &interfaces.AnalyzerResult{RequiredCapacity: 20000},
+							Result:    &domain.AnalyzerResult{RequiredCapacity: 20000},
 							Remaining: 20000,
 						},
 					},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				},
@@ -931,7 +931,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Score:     1.0,
 						Remaining: rB.RequiredCapacity,
 					}},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				},
@@ -957,13 +957,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// Prefill RequiredCapacity=15000 (75%), Decode RequiredCapacity=5000 (25%)
 			// Total model RequiredCapacity=20000, Score=20000
 			// With 10 A100 GPUs available, each variant uses 2 GPUs/replica
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", RequiredCapacity: 15000, TotalDemand: 15000},
 					"decode":  {Role: "decode", RequiredCapacity: 5000, TotalDemand: 5000},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -974,7 +974,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace:     "default",
 					Disaggregated: true,
 					Priority:      1.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
 						{VariantName: "decode-v", CurrentReplicas: 3, GPUsPerReplica: 2, Role: "decode"},
 					},
@@ -997,13 +997,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should distribute equally when roles have equal demand", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", RequiredCapacity: 10000, TotalDemand: 10000},
 					"decode":  {Role: "decode", RequiredCapacity: 10000, TotalDemand: 10000},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -1014,7 +1014,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace:     "default",
 					Disaggregated: true,
 					Priority:      1.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
 						{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "decode"},
 					},
@@ -1036,13 +1036,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 
 		It("should only allocate to the role that needs scale-up", func() {
 			// Only prefill needs scale-up; decode has 0 RequiredCapacity
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", RequiredCapacity: 10000, TotalDemand: 10000},
 					"decode":  {Role: "decode", RequiredCapacity: 0, TotalDemand: 0},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -1053,7 +1053,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace:     "default",
 					Disaggregated: true,
 					Priority:      1.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "prefill"},
 						{VariantName: "decode-v", CurrentReplicas: 3, GPUsPerReplica: 2, Role: "decode"},
 					},
@@ -1076,13 +1076,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 
 		It("should handle GPU exhaustion for one role without affecting the other", func() {
 			// Prefill uses H100s (exhausted), decode uses A100s (available)
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", RequiredCapacity: 10000, TotalDemand: 10000},
 					"decode":  {Role: "decode", RequiredCapacity: 10000, TotalDemand: 10000},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", AcceleratorName: "H100", Cost: 15.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 20000},
 					{VariantName: "decode-v", AcceleratorName: "A100", Cost: 5.0, Role: "decode", ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -1093,7 +1093,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Namespace:     "default",
 					Disaggregated: true,
 					Priority:      1.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 1, GPUsPerReplica: 4, Role: "prefill"},
 						{VariantName: "decode-v", CurrentReplicas: 1, GPUsPerReplica: 2, Role: "decode"},
 					},
@@ -1116,9 +1116,9 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("should handle non-disaggregated model with Score", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -1127,7 +1127,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					ModelID:   "model-1",
 					Namespace: "default",
 					Priority:  2.0,
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -1185,12 +1185,12 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				{Pools: map[string]ResourcePool{"A100": {Limit: 20}}},
 			}
 
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				AnalyzedAt:       time.Now(),
 				RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -1199,7 +1199,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 1, GPUsPerReplica: 1, MaxReplicas: intPtr(3)},
 						{VariantName: "expensive", CurrentReplicas: 1, GPUsPerReplica: 1},
 					},
@@ -1217,12 +1217,12 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		It("scale-down should respect minReplicas via scaleDownRoleIterated", func() {
 			intPtr := func(n int) *int { return &n }
 
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:       "model-1",
 				Namespace:     "default",
 				AnalyzedAt:    time.Now(),
 				SpareCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "expensive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -1231,7 +1231,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "expensive", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(2)},
 						{VariantName: "cheap", CurrentReplicas: 3, GPUsPerReplica: 1},
 					},
@@ -1248,12 +1248,12 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		It("scale-down should zero minReplicas=0 variant while keeping minReplicas>0 sibling", func() {
 			intPtr := func(n int) *int { return &n }
 
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:       "model-1",
 				Namespace:     "default",
 				AnalyzedAt:    time.Now(),
 				SpareCapacity: 80000, // enough to remove all
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "keep-alive", AcceleratorName: "A100", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 					{VariantName: "expendable", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -1262,7 +1262,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "keep-alive", CurrentReplicas: 2, GPUsPerReplica: 1, MinReplicas: intPtr(1)},
 						{VariantName: "expendable", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(0)},
 					},
@@ -1298,13 +1298,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		It("should scale up only decode when RC_P=0 and RC_D>0", func() {
 			// Pre-Phase-3 the model-level gate (Remaining=0 from P-anchor) would
 			// route the model to scale-down. anyRoleNeedsScaleUp fires on D demand.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 0,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "pf", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "dc", AcceleratorName: "A100", Cost: 5.0, Role: "decode", PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {RequiredCapacity: 0, TotalDemand: 0},
 					"decode":  {RequiredCapacity: 10000, TotalDemand: 10000},
 				},
@@ -1316,13 +1316,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Disaggregated: true,
 					Priority:      1.0,
 					AnalyzerResults: []NamedAnalyzerResult{{
-						Name:      interfaces.SaturationAnalyzerName,
+						Name:      domain.SaturationAnalyzerName,
 						Result:    r,
 						Score:     1.0,
 						Remaining: r.RequiredCapacity,
 						Spare:     r.SpareCapacity,
 					}},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "pf", CurrentReplicas: 2, GPUsPerReplica: 2},
 						{VariantName: "dc", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
@@ -1348,13 +1348,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// n_P=1 (ceil(10000/10000)), n_D=3 (ceil(30000/10000)).
 			// util_P=1.0, util_D=3.0 → Δ_util=1.0 → k_P=1, k_D=3.
 			// Result: prefill+1, decode+3 — same Δ_util=1.0 for both.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "pf", AcceleratorName: "A100", Cost: 5.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "dc", AcceleratorName: "A100", Cost: 5.0, Role: "decode", PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {RequiredCapacity: 10000, TotalDemand: 10000},
 					"decode":  {RequiredCapacity: 30000, TotalDemand: 30000},
 				},
@@ -1366,13 +1366,13 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 					Disaggregated: true,
 					Priority:      1.0,
 					AnalyzerResults: []NamedAnalyzerResult{{
-						Name:      interfaces.SaturationAnalyzerName,
+						Name:      domain.SaturationAnalyzerName,
 						Result:    r,
 						Score:     1.0,
 						Remaining: r.RequiredCapacity,
 						Spare:     r.SpareCapacity,
 					}},
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "pf", CurrentReplicas: 1, GPUsPerReplica: 2},
 						{VariantName: "dc", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
@@ -1394,11 +1394,11 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 	Context("Namespace-Scoped Quota", func() {
 
 		It("caps a model at its namespace budget even when cluster GPUs remain", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "m",
 				Namespace:        "team-a",
 				RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -1406,7 +1406,7 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "m",
 					Namespace: "team-a",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2},
 					},
 				}),
@@ -1429,26 +1429,26 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("enforces independent per-namespace budgets across models", func() {
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				ModelID: "mA", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				ModelID: "mB", Namespace: "team-b", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(rA, ModelScalingRequest{
 					ModelID: "mA", Namespace: "team-a",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 				withSatEntry(rB, ModelScalingRequest{
 					ModelID: "mB", Namespace: "team-b",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			// Cluster is unconstrained relative to the quotas; team-a is capped
@@ -1472,26 +1472,26 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("shares one namespace budget across same-namespace models, higher priority first", func() {
-			rHi := &interfaces.AnalyzerResult{
+			rHi := &domain.AnalyzerResult{
 				ModelID: "hi", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "hi-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rLo := &interfaces.AnalyzerResult{
+			rLo := &domain.AnalyzerResult{
 				ModelID: "lo", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "lo-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(rHi, ModelScalingRequest{
 					ModelID: "hi", Namespace: "team-a", Priority: 10,
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 				withSatEntry(rLo, ModelScalingRequest{
 					ModelID: "lo", Namespace: "team-a", Priority: 1,
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			// Both models are in team-a, which has 4 free GPUs (cap 6 − 2 used) =
@@ -1520,26 +1520,26 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// 2-GPU replica. With a 100x priority gap, the winner is deterministic:
 			// hi takes the single replica, lo gets nothing. A weaker >= assertion
 			// would not catch a priority inversion here.
-			rHi := &interfaces.AnalyzerResult{
+			rHi := &domain.AnalyzerResult{
 				ModelID: "hi", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "hi-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rLo := &interfaces.AnalyzerResult{
+			rLo := &domain.AnalyzerResult{
 				ModelID: "lo", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "lo-v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(rHi, ModelScalingRequest{
 					ModelID: "hi", Namespace: "team-a", Priority: 100,
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "hi-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 				withSatEntry(rLo, ModelScalingRequest{
 					ModelID: "lo", Namespace: "team-a", Priority: 1,
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "lo-v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			constraints := []*ResourceConstraints{
@@ -1564,26 +1564,26 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 			// not in team-a's allowlist) — it must NOT draw on team-b's A100
 			// quota via the cluster aggregate. This is the cross-namespace
 			// isolation breach the closed-allowlist model closes.
-			rA := &interfaces.AnalyzerResult{
+			rA := &domain.AnalyzerResult{
 				ModelID: "mA", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "a", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			rB := &interfaces.AnalyzerResult{
+			rB := &domain.AnalyzerResult{
 				ModelID: "mB", Namespace: "team-b", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "b", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(rA, ModelScalingRequest{
 					ModelID: "mA", Namespace: "team-a",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "a", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 				withSatEntry(rB, ModelScalingRequest{
 					ModelID: "mB", Namespace: "team-b",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "b", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			constraints := []*ResourceConstraints{
@@ -1604,16 +1604,16 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("denies all scale-up for a closed namespace with no listed types (deny-all)", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: "m", Namespace: "team-x", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(r, ModelScalingRequest{
 					ModelID: "m", Namespace: "team-x",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			// team-x is present (closed) but lists no types — a real deny-all.
@@ -1631,16 +1631,16 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("honors an unlimited (-1) per-namespace cap, bounding only by the cluster budget", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: "m", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(r, ModelScalingRequest{
 					ModelID: "m", Namespace: "team-a",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			// team-a holds an unlimited A100 cap (sentinel Limit == -1) from a
@@ -1665,16 +1665,16 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 		})
 
 		It("does not scale a purely-unlimited namespace config with no finite cluster cap (documented V2 limitation)", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID: "m", Namespace: "team-a", RequiredCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
 			requests := []ModelScalingRequest{
 				withSatEntry(r, ModelScalingRequest{
 					ModelID: "m", Namespace: "team-a",
-					VariantStates: []interfaces.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
+					VariantStates: []domain.VariantReplicaState{{VariantName: "v", CurrentReplicas: 1, GPUsPerReplica: 2}},
 				}),
 			}
 			// All-unlimited ns config: aggregateNamespacePools yields an empty

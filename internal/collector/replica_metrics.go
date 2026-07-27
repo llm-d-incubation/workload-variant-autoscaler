@@ -58,9 +58,9 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -162,7 +162,7 @@ func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 //   - variantCosts: Map of VariantAutoscaling namespace/name to cost value
 //
 // Returns:
-//   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
+//   - []domain.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
 func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	ctx context.Context,
@@ -172,7 +172,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	vaEventTracker map[string]bool,
 	variantCosts map[string]float64,
-) ([]interfaces.ReplicaMetrics, error) {
+) ([]domain.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
 
 	// Determine if metrics are available in this cycle
@@ -319,7 +319,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	variantCosts map[string]float64,
-) ([]interfaces.ReplicaMetrics, error) {
+) ([]domain.ReplicaMetrics, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	params := map[string]string{
@@ -849,7 +849,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	vaMetricsFreshnessStatus := make(map[string]map[string]int)
 
 	// Build replica metrics from pod data
-	replicaMetrics := make([]interfaces.ReplicaMetrics, 0, len(podData))
+	replicaMetrics := make([]domain.ReplicaMetrics, 0, len(podData))
 	collectedAt := time.Now()
 
 	for instanceKey, data := range podData {
@@ -974,7 +974,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 
 		// Track freshness for metrics in this pod
 		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
-		metric := interfaces.ReplicaMetrics{
+		metric := domain.ReplicaMetrics{
 			PodName:               podName,
 			ModelID:               modelID,
 			Namespace:             namespace,
@@ -997,7 +997,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			GenerationTokenRate:   data.generationTokenRate,
 			KvUsageInstant:        data.kvUsageInstant,
 			RequestRate:           data.requestRate,
-			Metadata: &interfaces.ReplicaMetricsMetadata{
+			Metadata: &domain.ReplicaMetricsMetadata{
 				CollectedAt:     collectedAt,
 				Age:             0, // Fresh
 				FreshnessStatus: "fresh",
@@ -1031,7 +1031,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 	ctx context.Context,
 	modelID string,
-) *interfaces.SchedulerQueueMetrics {
+) *domain.SchedulerQueueMetrics {
 	logger := ctrl.LoggerFrom(ctx)
 
 	params := map[string]string{
@@ -1083,7 +1083,7 @@ func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 		"queueSize", queueSize,
 		"queueBytes", queueBytes)
 
-	return &interfaces.SchedulerQueueMetrics{
+	return &domain.SchedulerQueueMetrics{
 		QueueSize:  queueSize,
 		QueueBytes: queueBytes,
 	}

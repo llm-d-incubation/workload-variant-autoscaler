@@ -1,4 +1,4 @@
-package interfaces
+package domain
 
 // MetricsValidationResult contains the result of metrics availability check
 type MetricsValidationResult struct {

@@ -8,7 +8,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -37,12 +37,12 @@ func (o *GreedyByScoreOptimizer) Name() string {
 // modelWork tracks per-model allocation state during fair-share iteration.
 type modelWork struct {
 	req       ModelScalingRequest
-	s         []NamedAnalyzerResult      // working slice; Remaining/Spare decremented in place
-	satEntry  *interfaces.AnalyzerResult // variant metadata keeper (Cost, AcceleratorName, Role)
-	ps        RolePairedState            // picker-local per-role demand (from initRoleState)
-	roles     []string                   // active roles for this model
-	remaining float64                    // fair-share priority metric (negative = fully satisfied)
-	targets   map[string]int             // variant name → target replicas (ALL variants)
+	s         []NamedAnalyzerResult  // working slice; Remaining/Spare decremented in place
+	satEntry  *domain.AnalyzerResult // variant metadata keeper (Cost, AcceleratorName, Role)
+	ps        RolePairedState        // picker-local per-role demand (from initRoleState)
+	roles     []string               // active roles for this model
+	remaining float64                // fair-share priority metric (negative = fully satisfied)
+	targets   map[string]int         // variant name → target replicas (ALL variants)
 }
 
 // fairShareValue computes the fair-share priority metric for one model.
@@ -93,7 +93,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	ctx context.Context,
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
-) []interfaces.VariantDecision {
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	available := mergeConstraints(constraints)
 	availableByNS := mergeNamespaceConstraints(constraints)
@@ -122,7 +122,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 
 	o.fairShareScaleUp(ctx, scaleUpWork, available, availableByNS)
 
-	allDecisions := make([]interfaces.VariantDecision, 0, len(scaleUpWork))
+	allDecisions := make([]domain.VariantDecision, 0, len(scaleUpWork))
 
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)
@@ -160,7 +160,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 }
 
 // buildScaleUpWork creates a single work unit for a scale-up request.
-func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, satEntry *interfaces.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
+func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, satEntry *domain.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
 	if fsv <= 0 {
 		return nil
 	}
@@ -320,7 +320,7 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 	// For "both" (non-disag): use fresh ps so applyAllocation-decremented
 	// s[i].Remaining is read (budget-capped ps is already 0).
 	// For P/D: use local capped ps which correctly reaches 0 when both roles served.
-	if len(w.roles) == 1 && w.roles[0] == interfaces.RoleBoth {
+	if len(w.roles) == 1 && w.roles[0] == domain.RoleBoth {
 		_, freshPs := initRoleState(w.s)
 		w.remaining = fairShareValue(w.req.Priority, w.s, freshPs, w.roles)
 	} else {
@@ -378,8 +378,8 @@ func fairShareRolePick(target float64, s []NamedAnalyzerResult, roles []string) 
 	return func(
 		role string,
 		_ []NamedAnalyzerResult,
-		variants []interfaces.VariantCapacity,
-		stateMap map[string]interfaces.VariantReplicaState,
+		variants []domain.VariantCapacity,
+		stateMap map[string]domain.VariantReplicaState,
 		available map[string]int,
 		targets map[string]int,
 	) (string, int) {
@@ -445,7 +445,7 @@ func sortByRemainingDesc(active []*modelWork) {
 }
 
 // prcFromVCs returns the PerReplicaCapacity for variant v from a slice of VCs.
-func prcFromVCs(vcs []interfaces.VariantCapacity, v string) float64 {
+func prcFromVCs(vcs []domain.VariantCapacity, v string) float64 {
 	for _, vc := range vcs {
 		if vc.VariantName == v {
 			return vc.PerReplicaCapacity
@@ -455,7 +455,7 @@ func prcFromVCs(vcs []interfaces.VariantCapacity, v string) float64 {
 }
 
 // accFromVCs returns the AcceleratorName for variant v from a slice of VCs.
-func accFromVCs(vcs []interfaces.VariantCapacity, v string) string {
+func accFromVCs(vcs []domain.VariantCapacity, v string) string {
 	for _, vc := range vcs {
 		if vc.VariantName == v {
 			return vc.AcceleratorName
@@ -465,7 +465,7 @@ func accFromVCs(vcs []interfaces.VariantCapacity, v string) string {
 }
 
 // gpusPerReplicaFromState returns GPUsPerReplica for variant v, defaulting to 1.
-func gpusPerReplicaFromState(stateMap map[string]interfaces.VariantReplicaState, v string) int {
+func gpusPerReplicaFromState(stateMap map[string]domain.VariantReplicaState, v string) int {
 	if state, ok := stateMap[v]; ok && state.GPUsPerReplica > 0 {
 		return state.GPUsPerReplica
 	}

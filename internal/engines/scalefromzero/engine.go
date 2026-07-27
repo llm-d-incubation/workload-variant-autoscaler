@@ -39,9 +39,9 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -343,7 +343,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		if err != nil {
 			return err
 		}
-		d := interfaces.VariantDecision{
+		d := domain.VariantDecision{
 			VariantName:        va.Name,
 			Namespace:          va.Namespace,
 			ModelID:            va.Spec.ModelID,
@@ -360,7 +360,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			MetricsReason:      MetricsReasonAvailable,
 			MetricsMessage:     MetricsMessageAvailable,
 		}
-		d.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		d.SetDecisionReason(domain.ActionScaleUp, domain.DecisionReasonScaleFromZero, string(domain.DecisionReasonScaleFromZero)+reasonDetails)
 		common.DecisionCache.Set(va.Name, va.Namespace, d)
 	} else {
 		if decision.CurrentReplicas == 0 {
@@ -371,7 +371,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 			decision.SaturationBased = false
 			decision.SafetyOverride = false
 			decision.ModelBasedDecision = false
-			decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonScaleFromZero, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+			decision.SetDecisionReason(domain.ActionScaleUp, domain.DecisionReasonScaleFromZero, string(domain.DecisionReasonScaleFromZero)+reasonDetails)
 			decision.AcceleratorName = accelerator
 			decision.MetricsAvailable = true
 			decision.MetricsReason = MetricsReasonAvailable
@@ -395,11 +395,11 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		wvav1alpha1.TypeOptimizationReady,
 		metav1.ConditionTrue,
 		"ScaleFromZeroMode",
-		"scalefromzero decision: "+string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		"scalefromzero decision: "+string(domain.DecisionReasonScaleFromZero)+reasonDetails)
 
 	// Record event just before Actuation.Applied = true
 	if hasDecision && targetWorkloadReplicas > 0 {
-		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		e.recorder.Eventf(&va, corev1.EventTypeNormal, constants.K8SEventScaledUp, string(domain.DecisionReasonScaleFromZero)+reasonDetails)
 	}
 	va.Status.Actuation.Applied = true
 
@@ -408,7 +408,7 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		"va", va.Name,
 		"namespace", va.Namespace,
 		"targetReplicas", targetWorkloadReplicas,
-		"reason", string(interfaces.DecisionReasonScaleFromZero)+reasonDetails)
+		"reason", string(domain.DecisionReasonScaleFromZero)+reasonDetails)
 
 	return nil
 }

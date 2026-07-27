@@ -20,7 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 var _ = Describe("applyUniversalThreshold", func() {
@@ -31,7 +31,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 
 	It("scales up when demand exceeds the scale-up threshold against anticipated supply", func() {
 		// RC = 10000/0.85 − 10000 = 1764.7...
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            10000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -44,7 +44,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 
 	It("scales down when demand is well below the scale-down boundary", func() {
 		// SC = 10000 − 5000/0.70 = 2857.1
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            5000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -56,7 +56,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 
 	It("yields RC=SC=0 when demand sits in the hysteresis band", func() {
 		// utilization 0.80: above scaleDown 0.70 (no SC) but below scaleUp 0.85 (no RC)
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            8000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -67,7 +67,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 	})
 
 	It("clamps RC and SC to zero exactly at the respective thresholds", func() {
-		rUp := &interfaces.AnalyzerResult{
+		rUp := &domain.AnalyzerResult{
 			TotalDemand:            10000 * scaleUp,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -75,7 +75,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 		applyUniversalThreshold(rUp, scaleUp, scaleDown)
 		Expect(rUp.RequiredCapacity).To(BeNumerically("~", 0, 1e-9))
 
-		rDown := &interfaces.AnalyzerResult{
+		rDown := &domain.AnalyzerResult{
 			TotalDemand:            10000 * scaleDown,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -87,7 +87,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 	It("uses anticipated supply for RC but steady-state TotalSupply for SC", func() {
 		// Pending replica: anticipated=10000 > steady-state=7000 → RC=0 despite demand>supply.
 		// SC still uses TotalSupply (7000), not anticipated.
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            8000,
 			TotalSupply:            7000,
 			TotalAnticipatedSupply: 10000,
@@ -102,7 +102,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 	It("treats TotalAnticipatedSupply == 0 as a literal value — RC = TotalDemand/scaleUp", func() {
 		// No fallback: zero means zero anticipated supply.
 		// RC = 10000/0.85 − 0 = 11764.7...
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            10000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 0,
@@ -112,7 +112,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 	})
 
 	It("does not divide by zero when scaleUp or scaleDown is non-positive", func() {
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            5000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
@@ -129,7 +129,7 @@ var _ = Describe("applyUniversalThreshold", func() {
 	})
 
 	It("is idempotent on its own output under the same inputs", func() {
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            12000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 11000,
@@ -149,11 +149,11 @@ var _ = Describe("applyUniversalThreshold", func() {
 		// P/D disaggregated: two roles with distinct demand/anticipated/supply.
 		// prefill: RC = 8000/0.85 − 11000 = 9411.7 − 11000 → 0; SC = 10000 − 8000/0.70 → 0
 		// decode:  RC = 9500/0.85 − 10000 = 11176.4 − 10000 = 1176.4; SC = 10000 − 9500/0.70 → 0
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            17500,
 			TotalSupply:            20000,
 			TotalAnticipatedSupply: 21000,
-			RoleCapacities: map[string]interfaces.RoleCapacity{
+			RoleCapacities: map[string]domain.RoleCapacity{
 				"prefill": {
 					TotalDemand:            8000,
 					TotalSupply:            10000,
@@ -180,11 +180,11 @@ var _ = Describe("applyUniversalThreshold", func() {
 	It("treats per-role TotalAnticipatedSupply == 0 as a literal value — RC = TotalDemand/scaleUp", func() {
 		// No fallback to TotalSupply; zero means zero anticipated supply for that role.
 		// RC = 5000/0.85 − 0 = 5882.3
-		r := &interfaces.AnalyzerResult{
+		r := &domain.AnalyzerResult{
 			TotalDemand:            5000,
 			TotalSupply:            10000,
 			TotalAnticipatedSupply: 10000,
-			RoleCapacities: map[string]interfaces.RoleCapacity{
+			RoleCapacities: map[string]domain.RoleCapacity{
 				"both": {
 					TotalDemand:            5000,
 					TotalSupply:            10000,

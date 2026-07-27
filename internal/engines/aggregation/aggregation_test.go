@@ -22,8 +22,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/aggregation"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 func TestAggregation(t *testing.T) {
@@ -36,11 +36,11 @@ var _ = Describe("aggregation helpers", func() {
 	Describe("SumTotalSupply", func() {
 		It("returns 0 for empty input", func() {
 			Expect(aggregation.SumTotalSupply(nil)).To(BeZero())
-			Expect(aggregation.SumTotalSupply([]interfaces.VariantCapacity{})).To(BeZero())
+			Expect(aggregation.SumTotalSupply([]domain.VariantCapacity{})).To(BeZero())
 		})
 
 		It("sums ReplicaCount × PerReplicaCapacity across variants", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{VariantName: "v1", ReplicaCount: 2, PendingReplicas: 1, PerReplicaCapacity: 5000},
 				{VariantName: "v2", ReplicaCount: 3, PendingReplicas: 0, PerReplicaCapacity: 8000},
 			}
@@ -49,14 +49,14 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("ignores pending replicas", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{ReplicaCount: 1, PendingReplicas: 99, PerReplicaCapacity: 1000},
 			}
 			Expect(aggregation.SumTotalSupply(vcs)).To(Equal(1000.0))
 		})
 
 		It("handles zero PRC", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{ReplicaCount: 5, PerReplicaCapacity: 0},
 			}
 			Expect(aggregation.SumTotalSupply(vcs)).To(BeZero())
@@ -69,7 +69,7 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("sums (ReplicaCount + PendingReplicas) × PRC across variants", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{ReplicaCount: 2, PendingReplicas: 1, PerReplicaCapacity: 5000},
 				{ReplicaCount: 3, PendingReplicas: 0, PerReplicaCapacity: 8000},
 			}
@@ -78,7 +78,7 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("equals SumTotalSupply when no variants have pending replicas", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{ReplicaCount: 3, PendingReplicas: 0, PerReplicaCapacity: 10000},
 			}
 			Expect(aggregation.SumTotalAnticipatedSupply(vcs)).To(Equal(aggregation.SumTotalSupply(vcs)))
@@ -91,7 +91,7 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("sums TotalDemand across variants", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{TotalDemand: 3000},
 				{TotalDemand: 7000},
 			}
@@ -105,16 +105,16 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("canonicalizes empty role to RoleBoth", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{Role: "", ReplicaCount: 1, PerReplicaCapacity: 1000, TotalDemand: 500},
 			}
 			result := aggregation.AggregateByRole(vcs)
-			Expect(result).To(HaveKey(interfaces.RoleBoth))
+			Expect(result).To(HaveKey(domain.RoleBoth))
 			Expect(result).NotTo(HaveKey(""))
 		})
 
 		It("groups variants by role and computes ScopeTotals for each", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{Role: "prefill", ReplicaCount: 2, PendingReplicas: 1, PerReplicaCapacity: 5000, TotalDemand: 8000},
 				{Role: "decode", ReplicaCount: 3, PendingReplicas: 0, PerReplicaCapacity: 8000, TotalDemand: 9000},
 				{Role: "decode", ReplicaCount: 1, PendingReplicas: 0, PerReplicaCapacity: 4000, TotalDemand: 2000},
@@ -135,18 +135,18 @@ var _ = Describe("aggregation helpers", func() {
 		})
 
 		It("handles a single non-disaggregated variant (empty role → RoleBoth)", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{Role: "", ReplicaCount: 2, PendingReplicas: 0, PerReplicaCapacity: 10000, TotalDemand: 15000},
 			}
 			result := aggregation.AggregateByRole(vcs)
-			both := result[interfaces.RoleBoth]
+			both := result[domain.RoleBoth]
 			Expect(both.TotalSupply).To(Equal(20000.0))
 			Expect(both.TotalAnticipatedSupply).To(Equal(20000.0))
 			Expect(both.TotalDemand).To(Equal(15000.0))
 		})
 
 		It("handles zero ReplicaCount", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{Role: "prefill", ReplicaCount: 0, PendingReplicas: 0, PerReplicaCapacity: 5000, TotalDemand: 0},
 			}
 			result := aggregation.AggregateByRole(vcs)

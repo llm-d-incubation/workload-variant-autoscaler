@@ -10,7 +10,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
@@ -290,7 +290,7 @@ type typeAllocator struct {
 // The accelerator type is determined from the decision's AcceleratorName field.
 // Returns the actual GPUs allocated (may be less than requested if the type's
 // pool is exhausted).
-func (a *typeAllocator) TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (a *typeAllocator) TryAllocate(ctx context.Context, decision *domain.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}

@@ -7,8 +7,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 // selectInventory is a minimal pipeline.Inventory whose Refresh result and
@@ -66,7 +66,7 @@ func (s *selectInventory) TotalAvailable() int {
 type selectLimiter struct{}
 
 func (selectLimiter) Name() string { return "select-limiter" }
-func (selectLimiter) Limit(context.Context, []*interfaces.VariantDecision) error {
+func (selectLimiter) Limit(context.Context, []*domain.VariantDecision) error {
 	return nil
 }
 

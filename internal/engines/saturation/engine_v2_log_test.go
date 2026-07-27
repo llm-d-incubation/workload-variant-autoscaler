@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 func zapObserverCtx(t *testing.T) (context.Context, *observer.ObservedLogs) {
@@ -31,13 +31,13 @@ func TestLogAnalyzerResult_EmitsRequiredFields(t *testing.T) {
 		Name:              "saturation",
 		ScaleUpThreshold:  1.2,
 		ScaleDownBoundary: 0.7,
-		Result: &interfaces.AnalyzerResult{
+		Result: &domain.AnalyzerResult{
 			TotalSupply:      100000,
 			TotalDemand:      80000,
 			Utilization:      0.8,
 			RequiredCapacity: 0,
 			SpareCapacity:    20000,
-			VariantCapacities: []interfaces.VariantCapacity{
+			VariantCapacities: []domain.VariantCapacity{
 				{
 					VariantName:        "primary",
 					PerReplicaCapacity: 50000,
@@ -87,11 +87,11 @@ func TestLogAnalyzerResult_EmptyVariants(t *testing.T) {
 
 	nr := pipeline.NamedAnalyzerResult{
 		Name: "throughput",
-		Result: &interfaces.AnalyzerResult{
+		Result: &domain.AnalyzerResult{
 			TotalSupply:       0,
 			TotalDemand:       0,
 			RequiredCapacity:  15000,
-			VariantCapacities: []interfaces.VariantCapacity{},
+			VariantCapacities: []domain.VariantCapacity{},
 		},
 	}
 
@@ -110,10 +110,10 @@ func TestLogScalingDecisions_EmitsPerModel(t *testing.T) {
 		{ModelID: "model-a", Namespace: "ns"},
 		{ModelID: "model-b", Namespace: "ns"},
 	}
-	decisions := []interfaces.VariantDecision{
-		{ModelID: "model-a", Namespace: "ns", VariantName: "v1", CurrentReplicas: 1, TargetReplicas: 2, Action: interfaces.ActionScaleUp},
-		{ModelID: "model-a", Namespace: "ns", VariantName: "v2", CurrentReplicas: 1, TargetReplicas: 1, Action: interfaces.ActionNoChange},
-		{ModelID: "model-b", Namespace: "ns", VariantName: "v1", CurrentReplicas: 2, TargetReplicas: 1, Action: interfaces.ActionScaleDown},
+	decisions := []domain.VariantDecision{
+		{ModelID: "model-a", Namespace: "ns", VariantName: "v1", CurrentReplicas: 1, TargetReplicas: 2, Action: domain.ActionScaleUp},
+		{ModelID: "model-a", Namespace: "ns", VariantName: "v2", CurrentReplicas: 1, TargetReplicas: 1, Action: domain.ActionNoChange},
+		{ModelID: "model-b", Namespace: "ns", VariantName: "v1", CurrentReplicas: 2, TargetReplicas: 1, Action: domain.ActionScaleDown},
 	}
 
 	logScalingDecisions(ctx, requests, decisions)
@@ -137,8 +137,8 @@ func TestLogScalingDecisions_NoDecisionsSkipsModel(t *testing.T) {
 		{ModelID: "model-b", Namespace: "ns"},
 	}
 	// Only model-a has a decision; model-b has none.
-	decisions := []interfaces.VariantDecision{
-		{ModelID: "model-a", Namespace: "ns", VariantName: "v1", Action: interfaces.ActionNoChange},
+	decisions := []domain.VariantDecision{
+		{ModelID: "model-a", Namespace: "ns", VariantName: "v1", Action: domain.ActionNoChange},
 	}
 
 	logScalingDecisions(ctx, requests, decisions)

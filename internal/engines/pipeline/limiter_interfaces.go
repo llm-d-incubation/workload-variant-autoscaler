@@ -50,7 +50,7 @@ package pipeline
 import (
 	"context"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // Limiter constrains scaling decisions based on resource availability.
@@ -76,7 +76,7 @@ type Limiter interface {
 	// Limit applies resource constraints to scaling decisions.
 	// Modifies decisions in place - may reduce TargetReplicas based on available resources.
 	// Sets GPUsAllocated, WasLimited, LimitedBy fields and appends to DecisionSteps.
-	Limit(ctx context.Context, decisions []*interfaces.VariantDecision) error
+	Limit(ctx context.Context, decisions []*domain.VariantDecision) error
 }
 
 // AllocationAlgorithm defines how to distribute limited resources across decisions.
@@ -112,7 +112,7 @@ type AllocationAlgorithm interface {
 	//   - GPUsAllocated: number of GPUs actually allocated
 	Allocate(
 		ctx context.Context,
-		decisions []*interfaces.VariantDecision,
+		decisions []*domain.VariantDecision,
 		allocator ResourceAllocator,
 	) error
 }
@@ -134,7 +134,7 @@ type ResourceAllocator interface {
 	// ScaleTargetRef) that some allocators need for type-aware or node-aware allocation.
 	// ctx carries the request-scoped logger so per-cycle traces emitted from the
 	// allocator are correlated with the rest of the engine cycle's structured logs.
-	TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (gpusAllocated int, err error)
+	TryAllocate(ctx context.Context, decision *domain.VariantDecision, gpusRequested int) (gpusAllocated int, err error)
 
 	// Remaining returns total remaining allocatable GPUs across all resources.
 	Remaining() int

@@ -11,8 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
@@ -60,8 +60,8 @@ var _ = Describe("applyScaleToZeroEnforcement", func() {
 		}
 	}
 
-	decisions := func() []interfaces.VariantDecision {
-		return []interfaces.VariantDecision{
+	decisions := func() []domain.VariantDecision {
+		return []domain.VariantDecision{
 			{VariantName: "v1", ModelID: modelID, Namespace: namespace, Cost: 1.0, CurrentReplicas: 2, TargetReplicas: 2},
 		}
 	}
@@ -102,7 +102,7 @@ var _ = Describe("applyScaleToZeroEnforcement", func() {
 		min := 1
 		scaledToZero := e.applyScaleToZeroEnforcement(ctx, modelID, namespace, "v1-saturation",
 			d, map[string]scaletarget.ScaleTargetAccessor{"a": target("vllm/vllm-openai:latest")},
-			[]interfaces.VariantReplicaState{{VariantName: "v1", MinReplicas: &min}})
+			[]domain.VariantReplicaState{{VariantName: "v1", MinReplicas: &min}})
 		Expect(scaledToZero).To(BeFalse())
 		Expect(d[0].TargetReplicas).To(Equal(2))
 	})

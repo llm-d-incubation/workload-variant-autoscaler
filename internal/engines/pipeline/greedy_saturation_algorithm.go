@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // GreedyBySaturation allocates resources to the most saturated variants first.
@@ -33,7 +33,7 @@ func (g *GreedyBySaturation) Name() string {
 // the most saturated variants (lowest spare capacity).
 func (g *GreedyBySaturation) Allocate(
 	ctx context.Context,
-	decisions []*interfaces.VariantDecision,
+	decisions []*domain.VariantDecision,
 	allocator ResourceAllocator,
 ) error {
 	// Filter and sort decisions that need scale-up
@@ -49,8 +49,8 @@ func (g *GreedyBySaturation) Allocate(
 }
 
 // filterScaleUpCandidates returns decisions that want to scale up.
-func (g *GreedyBySaturation) filterScaleUpCandidates(decisions []*interfaces.VariantDecision) []*interfaces.VariantDecision {
-	var candidates []*interfaces.VariantDecision
+func (g *GreedyBySaturation) filterScaleUpCandidates(decisions []*domain.VariantDecision) []*domain.VariantDecision {
+	var candidates []*domain.VariantDecision
 	for _, d := range decisions {
 		if d.TargetReplicas > d.CurrentReplicas {
 			candidates = append(candidates, d)
@@ -62,7 +62,7 @@ func (g *GreedyBySaturation) filterScaleUpCandidates(decisions []*interfaces.Var
 // sortByPriority sorts decisions by:
 //  1. SpareCapacity ascending (most saturated first)
 //  2. Cost ascending (cheaper variants as tie-breaker)
-func (g *GreedyBySaturation) sortByPriority(decisions []*interfaces.VariantDecision) {
+func (g *GreedyBySaturation) sortByPriority(decisions []*domain.VariantDecision) {
 	sort.Slice(decisions, func(i, j int) bool {
 		// Primary: lowest spare capacity first (most saturated)
 		if decisions[i].SpareCapacity != decisions[j].SpareCapacity {
@@ -76,7 +76,7 @@ func (g *GreedyBySaturation) sortByPriority(decisions []*interfaces.VariantDecis
 // allocateForDecision attempts to allocate GPUs for a single decision.
 // If partial allocation, adjusts TargetReplicas accordingly.
 // Respects MaxReplicas (caps scale-up) and MinReplicas (floor even under GPU scarcity).
-func (g *GreedyBySaturation) allocateForDecision(ctx context.Context, d *interfaces.VariantDecision, allocator ResourceAllocator) {
+func (g *GreedyBySaturation) allocateForDecision(ctx context.Context, d *domain.VariantDecision, allocator ResourceAllocator) {
 	replicasNeeded := d.TargetReplicas - d.CurrentReplicas
 	if replicasNeeded <= 0 {
 		return

@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
@@ -49,19 +49,19 @@ func TestScaledUpEvent(t *testing.T) {
 		},
 	}
 
-	decision := &interfaces.VariantDecision{
+	decision := &domain.VariantDecision{
 		VariantName:    "test-va",
-		Action:         interfaces.ActionScaleUp,
+		Action:         domain.ActionScaleUp,
 		TargetReplicas: 3,
 	}
-	decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+	decision.SetDecisionReason(domain.ActionScaleUp, domain.DecisionReasonTest, string(domain.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
-		case interfaces.ActionScaleUp:
+		case domain.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
-		case interfaces.ActionScaleDown:
+		case domain.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
 				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
@@ -103,19 +103,19 @@ func TestScaledDownEvent(t *testing.T) {
 		},
 	}
 
-	decision := &interfaces.VariantDecision{
+	decision := &domain.VariantDecision{
 		VariantName:    "test-va",
-		Action:         interfaces.ActionScaleDown,
+		Action:         domain.ActionScaleDown,
 		TargetReplicas: 2,
 	}
-	decision.SetDecisionReason(interfaces.ActionScaleDown, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+	decision.SetDecisionReason(domain.ActionScaleDown, domain.DecisionReasonTest, string(domain.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
-		case interfaces.ActionScaleUp:
+		case domain.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
-		case interfaces.ActionScaleDown:
+		case domain.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
 				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
@@ -157,19 +157,19 @@ func TestScaledToZeroEvent(t *testing.T) {
 		},
 	}
 
-	decision := &interfaces.VariantDecision{
+	decision := &domain.VariantDecision{
 		VariantName:    "test-va",
-		Action:         interfaces.ActionScaleDown,
+		Action:         domain.ActionScaleDown,
 		TargetReplicas: 0,
 	}
-	decision.SetDecisionReason(interfaces.ActionScaleDown, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+	decision.SetDecisionReason(domain.ActionScaleDown, domain.DecisionReasonTest, string(domain.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
-		case interfaces.ActionScaleUp:
+		case domain.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
-		case interfaces.ActionScaleDown:
+		case domain.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
 				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
@@ -211,20 +211,20 @@ func TestResourceConstrainedEvent(t *testing.T) {
 		},
 	}
 
-	decision := &interfaces.VariantDecision{
+	decision := &domain.VariantDecision{
 		VariantName:    "test-va",
-		Action:         interfaces.ActionScaleUp,
+		Action:         domain.ActionScaleUp,
 		TargetReplicas: 3,
 		WasLimited:     true,
 	}
-	decision.SetDecisionReason(interfaces.ActionScaleUp, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+	decision.SetDecisionReason(domain.ActionScaleUp, domain.DecisionReasonTest, string(domain.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
-		case interfaces.ActionScaleUp:
+		case domain.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
-		case interfaces.ActionScaleDown:
+		case domain.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
 				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {
@@ -288,19 +288,19 @@ func TestNoEventForNoDecision(t *testing.T) {
 		},
 	}
 
-	decision := &interfaces.VariantDecision{
+	decision := &domain.VariantDecision{
 		VariantName:    "test-va",
-		Action:         interfaces.ActionNoChange,
+		Action:         domain.ActionNoChange,
 		TargetReplicas: 3,
 	}
-	decision.SetDecisionReason(interfaces.ActionNoChange, interfaces.DecisionReasonTest, string(interfaces.DecisionReasonTest))
+	decision.SetDecisionReason(domain.ActionNoChange, domain.DecisionReasonTest, string(domain.DecisionReasonTest))
 
 	// Simulate the event recording logic from applySaturationDecisions
 	if fakeRecorder != nil {
 		switch decision.Action {
-		case interfaces.ActionScaleUp:
+		case domain.ActionScaleUp:
 			fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, decision.Reason())
-		case interfaces.ActionScaleDown:
+		case domain.ActionScaleDown:
 			if decision.TargetReplicas == 0 {
 				fakeRecorder.Eventf(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, decision.Reason())
 			} else {

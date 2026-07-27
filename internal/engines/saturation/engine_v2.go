@@ -8,8 +8,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -22,13 +22,13 @@ import (
 func (e *Engine) runV2AnalysisOnly(
 	ctx context.Context,
 	modelID, namespace string,
-	replicaMetrics []interfaces.ReplicaMetrics,
+	replicaMetrics []domain.ReplicaMetrics,
 	config config.SaturationScalingConfig,
-	variantStates []interfaces.VariantReplicaState,
+	variantStates []domain.VariantReplicaState,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	schedulerQueue *interfaces.SchedulerQueueMetrics,
-) (*interfaces.AnalyzerResult, error) {
+	schedulerQueue *domain.SchedulerQueueMetrics,
+) (*domain.AnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// 1. Pre-populate capacity store with scale target-derived params
@@ -49,7 +49,7 @@ func (e *Engine) runV2AnalysisOnly(
 	}
 
 	// 2. Build AnalyzerInput
-	input := interfaces.AnalyzerInput{
+	input := domain.AnalyzerInput{
 		ModelID:        modelID,
 		Namespace:      namespace,
 		ReplicaMetrics: replicaMetrics,
@@ -84,12 +84,12 @@ func (e *Engine) runV2AnalysisOnly(
 func (e *Engine) runAnalyzersAndScore(
 	ctx context.Context,
 	modelID, namespace string,
-	replicaMetrics []interfaces.ReplicaMetrics,
+	replicaMetrics []domain.ReplicaMetrics,
 	config config.SaturationScalingConfig,
-	variantStates []interfaces.VariantReplicaState,
+	variantStates []domain.VariantReplicaState,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	schedulerQueue *interfaces.SchedulerQueueMetrics,
+	schedulerQueue *domain.SchedulerQueueMetrics,
 ) ([]pipeline.NamedAnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -102,7 +102,7 @@ func (e *Engine) runAnalyzersAndScore(
 
 	// Universal threshold post-step for saturation: recalibrate RC/SC using the
 	// resolved threshold for the saturation entry (per-analyzer override over global).
-	satUp, satDown := resolveThresholds(interfaces.SaturationAnalyzerName, config)
+	satUp, satDown := resolveThresholds(domain.SaturationAnalyzerName, config)
 	applyUniversalThreshold(baseResult, satUp, satDown)
 
 	// Build AnalyzerInput once; shared by all non-saturation analyzers.
@@ -112,7 +112,7 @@ func (e *Engine) runAnalyzersAndScore(
 	// on this branch (their results are discarded), and the clean fix —
 	// engine applies thresholds universally after each analyzer runs —
 	// is tracked on multi-analyzer-threshold (PR #1228).
-	input := interfaces.AnalyzerInput{
+	input := domain.AnalyzerInput{
 		ModelID:        modelID,
 		Namespace:      namespace,
 		ReplicaMetrics: replicaMetrics,
@@ -124,16 +124,16 @@ func (e *Engine) runAnalyzersAndScore(
 	// Collect per-analyzer results. Saturation is first; each non-saturation
 	// analyzer is run, calibrated with its resolved thresholds, and appended.
 	namedResults := []pipeline.NamedAnalyzerResult{{
-		Name:              interfaces.SaturationAnalyzerName,
+		Name:              domain.SaturationAnalyzerName,
 		Result:            baseResult,
-		Score:             scoreForAnalyzer(interfaces.SaturationAnalyzerName, config),
+		Score:             scoreForAnalyzer(domain.SaturationAnalyzerName, config),
 		Remaining:         baseResult.RequiredCapacity,
 		Spare:             baseResult.SpareCapacity,
 		ScaleUpThreshold:  satUp,
 		ScaleDownBoundary: satDown,
 	}}
 	for _, entry := range e.analyzersSnapshot {
-		if entry.name == interfaces.SaturationAnalyzerName {
+		if entry.name == domain.SaturationAnalyzerName {
 			continue
 		}
 		if !effectiveEnabled(entry.name, config) {
@@ -211,8 +211,8 @@ func runRegisteredAnalyzer(
 	logger logr.Logger,
 	entry analyzerEntry,
 	modelID string,
-	input interfaces.AnalyzerInput,
-) (result *interfaces.AnalyzerResult) {
+	input domain.AnalyzerInput,
+) (result *domain.AnalyzerResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Plugin failure is non-fatal; log at debug to avoid spamming
@@ -251,7 +251,7 @@ func runRegisteredAnalyzer(
 // scope — model-level and each RoleCapacity entry. There are no per-role
 // threshold overrides. A non-positive scaleUp or scaleDown leaves the
 // corresponding signal unchanged.
-func applyUniversalThreshold(r *interfaces.AnalyzerResult, scaleUp, scaleDown float64) {
+func applyUniversalThreshold(r *domain.AnalyzerResult, scaleUp, scaleDown float64) {
 	if r == nil {
 		return
 	}
@@ -296,9 +296,9 @@ func applyUniversalThreshold(r *interfaces.AnalyzerResult, scaleUp, scaleDown fl
 func computeCurrentGPUUsage(requests []pipeline.ModelScalingRequest) map[string]int {
 	usage := make(map[string]int)
 	for _, req := range requests {
-		var satEntry *interfaces.AnalyzerResult
+		var satEntry *domain.AnalyzerResult
 		for _, e := range req.AnalyzerResults {
-			if e.Name == interfaces.SaturationAnalyzerName {
+			if e.Name == domain.SaturationAnalyzerName {
 				satEntry = e.Result
 				break
 			}
@@ -306,7 +306,7 @@ func computeCurrentGPUUsage(requests []pipeline.ModelScalingRequest) map[string]
 		if satEntry == nil {
 			continue
 		}
-		stateMap := make(map[string]interfaces.VariantReplicaState, len(req.VariantStates))
+		stateMap := make(map[string]domain.VariantReplicaState, len(req.VariantStates))
 		for _, s := range req.VariantStates {
 			stateMap[s.VariantName] = s
 		}
@@ -335,9 +335,9 @@ func computeCurrentGPUUsageByNamespace(requests []pipeline.ModelScalingRequest) 
 			perType = make(map[string]int)
 			usage[req.Namespace] = perType
 		}
-		var satEntry *interfaces.AnalyzerResult
+		var satEntry *domain.AnalyzerResult
 		for _, e := range req.AnalyzerResults {
-			if e.Name == interfaces.SaturationAnalyzerName {
+			if e.Name == domain.SaturationAnalyzerName {
 				satEntry = e.Result
 				break
 			}
@@ -345,7 +345,7 @@ func computeCurrentGPUUsageByNamespace(requests []pipeline.ModelScalingRequest) 
 		if satEntry == nil {
 			continue
 		}
-		stateMap := make(map[string]interfaces.VariantReplicaState, len(req.VariantStates))
+		stateMap := make(map[string]domain.VariantReplicaState, len(req.VariantStates))
 		for _, s := range req.VariantStates {
 			stateMap[s.VariantName] = s
 		}
@@ -388,12 +388,12 @@ func gpuConstraintProviders(l pipeline.Limiter) []pipeline.ConstraintProvider {
 func (e *Engine) collectV2ModelRequest(
 	ctx context.Context,
 	modelID, namespace string,
-	replicaMetrics []interfaces.ReplicaMetrics,
+	replicaMetrics []domain.ReplicaMetrics,
 	config config.SaturationScalingConfig,
-	variantStates []interfaces.VariantReplicaState,
+	variantStates []domain.VariantReplicaState,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	schedulerQueue *interfaces.SchedulerQueueMetrics,
+	schedulerQueue *domain.SchedulerQueueMetrics,
 ) (*pipeline.ModelScalingRequest, error) {
 	namedResults, err := e.runAnalyzersAndScore(ctx, modelID, namespace, replicaMetrics, config,
 		variantStates, scaleTargets, variantAutoscalings, schedulerQueue)
@@ -401,10 +401,10 @@ func (e *Engine) collectV2ModelRequest(
 		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
 	}
 
-	// Detect P/D disaggregation: true when any variant has role != interfaces.RoleBoth
+	// Detect P/D disaggregation: true when any variant has role != domain.RoleBoth
 	disaggregated := false
 	for _, vs := range variantStates {
-		if vs.Role != "" && vs.Role != interfaces.RoleBoth {
+		if vs.Role != "" && vs.Role != domain.RoleBoth {
 			disaggregated = true
 			break
 		}
@@ -463,7 +463,7 @@ func logAnalyzerResult(ctx context.Context, modelID, namespace string, nr pipeli
 func logScalingDecisions(
 	ctx context.Context,
 	modelRequests []pipeline.ModelScalingRequest,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 

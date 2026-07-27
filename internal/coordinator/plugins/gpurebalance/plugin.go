@@ -12,6 +12,8 @@ import (
 	"github.com/prometheus/common/model"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -263,23 +265,52 @@ func (p *Plugin) queryQueue(ctx context.Context, inferencePool string) (float64,
 	return float64(vec[0].Value), nil
 }
 
+// setMaxReplicas patches the scaler's max-replica ceiling to target under
+// optimistic concurrency control. Each attempt re-reads the object and patches
+// with MergeFromWithOptimisticLock, which pins resourceVersion on the patch so
+// the API server rejects a stale write with a 409 Conflict rather than silently
+// overwriting a concurrent change. On conflict the write is retried against the
+// freshly read object; the Coordinator remains authoritative for the ceiling,
+// so the recomputed target is re-applied rather than deferring to the other
+// writer.
 func (p *Plugin) setMaxReplicas(ctx context.Context, obj client.Object, target int32) error {
-	// TODO: MergeFrom uses the object captured at List time. If another controller
-	// or user updated maxReplicas between the List and this Patch, the write will
-	// silently overwrite that change. Use MergeFromWithOptimisticLock (which sets
-	// resourceVersion on the patch) so the API server rejects a stale write with
-	// a 409 Conflict, allowing the Coordinator to re-read and retry cleanly.
+	log := ctrl.LoggerFrom(ctx).WithName("gpu-rebalance")
+	key := client.ObjectKeyFromObject(obj)
 
-	switch o := obj.(type) {
+	switch obj.(type) {
 	case *autoscalingv2.HorizontalPodAutoscaler:
-		original := o.DeepCopy()
-		o.Spec.MaxReplicas = target
-		return p.client.Patch(ctx, o, client.MergeFrom(original))
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			cur := &autoscalingv2.HorizontalPodAutoscaler{}
+			if err := p.client.Get(ctx, key, cur); err != nil {
+				return err
+			}
+			original := cur.DeepCopy()
+			cur.Spec.MaxReplicas = target
+			return p.patchWithConflictLog(ctx, log, cur, original, displayKindHPA, key)
+		})
 	case *kedav1alpha1.ScaledObject:
-		original := o.DeepCopy()
-		o.Spec.MaxReplicaCount = ptr.To(target)
-		return p.client.Patch(ctx, o, client.MergeFrom(original))
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			cur := &kedav1alpha1.ScaledObject{}
+			if err := p.client.Get(ctx, key, cur); err != nil {
+				return err
+			}
+			original := cur.DeepCopy()
+			cur.Spec.MaxReplicaCount = ptr.To(target)
+			return p.patchWithConflictLog(ctx, log, cur, original, displayKindScaledObject, key)
+		})
 	default:
 		return fmt.Errorf("unsupported scaler type %T", obj)
 	}
+}
+
+// patchWithConflictLog applies an optimistic-lock patch and, when the write is
+// rejected with a 409 Conflict, logs the concurrent modification before
+// returning the error so RetryOnConflict re-reads and retries.
+func (p *Plugin) patchWithConflictLog(ctx context.Context, log logr.Logger, obj, original client.Object, kind string, key client.ObjectKey) error {
+	err := p.client.Patch(ctx, obj, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
+	if apierrors.IsConflict(err) {
+		log.V(1).Info("Conflict patching max replica ceiling; re-reading and retrying",
+			"kind", kind, "name", key.Name, "namespace", key.Namespace)
+	}
+	return err
 }

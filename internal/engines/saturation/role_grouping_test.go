@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
@@ -33,8 +33,8 @@ func TestNormalizeRole(t *testing.T) {
 		input  string
 		expect string
 	}{
-		{"empty maps to both", "", interfaces.RoleBoth},
-		{"both stays both", "both", interfaces.RoleBoth},
+		{"empty maps to both", "", domain.RoleBoth},
+		{"both stays both", "both", domain.RoleBoth},
 		{"prefill stays prefill", "prefill", "prefill"},
 		{"decode stays decode", "decode", "decode"},
 	}
@@ -47,7 +47,7 @@ func TestNormalizeRole(t *testing.T) {
 
 func TestGroupByRole(t *testing.T) {
 	t.Run("non-disaggregated model produces single group", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "v1", Role: "both"},
 			{VariantName: "v2", Role: ""},
 			{VariantName: "v3", Role: "both"},
@@ -59,7 +59,7 @@ func TestGroupByRole(t *testing.T) {
 	})
 
 	t.Run("disaggregated model produces per-role groups", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100", Role: "prefill"},
 			{VariantName: "prefill-a100", Role: "prefill"},
 			{VariantName: "decode-l4", Role: "decode"},
@@ -71,7 +71,7 @@ func TestGroupByRole(t *testing.T) {
 	})
 
 	t.Run("mixed roles produce three groups", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100", Role: "prefill"},
 			{VariantName: "decode-l4", Role: "decode"},
 			{VariantName: "both-a100", Role: "both"},
@@ -90,7 +90,7 @@ func TestGroupByRole(t *testing.T) {
 }
 
 func TestFilterReplicaMetricsByVariants(t *testing.T) {
-	metrics := []interfaces.ReplicaMetrics{
+	metrics := []domain.ReplicaMetrics{
 		{VariantName: "prefill-h100", PodName: "pod-1"},
 		{VariantName: "prefill-h100", PodName: "pod-2"},
 		{VariantName: "decode-l4", PodName: "pod-3"},
@@ -99,7 +99,7 @@ func TestFilterReplicaMetricsByVariants(t *testing.T) {
 	}
 
 	t.Run("filter prefill only", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100"},
 		}
 		filtered := filterReplicaMetricsByVariants(metrics, states)
@@ -110,7 +110,7 @@ func TestFilterReplicaMetricsByVariants(t *testing.T) {
 	})
 
 	t.Run("filter decode only", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "decode-l4"},
 		}
 		filtered := filterReplicaMetricsByVariants(metrics, states)
@@ -121,7 +121,7 @@ func TestFilterReplicaMetricsByVariants(t *testing.T) {
 	})
 
 	t.Run("filter all variants returns all metrics", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100"},
 			{VariantName: "decode-l4"},
 			{VariantName: "both-a100"},
@@ -144,7 +144,7 @@ func TestFilterVAsByVariantStates(t *testing.T) {
 	}
 
 	t.Run("filter to prefill only", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100"},
 		}
 		filtered := filterVAsByVariantStates(vas, states)
@@ -153,7 +153,7 @@ func TestFilterVAsByVariantStates(t *testing.T) {
 	})
 
 	t.Run("filter to all returns all", func(t *testing.T) {
-		states := []interfaces.VariantReplicaState{
+		states := []domain.VariantReplicaState{
 			{VariantName: "prefill-h100"},
 			{VariantName: "decode-l4"},
 			{VariantName: "both-a100"},
@@ -169,7 +169,7 @@ func TestFilterVAsByVariantStates(t *testing.T) {
 }
 
 func TestVariantNames(t *testing.T) {
-	states := []interfaces.VariantReplicaState{
+	states := []domain.VariantReplicaState{
 		{VariantName: "v1"},
 		{VariantName: "v2"},
 		{VariantName: "v3"},

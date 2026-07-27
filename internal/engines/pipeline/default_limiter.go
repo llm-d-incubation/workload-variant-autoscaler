@@ -7,7 +7,7 @@ import (
 	"slices"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
@@ -45,7 +45,7 @@ func (l *DefaultLimiter) Name() string {
 
 // Limit applies resource constraints to scaling decisions.
 // Modifies decisions in place - may reduce TargetReplicas based on available resources.
-func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*interfaces.VariantDecision) error {
+func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*domain.VariantDecision) error {
 	if len(decisions) == 0 {
 		return nil
 	}
@@ -112,7 +112,7 @@ func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*interfaces.Vari
 // real GPU type when the inventory has exactly one type (homogeneous cluster).
 // This must run before calculateUsedGPUs so existing replicas are counted
 // against the correct pool, and before TryAllocate so new allocations use it.
-func (l *DefaultLimiter) resolveUnknownAccelerators(decisions []*interfaces.VariantDecision) {
+func (l *DefaultLimiter) resolveUnknownAccelerators(decisions []*domain.VariantDecision) {
 	pools := l.inventory.GetResourcePools()
 	if len(pools) != 1 {
 		return // heterogeneous or empty — can't resolve
@@ -130,7 +130,7 @@ func (l *DefaultLimiter) resolveUnknownAccelerators(decisions []*interfaces.Vari
 
 // calculateUsedGPUs computes current GPU usage per accelerator type.
 // Uses CurrentReplicas * GPUsPerReplica for each decision.
-func (l *DefaultLimiter) calculateUsedGPUs(decisions []*interfaces.VariantDecision) map[string]int {
+func (l *DefaultLimiter) calculateUsedGPUs(decisions []*domain.VariantDecision) map[string]int {
 	usedByType := make(map[string]int)
 	for _, d := range decisions {
 		if d.AcceleratorName == "" {
@@ -145,7 +145,7 @@ func (l *DefaultLimiter) calculateUsedGPUs(decisions []*interfaces.VariantDecisi
 // (namespace, accelerator type). Outer key: namespace; inner key: accelerator
 // type. Used to feed NamespaceAwareInventory implementations the per-namespace
 // usage map needed for per-tenant cap enforcement.
-func (l *DefaultLimiter) calculateUsedGPUsByNamespace(decisions []*interfaces.VariantDecision) map[string]map[string]int {
+func (l *DefaultLimiter) calculateUsedGPUsByNamespace(decisions []*domain.VariantDecision) map[string]map[string]int {
 	usedByNS := make(map[string]map[string]int)
 	for _, d := range decisions {
 		if d.AcceleratorName == "" || d.Namespace == "" {
@@ -165,7 +165,7 @@ func (l *DefaultLimiter) calculateUsedGPUsByNamespace(decisions []*interfaces.Va
 // targetBefore are the per-decision WasLimited / TargetReplicas snapshots taken
 // before this limiter's algorithm ran, indexed to match decisions. See Limit for
 // why attribution and the per-step flag use different signals.
-func (l *DefaultLimiter) updateDecisionMetadata(decisions []*interfaces.VariantDecision, limitedBefore []bool, targetBefore []int) {
+func (l *DefaultLimiter) updateDecisionMetadata(decisions []*domain.VariantDecision, limitedBefore []bool, targetBefore []int) {
 	for i, d := range decisions {
 		// Attribution: credit the first limiter that newly marks the decision
 		// resource-limited (WasLimited is sticky across composite constituents).
@@ -188,7 +188,7 @@ func (l *DefaultLimiter) updateDecisionMetadata(decisions []*interfaces.VariantD
 // buildStepReason creates a human-readable reason for the decision step. limited
 // reflects whether THIS limiter constrained the decision this pass (matching the
 // step's limited flag), not the sticky WasLimited.
-func (l *DefaultLimiter) buildStepReason(d *interfaces.VariantDecision, limited bool) string {
+func (l *DefaultLimiter) buildStepReason(d *domain.VariantDecision, limited bool) string {
 	replicaChange := d.TargetReplicas - d.CurrentReplicas
 
 	if replicaChange <= 0 {

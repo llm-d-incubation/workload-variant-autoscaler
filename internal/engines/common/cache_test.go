@@ -4,21 +4,21 @@ import (
 	"sync"
 	"testing"
 
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 func TestInternalDecisionCache(t *testing.T) {
 	cache := &InternalDecisionCache{
-		items: make(map[string]interfaces.VariantDecision),
+		items: make(map[string]domain.VariantDecision),
 	}
 
 	// Test Set and Get
-	decision := interfaces.VariantDecision{
+	decision := domain.VariantDecision{
 		VariantName:     "test-variant",
 		Namespace:       "test-ns",
 		TargetReplicas:  5,
 		AcceleratorName: "A100",
-		Action:          interfaces.ActionScaleUp,
+		Action:          domain.ActionScaleUp,
 	}
 
 	cache.Set("test-variant", "test-ns", decision)
@@ -53,7 +53,7 @@ func TestInternalDecisionCache(t *testing.T) {
 // from internal/config package. Config functionality is now tested in internal/config/loader_test.go
 
 func TestDecisionToOptimizedAlloc(t *testing.T) {
-	d := interfaces.VariantDecision{
+	d := domain.VariantDecision{
 		TargetReplicas:  3,
 		AcceleratorName: "H100",
 	}

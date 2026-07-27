@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	ctrlutils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -488,7 +488,7 @@ var _ = Describe("Actuator", func() {
 
 		It("should verify that metrics emitter can emit scaling metrics", func() {
 			fmt.Printf("Emitting scaling metrics for variantAutoscaling - name: %s\n numReplicas: %s\n", va.Name, fmtNumReplicas(va.Status.DesiredOptimizedAlloc.NumReplicas))
-			err := actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
+			err := actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, domain.ActionScaleUp, domain.DecisionReasonV2)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -505,7 +505,7 @@ var _ = Describe("Actuator", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Additional scaling metrics
-			err = actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
+			err = actuator.MetricsEmitter.EmitReplicaScalingMetrics(ctx, va, domain.ActionScaleUp, domain.DecisionReasonV2)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})

@@ -4,12 +4,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // healthyReplica returns a ReplicaMetrics with all fields valid.
-func healthyReplica(podName string) interfaces.ReplicaMetrics {
-	return interfaces.ReplicaMetrics{
+func healthyReplica(podName string) domain.ReplicaMetrics {
+	return domain.ReplicaMetrics{
 		PodName:               podName,
 		VariantName:           "v1",
 		KvUsageInstant:        0.50,
@@ -30,7 +30,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		})
 
 		It("returns SanityIssueNoReplicas for empty slice", func() {
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{})
 			Expect(report.OK()).To(BeFalse())
 			Expect(report.Has(SanityIssueNoReplicas)).To(BeTrue())
 		})
@@ -38,7 +38,7 @@ var _ = Describe("CheckModelMetrics", func() {
 
 	Describe("healthy metrics", func() {
 		It("returns OK for a single healthy replica", func() {
-			metrics := []interfaces.ReplicaMetrics{healthyReplica("pod-0")}
+			metrics := []domain.ReplicaMetrics{healthyReplica("pod-0")}
 			report := CheckModelMetrics(metrics)
 			Expect(report.OK()).To(BeTrue())
 			Expect(report.Issues).To(BeEmpty())
@@ -46,7 +46,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		})
 
 		It("returns OK for multiple healthy replicas", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				healthyReplica("pod-0"),
 				healthyReplica("pod-1"),
 				healthyReplica("pod-2"),
@@ -59,23 +59,23 @@ var _ = Describe("CheckModelMetrics", func() {
 	Describe("stale metrics", func() {
 		It("flags SanityIssueStaleMetrics when FreshnessStatus is stale", func() {
 			m := healthyReplica("pod-0")
-			m.Metadata = &interfaces.ReplicaMetricsMetadata{FreshnessStatus: "stale"}
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			m.Metadata = &domain.ReplicaMetricsMetadata{FreshnessStatus: "stale"}
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueStaleMetrics)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
 
 		It("does not flag stale when FreshnessStatus is fresh", func() {
 			m := healthyReplica("pod-0")
-			m.Metadata = &interfaces.ReplicaMetricsMetadata{FreshnessStatus: "fresh"}
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			m.Metadata = &domain.ReplicaMetricsMetadata{FreshnessStatus: "fresh"}
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueStaleMetrics)).To(BeFalse())
 		})
 
 		It("does not flag stale when Metadata is nil", func() {
 			m := healthyReplica("pod-0")
 			// Metadata is nil by default in healthyReplica
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueStaleMetrics)).To(BeFalse())
 		})
 	})
@@ -84,7 +84,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueMissingKV when TotalKvCapacityTokens is zero", func() {
 			m := healthyReplica("pod-0")
 			m.TotalKvCapacityTokens = 0
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingKV)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
@@ -92,7 +92,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueMissingKV when TotalKvCapacityTokens is negative", func() {
 			m := healthyReplica("pod-0")
 			m.TotalKvCapacityTokens = -1
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingKV)).To(BeTrue())
 		})
 	})
@@ -101,7 +101,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueKVOutOfRange when KvUsageInstant (k*) is negative", func() {
 			m := healthyReplica("pod-0")
 			m.KvUsageInstant = -0.01
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
@@ -109,14 +109,14 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueKVOutOfRange when KvUsageInstant (k*) exceeds 1.0", func() {
 			m := healthyReplica("pod-0")
 			m.KvUsageInstant = 1.01
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 		})
 
 		It("flags SanityIssueKVOutOfRange for NaN KvUsageInstant (k*)", func() {
 			m := healthyReplica("pod-0")
 			m.KvUsageInstant = float64NaN()
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueKVOutOfRange)).To(BeTrue())
 		})
 
@@ -125,8 +125,8 @@ var _ = Describe("CheckModelMetrics", func() {
 			m0.KvUsageInstant = 0.0
 			m1 := healthyReplica("pod-1")
 			m1.KvUsageInstant = 1.0
-			Expect(CheckModelMetrics([]interfaces.ReplicaMetrics{m0}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
-			Expect(CheckModelMetrics([]interfaces.ReplicaMetrics{m1}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
+			Expect(CheckModelMetrics([]domain.ReplicaMetrics{m0}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
+			Expect(CheckModelMetrics([]domain.ReplicaMetrics{m1}).Has(SanityIssueKVOutOfRange)).To(BeFalse())
 		})
 	})
 
@@ -134,7 +134,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueITLNonPositive when AvgITL is zero", func() {
 			m := healthyReplica("pod-0")
 			m.AvgITL = 0
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueITLNonPositive)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
@@ -142,14 +142,14 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueITLNonPositive when AvgITL is negative", func() {
 			m := healthyReplica("pod-0")
 			m.AvgITL = -0.001
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueITLNonPositive)).To(BeTrue())
 		})
 
 		It("flags SanityIssueITLNonPositive when AvgITL is NaN", func() {
 			m := healthyReplica("pod-0")
 			m.AvgITL = float64NaN()
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueITLNonPositive)).To(BeTrue())
 		})
 	})
@@ -158,7 +158,7 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueMissingShape when AvgOutputTokens is at threshold", func() {
 			m := healthyReplica("pod-0")
 			m.AvgOutputTokens = DefaultMinTokensPerRequest
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingShape)).To(BeTrue())
 			Expect(report.AffectedPods).To(ContainElement("pod-0"))
 		})
@@ -166,21 +166,21 @@ var _ = Describe("CheckModelMetrics", func() {
 		It("flags SanityIssueMissingShape when AvgOutputTokens is zero", func() {
 			m := healthyReplica("pod-0")
 			m.AvgOutputTokens = 0
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingShape)).To(BeTrue())
 		})
 
 		It("flags SanityIssueMissingShape when AvgInputTokens is at threshold", func() {
 			m := healthyReplica("pod-0")
 			m.AvgInputTokens = DefaultMinTokensPerRequest
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingShape)).To(BeTrue())
 		})
 
 		It("flags SanityIssueMissingShape when AvgInputTokens is NaN", func() {
 			m := healthyReplica("pod-0")
 			m.AvgInputTokens = float64NaN()
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m})
 			Expect(report.Has(SanityIssueMissingShape)).To(BeTrue())
 		})
 	})
@@ -192,7 +192,7 @@ var _ = Describe("CheckModelMetrics", func() {
 			m1 := healthyReplica("pod-1")
 			m1.AvgITL = 0
 
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m0, m1})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m0, m1})
 			count := 0
 			for _, issue := range report.Issues {
 				if issue == SanityIssueITLNonPositive {
@@ -209,7 +209,7 @@ var _ = Describe("CheckModelMetrics", func() {
 			m1 := healthyReplica("pod-1")
 			m1.TotalKvCapacityTokens = 0 // KV issue
 
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{m0, m1})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{m0, m1})
 			Expect(report.Has(SanityIssueITLNonPositive)).To(BeTrue())
 			Expect(report.Has(SanityIssueMissingKV)).To(BeTrue())
 			Expect(report.AffectedPods).To(ConsistOf("pod-0", "pod-1"))
@@ -220,7 +220,7 @@ var _ = Describe("CheckModelMetrics", func() {
 			bad := healthyReplica("pod-bad")
 			bad.AvgITL = 0
 
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{good, bad})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{good, bad})
 			Expect(report.AffectedPods).To(ConsistOf("pod-bad"))
 			Expect(report.AffectedPods).NotTo(ContainElement("pod-good"))
 		})
@@ -228,7 +228,7 @@ var _ = Describe("CheckModelMetrics", func() {
 
 	Describe("SanityReport helpers", func() {
 		It("Has returns false for an issue not in the report", func() {
-			report := CheckModelMetrics([]interfaces.ReplicaMetrics{healthyReplica("pod-0")})
+			report := CheckModelMetrics([]domain.ReplicaMetrics{healthyReplica("pod-0")})
 			Expect(report.Has(SanityIssueNoReplicas)).To(BeFalse())
 		})
 	})
