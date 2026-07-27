@@ -3,7 +3,7 @@ package pipeline
 import (
 	"context"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // NamedAnalyzerResult pairs an analyzer's name with its result and mutable
@@ -20,7 +20,7 @@ import (
 // The original Result values are never mutated.
 type NamedAnalyzerResult struct {
 	Name              string
-	Result            *interfaces.AnalyzerResult
+	Result            *domain.AnalyzerResult
 	Score             float64            // per-analyzer weight from AnalyzerScoreConfig; used for fair-share priority
 	Remaining         float64            // mutable remaining required capacity; P-scope for disaggregated, model-scope otherwise
 	Spare             float64            // mutable remaining spare capacity; model-scope (non-disaggregated only)
@@ -35,7 +35,7 @@ type ModelScalingRequest struct {
 	ModelID         string
 	Namespace       string
 	AnalyzerResults []NamedAnalyzerResult // per-analyzer slice; saturation entry is always first
-	VariantStates   []interfaces.VariantReplicaState
+	VariantStates   []domain.VariantReplicaState
 	Priority        float64 // Model priority (default 1.0)
 	Disaggregated   bool    // true when model has prefill+decode variants
 }
@@ -51,5 +51,5 @@ type ScalingOptimizer interface {
 
 	// Optimize produces VariantDecisions from analyzer results and optional constraints.
 	// constraints may be nil in unlimited mode.
-	Optimize(ctx context.Context, requests []ModelScalingRequest, constraints []*ResourceConstraints) []interfaces.VariantDecision
+	Optimize(ctx context.Context, requests []ModelScalingRequest, constraints []*ResourceConstraints) []domain.VariantDecision
 }

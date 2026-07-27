@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // CompositeLimiter runs a slice of Limiter instances sequentially against the
@@ -73,7 +73,7 @@ func (c *CompositeLimiter) Constituents() []Limiter {
 // against the already-capped TargetReplicas that earlier constituents mutated in
 // place — so the most-restrictive cap wins as each successive constituent sees a
 // lower target.
-func (c *CompositeLimiter) Limit(ctx context.Context, decisions []*interfaces.VariantDecision) error {
+func (c *CompositeLimiter) Limit(ctx context.Context, decisions []*domain.VariantDecision) error {
 	if len(decisions) == 0 || len(c.limiters) == 0 {
 		return nil
 	}

@@ -3,7 +3,7 @@ package throughput
 import (
 	"math"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // CheckModelMetrics validates the replica metrics for a set of replicas belonging
@@ -15,7 +15,7 @@ import (
 //
 // Issues are deduplicated: the same SanityIssue type appears at most once in
 // the report even if multiple pods trigger it.
-func CheckModelMetrics(metrics []interfaces.ReplicaMetrics) SanityReport {
+func CheckModelMetrics(metrics []domain.ReplicaMetrics) SanityReport {
 	if len(metrics) == 0 {
 		return SanityReport{Issues: []SanityIssue{SanityIssueNoReplicas}}
 	}
@@ -46,7 +46,7 @@ func CheckModelMetrics(metrics []interfaces.ReplicaMetrics) SanityReport {
 
 // checkReplicaMetrics validates a single replica's metrics and returns the
 // list of issues found. An empty slice means the replica is healthy.
-func checkReplicaMetrics(m interfaces.ReplicaMetrics) []SanityIssue {
+func checkReplicaMetrics(m domain.ReplicaMetrics) []SanityIssue {
 	var issues []SanityIssue
 
 	// Stale metrics: FreshnessStatus == "stale" means the scrape is behind.

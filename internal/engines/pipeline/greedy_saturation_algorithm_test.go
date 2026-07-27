@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // simpleAllocator implements ResourceAllocator with a single pool
@@ -14,7 +14,7 @@ type simpleAllocator struct {
 	remaining int
 }
 
-func (s *simpleAllocator) TryAllocate(_ context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (s *simpleAllocator) TryAllocate(_ context.Context, decision *domain.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}
@@ -36,7 +36,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		ctx       context.Context
 		algorithm *GreedyBySaturation
 		allocator *simpleAllocator
-		decisions []*interfaces.VariantDecision
+		decisions []*domain.VariantDecision
 	)
 
 	BeforeEach(func() {
@@ -54,7 +54,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with single decision that needs scale-up", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 10}
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1",
 						CurrentReplicas: 2,
@@ -78,7 +78,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with multiple decisions prioritized by saturation", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 6} // Only enough for 3 replicas at 2 GPUs each
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1-medium",
 						CurrentReplicas: 1,
@@ -115,7 +115,7 @@ var _ = Describe("GreedyBySaturation", func() {
 				// v3-idle (SpareCapacity=0.5) should get allocation third
 				// Only 6 GPUs available, so only first 3 replicas can be allocated
 
-				var v1, v2, v3 *interfaces.VariantDecision
+				var v1, v2, v3 *domain.VariantDecision
 				for _, d := range decisions {
 					switch d.VariantName {
 					case "v1-medium":
@@ -146,7 +146,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("when resources are exhausted", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 3} // Not enough for a full replica
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1",
 						CurrentReplicas: 1,
@@ -171,7 +171,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with decisions that don't need scale-up", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 10}
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1-no-change",
 						CurrentReplicas: 2,
@@ -202,7 +202,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with equal saturation (tie-breaker by cost)", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 4} // Only enough for 2 replicas
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1-expensive",
 						CurrentReplicas: 1,
@@ -226,7 +226,7 @@ var _ = Describe("GreedyBySaturation", func() {
 				err := algorithm.Allocate(ctx, decisions, allocator)
 				Expect(err).NotTo(HaveOccurred())
 
-				var expensive, cheap *interfaces.VariantDecision
+				var expensive, cheap *domain.VariantDecision
 				for _, d := range decisions {
 					if d.VariantName == "v1-expensive" {
 						expensive = d
@@ -248,7 +248,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with zero GPUs per replica", func() {
 			BeforeEach(func() {
 				allocator = &simpleAllocator{remaining: 10}
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1",
 						CurrentReplicas: 1,
@@ -272,7 +272,7 @@ var _ = Describe("GreedyBySaturation", func() {
 		Context("with empty decisions", func() {
 			It("should return without error", func() {
 				allocator = &simpleAllocator{remaining: 10}
-				err := algorithm.Allocate(ctx, []*interfaces.VariantDecision{}, allocator)
+				err := algorithm.Allocate(ctx, []*domain.VariantDecision{}, allocator)
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
@@ -281,7 +281,7 @@ var _ = Describe("GreedyBySaturation", func() {
 			It("should cap scale-up at maxReplicas even when GPUs are available", func() {
 				maxReplicas := 3
 				allocator = &simpleAllocator{remaining: 100}
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1",
 						CurrentReplicas: 1,
@@ -304,7 +304,7 @@ var _ = Describe("GreedyBySaturation", func() {
 			It("should enforce minReplicas floor even under GPU scarcity", func() {
 				minReplicas := 3
 				allocator = &simpleAllocator{remaining: 0} // no GPUs
-				decisions = []*interfaces.VariantDecision{
+				decisions = []*domain.VariantDecision{
 					{
 						VariantName:     "v1",
 						CurrentReplicas: 1,

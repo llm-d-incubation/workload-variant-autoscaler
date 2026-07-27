@@ -38,12 +38,12 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -57,7 +57,7 @@ import (
 // deterministically.
 type analyzerEntry struct {
 	name     string
-	analyzer interfaces.Analyzer
+	analyzer domain.Analyzer
 }
 
 // v1Analyzer is the minimal surface of *saturation.Analyzer that optimizeV1
@@ -67,13 +67,13 @@ type v1Analyzer interface {
 	AnalyzeModelSaturation(
 		ctx context.Context,
 		modelID, namespace string,
-		replicaMetrics []interfaces.ReplicaMetrics,
+		replicaMetrics []domain.ReplicaMetrics,
 		config config.SaturationScalingConfig,
-	) (*interfaces.ModelSaturationAnalysis, error)
+	) (*domain.ModelSaturationAnalysis, error)
 	CalculateSaturationTargets(
 		ctx context.Context,
-		saturationAnalysis *interfaces.ModelSaturationAnalysis,
-		variantStates []interfaces.VariantReplicaState,
+		saturationAnalysis *domain.ModelSaturationAnalysis,
+		variantStates []domain.VariantReplicaState,
 	) map[string]int
 }
 
@@ -88,7 +88,7 @@ func defaultV1AnalyzerFactory() v1Analyzer { return saturation.NewAnalyzer() }
 type safetyNetEmitter func(
 	ctx context.Context,
 	roleVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 )
 
@@ -157,9 +157,9 @@ type Engine struct {
 	metricsRegistry *source.SourceRegistry
 
 	// saturationV2Analyzer is the V2 token-based saturation analyzer (initialized once).
-	// Also pre-registered in analyzers under interfaces.SaturationAnalyzerName.
-	// Typed as interfaces.Analyzer to allow injection in tests.
-	saturationV2Analyzer interfaces.Analyzer
+	// Also pre-registered in analyzers under domain.SaturationAnalyzerName.
+	// Typed as domain.Analyzer to allow injection in tests.
+	saturationV2Analyzer domain.Analyzer
 
 	// queueingModelAnalyzer is the queueing model-based analyzer (initialized once).
 	// Selected via analyzerName: "queueing-model" in SaturationScalingConfig.
@@ -251,7 +251,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
 		analyzers: []analyzerEntry{
-			{name: interfaces.SaturationAnalyzerName, analyzer: satV2},
+			{name: domain.SaturationAnalyzerName, analyzer: satV2},
 		},
 	}
 
@@ -286,7 +286,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 // registry. Returns an error if called after StartOptimizeLoop or if name
 // is already registered — callers must check the error. The analyzer is
 // appended in registration order.
-func (e *Engine) RegisterAnalyzer(name string, a interfaces.Analyzer) error {
+func (e *Engine) RegisterAnalyzer(name string, a domain.Analyzer) error {
 	if e.started {
 		return errors.New("RegisterAnalyzer: called after StartOptimizeLoop")
 	}
@@ -423,7 +423,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	// Create map to store current allocations populated during metrics collection
 	// Keyed by VariantAutoscaling Namespace/Name
-	currentAllocations := make(map[string]*interfaces.Allocation)
+	currentAllocations := make(map[string]*domain.Allocation)
 
 	// Determine which analyzer to use.
 	// Priority: queueing model ConfigMap (presence-based) > saturation config analyzerName.
@@ -444,12 +444,12 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	// Queueing model ConfigMap takes priority over saturation analyzerName.
 	if hasQMAnalyzerConfig {
-		analyzerName = interfaces.QueueingModelAnalyzerName
+		analyzerName = domain.QueueingModelAnalyzerName
 	}
 
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
-	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
+	if analyzerName == domain.SaturationAnalyzerName || analyzerName == domain.QueueingModelAnalyzerName {
 		savedOptimizer := e.optimizer
 		if enableLimiter {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
@@ -462,7 +462,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
-	var allDecisions []interfaces.VariantDecision
+	var allDecisions []domain.VariantDecision
 
 	// Each analyzer has a separate optimize path because they use fundamentally
 	// different analysis types and target-building flows:
@@ -472,9 +472,9 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// V1 will be deprecated once V2 is fully validated.
 	// Queueing model is activated by presence of wva-queueing-model-config ConfigMap.
 	switch analyzerName {
-	case interfaces.QueueingModelAnalyzerName:
+	case domain.QueueingModelAnalyzerName:
 		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
-	case interfaces.SaturationAnalyzerName:
+	case domain.SaturationAnalyzerName:
 		allDecisions = e.optimizeV2(ctx, modelGroups, currentAllocations)
 	default:
 		allDecisions = e.optimizeV1(ctx, modelGroups, currentAllocations)
@@ -543,7 +543,7 @@ func (e *Engine) recordOptimizationFailedEvent(
 
 func (e *Engine) recordScalingEvent(
 	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	action interfaces.SaturationAction,
+	action domain.SaturationAction,
 	targetReplicas int,
 	reason string,
 ) {
@@ -551,9 +551,9 @@ func (e *Engine) recordScalingEvent(
 		return
 	}
 	switch action {
-	case interfaces.ActionScaleUp:
+	case domain.ActionScaleUp:
 		e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
-	case interfaces.ActionScaleDown:
+	case domain.ActionScaleDown:
 		if targetReplicas == 0 {
 			e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, reason)
 		} else {
@@ -581,10 +581,10 @@ func (e *Engine) resolveSaturationConfig(
 func (e *Engine) optimizeV1(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
-) []interfaces.VariantDecision {
+	currentAllocations map[string]*domain.Allocation,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
-	var allDecisions []interfaces.VariantDecision
+	var allDecisions []domain.VariantDecision
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -657,7 +657,7 @@ func (e *Engine) optimizeV1(
 		logger.Info("Applying GPU limiter to scaling decisions",
 			"decisionCount", len(allDecisions))
 
-		decisionPtrs := make([]*interfaces.VariantDecision, len(allDecisions))
+		decisionPtrs := make([]*domain.VariantDecision, len(allDecisions))
 		for i := range allDecisions {
 			decisionPtrs[i] = &allDecisions[i]
 		}
@@ -697,9 +697,9 @@ func (e *Engine) analyzeRoleGroups(
 	saturationConfig config.SaturationScalingConfig,
 	data *modelData,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	emitSafetyNet safetyNetEmitter,
-) []interfaces.VariantDecision {
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Sub-group variants by role for P/D-aware analysis.
@@ -708,7 +708,7 @@ func (e *Engine) analyzeRoleGroups(
 	roleGroups := groupByRole(data.variantStates)
 	sortedRoles := sortedRoleKeys(roleGroups)
 
-	var modelDecisions []interfaces.VariantDecision
+	var modelDecisions []domain.VariantDecision
 	for _, role := range sortedRoles {
 		roleStates := roleGroups[role]
 		roleMetrics := filterReplicaMetricsByVariants(data.replicaMetrics, roleStates)
@@ -836,14 +836,14 @@ func (e *Engine) selectV2Optimizer(
 func (e *Engine) optimizeV2(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
-) []interfaces.VariantDecision {
+	currentAllocations map[string]*domain.Allocation,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Stage 1: Collect ModelScalingRequests for all models
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
-	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
+	modelReplicaMetrics := make(map[string][]domain.ReplicaMetrics)
 	// modelScaleTargets carries each model's scale targets into stage 3, where
 	// applyScaleToZeroEnforcement needs them to gate the enforcer. Captured here
 	// because data.scaleTargets is only in scope during this collection loop.
@@ -934,8 +934,8 @@ func (e *Engine) BuildVariantStates(
 	vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	k8sClient client.Client,
-) []interfaces.VariantReplicaState {
-	states := make([]interfaces.VariantReplicaState, 0, len(vas))
+) []domain.VariantReplicaState {
+	states := make([]domain.VariantReplicaState, 0, len(vas))
 
 	for _, va := range vas {
 		// Get current replicas using ScaleTargetRef
@@ -1003,7 +1003,7 @@ func (e *Engine) BuildVariantStates(
 		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
 			desiredReplicas = int(*va.Status.DesiredOptimizedAlloc.NumReplicas)
 		}
-		states = append(states, interfaces.VariantReplicaState{
+		states = append(states, domain.VariantReplicaState{
 			VariantName:     va.Name,
 			CurrentReplicas: currentReplicas,
 			DesiredReplicas: desiredReplicas,
@@ -1022,15 +1022,15 @@ func (e *Engine) BuildVariantStates(
 // Returns "prefill", "decode", or "both" (default when no role label is present).
 func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string {
 	if scaleTarget == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
 	if podTemplateSpec == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	labels := podTemplateSpec.Labels
 	if labels == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	if val, ok := labels["llm-d.ai/role"]; ok {
 		switch val {
@@ -1039,10 +1039,10 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 		case "decode":
 			return "decode"
 		default:
-			return interfaces.RoleBoth
+			return domain.RoleBoth
 		}
 	}
-	return interfaces.RoleBoth
+	return domain.RoleBoth
 }
 
 // convertSaturationTargetsToDecisions converts saturation-only targets to VariantDecisions.
@@ -1050,21 +1050,21 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 func (e *Engine) convertSaturationTargetsToDecisions(
 	ctx context.Context,
 	saturationTargets map[string]int,
-	saturationAnalysis *interfaces.ModelSaturationAnalysis,
-	variantStates []interfaces.VariantReplicaState,
-) []interfaces.VariantDecision {
+	saturationAnalysis *domain.ModelSaturationAnalysis,
+	variantStates []domain.VariantReplicaState,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
-	decisions := make([]interfaces.VariantDecision, 0, len(saturationTargets))
+	decisions := make([]domain.VariantDecision, 0, len(saturationTargets))
 
 	// Build variant analysis map for quick lookup
-	vaMap := make(map[string]*interfaces.VariantSaturationAnalysis)
+	vaMap := make(map[string]*domain.VariantSaturationAnalysis)
 	for i := range saturationAnalysis.VariantAnalyses {
 		va := &saturationAnalysis.VariantAnalyses[i]
 		vaMap[va.VariantName] = va
 	}
 
 	// Build state map for quick lookup
-	stateMap := make(map[string]interfaces.VariantReplicaState)
+	stateMap := make(map[string]domain.VariantReplicaState)
 	for _, state := range variantStates {
 		stateMap[state.VariantName] = state
 	}
@@ -1073,14 +1073,14 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 		state := stateMap[variantName]
 		va := vaMap[variantName]
 
-		var action interfaces.SaturationAction
+		var action domain.SaturationAction
 		switch {
 		case targetReplicas > state.CurrentReplicas:
-			action = interfaces.ActionScaleUp
+			action = domain.ActionScaleUp
 		case targetReplicas < state.CurrentReplicas:
-			action = interfaces.ActionScaleDown
+			action = domain.ActionScaleDown
 		default:
-			action = interfaces.ActionNoChange
+			action = domain.ActionNoChange
 		}
 
 		// Use GPUsPerReplica from variant state (extracted from scale target)
@@ -1089,7 +1089,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			gpusPerReplica = 1 // Fallback default
 		}
 
-		decision := interfaces.VariantDecision{
+		decision := domain.VariantDecision{
 			VariantName:            variantName,
 			Namespace:              saturationAnalysis.Namespace,
 			ModelID:                saturationAnalysis.ModelID,
@@ -1106,7 +1106,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			MinReplicas:            state.MinReplicas,
 			MaxReplicas:            state.MaxReplicas,
 		}
-		decision.SetDecisionReason(action, interfaces.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(interfaces.DecisionReasonSaturationOnly), string(action)))
+		decision.SetDecisionReason(action, domain.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(domain.DecisionReasonSaturationOnly), string(action)))
 
 		if va != nil {
 			decision.AcceleratorName = va.AcceleratorName
@@ -1133,7 +1133,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 //
 // Aggregation is keyed by (modelID, variantName) — not just variantName — because
 // variant names can collide across different models in the same reconcile cycle.
-func enrichDecisionsWithKvTokenData(decisions []interfaces.VariantDecision, modelReplicaMetrics map[string][]interfaces.ReplicaMetrics) {
+func enrichDecisionsWithKvTokenData(decisions []domain.VariantDecision, modelReplicaMetrics map[string][]domain.ReplicaMetrics) {
 	type kvAgg struct {
 		kvUsed  int64
 		kvTotal int64
@@ -1167,7 +1167,7 @@ func enrichDecisionsWithKvTokenData(decisions []interfaces.VariantDecision, mode
 }
 
 // hasMinReplicasAboveZero returns true if any variant in the states has MinReplicas > 0.
-func hasMinReplicasAboveZero(states []interfaces.VariantReplicaState) bool {
+func hasMinReplicasAboveZero(states []domain.VariantReplicaState) bool {
 	for _, state := range states {
 		if state.MinReplicas != nil && *state.MinReplicas > 0 {
 			return true
@@ -1209,9 +1209,9 @@ func scaleToZeroSupportedForEngines(scaleTargets map[string]scaletarget.ScaleTar
 func (e *Engine) applyScaleToZeroEnforcement(
 	ctx context.Context,
 	modelID, namespace, optimizerName string,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
-	variantStates []interfaces.VariantReplicaState,
+	variantStates []domain.VariantReplicaState,
 ) bool {
 	if len(decisions) == 0 {
 		return false
@@ -1245,7 +1245,7 @@ func (e *Engine) applyScaleToZeroEnforcement(
 // deployment carries a role label.
 func normalizeRole(role string) string {
 	if role == "" {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	return role
 }
@@ -1253,8 +1253,8 @@ func normalizeRole(role string) string {
 // groupByRole sub-groups variant states by their P/D role.
 // Returns a map keyed by normalized role ("both", "prefill", "decode").
 // For non-disaggregated models (all "both"/""), the map contains a single entry.
-func groupByRole(states []interfaces.VariantReplicaState) map[string][]interfaces.VariantReplicaState {
-	groups := make(map[string][]interfaces.VariantReplicaState)
+func groupByRole(states []domain.VariantReplicaState) map[string][]domain.VariantReplicaState {
+	groups := make(map[string][]domain.VariantReplicaState)
 	for _, s := range states {
 		key := normalizeRole(s.Role)
 		groups[key] = append(groups[key], s)
@@ -1267,7 +1267,7 @@ func groupByRole(states []interfaces.VariantReplicaState) map[string][]interface
 // easier debugging). The caller is expected to pass a map whose keys were
 // produced by groupByRole, which has already canonicalized empty roles to
 // "both"; the resulting lexicographic order is then "both" < "decode" < "prefill".
-func sortedRoleKeys(groups map[string][]interfaces.VariantReplicaState) []string {
+func sortedRoleKeys(groups map[string][]domain.VariantReplicaState) []string {
 	keys := make([]string, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -1279,12 +1279,12 @@ func sortedRoleKeys(groups map[string][]interfaces.VariantReplicaState) []string
 // filterReplicaMetricsByVariants returns only the replica metrics whose VariantName
 // appears in the given variant state slice. Used to split per-model metrics into
 // per-role subsets without re-querying Prometheus.
-func filterReplicaMetricsByVariants(metrics []interfaces.ReplicaMetrics, states []interfaces.VariantReplicaState) []interfaces.ReplicaMetrics {
+func filterReplicaMetricsByVariants(metrics []domain.ReplicaMetrics, states []domain.VariantReplicaState) []domain.ReplicaMetrics {
 	allowed := make(map[string]struct{}, len(states))
 	for _, s := range states {
 		allowed[s.VariantName] = struct{}{}
 	}
-	filtered := make([]interfaces.ReplicaMetrics, 0, len(metrics))
+	filtered := make([]domain.ReplicaMetrics, 0, len(metrics))
 	for _, m := range metrics {
 		if _, ok := allowed[m.VariantName]; ok {
 			filtered = append(filtered, m)
@@ -1298,7 +1298,7 @@ func filterReplicaMetricsByVariants(metrics []interfaces.ReplicaMetrics, states 
 // safety-net metric emission.
 func filterVAsByVariantStates(
 	vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	states []interfaces.VariantReplicaState,
+	states []domain.VariantReplicaState,
 ) []llmdVariantAutoscalingV1alpha1.VariantAutoscaling {
 	allowed := make(map[string]struct{}, len(states))
 	for _, s := range states {
@@ -1314,7 +1314,7 @@ func filterVAsByVariantStates(
 }
 
 // variantNames returns variant names from states for logging.
-func variantNames(states []interfaces.VariantReplicaState) []string {
+func variantNames(states []domain.VariantReplicaState) []string {
 	names := make([]string, len(states))
 	for i, s := range states {
 		names[i] = s.VariantName
@@ -1326,12 +1326,12 @@ func variantNames(states []interfaces.VariantReplicaState) []string {
 type modelData struct {
 	modelID             string
 	namespace           string
-	replicaMetrics      []interfaces.ReplicaMetrics
+	replicaMetrics      []domain.ReplicaMetrics
 	scaleTargets        map[string]scaletarget.ScaleTargetAccessor
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 	variantCosts        map[string]float64
-	variantStates       []interfaces.VariantReplicaState
-	schedulerQueue      *interfaces.SchedulerQueueMetrics
+	variantStates       []domain.VariantReplicaState
+	schedulerQueue      *domain.SchedulerQueueMetrics
 }
 
 // prepareModelData collects metrics and builds lookup maps for a model's VAs.
@@ -1422,14 +1422,14 @@ func (e *Engine) prepareModelData(
 // applySaturationDecisions updates VA status and emits metrics based on Saturation decisions.
 func (e *Engine) applySaturationDecisions(
 	ctx context.Context,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
-	decisionMap := make(map[string]interfaces.VariantDecision)
+	decisionMap := make(map[string]domain.VariantDecision)
 	for _, d := range decisions {
 		decisionMap[utils.GetNamespacedKey(d.Namespace, d.VariantName)] = d
 	}
@@ -1656,7 +1656,7 @@ func (e *Engine) applySaturationDecisions(
 		// reconcile trigger is needed.
 
 		if hasDecision {
-			if decision.Action != interfaces.ActionNoChange {
+			if decision.Action != domain.ActionNoChange {
 				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, decision.Action, decision.ReasonCategory()); err != nil {
 					logger.Error(err, "Failed to emit replica scaling metrics")
 				}
@@ -1690,7 +1690,7 @@ func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alp
 func (e *Engine) emitSafetyNetMetrics(
 	ctx context.Context,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 ) {
 	logger := ctrl.LoggerFrom(ctx)

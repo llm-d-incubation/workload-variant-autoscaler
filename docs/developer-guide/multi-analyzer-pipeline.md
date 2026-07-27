@@ -157,7 +157,7 @@ result slice, so it cannot veto scale-down decisions.
 
 ## Analyzer implementor guide
 
-Implement `interfaces.Analyzer` (`internal/interfaces/analyzer.go`):
+Implement `domain.Analyzer` (`internal/domain/analyzer.go`):
 
 ```go
 type Analyzer interface {

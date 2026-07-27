@@ -35,8 +35,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
@@ -254,10 +254,10 @@ var _ = Describe("Saturation Engine", func() {
 				"variant-c": 2,
 			}
 
-			saturationAnalysis := &interfaces.ModelSaturationAnalysis{
+			saturationAnalysis := &domain.ModelSaturationAnalysis{
 				ModelID:   "test-model",
 				Namespace: "test-ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "variant-a", AcceleratorName: "A100", Cost: 10.0},
 					{VariantName: "variant-b", AcceleratorName: "A100", Cost: 10.0},
 					{VariantName: "variant-c", AcceleratorName: "A100", Cost: 10.0},
@@ -266,7 +266,7 @@ var _ = Describe("Saturation Engine", func() {
 
 			// Populate Role to verify it propagates to VariantDecision in the
 			// P/D-aware path (empty, prefill, decode cover the common cases).
-			variantStates := []interfaces.VariantReplicaState{
+			variantStates := []domain.VariantReplicaState{
 				{VariantName: "variant-a", CurrentReplicas: 3, DesiredReplicas: 3, Role: ""},
 				{VariantName: "variant-b", CurrentReplicas: 3, DesiredReplicas: 3, Role: "prefill"},
 				{VariantName: "variant-c", CurrentReplicas: 2, DesiredReplicas: 2, Role: "decode"},
@@ -285,15 +285,15 @@ var _ = Describe("Saturation Engine", func() {
 			Expect(decisions).To(HaveLen(3), "All 3 variants should have decisions including ActionNoChange")
 
 			By("Verifying ActionNoChange decisions are present")
-			decisionMap := make(map[string]interfaces.VariantDecision)
+			decisionMap := make(map[string]domain.VariantDecision)
 			for _, d := range decisions {
 				decisionMap[d.VariantName] = d
 			}
 
 			Expect(decisionMap).To(HaveKey("variant-a"))
-			Expect(decisionMap["variant-a"].Action).To(Equal(interfaces.ActionNoChange))
-			Expect(decisionMap["variant-b"].Action).To(Equal(interfaces.ActionScaleUp))
-			Expect(decisionMap["variant-c"].Action).To(Equal(interfaces.ActionNoChange))
+			Expect(decisionMap["variant-a"].Action).To(Equal(domain.ActionNoChange))
+			Expect(decisionMap["variant-b"].Action).To(Equal(domain.ActionScaleUp))
+			Expect(decisionMap["variant-c"].Action).To(Equal(domain.ActionNoChange))
 
 			By("Verifying Role propagates from VariantReplicaState to VariantDecision")
 			Expect(decisionMap["variant-a"].Role).To(Equal(""), "empty role must pass through unchanged")
@@ -536,7 +536,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig := config.NewTestConfig()
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {
-					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					AnalyzerName:  domain.SaturationAnalyzerName, // V2 path
 					EnableLimiter: false,
 				},
 			})
@@ -551,7 +551,7 @@ var _ = Describe("Saturation Engine", func() {
 			By("Updating config to EnableLimiter=true")
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {
-					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					AnalyzerName:  domain.SaturationAnalyzerName, // V2 path
 					EnableLimiter: true,
 				},
 			})
@@ -565,7 +565,7 @@ var _ = Describe("Saturation Engine", func() {
 			By("Updating config back to EnableLimiter=false")
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {
-					AnalyzerName:  interfaces.SaturationAnalyzerName, // V2 path
+					AnalyzerName:  domain.SaturationAnalyzerName, // V2 path
 					EnableLimiter: false,
 				},
 			})

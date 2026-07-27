@@ -8,15 +8,15 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // withSatEntry adds a single-saturation AnalyzerResults to req, initialised from r.
 // Used by test fixtures so CostAwareOptimizer can find the saturation entry.
-func withSatEntry(r *interfaces.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
+func withSatEntry(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
 	if r != nil {
 		req.AnalyzerResults = []NamedAnalyzerResult{{
-			Name:      interfaces.SaturationAnalyzerName,
+			Name:      domain.SaturationAnalyzerName,
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
@@ -44,12 +44,12 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Scale-Up", func() {
 
 		It("should add replicas to most cost-efficient variant", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				AnalyzedAt:       time.Now(),
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -58,7 +58,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 2},
 						{VariantName: "expensive", CurrentReplicas: 1},
 					},
@@ -77,12 +77,12 @@ var _ = Describe("CostAwareOptimizer", func() {
 		It("populates decision observability fields (utilization/required/spare) from the analyzer result", func() {
 			// Regression: these three feed wva_saturation_utilization / wva_required_capacity /
 			// wva_spare_capacity. If buildDecisionsWithOptimizer stops copying them, the gauges read 0.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				RequiredCapacity: 5000,
 				SpareCapacity:    1200,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000, Utilization: 0.42},
 				},
 			}
@@ -90,7 +90,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 2},
 					},
 				}),
@@ -103,16 +103,16 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("uses per-role required/spare capacity for P/D-disaggregated models", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				RequiredCapacity: 9999, // model-level; must NOT be used for role-scoped variants
 				SpareCapacity:    8888,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", RequiredCapacity: 100, SpareCapacity: 10},
 					"decode":  {Role: "decode", RequiredCapacity: 200, SpareCapacity: 20},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "p", Role: "prefill", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.3},
 					{VariantName: "d", Role: "decode", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.6},
 				},
@@ -121,7 +121,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "p", Role: "prefill", CurrentReplicas: 1},
 						{VariantName: "d", Role: "decode", CurrentReplicas: 1},
 					},
@@ -138,15 +138,15 @@ var _ = Describe("CostAwareOptimizer", func() {
 		It("maps an empty-role variant to the \"both\" RoleCapacities entry", func() {
 			// Role "" normalizes to RoleBoth, so the "both" entry (not the model-level
 			// totals) must be used. Model-level 9999/8888 are decoys.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				RequiredCapacity: 9999,
 				SpareCapacity:    8888,
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"both": {Role: "both", RequiredCapacity: 300, SpareCapacity: 30},
 				},
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v", Role: "", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000, Utilization: 0.5},
 				},
 			}
@@ -154,7 +154,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v", Role: "", CurrentReplicas: 1},
 					},
 				}),
@@ -166,9 +166,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should not skip variants with pending replicas", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "mid", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
@@ -177,7 +177,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 2, PendingReplicas: 1},
 						{VariantName: "mid", CurrentReplicas: 1},
 					},
@@ -194,9 +194,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should skip variants with zero capacity", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "zero-cap", Cost: 1.0, ReplicaCount: 0, PerReplicaCapacity: 0},
 					{VariantName: "normal", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -205,7 +205,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "zero-cap", CurrentReplicas: 0},
 						{VariantName: "normal", CurrentReplicas: 1},
 					},
@@ -220,9 +220,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should spread across multiple variants when needed", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 25000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "mid", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
@@ -231,7 +231,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 1},
 						{VariantName: "mid", CurrentReplicas: 1},
 					},
@@ -250,9 +250,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Scale-Down", func() {
 
 		It("should remove from most expensive variant first", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 15000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 				},
@@ -261,7 +261,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 3},
 						{VariantName: "expensive", CurrentReplicas: 2},
 					},
@@ -278,9 +278,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should protect cheapest variant at 1 replica", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -289,7 +289,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "expensive", CurrentReplicas: 1},
 						{VariantName: "cheap", CurrentReplicas: 1},
 					},
@@ -306,9 +306,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should remove cheap variant when expensive replica capacity exceeds spare", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 15000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -317,7 +317,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "expensive", CurrentReplicas: 1},
 						{VariantName: "cheap", CurrentReplicas: 1},
 					},
@@ -334,9 +334,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should cascade scale-down across variants", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 					{VariantName: "mid", Cost: 10.0, ReplicaCount: 2, PerReplicaCapacity: 15000},
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
@@ -346,7 +346,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "expensive", CurrentReplicas: 2},
 						{VariantName: "mid", CurrentReplicas: 2},
 						{VariantName: "cheap", CurrentReplicas: 2},
@@ -371,13 +371,13 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// decode has spare. Model-level SpareCapacity aggregates both roles, so a
 			// role-blind scale-down would trim the expensive prefill. Role-aware
 			// scale-down must leave the saturated prefill untouched and shed decode.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 20000, // aggregate (decode's spare) — gates scale-down
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill", Role: "prefill", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", SpareCapacity: 0},
 					"decode":  {Role: "decode", SpareCapacity: 20000},
 				},
@@ -386,7 +386,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 2},
 						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
 					},
@@ -398,22 +398,22 @@ var _ = Describe("CostAwareOptimizer", func() {
 
 			// Prefill (saturated role) is never trimmed despite being most expensive.
 			Expect(dm["prefill"].TargetReplicas).To(Equal(2))
-			Expect(dm["prefill"].Action).To(Equal(interfaces.ActionNoChange))
+			Expect(dm["prefill"].Action).To(Equal(domain.ActionNoChange))
 			// Decode sheds its own spare: floor(20000/10000)=2 → 3 - 2 = 1.
 			Expect(dm["decode"].TargetReplicas).To(Equal(1))
-			Expect(dm["decode"].Action).To(Equal(interfaces.ActionScaleDown))
+			Expect(dm["decode"].Action).To(Equal(domain.ActionScaleDown))
 		})
 
 		It("should shed each role by its own spare when both have slack", func() {
 			// Both roles have spare, but different amounts. Each role must shed by
 			// its own per-role spare, not the aggregate.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 30000, // aggregate — gates scale-down
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill", Role: "prefill", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 					{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", SpareCapacity: 10000}, // 1 replica
 					"decode":  {Role: "decode", SpareCapacity: 20000},  // 2 replicas
 				},
@@ -422,7 +422,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 3},
 						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
 					},
@@ -442,13 +442,13 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// Only decode has a RoleCapacities entry (e.g. a prefill data-collection
 			// gap). The one-iteration path must shed decode against its own spare and
 			// keep the cheapest decode variant at one replica.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "decode-exp", Role: "decode", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "decode-cheap", Role: "decode", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"decode": {Role: "decode", SpareCapacity: 20000}, // 2 replicas
 				},
 			}
@@ -456,7 +456,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "decode-exp", Role: "decode", CurrentReplicas: 1},
 						{VariantName: "decode-cheap", Role: "decode", CurrentReplicas: 1},
 					},
@@ -477,14 +477,14 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// prefill/decode RoleCapacities map — so the per-role sheds never include it.
 			// The design assumes one role per variant; this pins the defensive behavior
 			// if that assumption is violated: the orphan is left as-is.
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill", Role: "prefill", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "decode", Role: "decode", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 					{VariantName: "orphan", Role: "", Cost: 20.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {Role: "prefill", SpareCapacity: 0},
 					"decode":  {Role: "decode", SpareCapacity: 20000},
 				},
@@ -493,7 +493,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill", Role: "prefill", CurrentReplicas: 2},
 						{VariantName: "decode", Role: "decode", CurrentReplicas: 3},
 						{VariantName: "orphan", Role: "", CurrentReplicas: 2},
@@ -507,7 +507,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// orphan (role "") matches no per-role set → never trimmed, despite being
 			// the most expensive variant.
 			Expect(dm["orphan"].TargetReplicas).To(Equal(2))
-			Expect(dm["orphan"].Action).To(Equal(interfaces.ActionNoChange))
+			Expect(dm["orphan"].Action).To(Equal(domain.ActionNoChange))
 			// prefill saturated → untouched; decode sheds its own spare → 3 - 2 = 1.
 			Expect(dm["prefill"].TargetReplicas).To(Equal(2))
 			Expect(dm["decode"].TargetReplicas).To(Equal(1))
@@ -517,10 +517,10 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Steady State", func() {
 
 		It("should return no-change when no scaling signal", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 0,
 				SpareCapacity:    0,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
 			}
@@ -528,7 +528,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 2},
 					},
 				}),
@@ -537,7 +537,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, nil)
 
 			Expect(decisions).To(HaveLen(1))
-			Expect(decisions[0].Action).To(Equal(interfaces.ActionNoChange))
+			Expect(decisions[0].Action).To(Equal(domain.ActionNoChange))
 			Expect(decisions[0].TargetReplicas).To(Equal(2))
 		})
 
@@ -554,15 +554,15 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Multi-Model", func() {
 
 		It("should process models independently", func() {
-			r1 := &interfaces.AnalyzerResult{
+			r1 := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "m1-v1", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
-			r2 := &interfaces.AnalyzerResult{
+			r2 := &domain.AnalyzerResult{
 				SpareCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "m2-v1", Cost: 10.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
 			}
@@ -570,14 +570,14 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r1, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "m1-v1", CurrentReplicas: 1},
 					},
 				}),
 				withSatEntry(r2, ModelScalingRequest{
 					ModelID:   "model-2",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "m2-v1", CurrentReplicas: 2},
 					},
 				}),
@@ -586,9 +586,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 			decisions := optimizer.Optimize(ctx, requests, nil)
 			dm := decisionMap(decisions)
 
-			Expect(dm["m1-v1"].Action).To(Equal(interfaces.ActionScaleUp))
+			Expect(dm["m1-v1"].Action).To(Equal(domain.ActionScaleUp))
 			Expect(dm["m1-v1"].TargetReplicas).To(Equal(2))
-			Expect(dm["m2-v1"].Action).To(Equal(interfaces.ActionScaleDown))
+			Expect(dm["m2-v1"].Action).To(Equal(domain.ActionScaleDown))
 			Expect(dm["m2-v1"].TargetReplicas).To(Equal(1))
 		})
 	})
@@ -596,9 +596,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Decision Metadata", func() {
 
 		It("should set model ID, namespace, and cost on decisions", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
 			}
@@ -606,7 +606,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "ns-1",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 1},
 					},
 				}),
@@ -626,9 +626,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		intPtr := func(n int) *int { return &n }
 
 		It("should respect maxReplicas during scale-up (spillover to next variant)", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -637,7 +637,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap", CurrentReplicas: 1, MaxReplicas: intPtr(3)},
 						{VariantName: "expensive", CurrentReplicas: 1},
 					},
@@ -654,9 +654,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should respect minReplicas during scale-down", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 50000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "expensive", Cost: 15.0, ReplicaCount: 3, PerReplicaCapacity: 20000},
 					{VariantName: "cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -665,7 +665,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "expensive", CurrentReplicas: 3, MinReplicas: intPtr(2)},
 						{VariantName: "cheap", CurrentReplicas: 3},
 					},
@@ -682,9 +682,9 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should scale minReplicas=0 variant to zero while keeping minReplicas>0 sibling", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 80000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "keep-alive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 					{VariantName: "expendable", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 				},
@@ -693,7 +693,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "keep-alive", CurrentReplicas: 2, MinReplicas: intPtr(1)},
 						{VariantName: "expendable", CurrentReplicas: 3, MinReplicas: intPtr(0)},
 					},
@@ -708,10 +708,10 @@ var _ = Describe("CostAwareOptimizer", func() {
 		})
 
 		It("should propagate MinReplicas/MaxReplicas to VariantDecision", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 0,
 				SpareCapacity:    0,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "v1", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 				},
 			}
@@ -719,7 +719,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntry(r, ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "v1", CurrentReplicas: 2, MinReplicas: intPtr(1), MaxReplicas: intPtr(10)},
 					},
 				}),
@@ -736,11 +736,11 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Disaggregated (P/D) Scale-Up", func() {
 
 		// withSatEntryPD builds a request with a disaggregated saturation result.
-		withSatEntryPD := func(r *interfaces.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
+		withSatEntryPD := func(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
 			if r != nil {
 				req.Disaggregated = true
 				req.AnalyzerResults = []NamedAnalyzerResult{{
-					Name:      interfaces.SaturationAnalyzerName,
+					Name:      domain.SaturationAnalyzerName,
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
@@ -752,13 +752,13 @@ var _ = Describe("CostAwareOptimizer", func() {
 		It("should allocate paired (n_P, n_D) replicas for cheapest prefill + decode pair", func() {
 			// P-Remaining=20000, PRC_P=10000 → n_P=2
 			// D=α×P=20000 (α=1), PRC_D=10000 → n_D=2
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 20000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", Cost: 5.0, Role: "prefill", ReplicaCount: 1, PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", Cost: 5.0, Role: "decode", ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {RequiredCapacity: 20000, TotalDemand: 20000},
 					"decode":  {RequiredCapacity: 20000, TotalDemand: 20000},
 				},
@@ -767,7 +767,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntryPD(r, ModelScalingRequest{
 					ModelID:   "model-pd",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 1},
 						{VariantName: "decode-v", CurrentReplicas: 1},
 					},
@@ -786,15 +786,15 @@ var _ = Describe("CostAwareOptimizer", func() {
 			// Two prefill variants: cheap-p (cost 5) and expensive-p (cost 15)
 			// Two decode variants: cheap-d (cost 5) and expensive-d (cost 15)
 			// α=1; P-RC=10000, PRC=10000 → n_P=1 on cheap-p; n_D=1 on cheap-d
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap-p", Cost: 5.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "expensive-p", Cost: 15.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "cheap-d", Cost: 5.0, Role: "decode", PerReplicaCapacity: 10000},
 					{VariantName: "expensive-d", Cost: 15.0, Role: "decode", PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {RequiredCapacity: 10000, TotalDemand: 10000},
 					"decode":  {RequiredCapacity: 10000, TotalDemand: 10000},
 				},
@@ -803,7 +803,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntryPD(r, ModelScalingRequest{
 					ModelID:   "model-pd",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap-p", CurrentReplicas: 1},
 						{VariantName: "expensive-p", CurrentReplicas: 1},
 						{VariantName: "cheap-d", CurrentReplicas: 1},
@@ -828,11 +828,11 @@ var _ = Describe("CostAwareOptimizer", func() {
 	// (anyRoleNeedsScaleUp) correctly fires on decode demand.
 	Context("Disaggregated (P/D) D-only scale-up", func() {
 
-		withSatEntryPD := func(r *interfaces.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
+		withSatEntryPD := func(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
 			if r != nil {
 				req.Disaggregated = true
 				req.AnalyzerResults = []NamedAnalyzerResult{{
-					Name:      interfaces.SaturationAnalyzerName,
+					Name:      domain.SaturationAnalyzerName,
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
@@ -842,13 +842,13 @@ var _ = Describe("CostAwareOptimizer", func() {
 		}
 
 		It("should scale up only decode when only D has demand (RC_P=0, RC_D>0)", func() {
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				RequiredCapacity: 10000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "prefill-v", Cost: 5.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", Cost: 5.0, Role: "decode", PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {RequiredCapacity: 0, TotalDemand: 0},
 					"decode":  {RequiredCapacity: 10000, TotalDemand: 10000},
 				},
@@ -857,7 +857,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntryPD(r, ModelScalingRequest{
 					ModelID:   "model-d-only",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "prefill-v", CurrentReplicas: 2},
 						{VariantName: "decode-v", CurrentReplicas: 1},
 					},
@@ -876,11 +876,11 @@ var _ = Describe("CostAwareOptimizer", func() {
 
 	Context("Disaggregated (P/D) Scale-Down", func() {
 
-		withSatEntryPD := func(r *interfaces.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
+		withSatEntryPD := func(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
 			if r != nil {
 				req.Disaggregated = true
 				req.AnalyzerResults = []NamedAnalyzerResult{{
-					Name:      interfaces.SaturationAnalyzerName,
+					Name:      domain.SaturationAnalyzerName,
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
@@ -891,14 +891,14 @@ var _ = Describe("CostAwareOptimizer", func() {
 
 		It("should remove from most expensive prefill and decode variants", func() {
 			// P-Spare=20000, PRC_P=10000 → n_P=2; D-Spare=10000, PRC_D=10000 → n_D=1
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				SpareCapacity: 20000, // model-level (unused in disaggregated path)
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "cheap-p", Cost: 5.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "expensive-p", Cost: 15.0, Role: "prefill", PerReplicaCapacity: 10000},
 					{VariantName: "decode-v", Cost: 5.0, Role: "decode", PerReplicaCapacity: 10000},
 				},
-				RoleCapacities: map[string]interfaces.RoleCapacity{
+				RoleCapacities: map[string]domain.RoleCapacity{
 					"prefill": {SpareCapacity: 20000, TotalDemand: 10000},
 					"decode":  {SpareCapacity: 10000, TotalDemand: 10000},
 				},
@@ -907,7 +907,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 				withSatEntryPD(r, ModelScalingRequest{
 					ModelID:   "model-pd",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "cheap-p", CurrentReplicas: 2},
 						{VariantName: "expensive-p", CurrentReplicas: 2},
 						{VariantName: "decode-v", CurrentReplicas: 3},
@@ -929,7 +929,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 	Context("Helper Functions", func() {
 
 		It("sortByCostEfficiencyAsc should order by cost/capacity", func() {
-			capacities := []interfaces.VariantCapacity{
+			capacities := []domain.VariantCapacity{
 				{VariantName: "expensive", Cost: 15.0, PerReplicaCapacity: 10000},
 				{VariantName: "cheap", Cost: 5.0, PerReplicaCapacity: 10000},
 				{VariantName: "mid", Cost: 10.0, PerReplicaCapacity: 10000},
@@ -987,8 +987,8 @@ var _ = Describe("CostAwareOptimizer", func() {
 	})
 })
 
-func decisionMap(decisions []interfaces.VariantDecision) map[string]interfaces.VariantDecision {
-	m := make(map[string]interfaces.VariantDecision, len(decisions))
+func decisionMap(decisions []domain.VariantDecision) map[string]domain.VariantDecision {
+	m := make(map[string]domain.VariantDecision, len(decisions))
 	for _, d := range decisions {
 		m[d.VariantName] = d
 	}

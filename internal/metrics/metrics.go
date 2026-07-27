@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -495,7 +495,7 @@ func NewMetricsEmitter() *MetricsEmitter {
 }
 
 // EmitReplicaScalingMetrics emits metrics related to replica scaling
-func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling, direction interfaces.SaturationAction, reason interfaces.DecisionReason) error {
+func (m *MetricsEmitter) EmitReplicaScalingMetrics(ctx context.Context, va *llmdOptv1alpha1.VariantAutoscaling, direction domain.SaturationAction, reason domain.DecisionReason) error {
 	labels := prometheus.Labels{
 		constants.LabelVariantName: va.Name,
 		constants.LabelNamespace:   va.Namespace,

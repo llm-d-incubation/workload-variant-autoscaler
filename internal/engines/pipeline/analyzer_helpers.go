@@ -7,7 +7,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -37,9 +37,9 @@ func applyAllocation(s []NamedAnalyzerResult, v string, n int) {
 // The saturation entry is the keeper of per-variant metadata (Cost, AcceleratorName, Role,
 // replica counts) that the optimizer uses for variant selection and GPU accounting.
 // TODO: remove the sat_v2 special role once all analyzers populate variant metadata.
-func saturationEntry(s []NamedAnalyzerResult) *interfaces.AnalyzerResult {
+func saturationEntry(s []NamedAnalyzerResult) *domain.AnalyzerResult {
 	for _, e := range s {
-		if e.Name == interfaces.SaturationAnalyzerName {
+		if e.Name == domain.SaturationAnalyzerName {
 			return e.Result
 		}
 	}
@@ -48,7 +48,7 @@ func saturationEntry(s []NamedAnalyzerResult) *interfaces.AnalyzerResult {
 
 // prcForVariant returns the PerReplicaCapacity for variant v in result r.
 // Returns 0 if the variant is not present.
-func prcForVariant(r *interfaces.AnalyzerResult, v string) float64 {
+func prcForVariant(r *domain.AnalyzerResult, v string) float64 {
 	for _, vc := range r.VariantCapacities {
 		if vc.VariantName == v {
 			return vc.PerReplicaCapacity
@@ -94,12 +94,12 @@ func initRoleState(s []NamedAnalyzerResult) (roles []string, pickerState RolePai
 			}
 		} else {
 			// Non-disaggregated: synthesize a single "both" role from model-level scalars.
-			pickerState[i][interfaces.RoleBoth] = e.Remaining
+			pickerState[i][domain.RoleBoth] = e.Remaining
 			if s[i].RoleSpare == nil {
 				s[i].RoleSpare = make(map[string]float64, 1)
 			}
-			s[i].RoleSpare[interfaces.RoleBoth] = e.Spare
-			roleSet[interfaces.RoleBoth] = struct{}{}
+			s[i].RoleSpare[domain.RoleBoth] = e.Spare
+			roleSet[domain.RoleBoth] = struct{}{}
 		}
 	}
 
@@ -171,13 +171,13 @@ func anyRoleNeedsScaleUp(state RolePairedState, roles []string) bool {
 }
 
 // variantsForRole returns the capacities whose role matches role exactly,
-// canonicalizing an empty Role to interfaces.RoleBoth.
-func variantsForRole(vcs []interfaces.VariantCapacity, role string) []interfaces.VariantCapacity {
-	out := make([]interfaces.VariantCapacity, 0, len(vcs))
+// canonicalizing an empty Role to domain.RoleBoth.
+func variantsForRole(vcs []domain.VariantCapacity, role string) []domain.VariantCapacity {
+	out := make([]domain.VariantCapacity, 0, len(vcs))
 	for _, vc := range vcs {
 		r := vc.Role
 		if r == "" {
-			r = interfaces.RoleBoth
+			r = domain.RoleBoth
 		}
 		if r == role {
 			out = append(out, vc)
@@ -256,8 +256,8 @@ func needsScaleDownForRole(s []NamedAnalyzerResult, role string) bool {
 type RolePickFn func(
 	role string,
 	s []NamedAnalyzerResult,
-	variants []interfaces.VariantCapacity,
-	stateMap map[string]interfaces.VariantReplicaState,
+	variants []domain.VariantCapacity,
+	stateMap map[string]domain.VariantReplicaState,
 	available map[string]int,
 	targets map[string]int,
 ) (variant string, capN int)
@@ -270,8 +270,8 @@ type RolePickFn func(
 func allocateForModelPaired(
 	ctx context.Context,
 	s []NamedAnalyzerResult,
-	variants []interfaces.VariantCapacity,
-	stateMap map[string]interfaces.VariantReplicaState,
+	variants []domain.VariantCapacity,
+	stateMap map[string]domain.VariantReplicaState,
 	available map[string]int,
 	targets map[string]int,
 	pick RolePickFn,
@@ -356,7 +356,7 @@ func allocateForModelPaired(
 		// Update model-level Remaining via the P-anchor role so fairShareValue
 		// reflects committed capacity. For "both" (non-disaggregated) use the
 		// single role; for P/D prefer "prefill".
-		for _, anchor := range []string{"prefill", interfaces.RoleBoth} {
+		for _, anchor := range []string{"prefill", domain.RoleBoth} {
 			if v, ok := variantByRole[anchor]; ok {
 				applyAllocation(s, v, kByRole[anchor])
 				break

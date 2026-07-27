@@ -9,7 +9,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -44,7 +44,7 @@ func (e *Enforcer) EnforcePolicyOnDecisions(
 	ctx context.Context,
 	modelID string,
 	namespace string,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	scaleToZeroConfig config.ScaleToZeroConfigData,
 	optimizerName string,
 ) bool {
@@ -78,7 +78,7 @@ func (e *Enforcer) applyScaleToZeroOnDecisions(
 	ctx context.Context,
 	modelID string,
 	namespace string,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	scaleToZeroConfig config.ScaleToZeroConfigData,
 	optimizerName string,
 ) bool {
@@ -129,7 +129,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 	ctx context.Context,
 	modelID string,
 	namespace string,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	optimizerName string,
 ) bool {
 	logger := ctrl.LoggerFrom(ctx)
@@ -181,22 +181,22 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 // updateDecisionAction recomputes a decision's Action from TargetReplicas vs
 // CurrentReplicas after enforcement and refreshes its reason. SetDecisionReason
 // is the single place that writes d.Action.
-func updateDecisionAction(d *interfaces.VariantDecision, optimizerName, policyType string, metricsEmitter *metrics.MetricsEmitter) {
-	var action interfaces.SaturationAction
+func updateDecisionAction(d *domain.VariantDecision, optimizerName, policyType string, metricsEmitter *metrics.MetricsEmitter) {
+	var action domain.SaturationAction
 	switch {
 	case d.TargetReplicas > d.CurrentReplicas:
-		action = interfaces.ActionScaleUp
+		action = domain.ActionScaleUp
 	case d.TargetReplicas < d.CurrentReplicas:
-		action = interfaces.ActionScaleDown
+		action = domain.ActionScaleDown
 	default:
-		action = interfaces.ActionNoChange
+		action = domain.ActionNoChange
 	}
 	// Preserve the decision's original reason category (e.g. saturation-only on
 	// the V1 path) instead of hardcoding V2, so an enforced decision is not
 	// mis-attributed in the reason metric label. Fall back to V2 if it was unset.
 	category := d.ReasonCategory()
 	if category == "" {
-		category = interfaces.DecisionReasonV2
+		category = domain.DecisionReasonV2
 	}
 	d.SetDecisionReason(action, category, fmt.Sprintf("%s %s (optimizer: %s, enforced)", category, action, optimizerName))
 

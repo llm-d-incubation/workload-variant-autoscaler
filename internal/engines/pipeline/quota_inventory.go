@@ -9,7 +9,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -370,7 +370,7 @@ type quotaAllocator struct {
 //     does enforce); exact match → cap; fall-through to `default` → cap;
 //     missing → 0.
 //   - Unlimited (-1) on either scope: pass-through.
-func (a *quotaAllocator) TryAllocate(ctx context.Context, decision *interfaces.VariantDecision, gpusRequested int) (int, error) {
+func (a *quotaAllocator) TryAllocate(ctx context.Context, decision *domain.VariantDecision, gpusRequested int) (int, error) {
 	if gpusRequested <= 0 {
 		return 0, nil
 	}

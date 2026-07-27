@@ -14,7 +14,7 @@ import (
 //
 // Only three queries are registered here — those that are genuinely new and not
 // provided by other analyzer registrations. The remaining TA inputs are already
-// collected and exposed via interfaces.ReplicaMetrics; the TA reads those fields
+// collected and exposed via domain.ReplicaMetrics; the TA reads those fields
 // directly instead of re-registering duplicate PromQL templates.
 //
 // TA notation → ReplicaMetrics field (query / registration):
@@ -77,7 +77,7 @@ const (
 //   - QueryKvUsageInstant      — k*: instantaneous KV cache utilization per pod
 //   - QueryRequestRate     — fallback λ_req: completion rate per pod when EPP absent
 //
-// Additional TA inputs are read from interfaces.ReplicaMetrics fields populated by
+// Additional TA inputs are read from domain.ReplicaMetrics fields populated by
 // RegisterSaturationQueries (TotalKvCapacityTokens, AvgOutputTokens, AvgInputTokens,
 // PrefixCacheHitRate) and RegisterQueueingModelQueries (AvgITL, ArrivalRate).
 // See the package-level constant block for the full TA notation → field mapping.

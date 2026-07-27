@@ -26,7 +26,7 @@ limitations under the License.
 //	r.RoleCapacities[role].* == same sums filtered by vc.Role == role
 package aggregation
 
-import "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+import "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 
 // ScopeTotals holds the three model-level (or per-role) aggregates that the
 // engine's universal threshold post-step reads to compute RC and SC.
@@ -37,7 +37,7 @@ type ScopeTotals struct {
 }
 
 // SumTotalSupply returns Σ_v vc.ReplicaCount × vc.PerReplicaCapacity.
-func SumTotalSupply(vcs []interfaces.VariantCapacity) float64 {
+func SumTotalSupply(vcs []domain.VariantCapacity) float64 {
 	var total float64
 	for _, vc := range vcs {
 		total += float64(vc.ReplicaCount) * vc.PerReplicaCapacity
@@ -49,7 +49,7 @@ func SumTotalSupply(vcs []interfaces.VariantCapacity) float64 {
 // Σ_v (vc.ReplicaCount + vc.PendingReplicas) × vc.PerReplicaCapacity.
 // Pending replicas count toward anticipated supply so an in-flight scale-up
 // reduces the computed RC and prevents double-scaling.
-func SumTotalAnticipatedSupply(vcs []interfaces.VariantCapacity) float64 {
+func SumTotalAnticipatedSupply(vcs []domain.VariantCapacity) float64 {
 	var total float64
 	for _, vc := range vcs {
 		total += float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
@@ -58,7 +58,7 @@ func SumTotalAnticipatedSupply(vcs []interfaces.VariantCapacity) float64 {
 }
 
 // SumTotalDemand returns Σ_v vc.TotalDemand.
-func SumTotalDemand(vcs []interfaces.VariantCapacity) float64 {
+func SumTotalDemand(vcs []domain.VariantCapacity) float64 {
 	var total float64
 	for _, vc := range vcs {
 		total += vc.TotalDemand
@@ -67,14 +67,14 @@ func SumTotalDemand(vcs []interfaces.VariantCapacity) float64 {
 }
 
 // AggregateByRole groups vcs by role and computes ScopeTotals for each group.
-// An empty or blank role string is canonicalized to interfaces.RoleBoth,
+// An empty or blank role string is canonicalized to domain.RoleBoth,
 // consistent with saturation_v2's role normalization.
-func AggregateByRole(vcs []interfaces.VariantCapacity) map[string]ScopeTotals {
+func AggregateByRole(vcs []domain.VariantCapacity) map[string]ScopeTotals {
 	result := make(map[string]ScopeTotals)
 	for _, vc := range vcs {
 		role := vc.Role
 		if role == "" {
-			role = interfaces.RoleBoth
+			role = domain.RoleBoth
 		}
 		t := result[role]
 		t.TotalSupply += float64(vc.ReplicaCount) * vc.PerReplicaCapacity

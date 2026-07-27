@@ -1,4 +1,4 @@
-package interfaces
+package domain
 
 // Allocation describes the current resource allocation for a model variant.
 type Allocation struct {

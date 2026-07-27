@@ -3,7 +3,7 @@ package pipeline
 import (
 	"context"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // NoOpLimiter is a Limiter whose Limit method returns nil without
@@ -25,7 +25,7 @@ func NewNoOpLimiter(name string) *NoOpLimiter {
 func (l *NoOpLimiter) Name() string { return l.name }
 
 // Limit is a no-op; decisions are returned unchanged.
-func (l *NoOpLimiter) Limit(_ context.Context, _ []*interfaces.VariantDecision) error {
+func (l *NoOpLimiter) Limit(_ context.Context, _ []*domain.VariantDecision) error {
 	return nil
 }
 

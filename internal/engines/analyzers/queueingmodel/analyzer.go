@@ -7,13 +7,13 @@ import (
 	"math"
 	"time"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel/tuner"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/analyzer"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// QueueingModelAnalyzer implements interfaces.Analyzer.
+// QueueingModelAnalyzer implements domain.Analyzer.
 // It performs SLO-driven capacity analysis by:
 //  1. Learning model parameters (alpha, beta, gamma) online via Kalman filter
 //  2. Using queueing model to predict max request rate that meets TTFT/ITL SLOs
@@ -31,9 +31,9 @@ func NewQueueingModelAnalyzer() *QueueingModelAnalyzer {
 	}
 }
 
-// Name implements interfaces.Analyzer.
+// Name implements domain.Analyzer.
 func (a *QueueingModelAnalyzer) Name() string {
-	return interfaces.QueueingModelAnalyzerName
+	return domain.QueueingModelAnalyzerName
 }
 
 // Update deletes non-existing models from paramStore[models]
@@ -79,7 +79,7 @@ func (a *QueueingModelAnalyzer) setParams(modelID, namespace, variantName string
 	pStore.Set(namespace, variantName, params)
 }
 
-// Analyze implements interfaces.Analyzer.
+// Analyze implements domain.Analyzer.
 // Called for each model.
 //
 // If we fail to analyze a model (bad config, no learned parameters, no
@@ -91,8 +91,8 @@ func (a *QueueingModelAnalyzer) setParams(modelID, namespace, variantName string
 // without an SLO but the situation is not necessarily erroneous.
 func (a *QueueingModelAnalyzer) Analyze(
 	ctx context.Context,
-	input interfaces.AnalyzerInput,
-) (*interfaces.AnalyzerResult, error) {
+	input domain.AnalyzerInput,
+) (*domain.AnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 	modelID := input.ModelID
 	namespace := input.Namespace
@@ -135,7 +135,7 @@ func (a *QueueingModelAnalyzer) Analyze(
 		utilization = totalDemand / totalSupply
 	}
 
-	return &interfaces.AnalyzerResult{
+	return &domain.AnalyzerResult{
 		AnalyzerName:      a.Name(),
 		ModelID:           modelID,
 		Namespace:         namespace,
@@ -155,7 +155,7 @@ func (a *QueueingModelAnalyzer) updateVariantParameters(
 	namespace string,
 	modelID string,
 	variantNames []string,
-	variantMetrics map[string][]interfaces.ReplicaMetrics,
+	variantMetrics map[string][]domain.ReplicaMetrics,
 	config *QMConfig,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
@@ -244,7 +244,7 @@ func (a *QueueingModelAnalyzer) getSLOTarget(
 	modelID string,
 	config *QMConfig,
 	variantNames []string,
-	modelReplicaMetrics []interfaces.ReplicaMetrics,
+	modelReplicaMetrics []domain.ReplicaMetrics,
 ) *SLOTarget {
 	// First try explicit config
 	if slo := config.GetSLOForModel(namespace, modelID); slo != nil {
@@ -259,10 +259,10 @@ func (a *QueueingModelAnalyzer) computeAllVariantCapacities(
 	ctx context.Context,
 	namespace string,
 	modelID string,
-	variantMetrics map[string][]interfaces.ReplicaMetrics,
-	variantStates []interfaces.VariantReplicaState,
+	variantMetrics map[string][]domain.ReplicaMetrics,
+	variantStates []domain.VariantReplicaState,
 	sloTarget *SLOTarget,
-) []interfaces.VariantCapacity {
+) []domain.VariantCapacity {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Build cost and accelerator lookup from input metrics
@@ -275,13 +275,13 @@ func (a *QueueingModelAnalyzer) computeAllVariantCapacities(
 		}
 	}
 
-	variantCapacities := make([]interfaces.VariantCapacity, 0, len(variantStates))
+	variantCapacities := make([]domain.VariantCapacity, 0, len(variantStates))
 	for _, variantState := range variantStates {
 		variantName := variantState.VariantName
 		readyCount := max(variantState.CurrentReplicas-variantState.PendingReplicas, 0)
 
 		// variant capacity in case of error
-		errorVariantCapacity := interfaces.VariantCapacity{
+		errorVariantCapacity := domain.VariantCapacity{
 			VariantName:     variantName,
 			AcceleratorName: variantAccel[variantName],
 			Cost:            variantCost[variantName],
@@ -382,7 +382,7 @@ func (a *QueueingModelAnalyzer) computeAllVariantCapacities(
 		}
 		arrivalRatePerReplica := totalArrivalRate / desiredNumReplicas
 
-		variantCapacity := interfaces.VariantCapacity{
+		variantCapacity := domain.VariantCapacity{
 			VariantName:     variantName,
 			AcceleratorName: variantAccel[variantName],
 			Cost:            variantCost[variantName], // TODO: multiply by numReplicas?
@@ -497,7 +497,7 @@ func (a *QueueingModelAnalyzer) guessSLOFromMetrics(
 	modelID string,
 	config *QMConfig,
 	variantNames []string,
-	modelReplicaMetrics []interfaces.ReplicaMetrics,
+	modelReplicaMetrics []domain.ReplicaMetrics,
 ) *SLOTarget {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -623,7 +623,7 @@ func (a *QueueingModelAnalyzer) storeParametersFromResults(
 // Returns error if required metrics are unavailable.
 func buildEnvironmentsFromMetrics(
 	variantName string,
-	variantReplicaMetrics []interfaces.ReplicaMetrics,
+	variantReplicaMetrics []domain.ReplicaMetrics,
 ) ([]*tuner.Environment, error) {
 	if len(variantReplicaMetrics) == 0 {
 		return nil, fmt.Errorf("no replica metrics for variant %s", variantName)
@@ -771,7 +771,7 @@ func guessInitState(env *tuner.Environment) ([]float64, error) {
 }
 
 // aggregateCapacities calculates the sum of supply and demand over all variants
-func aggregateCapacities(capacities []interfaces.VariantCapacity) (supply, demand float64) {
+func aggregateCapacities(capacities []domain.VariantCapacity) (supply, demand float64) {
 	for _, c := range capacities {
 		supply += c.TotalCapacity
 		demand += c.TotalDemand
@@ -780,8 +780,8 @@ func aggregateCapacities(capacities []interfaces.VariantCapacity) (supply, deman
 }
 
 // groupMetricsByVariant groups replica metrics by variant name.
-func groupMetricsByVariant(modelReplicaMetrics []interfaces.ReplicaMetrics) map[string][]interfaces.ReplicaMetrics {
-	grouped := make(map[string][]interfaces.ReplicaMetrics)
+func groupMetricsByVariant(modelReplicaMetrics []domain.ReplicaMetrics) map[string][]domain.ReplicaMetrics {
+	grouped := make(map[string][]domain.ReplicaMetrics)
 	for _, replicaMetric := range modelReplicaMetrics {
 		grouped[replicaMetric.VariantName] = append(grouped[replicaMetric.VariantName], replicaMetric)
 	}
@@ -790,7 +790,7 @@ func groupMetricsByVariant(modelReplicaMetrics []interfaces.ReplicaMetrics) map[
 
 // getVariantNames returns the variant names, derived from replicaMetrics,
 // in the order they appear in the slice
-func getVariantNames(replicaMetrics []interfaces.ReplicaMetrics) []string {
+func getVariantNames(replicaMetrics []domain.ReplicaMetrics) []string {
 	names := []string{}
 	namesMap := make(map[string]bool)
 	for _, replicaMetric := range replicaMetrics {
@@ -815,7 +815,7 @@ type workloadMetrics struct {
 
 // aggregateWorkloadMetrics averages token sizes and latencies across replicas
 // that have active traffic. Returns zero metrics if no replicas have traffic.
-func aggregateWorkloadMetrics(replicaMetrics []interfaces.ReplicaMetrics) *workloadMetrics {
+func aggregateWorkloadMetrics(replicaMetrics []domain.ReplicaMetrics) *workloadMetrics {
 	var totalArrivalRate float64
 	var totalInputToks, totalOutputToks float64
 	var totalTTFT, totalITL float64

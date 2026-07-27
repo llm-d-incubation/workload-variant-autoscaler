@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // These specs exercise the V1 Limit() enforcement path end-to-end: a real
@@ -24,8 +24,8 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 		ctx = context.Background()
 	})
 
-	newDecision := func() *interfaces.VariantDecision {
-		return &interfaces.VariantDecision{
+	newDecision := func() *domain.VariantDecision {
+		return &domain.VariantDecision{
 			VariantName:     "v1",
 			Namespace:       "team-a",
 			AcceleratorName: "H100",
@@ -53,7 +53,7 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 	It("caps TargetReplicas at the cluster quota headroom", func() {
 		d := newDecision()
 		// cap 6, used 4 → 2 free = 1 replica; target lands at 2 + 1 = 3.
-		Expect(clusterLimiter("cluster-quota", 6).Limit(ctx, []*interfaces.VariantDecision{d})).To(Succeed())
+		Expect(clusterLimiter("cluster-quota", 6).Limit(ctx, []*domain.VariantDecision{d})).To(Succeed())
 
 		Expect(d.TargetReplicas).To(Equal(3), "capped at cluster quota headroom")
 		Expect(d.WasLimited).To(BeTrue())
@@ -62,7 +62,7 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 
 	It("caps TargetReplicas at the namespace quota headroom", func() {
 		d := newDecision()
-		Expect(namespaceLimiter("namespace-quota", 6).Limit(ctx, []*interfaces.VariantDecision{d})).To(Succeed())
+		Expect(namespaceLimiter("namespace-quota", 6).Limit(ctx, []*domain.VariantDecision{d})).To(Succeed())
 
 		Expect(d.TargetReplicas).To(Equal(3), "capped at namespace quota headroom")
 		Expect(d.WasLimited).To(BeTrue())
@@ -77,7 +77,7 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 			namespaceLimiter("namespace-quota", 6),
 		})
 		d := newDecision()
-		Expect(comp.Limit(ctx, []*interfaces.VariantDecision{d})).To(Succeed())
+		Expect(comp.Limit(ctx, []*domain.VariantDecision{d})).To(Succeed())
 
 		Expect(d.TargetReplicas).To(Equal(3), "namespace quota is the binding constraint")
 		Expect(d.WasLimited).To(BeTrue())
@@ -100,7 +100,7 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 		minReplicas := 5
 		d := newDecision()
 		d.MinReplicas = &minReplicas
-		Expect(limiter.Limit(ctx, []*interfaces.VariantDecision{d})).To(Succeed())
+		Expect(limiter.Limit(ctx, []*domain.VariantDecision{d})).To(Succeed())
 
 		Expect(d.TargetReplicas).To(Equal(5), "MinReplicas floor restores the requested target")
 		Expect(d.WasLimited).To(BeTrue(), "the quota still denied GPUs")
@@ -117,7 +117,7 @@ var _ = Describe("Quota limiter V1 enforcement (integration)", func() {
 			clusterLimiter("cluster-quota", 100),
 		})
 		d := newDecision()
-		Expect(comp.Limit(ctx, []*interfaces.VariantDecision{d})).To(Succeed())
+		Expect(comp.Limit(ctx, []*domain.VariantDecision{d})).To(Succeed())
 
 		Expect(d.TargetReplicas).To(Equal(3))
 		Expect(d.WasLimited).To(BeTrue())

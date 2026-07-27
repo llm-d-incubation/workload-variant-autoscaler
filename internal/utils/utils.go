@@ -15,7 +15,7 @@ import (
 	"github.com/prometheus/common/model"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/resources"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -94,9 +94,9 @@ func MarshalStructToJsonString(t any) string {
 }
 
 // Helper to find SLOs for a model variant
-func FindModelSLO(cmData map[string]string, targetModel string) (*interfaces.ServiceClassEntry, string /* class name */, error) {
+func FindModelSLO(cmData map[string]string, targetModel string) (*domain.ServiceClassEntry, string /* class name */, error) {
 	for key, val := range cmData {
-		var sc interfaces.ServiceClass
+		var sc domain.ServiceClass
 		if err := yaml.Unmarshal([]byte(val), &sc); err != nil {
 			return nil, "", fmt.Errorf("failed to parse %s: %w", key, err)
 		}

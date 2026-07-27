@@ -4,24 +4,24 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // makeNamed builds a NamedAnalyzerResult with the given RC, SC, and per-variant
 // (variantName, perReplicaCapacity) pairs.
 func makeNamed(name string, rc, sc float64, vcs ...any) NamedAnalyzerResult {
-	var caps []interfaces.VariantCapacity
+	var caps []domain.VariantCapacity
 	for i := 0; i+1 < len(vcs); i += 2 {
 		vName := vcs[i].(string)
 		prc := vcs[i+1].(float64)
-		caps = append(caps, interfaces.VariantCapacity{
+		caps = append(caps, domain.VariantCapacity{
 			VariantName:        vName,
 			PerReplicaCapacity: prc,
 		})
 	}
 	return NamedAnalyzerResult{
 		Name: name,
-		Result: &interfaces.AnalyzerResult{
+		Result: &domain.AnalyzerResult{
 			RequiredCapacity:  rc,
 			SpareCapacity:     sc,
 			VariantCapacities: caps,
@@ -62,9 +62,9 @@ var _ = Describe("analyzer helpers", func() {
 
 	Describe("saturationEntry", func() {
 		It("returns the saturation result from the slice", func() {
-			satResult := &interfaces.AnalyzerResult{RequiredCapacity: 42}
+			satResult := &domain.AnalyzerResult{RequiredCapacity: 42}
 			s := []NamedAnalyzerResult{
-				{Name: interfaces.SaturationAnalyzerName, Result: satResult},
+				{Name: domain.SaturationAnalyzerName, Result: satResult},
 				makeNamed("ta", 10, 0),
 			}
 			Expect(saturationEntry(s)).To(BeIdenticalTo(satResult))
@@ -82,12 +82,12 @@ var _ = Describe("analyzer helpers", func() {
 func makeNamedPD(name string, pRC, dRC, pSC, dSC float64, pDemand, dDemand float64, vPPRC float64, vDPRC float64) NamedAnalyzerResult {
 	return NamedAnalyzerResult{
 		Name: name,
-		Result: &interfaces.AnalyzerResult{
-			VariantCapacities: []interfaces.VariantCapacity{
+		Result: &domain.AnalyzerResult{
+			VariantCapacities: []domain.VariantCapacity{
 				{VariantName: "pf", Role: "prefill", PerReplicaCapacity: vPPRC},
 				{VariantName: "dc", Role: "decode", PerReplicaCapacity: vDPRC},
 			},
-			RoleCapacities: map[string]interfaces.RoleCapacity{
+			RoleCapacities: map[string]domain.RoleCapacity{
 				"prefill": {Role: "prefill", RequiredCapacity: pRC, SpareCapacity: pSC, TotalDemand: pDemand},
 				"decode":  {Role: "decode", RequiredCapacity: dRC, SpareCapacity: dSC, TotalDemand: dDemand},
 			},
@@ -113,9 +113,9 @@ var _ = Describe("paired helpers", func() {
 		It("non-disaggregated: synthetic 'both' role using model-level Remaining/Spare", func() {
 			s := []NamedAnalyzerResult{makeNamed("sat", 20000, 5000, "v", 10.0)}
 			roles, ps := initRoleState(s)
-			Expect(roles).To(ConsistOf(interfaces.RoleBoth))
-			Expect(ps[0][interfaces.RoleBoth]).To(BeNumerically("~", 20000.0, 1e-9))
-			Expect(s[0].RoleSpare[interfaces.RoleBoth]).To(BeNumerically("~", 5000.0, 1e-9))
+			Expect(roles).To(ConsistOf(domain.RoleBoth))
+			Expect(ps[0][domain.RoleBoth]).To(BeNumerically("~", 20000.0, 1e-9))
+			Expect(s[0].RoleSpare[domain.RoleBoth]).To(BeNumerically("~", 5000.0, 1e-9))
 		})
 	})
 
@@ -200,7 +200,7 @@ var _ = Describe("paired helpers", func() {
 
 	Describe("variantsForRole", func() {
 		It("filters variants by exact role match", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{VariantName: "pf", Role: "prefill"},
 				{VariantName: "dc", Role: "decode"},
 				{VariantName: "both", Role: "both"},
@@ -211,7 +211,7 @@ var _ = Describe("paired helpers", func() {
 		})
 
 		It("matches 'both' query against both explicit 'both' and empty-role variants", func() {
-			vcs := []interfaces.VariantCapacity{
+			vcs := []domain.VariantCapacity{
 				{VariantName: "pf", Role: "prefill"},
 				{VariantName: "dc", Role: "decode"},
 				{VariantName: "all", Role: "both"},

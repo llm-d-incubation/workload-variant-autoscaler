@@ -12,13 +12,16 @@ import (
 	"github.com/prometheus/common/model"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // stubPromAPI implements promv1.API with only Query stubbed.
@@ -612,5 +615,104 @@ func TestRebalance_MultiNamespace(t *testing.T) {
 		if got := getMaxReplicas(t, c, tc.hpa); got != tc.want {
 			t.Errorf("%s/%s maxReplicas = %d, want %d", tc.hpa.Namespace, tc.hpa.Name, got, tc.want)
 		}
+	}
+}
+
+// newPluginWithInterceptor builds a plugin whose fake client routes calls
+// through funcs, letting a test inject a transient 409 Conflict on Patch.
+func newPluginWithInterceptor(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) (*Plugin, client.Client) {
+	t.Helper()
+	scheme := newTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithInterceptorFuncs(funcs).
+		Build()
+	return New(c, &stubPromAPI{}), c
+}
+
+// conflictOnceThenDelegate returns a Patch interceptor that fails the first
+// call with a 409 Conflict and delegates every subsequent call to the real
+// client. patchCalls is incremented on each invocation.
+func conflictOnceThenDelegate(patchCalls *int, gr schema.GroupResource) func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+	return func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		*patchCalls++
+		if *patchCalls == 1 {
+			return apierrors.NewConflict(gr, obj.GetName(), errors.New("stale resourceVersion"))
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}
+}
+
+// TestSetMaxReplicas_RetriesOnConflictHPA verifies that a transient 409 on the
+// first HPA patch is retried against a freshly read object and the target is
+// applied on the retry.
+func TestSetMaxReplicas_RetriesOnConflictHPA(t *testing.T) {
+	hpa := makeHPA("hpa-a", "ns", "pool-a", 5)
+	var patchCalls int
+	funcs := interceptor.Funcs{
+		Patch: conflictOnceThenDelegate(&patchCalls,
+			schema.GroupResource{Group: "autoscaling", Resource: "horizontalpodautoscalers"}),
+	}
+	p, c := newPluginWithInterceptor(t, funcs, hpa)
+
+	if err := p.setMaxReplicas(context.Background(), hpa, 8); err != nil {
+		t.Fatalf("setMaxReplicas: %v", err)
+	}
+	if patchCalls != 2 {
+		t.Errorf("patch calls = %d, want 2 (one conflict, one success)", patchCalls)
+	}
+	if got := getMaxReplicas(t, c, hpa); got != 8 {
+		t.Errorf("maxReplicas = %d, want 8", got)
+	}
+}
+
+// TestSetMaxReplicas_RetriesOnConflictScaledObject verifies the same retry
+// behavior for KEDA ScaledObjects.
+func TestSetMaxReplicas_RetriesOnConflictScaledObject(t *testing.T) {
+	so := makeScaledObject("so-a", "pool-a", 5)
+	var patchCalls int
+	funcs := interceptor.Funcs{
+		Patch: conflictOnceThenDelegate(&patchCalls,
+			schema.GroupResource{Group: "keda.sh", Resource: "scaledobjects"}),
+	}
+	p, c := newPluginWithInterceptor(t, funcs, so)
+
+	if err := p.setMaxReplicas(context.Background(), so, 8); err != nil {
+		t.Fatalf("setMaxReplicas: %v", err)
+	}
+	if patchCalls != 2 {
+		t.Errorf("patch calls = %d, want 2 (one conflict, one success)", patchCalls)
+	}
+	if got := getMaxReplicaCount(t, c, so); got != 8 {
+		t.Errorf("maxReplicaCount = %d, want 8", got)
+	}
+}
+
+// TestSetMaxReplicas_GivesUpAfterMaxRetries verifies that a persistent conflict
+// exhausts the bounded retry, returns a Conflict error rather than hanging, and
+// leaves the object unchanged.
+func TestSetMaxReplicas_GivesUpAfterMaxRetries(t *testing.T) {
+	hpa := makeHPA("hpa-a", "ns", "pool-a", 5)
+	var patchCalls int
+	funcs := interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+			patchCalls++
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: "autoscaling", Resource: "horizontalpodautoscalers"},
+				obj.GetName(), errors.New("stale resourceVersion"))
+		},
+	}
+	p, c := newPluginWithInterceptor(t, funcs, hpa)
+
+	err := p.setMaxReplicas(context.Background(), hpa, 8)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, want a Conflict error", err)
+	}
+	if patchCalls != 5 {
+		t.Errorf("patch calls = %d, want 5 (retry.DefaultRetry steps)", patchCalls)
+	}
+	if got := getMaxReplicas(t, c, hpa); got != 5 {
+		t.Errorf("maxReplicas = %d, want 5 (unchanged)", got)
 	}
 }

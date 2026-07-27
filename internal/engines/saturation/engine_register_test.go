@@ -28,11 +28,11 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
-// spyAnalyzer is a minimal interfaces.Analyzer used in registration tests.
+// spyAnalyzer is a minimal domain.Analyzer used in registration tests.
 // Configurable to record calls, return an error, or panic.
 type spyAnalyzer struct {
 	name      string
@@ -43,7 +43,7 @@ type spyAnalyzer struct {
 
 func (s *spyAnalyzer) Name() string { return s.name }
 
-func (s *spyAnalyzer) Analyze(_ context.Context, in interfaces.AnalyzerInput) (*interfaces.AnalyzerResult, error) {
+func (s *spyAnalyzer) Analyze(_ context.Context, in domain.AnalyzerInput) (*domain.AnalyzerResult, error) {
 	s.callCount++
 	if s.panicMsg != "" {
 		panic(s.panicMsg)
@@ -51,7 +51,7 @@ func (s *spyAnalyzer) Analyze(_ context.Context, in interfaces.AnalyzerInput) (*
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &interfaces.AnalyzerResult{AnalyzerName: s.name, ModelID: in.ModelID}, nil
+	return &domain.AnalyzerResult{AnalyzerName: s.name, ModelID: in.ModelID}, nil
 }
 
 var _ = Describe("Engine analyzer registry", func() {
@@ -64,7 +64,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			Expect(engine.analyzers).To(HaveLen(1))
-			Expect(engine.analyzers[0].name).To(Equal(interfaces.SaturationAnalyzerName))
+			Expect(engine.analyzers[0].name).To(Equal(domain.SaturationAnalyzerName))
 			Expect(engine.analyzers[0].analyzer).To(BeIdenticalTo(engine.saturationV2Analyzer))
 		})
 	})
@@ -73,7 +73,7 @@ var _ = Describe("Engine analyzer registry", func() {
 		It("appends new analyzers in registration order", func() {
 			e := &Engine{
 				analyzers: []analyzerEntry{
-					{name: interfaces.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: interfaces.SaturationAnalyzerName}},
+					{name: domain.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: domain.SaturationAnalyzerName}},
 				},
 			}
 
@@ -81,7 +81,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			Expect(e.RegisterAnalyzer("slo", &spyAnalyzer{name: "slo"})).To(Succeed())
 
 			Expect(e.analyzers).To(HaveLen(3))
-			Expect(e.analyzers[0].name).To(Equal(interfaces.SaturationAnalyzerName))
+			Expect(e.analyzers[0].name).To(Equal(domain.SaturationAnalyzerName))
 			Expect(e.analyzers[1].name).To(Equal("throughput"))
 			Expect(e.analyzers[2].name).To(Equal("slo"))
 		})
@@ -89,7 +89,7 @@ var _ = Describe("Engine analyzer registry", func() {
 		It("returns an error when re-registering an existing name", func() {
 			e := &Engine{
 				analyzers: []analyzerEntry{
-					{name: interfaces.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: interfaces.SaturationAnalyzerName}},
+					{name: domain.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: domain.SaturationAnalyzerName}},
 					{name: "throughput", analyzer: &spyAnalyzer{name: "throughput"}},
 				},
 			}
@@ -97,14 +97,14 @@ var _ = Describe("Engine analyzer registry", func() {
 			Expect(e.RegisterAnalyzer("throughput", &spyAnalyzer{name: "throughput"})).
 				To(MatchError(ContainSubstring(`duplicate analyzer name "throughput"`)))
 
-			Expect(e.RegisterAnalyzer(interfaces.SaturationAnalyzerName, &spyAnalyzer{name: "x"})).
+			Expect(e.RegisterAnalyzer(domain.SaturationAnalyzerName, &spyAnalyzer{name: "x"})).
 				To(MatchError(ContainSubstring(`duplicate analyzer name`)))
 		})
 
 		It("returns an error when called after StartOptimizeLoop has frozen the registry", func() {
 			e := &Engine{
 				analyzers: []analyzerEntry{
-					{name: interfaces.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: interfaces.SaturationAnalyzerName}},
+					{name: domain.SaturationAnalyzerName, analyzer: &spyAnalyzer{name: domain.SaturationAnalyzerName}},
 				},
 				started: true,
 			}
@@ -201,7 +201,7 @@ var _ = Describe("Engine analyzer registry", func() {
 			spy := &spyAnalyzer{name: "throughput", err: errors.New("boom")}
 			entry := analyzerEntry{name: "throughput", analyzer: spy}
 			result := runRegisteredAnalyzer(testCtx, testLogger, entry, "model-1",
-				interfaces.AnalyzerInput{ModelID: "model-1"})
+				domain.AnalyzerInput{ModelID: "model-1"})
 			Expect(result).To(BeNil())
 			Expect(spy.callCount).To(Equal(1))
 		})
@@ -209,10 +209,10 @@ var _ = Describe("Engine analyzer registry", func() {
 		It("recovers from a panicking analyzer and returns nil", func() {
 			spy := &spyAnalyzer{name: "throughput", panicMsg: "boom"}
 			entry := analyzerEntry{name: "throughput", analyzer: spy}
-			var result *interfaces.AnalyzerResult
+			var result *domain.AnalyzerResult
 			Expect(func() {
 				result = runRegisteredAnalyzer(testCtx, testLogger, entry, "model-1",
-					interfaces.AnalyzerInput{ModelID: "model-1"})
+					domain.AnalyzerInput{ModelID: "model-1"})
 			}).NotTo(Panic())
 			Expect(result).To(BeNil())
 		})

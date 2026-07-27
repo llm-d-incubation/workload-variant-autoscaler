@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // namespaceAwareMockInventory extends mockInventory with SetUsedByNamespace
@@ -58,7 +58,7 @@ var _ = Describe("DefaultLimiter namespace-aware feature detection", func() {
 		inv := newNamespaceAwareMockInventory(map[string]int{"H100": 100})
 		limiter := NewDefaultLimiter("test", inv, algorithm)
 
-		decisions := []*interfaces.VariantDecision{
+		decisions := []*domain.VariantDecision{
 			{VariantName: "v1", Namespace: "team-a", AcceleratorName: "H100", CurrentReplicas: 2, GPUsPerReplica: 4},
 			{VariantName: "v2", Namespace: "team-a", AcceleratorName: "H100", CurrentReplicas: 1, GPUsPerReplica: 2},
 			{VariantName: "v3", Namespace: "team-b", AcceleratorName: "A100", CurrentReplicas: 3, GPUsPerReplica: 1},
@@ -79,7 +79,7 @@ var _ = Describe("DefaultLimiter namespace-aware feature detection", func() {
 		inv := newNamespaceAwareMockInventory(map[string]int{"H100": 100, "A100": 100})
 		limiter := NewDefaultLimiter("test", inv, algorithm)
 
-		decisions := []*interfaces.VariantDecision{
+		decisions := []*domain.VariantDecision{
 			{Namespace: "team-a", AcceleratorName: "H100", CurrentReplicas: 1, GPUsPerReplica: 1},
 			{Namespace: "", AcceleratorName: "H100", CurrentReplicas: 99, GPUsPerReplica: 99},   // skipped (empty ns)
 			{Namespace: "team-a", AcceleratorName: "", CurrentReplicas: 99, GPUsPerReplica: 99}, // skipped (empty type, unresolvable)
@@ -95,7 +95,7 @@ var _ = Describe("DefaultLimiter namespace-aware feature detection", func() {
 		inv := newMockInventory("plain", map[string]int{"H100": 100})
 		limiter := NewDefaultLimiter("test", inv, algorithm)
 
-		decisions := []*interfaces.VariantDecision{
+		decisions := []*domain.VariantDecision{
 			{Namespace: "team-a", AcceleratorName: "H100", CurrentReplicas: 1, GPUsPerReplica: 1},
 		}
 		Expect(limiter.Limit(ctx, decisions)).To(Succeed())

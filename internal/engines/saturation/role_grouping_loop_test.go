@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
@@ -40,10 +40,10 @@ import (
 type stubAnalyzer struct {
 	// callMetrics captures the replicaMetrics slice handed to each call so
 	// tests can assert per-role scoping of analyzer input.
-	callMetrics [][]interfaces.ReplicaMetrics
+	callMetrics [][]domain.ReplicaMetrics
 	// analysisByVariant returns the ModelSaturationAnalysis the stub should
 	// produce when a matching variant name appears in the incoming metrics.
-	analysisByVariant map[string]*interfaces.ModelSaturationAnalysis
+	analysisByVariant map[string]*domain.ModelSaturationAnalysis
 	// errByVariant returns an error when a matching variant name appears
 	// in the incoming metrics.
 	errByVariant map[string]error
@@ -55,10 +55,10 @@ type stubAnalyzer struct {
 func (s *stubAnalyzer) AnalyzeModelSaturation(
 	_ context.Context,
 	modelID, namespace string,
-	replicaMetrics []interfaces.ReplicaMetrics,
+	replicaMetrics []domain.ReplicaMetrics,
 	_ config.SaturationScalingConfig,
-) (*interfaces.ModelSaturationAnalysis, error) {
-	s.callMetrics = append(s.callMetrics, append([]interfaces.ReplicaMetrics(nil), replicaMetrics...))
+) (*domain.ModelSaturationAnalysis, error) {
+	s.callMetrics = append(s.callMetrics, append([]domain.ReplicaMetrics(nil), replicaMetrics...))
 	for _, m := range replicaMetrics {
 		if err, ok := s.errByVariant[m.VariantName]; ok {
 			return nil, err
@@ -67,13 +67,13 @@ func (s *stubAnalyzer) AnalyzeModelSaturation(
 			return a, nil
 		}
 	}
-	return &interfaces.ModelSaturationAnalysis{ModelID: modelID, Namespace: namespace}, nil
+	return &domain.ModelSaturationAnalysis{ModelID: modelID, Namespace: namespace}, nil
 }
 
 func (s *stubAnalyzer) CalculateSaturationTargets(
 	_ context.Context,
-	_ *interfaces.ModelSaturationAnalysis,
-	variantStates []interfaces.VariantReplicaState,
+	_ *domain.ModelSaturationAnalysis,
+	variantStates []domain.VariantReplicaState,
 ) map[string]int {
 	if len(variantStates) > 0 {
 		if t, ok := s.targetsByVariant[variantStates[0].VariantName]; ok {
@@ -98,7 +98,7 @@ func engineWithStub(stub *stubAnalyzer) *Engine {
 // uniqueVariantCount returns the number of distinct VariantNames in m,
 // used to assert that each role group's metrics are scoped to exactly the
 // variants in that role.
-func uniqueVariantCount(m []interfaces.ReplicaMetrics) int {
+func uniqueVariantCount(m []domain.ReplicaMetrics) int {
 	seen := map[string]struct{}{}
 	for _, r := range m {
 		seen[r.VariantName] = struct{}{}
@@ -117,11 +117,11 @@ type pdFixture struct {
 func newPDFixture() pdFixture {
 	return pdFixture{
 		data: &modelData{
-			variantStates: []interfaces.VariantReplicaState{
+			variantStates: []domain.VariantReplicaState{
 				{VariantName: "prefill-h100", Role: "prefill", CurrentReplicas: 1},
 				{VariantName: "decode-l4", Role: "decode", CurrentReplicas: 1},
 			},
-			replicaMetrics: []interfaces.ReplicaMetrics{
+			replicaMetrics: []domain.ReplicaMetrics{
 				{VariantName: "prefill-h100", PodName: "pod-p1"},
 				{VariantName: "decode-l4", PodName: "pod-d1"},
 			},
@@ -139,7 +139,7 @@ func collectSafetyNetVAs(calls *[][]string) safetyNetEmitter {
 	return func(
 		_ context.Context,
 		vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-		_ map[string]*interfaces.Allocation,
+		_ map[string]*domain.Allocation,
 		_ map[string]scaletarget.ScaleTargetAccessor,
 	) {
 		names := make([]string, 0, len(vas))
@@ -154,25 +154,25 @@ func collectSafetyNetVAs(calls *[][]string) safetyNetEmitter {
 func noopSafetyNet(
 	_ context.Context,
 	_ []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	_ map[string]*interfaces.Allocation,
+	_ map[string]*domain.Allocation,
 	_ map[string]scaletarget.ScaleTargetAccessor,
 ) {
 }
 
 func TestAnalyzeRoleGroups_DisaggregatedModel_TwoIndependentAnalyses(t *testing.T) {
 	stub := &stubAnalyzer{
-		analysisByVariant: map[string]*interfaces.ModelSaturationAnalysis{
+		analysisByVariant: map[string]*domain.ModelSaturationAnalysis{
 			"prefill-h100": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "prefill-h100", ReplicaCount: 1},
 				},
 			},
 			"decode-l4": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "decode-l4", ReplicaCount: 1},
 				},
 			},
@@ -201,7 +201,7 @@ func TestAnalyzeRoleGroups_DisaggregatedModel_TwoIndependentAnalyses(t *testing.
 	}
 
 	// Both role groups must produce a decision; Role field must propagate.
-	byVariant := map[string]interfaces.VariantDecision{}
+	byVariant := map[string]domain.VariantDecision{}
 	for _, d := range decisions {
 		byVariant[d.VariantName] = d
 	}
@@ -209,17 +209,17 @@ func TestAnalyzeRoleGroups_DisaggregatedModel_TwoIndependentAnalyses(t *testing.
 	require.Contains(t, byVariant, "decode-l4")
 	assert.Equal(t, "prefill", byVariant["prefill-h100"].Role)
 	assert.Equal(t, "decode", byVariant["decode-l4"].Role)
-	assert.Equal(t, interfaces.ActionScaleUp, byVariant["prefill-h100"].Action)
-	assert.Equal(t, interfaces.ActionNoChange, byVariant["decode-l4"].Action)
+	assert.Equal(t, domain.ActionScaleUp, byVariant["prefill-h100"].Action)
+	assert.Equal(t, domain.ActionNoChange, byVariant["decode-l4"].Action)
 }
 
 func TestAnalyzeRoleGroups_HomogeneousModel_SingleGroup(t *testing.T) {
 	stub := &stubAnalyzer{
-		analysisByVariant: map[string]*interfaces.ModelSaturationAnalysis{
+		analysisByVariant: map[string]*domain.ModelSaturationAnalysis{
 			"variant-a": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "variant-a", ReplicaCount: 2},
 					{VariantName: "variant-b", ReplicaCount: 1},
 				},
@@ -232,11 +232,11 @@ func TestAnalyzeRoleGroups_HomogeneousModel_SingleGroup(t *testing.T) {
 	e := engineWithStub(stub)
 
 	data := &modelData{
-		variantStates: []interfaces.VariantReplicaState{
+		variantStates: []domain.VariantReplicaState{
 			{VariantName: "variant-a", Role: "", CurrentReplicas: 2},
 			{VariantName: "variant-b", Role: "", CurrentReplicas: 1},
 		},
-		replicaMetrics: []interfaces.ReplicaMetrics{
+		replicaMetrics: []domain.ReplicaMetrics{
 			{VariantName: "variant-a", PodName: "a-1"},
 			{VariantName: "variant-a", PodName: "a-2"},
 			{VariantName: "variant-b", PodName: "b-1"},
@@ -258,7 +258,7 @@ func TestAnalyzeRoleGroups_HomogeneousModel_SingleGroup(t *testing.T) {
 	require.Len(t, stub.callMetrics, 1, "homogeneous-role model should collapse to a single analyzer call")
 	require.Len(t, decisions, 2)
 	// Role defaults to empty for non-disaggregated variants; propagated verbatim.
-	byVariant := map[string]interfaces.VariantDecision{}
+	byVariant := map[string]domain.VariantDecision{}
 	for _, d := range decisions {
 		byVariant[d.VariantName] = d
 	}
@@ -270,11 +270,11 @@ func TestAnalyzeRoleGroups_PerRoleFailure_SafetyNetScopedToFailingRole(t *testin
 	analysisErr := errors.New("prefill analyzer blew up")
 	stub := &stubAnalyzer{
 		errByVariant: map[string]error{"prefill-h100": analysisErr},
-		analysisByVariant: map[string]*interfaces.ModelSaturationAnalysis{
+		analysisByVariant: map[string]*domain.ModelSaturationAnalysis{
 			"decode-l4": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "decode-l4", ReplicaCount: 1},
 				},
 			},
@@ -312,18 +312,18 @@ func TestAnalyzeRoleGroups_MergesDecisionsAcrossRoles(t *testing.T) {
 	// merged slice (which optimizeV1 forwards to ScaleToZeroEnforcer) contains
 	// entries from every group.
 	stub := &stubAnalyzer{
-		analysisByVariant: map[string]*interfaces.ModelSaturationAnalysis{
+		analysisByVariant: map[string]*domain.ModelSaturationAnalysis{
 			"prefill-h100": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "prefill-h100", ReplicaCount: 1},
 				},
 			},
 			"decode-l4": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "decode-l4", ReplicaCount: 1},
 				},
 			},
@@ -348,7 +348,7 @@ func TestAnalyzeRoleGroups_MergesDecisionsAcrossRoles(t *testing.T) {
 	roles := map[string]struct{}{}
 	for _, d := range decisions {
 		roles[d.Role] = struct{}{}
-		assert.Equal(t, interfaces.ActionScaleDown, d.Action)
+		assert.Equal(t, domain.ActionScaleDown, d.Action)
 	}
 	assert.Contains(t, roles, "prefill")
 	assert.Contains(t, roles, "decode")
@@ -356,11 +356,11 @@ func TestAnalyzeRoleGroups_MergesDecisionsAcrossRoles(t *testing.T) {
 
 func TestAnalyzeRoleGroups_RoleGroupWithoutMetrics_EmitsSafetyNet(t *testing.T) {
 	stub := &stubAnalyzer{
-		analysisByVariant: map[string]*interfaces.ModelSaturationAnalysis{
+		analysisByVariant: map[string]*domain.ModelSaturationAnalysis{
 			"decode-l4": {
 				ModelID:   "m",
 				Namespace: "ns",
-				VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+				VariantAnalyses: []domain.VariantSaturationAnalysis{
 					{VariantName: "decode-l4", ReplicaCount: 1},
 				},
 			},
@@ -375,7 +375,7 @@ func TestAnalyzeRoleGroups_RoleGroupWithoutMetrics_EmitsSafetyNet(t *testing.T) 
 	// role must still get safety-net emission (scoped to its own VAs) so
 	// HPA/KEDA does not go dark while prefill waits for metrics to appear.
 	fx := newPDFixture()
-	fx.data.replicaMetrics = []interfaces.ReplicaMetrics{
+	fx.data.replicaMetrics = []domain.ReplicaMetrics{
 		{VariantName: "decode-l4", PodName: "pod-d1"},
 	}
 
@@ -400,7 +400,7 @@ func TestSortedRoleKeys_DeterministicOrder(t *testing.T) {
 	// Exercises the precondition promised in sortedRoleKeys: callers pass
 	// keys that groupByRole has already normalized, so the resulting order
 	// is stable lexicographic.
-	groups := map[string][]interfaces.VariantReplicaState{
+	groups := map[string][]domain.VariantReplicaState{
 		"prefill": nil,
 		"both":    nil,
 		"decode":  nil,
@@ -409,7 +409,7 @@ func TestSortedRoleKeys_DeterministicOrder(t *testing.T) {
 	assert.Equal(t, []string{"both", "decode", "prefill"}, got)
 
 	// Single-group and empty-map cases.
-	assert.Equal(t, []string{interfaces.RoleBoth},
-		sortedRoleKeys(map[string][]interfaces.VariantReplicaState{interfaces.RoleBoth: nil}))
-	assert.Empty(t, sortedRoleKeys(map[string][]interfaces.VariantReplicaState{}))
+	assert.Equal(t, []string{domain.RoleBoth},
+		sortedRoleKeys(map[string][]domain.VariantReplicaState{domain.RoleBoth: nil}))
+	assert.Empty(t, sortedRoleKeys(map[string][]domain.VariantReplicaState{}))
 }
