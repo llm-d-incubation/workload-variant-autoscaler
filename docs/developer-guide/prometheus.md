@@ -510,7 +510,7 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 
 ### `wva_saturation_utilization`
 - **Type**: Gauge
-- **Description**: Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
+- **Description**: Per-variant utilization ratio from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions, bounded 0.0-1.0 (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result — **unbounded above**, where > 1.0 means demand exceeds supply. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
 - **Labels**:
   - `variant_name`: Name of the variant
   - `namespace`: Kubernetes namespace
@@ -875,6 +875,32 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
   }
   ```
 
+### `wva_replica_scaling_total`
+- **Type**: Counter
+- **Description**: Total number of replica scaling operations performed, labeled by direction and reason
+- **Labels**:
+  - `variant_name`: Name of the variant
+  - `namespace`: Kubernetes namespace
+  - `direction`: Scaling direction (`up`, `down`)
+  - `reason`: Reason for the scaling operation
+- **Use Case**: Detect scaling thrashing — backs the `WVAReplicaScalingThrashing` alert — and audit scaling activity per variant
+- **Example**:
+  ```
+  {
+    "metric": {
+      "__name__": "wva_replica_scaling_total",
+      "direction": "up",
+      "namespace": "workload-variant-autoscaler-system",
+      "reason": "saturation",
+      "variant_name": "smoke-test-va"
+    },
+    "value": [
+      1778846184.925,
+      "3"
+    ]
+  }
+  ```
+
 ### Error Tracking
 
 ### `wva_errors_total`
@@ -1033,4 +1059,77 @@ wva_optimizer_active
 
 # Currently active optimizer (filter for value = 1)
 wva_optimizer_active == 1
+```
+
+## Alerting Rules
+
+WVA pre-defined a number of Prometheus alerting rules which can be optionally installed. These rules are defined in `config/components/prometheus-alerts/prometheusrule.yaml`.
+### Alerting Rules Installation
+- To install alerting rules, set environment variable `DEPLOY_ALERTING_RULES` to `true`, and run the installation, for example:
+  ```bash
+  export DEPLOY_ALERTING_RULES=true
+  make deploy-e2e-infra
+  ```
+- To remove alerting rules, set environment variable `DEPLOY_ALERTING_RULES` to `false`, and run the installation, for example:
+  ```bash
+  export DEPLOY_ALERTING_RULES=false
+  make deploy-e2e-infra
+  ```
+
+### Alerting Rules Verification
+Once installed, you can verify as follows:
+- Check that PrometheusRule resource has been created:
+  ```bash
+  kubectl get PrometheusRule -n workload-variant-autoscaler-system controller-manager-alerts
+  NAME                        AGE
+  controller-manager-alerts   40h
+  ```
+
+- Check Prometheus:
+  - Forward Prometheus service to local host:
+    ```bash
+    kubectl port-forward -n workload-variant-autoscaler-monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+    ```
+
+  - Browse to https://localhost:9090/alerts
+  - You should see `wva.rules`: ![wva.rules](./wva.rules.png)
+  - Here's an example of a triggered rule: ![wva.rules-firing](./wva.rules-firing.png)
+
+- Get fired-rule details:
+    From https://localhost:9090/alerts, if there's a rule has been fired, you can get the details as follows. Here's an example:
+    ```bash
+    curl -k https://localhost:9090/api/v1/alerts | jq .
+
+    {
+        "labels": {
+          "alertname": "WVAHighErrorRate",
+          "component": "controller",
+          "error_type": "Config is nil in ConfigMapReconciler bootstrap",
+          "severity": "warning"
+        },
+        "annotations": {
+          "description": "WVA component 'controller' error_type 'Config is nil in ConfigMapReconciler bootstrap' rate is 0.03/sec (>6/min threshold) sustained for 5+ minutes. Check controller logs for error patterns.",
+          "summary": "WVA error rate elevated in controller"
+        },
+        "state": "pending",
+        "activeAt": "2026-07-02T19:35:06.642428048Z",
+        "value": "3.1034482758620693e-02"
+    }
+    ```
+
+### Alerting Rules Notes
+- For `WVAGPUResourceExhausted` rule with `wva_available_gpus` metric, as described in [wva_available_gpus](#wva_available_gpus) this metric is not always available in which case this rule will not trigger. In other words, if there's no alert for this rule, it does not mean GPUs are available.
+  
+### Alerting Rules E2E Test
+E2E tests for alerting rules are in `test/e2e/prometheus_alerts_test.go`. The tests cover basic install and validation. Here are some scenarios:
+- should create PrometheusRule with WVA alert rules
+- should have all expected alert rules defined
+- should have valid alert rule structure 
+- should only reference known WVA metrics in alert expressions
+
+How to execute E2e Test:
+```bash
+export DEPLOY_ALERTING_RULES=true
+make deploy-e2e-infra
+make test-e2e-smoke FOCUS="PrometheusAlerts"
 ```

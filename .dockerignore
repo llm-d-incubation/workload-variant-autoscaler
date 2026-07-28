@@ -24,7 +24,6 @@ docs/
 test/
 deploy/
 hack/
-charts/
 config/
 
 # Build artifacts and local binaries

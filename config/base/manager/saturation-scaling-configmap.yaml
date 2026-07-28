@@ -15,12 +15,33 @@ metadata:
     # are never picked up at runtime.
     app.kubernetes.io/name: workload-variant-autoscaler
 data:
-  # Global defaults applied to all variants unless overridden
+  # Global defaults applied to all variants unless overridden.
+  #
+  # The `analyzers` section selects the V2 (token/capacity-based) saturation
+  # analyzer — the default since v0.9.0. Remove the `analyzers` section (and the
+  # V2-only thresholds) to opt out to the legacy V1 (percentage-based) analyzer.
+  # See docs/developer-guide/saturation-scaling-config.md.
   default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    # V2-only thresholds:
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    # Shared by V1 and V2:
     kvCacheThreshold: 0.80
     queueLengthThreshold: 5
+    # V1-only (ignored by V2):
     kvSpareTrigger: 0.1
     queueSpareTrigger: 3
     # Enable GPU limiter to constrain scaling based on available cluster resources
     # When true, scale-up decisions are limited by available GPU capacity
     enableLimiter: false
+    # Enable priority-weighted rescale: under GPU contention the V2 optimizer
+    # redistributes the whole budget by priority x demand, reclaiming from
+    # lower-priority models so higher-priority work can run. Off by default.
+    # Budget-scope flag (read only from this `default` entry): the value here
+    # governs the cluster budget; a namespace-local config's `default` governs
+    # that namespace's quota budget. Has no effect without a same-scope GPU budget
+    # (requires enableLimiter and a matching cluster/namespace budget).
+    enableRescale: false

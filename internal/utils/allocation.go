@@ -4,7 +4,7 @@ import (
 	"strconv"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
@@ -17,11 +17,11 @@ import (
 //
 // This function is placed in utils to avoid import cycles between collector and controller packages.
 func BuildAllocationFromMetrics(
-	metrics interfaces.OptimizerMetrics,
+	metrics domain.OptimizerMetrics,
 	va *variant.VariantAutoscaling,
 	scaleTarget scaletarget.ScaleTargetAccessor,
 	acceleratorCost float64,
-) (interfaces.Allocation, error) {
+) (domain.Allocation, error) {
 	// Extract K8s information
 	// Number of replicas
 	var numReplicas int
@@ -58,14 +58,14 @@ func BuildAllocationFromMetrics(
 	avgOutputTokensStr := strconv.FormatFloat(metrics.AvgOutputTokens, 'f', 2, 64)
 
 	// Build Allocation struct
-	allocation := interfaces.Allocation{
+	allocation := domain.Allocation{
 		Accelerator: acc,
 		NumReplicas: numReplicas,
 		MaxBatch:    maxBatch,
 		// VariantCost removed from Status
 		TTFTAverage: ttftAverageStr,
 		ITLAverage:  itlAverageStr,
-		Load: interfaces.LoadProfile{
+		Load: domain.LoadProfile{
 			ArrivalRate:     arrivalRateStr,
 			AvgInputTokens:  avgInputTokensStr,
 			AvgOutputTokens: avgOutputTokensStr,

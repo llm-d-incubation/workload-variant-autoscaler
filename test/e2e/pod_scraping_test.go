@@ -19,12 +19,11 @@ import (
 //
 // Note: On Kind clusters, pod IPs are not routable from outside the cluster, so direct
 // scraping tests are skipped. In-cluster scraping tests still run to verify functionality.
-var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, func() {
+var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 	var (
-		poolName          = "pod-scraping-pool"
-		modelServiceName  = "pod-scraping-ms"
-		eppServiceName    string
-		metricsSecretName string
+		poolName         = "pod-scraping-pool"
+		modelServiceName = "pod-scraping-ms"
+		eppServiceName   string
 	)
 
 	BeforeAll(func() {
@@ -100,12 +99,6 @@ var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, fu
 				"Should have at least one Ready EPP pod")
 		}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
-		By("Discovering or creating metrics reader secret")
-		var discoverErr error
-		metricsSecretName, discoverErr = utils.DiscoverMetricsReaderSecret(ctx, k8sClient,
-			crClient, cfg.LLMDNamespace, eppServiceName)
-		Expect(discoverErr).NotTo(HaveOccurred(), "Should be able to discover or create metrics secret")
-		GinkgoWriter.Printf("Using metrics secret: %s\n", metricsSecretName)
 	})
 
 	AfterAll(func() {
@@ -134,17 +127,15 @@ var _ = Describe("PodScrapingSource", Label("full"), Label("flaky"), Ordered, fu
 	// Use shared PodScrapingSource tests with environment-agnostic configuration
 	utils.DescribePodScrapingSourceTests(func() utils.PodScrapingTestConfig {
 		return utils.PodScrapingTestConfig{
-			Environment:             cfg.Environment,
-			ServiceName:             eppServiceName,
-			ServiceNamespace:        cfg.LLMDNamespace,
-			MetricsPort:             9090,
-			MetricsPath:             "/metrics",
-			MetricsScheme:           "http",
-			MetricsReaderSecretName: metricsSecretName,
-			MetricsReaderSecretKey:  "token",
-			K8sClient:               k8sClient,
-			CRClient:                crClient,
-			Ctx:                     ctx,
+			Environment:      cfg.Environment,
+			ServiceName:      eppServiceName,
+			ServiceNamespace: cfg.LLMDNamespace,
+			MetricsPort:      9090,
+			MetricsPath:      "/metrics",
+			MetricsScheme:    "http",
+			K8sClient:        k8sClient,
+			CRClient:         crClient,
+			Ctx:              ctx,
 		}
 	})
 })

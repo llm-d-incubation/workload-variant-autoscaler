@@ -34,6 +34,12 @@ SKIP_CLUSTER_CRDS=true \
 ./deploy/install-epp.sh
 
 # Tune saturation thresholds for CI simulator mode.
+# NOTE (v0.9.0): this patch overwrites the `default` entry with only the V1-only
+# spare-trigger fields, which drops the shipped `analyzers:` section and therefore
+# pins this CI run to the legacy V1 (percentage-based) analyzer. This is deliberate
+# for now — V1's spare-trigger tuning gives deterministic scale-up in simulator mode.
+# TODO(v2): reconfigure this e2e path for the V2 (token/capacity-based) analyzer by
+# patching an `analyzers:` list + scaleUpThreshold/scaleDownBoundary instead.
 kubectl patch configmap wva-saturation-scaling-config \
   -n "$WVA_NAMESPACE" --type=merge \
   -p "$(printf '{"data":{"default":"kvSpareTrigger: %s\\nqueueSpareTrigger: %s\\n"}}' \

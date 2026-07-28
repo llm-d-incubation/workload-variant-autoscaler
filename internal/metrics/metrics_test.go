@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	llmdOptv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -441,7 +441,7 @@ var _ = Describe("EmitReplicaScalingMetrics", func() {
 			},
 		}
 
-		err := emitter.EmitReplicaScalingMetrics(ctx, va, interfaces.ActionScaleUp, interfaces.DecisionReasonV2)
+		err := emitter.EmitReplicaScalingMetrics(ctx, va, domain.ActionScaleUp, domain.DecisionReasonV2)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Gather the metric and verify the counter was incremented
@@ -452,8 +452,8 @@ var _ = Describe("EmitReplicaScalingMetrics", func() {
 		labels := map[string]string{
 			constants.LabelVariantName: "test-variant",
 			constants.LabelNamespace:   "test-namespace",
-			constants.LabelDirection:   string(interfaces.ActionScaleUp),
-			constants.LabelReason:      string(interfaces.DecisionReasonV2),
+			constants.LabelDirection:   string(domain.ActionScaleUp),
+			constants.LabelReason:      string(domain.DecisionReasonV2),
 		}
 
 		var found bool

@@ -9,17 +9,17 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/aggregation"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
 // makeMetrics builds a slice of healthy ReplicaMetrics for a single variant,
 // each with a distinct KvCacheUsage/KvUsageInstant to provide k-spread.
-func makeMetrics(variant string, count int, baseK float64, kStep float64) []interfaces.ReplicaMetrics {
-	metrics := make([]interfaces.ReplicaMetrics, count)
+func makeMetrics(variant string, count int, baseK float64, kStep float64) []domain.ReplicaMetrics {
+	metrics := make([]domain.ReplicaMetrics, count)
 	for i := range metrics {
 		k := baseK + float64(i)*kStep
-		metrics[i] = interfaces.ReplicaMetrics{
+		metrics[i] = domain.ReplicaMetrics{
 			PodName:               "pod-" + variant + "-" + string(rune('0'+i)),
 			VariantName:           variant,
 			KvCacheUsage:          k,
@@ -41,7 +41,7 @@ func injectWindowObs(a *ThroughputAnalyzer, ctx context.Context, modelID, namesp
 	il, ol, prefixRate float64, kvMax int64, b float64, kValues []float64) {
 	const A = 0.073
 	for _, k := range kValues {
-		m := interfaces.ReplicaMetrics{
+		m := domain.ReplicaMetrics{
 			VariantName:           variant,
 			KvCacheUsage:          k,
 			KvUsageInstant:        k,
@@ -51,7 +51,7 @@ func injectWindowObs(a *ThroughputAnalyzer, ctx context.Context, modelID, namesp
 			PrefixCacheHitRate:    prefixRate,
 			TotalKvCapacityTokens: kvMax,
 		}
-		a.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{m})
+		a.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{m})
 	}
 }
 
@@ -202,7 +202,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 	Describe("Analyze — basic behaviour", func() {
 		It("returns an AnalyzerResult with the correct identifiers", func() {
 			metrics := makeMetrics("v1", 3, 0.20, 0.10)
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: metrics,
@@ -217,7 +217,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("returns zero signal when demand is zero (no ArrivalRate or RequestRate set)", func() {
 			metrics := makeMetrics("v1", 3, 0.20, 0.10)
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: metrics,
@@ -229,7 +229,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("updates internal state on each Analyze call", func() {
 			for i := range 4 {
-				input := interfaces.AnalyzerInput{
+				input := domain.AnalyzerInput{
 					ModelID:        modelID,
 					Namespace:      namespace,
 					ReplicaMetrics: makeMetrics("v1", 3, 0.20+float64(i)*0.10, 0.05),
@@ -244,7 +244,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("sets AnalyzedAt to a recent timestamp", func() {
 			before := time.Now()
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: makeMetrics("v1", 3, 0.20, 0.10),
@@ -276,10 +276,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		kValues := []float64{0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
 
 		// baseReplica is a healthy replica for the signal-test variant.
-		baseReplica := func(arrivalRate float64) interfaces.ReplicaMetrics {
+		baseReplica := func(arrivalRate float64) domain.ReplicaMetrics {
 			const A = 0.073
 			const k = 0.50
-			return interfaces.ReplicaMetrics{
+			return domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          k,
 				KvUsageInstant:        k,
@@ -303,10 +303,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildReadyWindow()
 
 			// ArrivalRate=15 req/s, OL=200 → λ_dec = 3000 tok/s > μ_sat ≈ 2782 tok/s
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(15)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(15)},
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -321,10 +321,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildReadyWindow()
 
 			// ArrivalRate=5 req/s, OL=200 → λ_dec = 1000 tok/s < μ_sat ≈ 2782 tok/s
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -340,10 +340,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 			// ArrivalRate=0, RequestRate=0 → isEPP=false → no scale-down signal
 			replica := baseReplica(0)
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -353,10 +353,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("populates VariantCapacities and TotalSupply/TotalDemand", func() {
 			buildReadyWindow()
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
 			}
 			result, _ := analyzer.Analyze(ctx, input)
 			Expect(result.VariantCapacities).To(HaveLen(1))
@@ -379,12 +379,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			booting.KvCacheUsage = 0
 			booting.KvUsageInstant = 0
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{ready, booting},
+				ReplicaMetrics: []domain.ReplicaMetrics{ready, booting},
 				// The booting pod is a not-ready replica (currentReplicas − readyReplicas = 1).
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v1", CurrentReplicas: 2, PendingReplicas: 1},
 				},
 			}
@@ -407,10 +407,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("exposes ITLModel and supply/demand in VariantState after Analyze", func() {
 			buildReadyWindow()
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
 			}
 			analyzer.Analyze(ctx, input) //nolint:errcheck
 
@@ -425,10 +425,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("sets Reason to T1-ols when tier-1 OLS fit succeeds", func() {
 			buildReadyWindow()
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica(5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -444,8 +444,8 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		//   A_est  = (0.06075 - 0.006) / 0.75 = 0.073
 		//   ITL_sat ≈ 0.068  →  μ_sat ≈ 2782 tok/s (same scenario as tier-1)
 
-		tier2Replica := func(k, arrivalRate float64) interfaces.ReplicaMetrics { //nolint:unparam
-			return interfaces.ReplicaMetrics{
+		tier2Replica := func(k, arrivalRate float64) domain.ReplicaMetrics { //nolint:unparam
+			return domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          k,
 				KvUsageInstant:        k,
@@ -460,16 +460,16 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("resolves a supply signal without OLS window using tier-2 estimation", func() {
 			// Single Observe cycle → only 1 observation → window NOT ready.
-			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{tier2Replica(0.75, 0)})
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{tier2Replica(0.75, 0)})
 
 			state, _ := analyzer.VariantState(modelID, namespace, "v1")
 			Expect(state.ObservationReady).To(BeFalse())
 
 			// Analyze with ArrivalRate=15 → λ_dec=3000 tok/s; tier-2 model → scale up.
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{tier2Replica(0.75, 15)},
+				ReplicaMetrics: []domain.ReplicaMetrics{tier2Replica(0.75, 15)},
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -481,12 +481,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("sets Reason to T2-default when no prior tier-1 fit exists", func() {
 			// Single observation → window not ready; no prior fit → T2-default.
-			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{tier2Replica(0.75, 0)})
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{tier2Replica(0.75, 0)})
 
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{tier2Replica(0.75, 5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{tier2Replica(0.75, 5)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.VariantCapacities).To(HaveLen(1))
@@ -498,15 +498,15 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			const trueA, trueB = 0.073, 0.006
 			t1kValues := []float64{0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80}
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", 5000, 200, 0.1, 1024000, trueB, t1kValues)
-			onLine := interfaces.ReplicaMetrics{
+			onLine := domain.ReplicaMetrics{
 				VariantName: "v1", KvUsageInstant: 0.75, KvCacheUsage: 0.75,
 				AvgITL: trueA*0.75 + trueB, AvgInputTokens: 5000, AvgOutputTokens: 200,
 				PrefixCacheHitRate: 0.1, TotalKvCapacityTokens: 1024000, ArrivalRate: 5,
 			}
-			_, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			_, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{onLine},
+				ReplicaMetrics: []domain.ReplicaMetrics{onLine},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			st, _ := analyzer.VariantState(modelID, namespace, "v1")
@@ -519,10 +519,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			analyzer.mu.Unlock()
 
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{tier2Replica(0.75, 5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{tier2Replica(0.75, 5)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.VariantCapacities).To(HaveLen(1))
@@ -532,12 +532,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("resolveITLModel returns T2-failed when all replicas are idle (KvUsageInstant == 0)", func() {
 			// Single Observe with idle metrics to create variant state, then Analyze
 			// with idle replicas so both tiers fail — tier-2 needs KvUsageInstant > 0.
-			idleMetrics := interfaces.ReplicaMetrics{
+			idleMetrics := domain.ReplicaMetrics{
 				VariantName: "v1", KvUsageInstant: 0, KvCacheUsage: 0,
 				AvgITL: 0.006, AvgInputTokens: 5000, AvgOutputTokens: 200,
 				PrefixCacheHitRate: 0.1, TotalKvCapacityTokens: 1024000,
 			}
-			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{idleMetrics})
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{idleMetrics})
 
 			_, reason, ok := analyzer.resolveITLModel(ctx,
 				func() *variantState {
@@ -545,7 +545,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					defer analyzer.mu.Unlock()
 					return analyzer.variantStates[variantKey(namespace, modelID, "v1")]
 				}(),
-				[]interfaces.ReplicaMetrics{idleMetrics},
+				[]domain.ReplicaMetrics{idleMetrics},
 				namespace, modelID, "v1",
 			)
 			Expect(ok).To(BeFalse())
@@ -558,7 +558,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// Idle replicas (k*=0) cannot contribute to tier-1 (filtered by ObservationWindow)
 			// or tier-2 (KvUsageInstant > 0 guard). The knowledge store must NOT be consulted
 			// while replicas are running — a stale model could trigger incorrect scaling.
-			idleReplica := interfaces.ReplicaMetrics{
+			idleReplica := domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          0.0,
 				KvUsageInstant:        0.0,
@@ -569,10 +569,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				TotalKvCapacityTokens: 1024000,
 				ArrivalRate:           15, // demand present, but no supply estimate possible
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{idleReplica},
+				ReplicaMetrics: []domain.ReplicaMetrics{idleReplica},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequiredCapacity).To(Equal(0.0))
@@ -588,7 +588,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(state.ObservationReady).To(BeTrue())
 
 			// Trigger a shape change (+50% IL) to clear the OLS window.
-			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{{
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{{
 				VariantName:           "v1",
 				KvCacheUsage:          0.50,
 				KvUsageInstant:        0.50,
@@ -602,10 +602,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(stateAfter.ObservationReady).To(BeFalse())
 
 			// Variant goes idle with cleared window — neither tier-1 nor tier-2 can resolve.
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:   modelID,
 				Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{{
+				ReplicaMetrics: []domain.ReplicaMetrics{{
 					VariantName:           "v1",
 					KvCacheUsage:          0.0,
 					KvUsageInstant:        0.0,
@@ -625,7 +625,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 	Describe("Analyze — empty metrics list", func() {
 		It("handles an empty metrics slice gracefully", func() {
-			reports := analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{})
+			reports := analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{})
 			Expect(reports).To(BeEmpty())
 		})
 	})
@@ -661,7 +661,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			cancelled, cancel := context.WithCancel(context.Background())
 			cancel()
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: makeMetrics("v1", 3, 0.20, 0.10),
@@ -689,7 +689,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("suppresses RequiredCapacity when pending replicas cover anticipated demand", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
-			replica := interfaces.ReplicaMetrics{
+			replica := domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          0.50,
 				KvUsageInstant:        0.50,
@@ -700,11 +700,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				TotalKvCapacityTokens: kvMax,
 				ArrivalRate:           15, // λ_dec = 3000 tok/s > 1 × μ_sat
 			}
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
-				VariantStates: []interfaces.VariantReplicaState{
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v1", CurrentReplicas: 1, PendingReplicas: 1},
 				},
 			}
@@ -719,7 +719,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 			// 3 replicas running, ArrivalRate=15 each → λ_dec = 3×3000 = 9000 tok/s
 			// μ_sat ≈ 2782 tok/s per replica; anticipated = 3 × 2782 ≈ 8346 < 9000
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50, AvgITL: A*0.50 + B,
 					AvgInputTokens: il, AvgOutputTokens: ol, PrefixCacheHitRate: prefix,
 					TotalKvCapacityTokens: kvMax, ArrivalRate: 15},
@@ -730,7 +730,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					AvgInputTokens: il, AvgOutputTokens: ol, PrefixCacheHitRate: prefix,
 					TotalKvCapacityTokens: kvMax, ArrivalRate: 15},
 			}
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
@@ -766,10 +766,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, variant, il, ol, prefix, kvMax, B, kValues)
 		}
 
-		baseReplica := func(variant string, arrivalRate float64) interfaces.ReplicaMetrics {
+		baseReplica := func(variant string, arrivalRate float64) domain.ReplicaMetrics {
 			const A = 0.073
 			const k = 0.50
-			return interfaces.ReplicaMetrics{
+			return domain.ReplicaMetrics{
 				VariantName:           variant,
 				KvCacheUsage:          k,
 				KvUsageInstant:        k,
@@ -786,14 +786,14 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildVariantWindow("v-decode")
 			buildVariantWindow("v-prefill")
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:   modelID,
 				Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{
+				ReplicaMetrics: []domain.ReplicaMetrics{
 					baseReplica("v-decode", 5),
 					baseReplica("v-prefill", 5),
 				},
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v-decode", Role: "decode"},
 					{VariantName: "v-prefill", Role: "prefill"},
 				},
@@ -810,14 +810,14 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildVariantWindow("v-prefill")
 
 			// ArrivalRate=15 → λ_dec=3000 > μ_sat≈2782: scale-up signal for decode.
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:   modelID,
 				Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{
+				ReplicaMetrics: []domain.ReplicaMetrics{
 					baseReplica("v-decode", 15),
 					baseReplica("v-prefill", 15),
 				},
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v-decode", Role: "decode"},
 					{VariantName: "v-prefill", Role: "prefill"},
 				},
@@ -840,10 +840,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("returns nil RoleCapacities when all variants are non-disaggregated", func() {
 			buildVariantWindow("v1")
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica("v1", 5)},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica("v1", 5)},
 				// No VariantStates → role is "" for all variants
 			}
 			result, err := analyzer.Analyze(ctx, input)
@@ -854,11 +854,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("sets Role on VariantCapacity and ThroughputVariantState", func() {
 			buildVariantWindow("v-decode")
 
-			input := interfaces.AnalyzerInput{
+			input := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica("v-decode", 5)},
-				VariantStates: []interfaces.VariantReplicaState{
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica("v-decode", 5)},
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v-decode", Role: "decode"},
 				},
 			}
@@ -891,7 +891,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("emits RequiredCapacity from k* when EPP is absent", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.95, KvUsageInstant: 0.95,
 					AvgITL: A*0.95 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
@@ -902,7 +902,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
 				},
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -918,14 +918,14 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
 			// Low k* → λ_local << μ_sat, but no EPP → no scale-down.
-			replica := interfaces.ReplicaMetrics{
+			replica := domain.ReplicaMetrics{
 				VariantName: "v1", KvCacheUsage: 0.20, KvUsageInstant: 0.20,
 				AvgITL: A*0.20 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 				PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.SpareCapacity).To(Equal(0.0))
@@ -938,7 +938,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			const lowOL = 5.0
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, lowOL, prefix, kvMax, B, kValues)
 
-			replica := interfaces.ReplicaMetrics{
+			replica := domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          0.95,
 				KvUsageInstant:        0.95,
@@ -949,9 +949,9 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				TotalKvCapacityTokens: kvMax,
 				// ArrivalRate=0, RequestRate=0
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequiredCapacity).To(Equal(0.0))
@@ -980,7 +980,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 			// Replica with EPP ArrivalRate>0 but AvgOutputTokens==0 (no completions yet).
 			// k*=0.85 is near saturation → local demand is high.
-			replica := interfaces.ReplicaMetrics{
+			replica := domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          0.85,
 				KvUsageInstant:        0.85,
@@ -991,9 +991,9 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				TotalKvCapacityTokens: kvMaxW,
 				ArrivalRate:           5.0, // EPP present
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// Local demand must be > 0 (k*=0.85 is busy) so Utilization > 0 and
@@ -1009,7 +1009,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ilW, olW, prefixW, kvMaxW, BW, kValuesW)
 
 			// Normal operation: EPP present with usable demand.
-			replica := interfaces.ReplicaMetrics{
+			replica := domain.ReplicaMetrics{
 				VariantName:           "v1",
 				KvCacheUsage:          0.50,
 				KvUsageInstant:        0.50,
@@ -1020,9 +1020,9 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				TotalKvCapacityTokens: kvMaxW,
 				ArrivalRate:           10.0, // 10 req/s × 200 ol = 2000 tok/s
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replica},
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// EPP demand = 10×200 = 2000 tok/s; TotalDemand must reflect that.
@@ -1048,7 +1048,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		)
 		kValues := []float64{0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
 
-		baseReplica := interfaces.ReplicaMetrics{
+		baseReplica := domain.ReplicaMetrics{
 			VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 			AvgITL: A*0.50 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 			PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
@@ -1058,10 +1058,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("adds queue demand and emits RequiredCapacity when queue is large", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
-			withQueue := interfaces.AnalyzerInput{
+			withQueue := domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica},
-				SchedulerQueue: &interfaces.SchedulerQueueMetrics{QueueSize: 200},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica},
+				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: 200},
 			}
 			result, err := analyzer.Analyze(ctx, withQueue)
 			Expect(err).NotTo(HaveOccurred())
@@ -1074,9 +1074,9 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("emits no RequiredCapacity when SchedulerQueue is nil", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
-			noQueue := interfaces.AnalyzerInput{
+			noQueue := domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{baseReplica},
+				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica},
 				// SchedulerQueue: nil
 			}
 			result, err := analyzer.Analyze(ctx, noQueue)
@@ -1105,7 +1105,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v2", il, ol, prefix, kvMax, B, kValues)
 
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: A*0.50 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
@@ -1115,7 +1115,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
 					ArrivalRate: 1}, // λ = 200 << μ_sat per-variant
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1133,7 +1133,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v2", il, ol, prefix, kvMax, B, kValues)
 
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: A*0.50 + B, AvgInputTokens: il, AvgOutputTokens: ol,
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
@@ -1143,7 +1143,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
 					ArrivalRate: 15},
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1172,7 +1172,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("TotalSupply equals aggregation.SumTotalSupply(VariantCapacities)", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v2", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
@@ -1180,7 +1180,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					AvgITL: aA*0.40 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 3},
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1190,17 +1190,17 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("TotalAnticipatedSupply equals aggregation.SumTotalAnticipatedSupply(VariantCapacities)", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
 			}
 			// 1 pending replica — TotalAnticipatedSupply should count it.
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v1", PendingReplicas: 1},
 				},
 			})
@@ -1211,17 +1211,17 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("TotalDemand equals aggregation.SumTotalDemand(VariantCapacities) plus queue demand", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
 			}
 			const queueSize = int64(10)
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
-				SchedulerQueue: &interfaces.SchedulerQueueMetrics{QueueSize: queueSize},
+				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: queueSize},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			variantDemand := aggregation.SumTotalDemand(result.VariantCapacities)
@@ -1234,7 +1234,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("RoleCapacities[role].TotalAnticipatedSupply matches per-role aggregation", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v-decode", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v-prefill", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v-decode", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
@@ -1242,11 +1242,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 1},
 			}
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v-decode", Role: "decode"},
 					{VariantName: "v-prefill", Role: "prefill"},
 				},
@@ -1264,7 +1264,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("RoleCapacities[decode].TotalDemand includes the queue-demand share", func() {
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v-decode", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v-prefill", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
-			replicas := []interfaces.ReplicaMetrics{
+			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v-decode", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
 					AvgITL: aA*0.50 + bA, AvgInputTokens: ilA, AvgOutputTokens: olA,
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
@@ -1274,17 +1274,17 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			// With queue: decode role should receive the queue-demand share.
 			// Without queue: decode TotalDemand == variant-level demand only.
-			inputNoQ := interfaces.AnalyzerInput{
+			inputNoQ := domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
-				VariantStates: []interfaces.VariantReplicaState{
+				VariantStates: []domain.VariantReplicaState{
 					{VariantName: "v-decode", Role: "decode"},
 					{VariantName: "v-prefill", Role: "prefill"},
 				},
 			}
 			inputWithQ := inputNoQ
-			inputWithQ.SchedulerQueue = &interfaces.SchedulerQueueMetrics{QueueSize: 20}
+			inputWithQ.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 20}
 
 			resultNoQ, errNoQ := analyzer.Analyze(ctx, inputNoQ)
 			Expect(errNoQ).NotTo(HaveOccurred())
@@ -1309,7 +1309,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// r1: rate=1, IL=1000, OL=200, hr=0.1
 			// r2: rate=3, IL=3000, OL=600, hr=0.5
 			// Weighted: IL=(1*1000+3*3000)/4=2500, OL=(1*200+3*600)/4=500, hr=(1*0.1+3*0.5)/4=0.4
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 1},
 				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 3},
 			}
@@ -1320,7 +1320,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		})
 
 		It("falls back to unweighted mean when all RequestRates are zero", func() {
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 0},
 				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 0},
 			}
@@ -1333,7 +1333,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("excludes zero-rate replicas from weighted sum when mixed rates are present", func() {
 			// r1 has rate=0: contributes only to unweighted fallback
 			// r2 has rate=2: drives the weighted result entirely
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{AvgInputTokens: 1000, AvgOutputTokens: 200, PrefixCacheHitRate: 0.1, RequestRate: 0},
 				{AvgInputTokens: 3000, AvgOutputTokens: 600, PrefixCacheHitRate: 0.5, RequestRate: 2},
 			}
@@ -1353,7 +1353,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			const wantA = 0.073
 			const wantB = 0.006
 			// Fresh analyzer: no OLS window → tier-2 fires.
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{
 					VariantName: "v1", KvUsageInstant: 0.20, KvCacheUsage: 0.20,
 					AvgITL: wantA*0.20 + wantB, AvgInputTokens: 5000, AvgOutputTokens: 200,
@@ -1368,7 +1368,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// Seed the shape tracker with one prior Observe so shape is known.
 			analyzer.Observe(ctx, time.Now(), modelID, namespace, metrics)
 
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: metrics,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1393,8 +1393,8 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		// onLineMetrics returns two replicas whose (k*, ITL) lie exactly on y = trueA*k + trueB.
 		// IL/OL/shape matches the buildTier1Window observations so no shape change fires.
-		onLineMetrics := func() []interfaces.ReplicaMetrics {
-			return []interfaces.ReplicaMetrics{
+		onLineMetrics := func() []domain.ReplicaMetrics {
+			return []domain.ReplicaMetrics{
 				{
 					VariantName: "v1", KvUsageInstant: 0.30, KvCacheUsage: 0.30,
 					AvgITL: trueA*0.30 + trueB, AvgInputTokens: 1024, AvgOutputTokens: 256,
@@ -1418,7 +1418,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("saves lastFittedB after a successful Tier-1 OLS fit", func() {
 			buildTier1Window()
 			// Analyze-internal Observe must also add on-line points so OLS recovers trueB exactly.
-			_, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			_, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: onLineMetrics(),
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1432,12 +1432,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("retains lastFittedB after a shape change clears the observation window", func() {
 			buildTier1Window()
-			_, _ = analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			_, _ = analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: onLineMetrics(),
 			})
 
 			// Trigger a shape change: shift OL by >20%.
-			shapeShiftMetrics := []interfaces.ReplicaMetrics{
+			shapeShiftMetrics := []domain.ReplicaMetrics{
 				{
 					VariantName: "v1", KvUsageInstant: 0.40, KvCacheUsage: 0.40,
 					AvgITL: trueA*0.40 + trueB, AvgInputTokens: 1024, AvgOutputTokens: 800,
@@ -1455,12 +1455,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("uses lastFittedB as the pinned B in tier-2 after a shape reset", func() {
 			buildTier1Window()
-			_, _ = analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			_, _ = analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: onLineMetrics(),
 			})
 
 			// Shape change → window cleared → tier-2 will fire next.
-			shapeShiftMetrics := []interfaces.ReplicaMetrics{
+			shapeShiftMetrics := []domain.ReplicaMetrics{
 				{
 					VariantName: "v1", KvUsageInstant: 0.40, KvCacheUsage: 0.40,
 					AvgITL: trueA*0.40 + trueB, AvgInputTokens: 1024, AvgOutputTokens: 800,
@@ -1469,7 +1469,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			analyzer.Observe(ctx, time.Now(), modelID, namespace, shapeShiftMetrics)
 
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: shapeShiftMetrics,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1484,7 +1484,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 		It("uses DefaultBaselineITLSec in tier-2 when no Tier-1 fit has occurred", func() {
 			// Fresh analyzer, never reached tier-1 — hasFittedB is false.
-			metrics := []interfaces.ReplicaMetrics{
+			metrics := []domain.ReplicaMetrics{
 				{
 					VariantName: "v1", KvUsageInstant: 0.40, KvCacheUsage: 0.40,
 					AvgITL: trueA*0.40 + DefaultBaselineITLSec, AvgInputTokens: 1024, AvgOutputTokens: 256,
@@ -1493,7 +1493,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			analyzer.Observe(ctx, time.Now(), modelID, namespace, metrics)
 
-			_, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			_, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: metrics,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -1535,8 +1535,8 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(state.ObservationReady).To(BeTrue())
 		}
 
-		replicaG := func(k, arrivalRate, gps float64) interfaces.ReplicaMetrics {
-			return interfaces.ReplicaMetrics{
+		replicaG := func(k, arrivalRate, gps float64) domain.ReplicaMetrics {
+			return domain.ReplicaMetrics{
 				VariantName:           "gv1",
 				KvCacheUsage:          k,
 				KvUsageInstant:        k,
@@ -1561,10 +1561,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildWindowG()
 			// GPS equals model value → 0% error, well within threshold.
 			gps := muDecG()
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replicaG(kStar, 2, gps)},
+				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(kStar, 2, gps)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// GPS gate is dropped — TA always leaves SC=0; engine post-step computes it.
@@ -1577,10 +1577,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildWindowG()
 			// GPS is 50% of model → gpsErrPct = |1 - 0.5| / 0.5 × 100 = 100% >> 15%.
 			gps := muDecG() * 0.5
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replicaG(kStar, 2, gps)},
+				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(kStar, 2, gps)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.SpareCapacity).To(Equal(0.0))
@@ -1590,10 +1590,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			buildWindowG()
 			// k*=0.20 < DefaultGPSMinKForVerification(0.30); GPS check is skipped.
 			gps := muDecG() * 0.1 // enormous mismatch, but k* too low to trust
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replicaG(0.20, 2, gps)},
+				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(0.20, 2, gps)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// GPS gate is dropped — TA always leaves SC=0; engine post-step computes it.
@@ -1605,10 +1605,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		It("GenerationTokenRate is zero (metric absent) — fixture for future SC pass-through", func() {
 			buildWindowG()
 			// GPS=0 → check is skipped entirely.
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replicaG(kStar, 2, 0)},
+				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(kStar, 2, 0)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// GPS gate is dropped — TA always leaves SC=0; engine post-step computes it.
@@ -1622,10 +1622,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// High ArrivalRate drives demand > supply (RC > 0).
 			// GPS gate is dropped — TA always leaves SC=0; SC=0 is now unconditional.
 			gps := muDecG() * 0.1
-			result, err := analyzer.Analyze(ctx, interfaces.AnalyzerInput{
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{replicaG(kStar, 20, gps)},
+				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(kStar, 20, gps)},
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.SpareCapacity).To(Equal(0.0))
@@ -1663,11 +1663,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			return nDec / (aW*k + bW)
 		}
 
-		mismatchInput := func() interfaces.AnalyzerInput {
-			return interfaces.AnalyzerInput{
+		mismatchInput := func() domain.AnalyzerInput {
+			return domain.AnalyzerInput{
 				ModelID:   modelID,
 				Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{{
+				ReplicaMetrics: []domain.ReplicaMetrics{{
 					VariantName:           "wv1",
 					KvCacheUsage:          kStarW,
 					KvUsageInstant:        kStarW,
@@ -1682,11 +1682,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 		}
 
-		cleanInput := func() interfaces.AnalyzerInput {
-			return interfaces.AnalyzerInput{
+		cleanInput := func() domain.AnalyzerInput {
+			return domain.AnalyzerInput{
 				ModelID:   modelID,
 				Namespace: namespace,
-				ReplicaMetrics: []interfaces.ReplicaMetrics{{
+				ReplicaMetrics: []domain.ReplicaMetrics{{
 					VariantName:           "wv1",
 					KvCacheUsage:          kStarW,
 					KvUsageInstant:        kStarW,
@@ -1780,19 +1780,19 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(estimateQueueDemand(nil, 0.05, 2.0)).To(Equal(0.0))
 		})
 		It("returns 0 when QueueSize is zero", func() {
-			sq := &interfaces.SchedulerQueueMetrics{QueueSize: 0}
+			sq := &domain.SchedulerQueueMetrics{QueueSize: 0}
 			Expect(estimateQueueDemand(sq, 0.05, 2.0)).To(Equal(0.0))
 		})
 		It("returns 0 when itlSat is zero", func() {
-			sq := &interfaces.SchedulerQueueMetrics{QueueSize: 10}
+			sq := &domain.SchedulerQueueMetrics{QueueSize: 10}
 			Expect(estimateQueueDemand(sq, 0, 2.0)).To(Equal(0.0))
 		})
 		It("returns 0 when drainFactor is zero", func() {
-			sq := &interfaces.SchedulerQueueMetrics{QueueSize: 10}
+			sq := &domain.SchedulerQueueMetrics{QueueSize: 10}
 			Expect(estimateQueueDemand(sq, 0.05, 0)).To(Equal(0.0))
 		})
 		It("returns QueueSize / (drainFactor * itlSat) for valid inputs", func() {
-			sq := &interfaces.SchedulerQueueMetrics{QueueSize: 100}
+			sq := &domain.SchedulerQueueMetrics{QueueSize: 100}
 			// 100 / (2.0 × 0.05) = 1000
 			Expect(estimateQueueDemand(sq, 0.05, 2.0)).To(BeNumerically("~", 1000.0, 1e-9))
 		})
@@ -1810,7 +1810,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		)
 
 		It("still observes shape and window entries when one pod has ITL=0 (cold start)", func() {
-			healthy := interfaces.ReplicaMetrics{
+			healthy := domain.ReplicaMetrics{
 				PodName:               "pod-healthy",
 				VariantName:           "v1",
 				KvCacheUsage:          0.50,
@@ -1820,7 +1820,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				AvgOutputTokens:       olS,
 				TotalKvCapacityTokens: kvMaxS,
 			}
-			cold := interfaces.ReplicaMetrics{
+			cold := domain.ReplicaMetrics{
 				PodName:               "pod-cold",
 				VariantName:           "v1",
 				KvCacheUsage:          0.0,
@@ -1830,7 +1830,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				AvgOutputTokens:       olS,
 				TotalKvCapacityTokens: kvMaxS,
 			}
-			analyzer.Observe(ctx, time.Now(), modelID, namespace, []interfaces.ReplicaMetrics{healthy, cold})
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{healthy, cold})
 
 			state, ok := analyzer.VariantState(modelID, namespace, "v1")
 			Expect(ok).To(BeTrue())

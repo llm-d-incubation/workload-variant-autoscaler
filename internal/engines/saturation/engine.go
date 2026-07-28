@@ -38,13 +38,12 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -58,7 +57,7 @@ import (
 // deterministically.
 type analyzerEntry struct {
 	name     string
-	analyzer interfaces.Analyzer
+	analyzer domain.Analyzer
 }
 
 // v1Analyzer is the minimal surface of *saturation.Analyzer that optimizeV1
@@ -68,13 +67,13 @@ type v1Analyzer interface {
 	AnalyzeModelSaturation(
 		ctx context.Context,
 		modelID, namespace string,
-		replicaMetrics []interfaces.ReplicaMetrics,
+		replicaMetrics []domain.ReplicaMetrics,
 		config config.SaturationScalingConfig,
-	) (*interfaces.ModelSaturationAnalysis, error)
+	) (*domain.ModelSaturationAnalysis, error)
 	CalculateSaturationTargets(
 		ctx context.Context,
-		saturationAnalysis *interfaces.ModelSaturationAnalysis,
-		variantStates []interfaces.VariantReplicaState,
+		saturationAnalysis *domain.ModelSaturationAnalysis,
+		variantStates []domain.VariantReplicaState,
 	) map[string]int
 }
 
@@ -89,7 +88,7 @@ func defaultV1AnalyzerFactory() v1Analyzer { return saturation.NewAnalyzer() }
 type safetyNetEmitter func(
 	ctx context.Context,
 	roleVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 )
 
@@ -97,7 +96,9 @@ type safetyNetEmitter func(
 // Starts from the "default" entry (or zero-value), then merges the model-specific
 // override "{modelID}#{namespace}" on top (if present). This allows per-model
 // overrides to specify only the fields they want to change.
-// ApplyDefaults is called last to fill any remaining zero-valued fields.
+// After merging, ApplyDefaults fills remaining zero-valued fields, then
+// ApplyV2ThresholdDefaults calibrates the V2 thresholds on the final config and an
+// inconsistent (inverted) threshold pair is reset to the defaults.
 func resolveSaturationConfig(
 	configMap map[string]config.SaturationScalingConfig,
 	modelID, namespace string,
@@ -112,6 +113,19 @@ func resolveSaturationConfig(
 		base.Merge(override)
 	}
 	base.ApplyDefaults()
+	// Calibrate V2 thresholds on the final merged config. Analyzer selection is
+	// global, so this entry may run on the V2 path even when written V1-style;
+	// applied here (post-merge) rather than in ApplyDefaults so a V1-style override
+	// cannot clobber a tuned global threshold during Merge.
+	base.ApplyV2ThresholdDefaults()
+	// Per-entry V2 thresholds are range-validated at load, but a merge can still
+	// produce an inconsistent pair across entries (e.g. an override raises
+	// scaleDownBoundary above the base scaleUpThreshold). Rather than feed the
+	// optimizer an inverted pair, fall back to the defaults for both.
+	if base.ScaleUpThreshold <= base.ScaleDownBoundary {
+		base.ScaleUpThreshold = config.DefaultScaleUpThreshold
+		base.ScaleDownBoundary = config.DefaultScaleDownBoundary
+	}
 	return base
 }
 
@@ -143,9 +157,9 @@ type Engine struct {
 	metricsRegistry *source.SourceRegistry
 
 	// saturationV2Analyzer is the V2 token-based saturation analyzer (initialized once).
-	// Also pre-registered in analyzers under interfaces.SaturationAnalyzerName.
-	// Typed as interfaces.Analyzer to allow injection in tests.
-	saturationV2Analyzer interfaces.Analyzer
+	// Also pre-registered in analyzers under domain.SaturationAnalyzerName.
+	// Typed as domain.Analyzer to allow injection in tests.
+	saturationV2Analyzer domain.Analyzer
 
 	// queueingModelAnalyzer is the queueing model-based analyzer (initialized once).
 	// Selected via analyzerName: "queueing-model" in SaturationScalingConfig.
@@ -188,10 +202,16 @@ type Engine struct {
 
 // NewEngine creates a new instance of the saturation engine.
 // Config must be non-nil (validated in main.go before engine creation).
-// Panics if cfg is nil to fail fast on programming errors.
-func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, cfg *config.Config) *Engine {
+// gpuLimiter is the operator-selected limiter built by
+// pipeline.NewLimiterFromConfig in main.go and must be non-nil — tests
+// that do not exercise the limiter path can pass pipeline.NewNoOpLimiter.
+// Panics if cfg or gpuLimiter is nil to fail fast on programming errors.
+func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Scheme, recorder record.EventRecorder, metricsRegistry *source.SourceRegistry, cfg *config.Config, gpuLimiter pipeline.Limiter) *Engine {
 	if cfg == nil {
 		panic("config is nil in NewEngine - this should not happen (validated in main.go before engine creation)")
+	}
+	if gpuLimiter == nil {
+		panic("gpuLimiter is nil in NewEngine - production callers must use pipeline.NewLimiterFromConfig; tests should pass pipeline.NewNoOpLimiter")
 	}
 	promSource := metricsRegistry.Get("prometheus") // assume prometheus source is registered
 
@@ -199,12 +219,6 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 	requestCountFunc := func(ctx context.Context, modelID, namespace string, retentionPeriod time.Duration) (float64, error) {
 		return registration.CollectModelRequestCount(ctx, promSource, modelID, namespace, retentionPeriod)
 	}
-
-	// Create GPU limiter with TypeInventory and GreedyBySaturation algorithm
-	gpuDiscovery := discovery.NewK8sWithGpuOperator(client)
-	gpuInventory := pipeline.NewTypeInventoryWithUsage("cluster-gpu-inventory", gpuDiscovery)
-	gpuAlgorithm := pipeline.NewGreedyBySaturation()
-	gpuLimiter := pipeline.NewDefaultLimiter("gpu-limiter", gpuInventory, gpuAlgorithm)
 
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
 	satV2 := saturation_v2.NewSaturationAnalyzer(capacityStore)
@@ -237,7 +251,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
 		analyzers: []analyzerEntry{
-			{name: interfaces.SaturationAnalyzerName, analyzer: satV2},
+			{name: domain.SaturationAnalyzerName, analyzer: satV2},
 		},
 	}
 
@@ -272,7 +286,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 // registry. Returns an error if called after StartOptimizeLoop or if name
 // is already registered — callers must check the error. The analyzer is
 // appended in registration order.
-func (e *Engine) RegisterAnalyzer(name string, a interfaces.Analyzer) error {
+func (e *Engine) RegisterAnalyzer(name string, a domain.Analyzer) error {
 	if e.started {
 		return errors.New("RegisterAnalyzer: called after StartOptimizeLoop")
 	}
@@ -373,8 +387,15 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// Initialize vaEventTracker for this optimize cycle
 	e.vaEventTracker = make(map[string]bool)
 
-	// Collected accelerator inventory (only in limited mode)
-	if e.Config.LimitedModeEnabled() {
+	// Collect accelerator inventory (only in limited mode AND only when the
+	// operator selected the inventory-based limiter). When --limiter-type=quota,
+	// the controller deliberately runs without consulting physical capacity —
+	// listing Nodes here would defeat that contract (and trigger a
+	// controller-runtime Node informer for the lifetime of the process). The
+	// collected inventory is currently only logged anyway (see comment at
+	// internal/collector/collector.go), so skipping it in quota mode loses
+	// nothing of operational value.
+	if e.Config.LimitedModeEnabled() && shouldCollectClusterInventory(e.Config) {
 		inventory, err := collector.CollectInventoryK8S(ctx, e.client)
 		if err != nil {
 			logger.Error(err, "Failed to collect cluster inventory")
@@ -402,7 +423,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	// Create map to store current allocations populated during metrics collection
 	// Keyed by VariantAutoscaling Namespace/Name
-	currentAllocations := make(map[string]*interfaces.Allocation)
+	currentAllocations := make(map[string]*domain.Allocation)
 
 	// Determine which analyzer to use.
 	// Priority: queueing model ConfigMap (presence-based) > saturation config analyzerName.
@@ -423,12 +444,12 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 
 	// Queueing model ConfigMap takes priority over saturation analyzerName.
 	if hasQMAnalyzerConfig {
-		analyzerName = interfaces.QueueingModelAnalyzerName
+		analyzerName = domain.QueueingModelAnalyzerName
 	}
 
 	// Select optimizer based on enableLimiter flag (both are stateless, safe to swap)
 	// Applies to V2 and queueing-model paths which both use the optimizer pipeline.
-	if analyzerName == interfaces.SaturationAnalyzerName || analyzerName == interfaces.QueueingModelAnalyzerName {
+	if analyzerName == domain.SaturationAnalyzerName || analyzerName == domain.QueueingModelAnalyzerName {
 		savedOptimizer := e.optimizer
 		if enableLimiter {
 			e.optimizer = pipeline.NewGreedyByScoreOptimizer()
@@ -441,7 +462,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		logger.V(logging.DEBUG).Info("Optimizer selected", "analyzer", analyzerName, "optimizer", e.optimizer.Name(), "enableLimiter", enableLimiter)
 	}
 
-	var allDecisions []interfaces.VariantDecision
+	var allDecisions []domain.VariantDecision
 
 	// Each analyzer has a separate optimize path because they use fundamentally
 	// different analysis types and target-building flows:
@@ -450,10 +471,11 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	//   - Queueing model: QueueingModelAnalyzer → AnalyzerResult → Optimizer.Optimize → Enforcer bridge
 	// V1 will be deprecated once V2 is fully validated.
 	// Queueing model is activated by presence of wva-queueing-model-config ConfigMap.
+	mode := modeLabelForAnalyzer(analyzerName)
 	switch analyzerName {
-	case interfaces.QueueingModelAnalyzerName:
+	case domain.QueueingModelAnalyzerName:
 		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
-	case interfaces.SaturationAnalyzerName:
+	case domain.SaturationAnalyzerName:
 		allDecisions = e.optimizeV2(ctx, modelGroups, currentAllocations)
 	default:
 		allDecisions = e.optimizeV1(ctx, modelGroups, currentAllocations)
@@ -472,11 +494,25 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
 
 	logger.Info("Optimization completed successfully",
-		"mode", "saturation-only",
+		"mode", mode,
 		"modelsProcessed", len(modelGroups),
 		"decisionsApplied", len(allDecisions))
 
 	return nil
+}
+
+// modeLabelForAnalyzer returns the human-readable mode label for the given
+// analyzer name, used in the "Optimization completed successfully" log entry.
+// It mirrors the analyzer selection in optimize's switch statement.
+func modeLabelForAnalyzer(analyzerName string) string {
+	switch analyzerName {
+	case domain.QueueingModelAnalyzerName:
+		return domain.QueueingModelAnalyzerName
+	case domain.SaturationAnalyzerName:
+		return domain.SaturationAnalyzerName
+	default:
+		return "saturation-only"
+	}
 }
 
 // recordEvent ensures only one event is recorded per VA in an optimization cycle.
@@ -522,7 +558,7 @@ func (e *Engine) recordOptimizationFailedEvent(
 
 func (e *Engine) recordScalingEvent(
 	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	action interfaces.SaturationAction,
+	action domain.SaturationAction,
 	targetReplicas int,
 	reason string,
 ) {
@@ -530,9 +566,9 @@ func (e *Engine) recordScalingEvent(
 		return
 	}
 	switch action {
-	case interfaces.ActionScaleUp:
+	case domain.ActionScaleUp:
 		e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledUp, reason)
-	case interfaces.ActionScaleDown:
+	case domain.ActionScaleDown:
 		if targetReplicas == 0 {
 			e.recordEvent(va, corev1.EventTypeNormal, constants.K8SEventScaledToZero, reason)
 		} else {
@@ -560,10 +596,10 @@ func (e *Engine) resolveSaturationConfig(
 func (e *Engine) optimizeV1(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
-) []interfaces.VariantDecision {
+	currentAllocations map[string]*domain.Allocation,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
-	var allDecisions []interfaces.VariantDecision
+	var allDecisions []domain.VariantDecision
 
 	for groupKey, modelVAs := range modelGroups {
 		modelID := modelVAs[0].Spec.ModelID
@@ -636,7 +672,7 @@ func (e *Engine) optimizeV1(
 		logger.Info("Applying GPU limiter to scaling decisions",
 			"decisionCount", len(allDecisions))
 
-		decisionPtrs := make([]*interfaces.VariantDecision, len(allDecisions))
+		decisionPtrs := make([]*domain.VariantDecision, len(allDecisions))
 		for i := range allDecisions {
 			decisionPtrs[i] = &allDecisions[i]
 		}
@@ -676,9 +712,9 @@ func (e *Engine) analyzeRoleGroups(
 	saturationConfig config.SaturationScalingConfig,
 	data *modelData,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	emitSafetyNet safetyNetEmitter,
-) []interfaces.VariantDecision {
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Sub-group variants by role for P/D-aware analysis.
@@ -687,7 +723,7 @@ func (e *Engine) analyzeRoleGroups(
 	roleGroups := groupByRole(data.variantStates)
 	sortedRoles := sortedRoleKeys(roleGroups)
 
-	var modelDecisions []interfaces.VariantDecision
+	var modelDecisions []domain.VariantDecision
 	for _, role := range sortedRoles {
 		roleStates := roleGroups[role]
 		roleMetrics := filterReplicaMetricsByVariants(data.replicaMetrics, roleStates)
@@ -777,17 +813,60 @@ func (e *Engine) selectV2Optimizer(
 		return optimizer, nil
 	}
 
-	provider, ok := e.GPULimiter.(pipeline.ConstraintProvider)
-	if !ok {
+	// Collect constraints from every provider backing the GPU limiter: a single
+	// DefaultLimiter, or each constituent of a CompositeLimiter (so multi-entry
+	// quota configs are all consulted, and namespace-scoped providers contribute
+	// per-namespace caps via NamespacePools).
+	providers := gpuConstraintProviders(e.GPULimiter)
+	if len(providers) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
 	}
 
-	constraint, err := provider.ComputeConstraints(ctx, computeCurrentGPUUsage(requests))
-	if err != nil {
-		logger.Error(err, "Failed to compute GPU constraints, falling back to unlimited (cost-aware) optimizer for this cycle")
+	currentUsage := computeCurrentGPUUsage(requests)
+	currentUsageByNS := computeCurrentGPUUsageByNamespace(requests)
+	var constraints []*pipeline.ResourceConstraints
+	for _, cp := range providers {
+		constraint, err := cp.ComputeConstraints(ctx, currentUsage, currentUsageByNS)
+		if err != nil {
+			logger.Error(err, "Failed to compute GPU constraints, skipping provider", "provider", cp.Name())
+			continue
+		}
+		constraints = append(constraints, constraint)
+	}
+
+	// GreedyByScore treats absent constraints as zero available capacity
+	// (deny-all), not as unlimited. When no provider could supply constraints
+	// (limiter is not constraint-backed, or every provider failed — e.g. GPU
+	// capacity cannot be discovered), fall back to the cost-aware optimizer, the
+	// engine's unlimited path, so scale-up proceeds instead of being silently
+	// blocked.
+	if len(constraints) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
 	}
-	return optimizer, []*pipeline.ResourceConstraints{constraint}
+	return optimizer, constraints
+}
+
+// resolveRescaleFlags builds the scope-coupled rescale enablement for this cycle:
+// the cluster flag from the global saturation `default` config, plus a per-namespace
+// flag from each active namespace's OWN `default` config (never the global fallback,
+// so the cluster flag cannot enable rescale on a namespace quota).
+func (e *Engine) resolveRescaleFlags(requests []pipeline.ModelScalingRequest) pipeline.RescaleFlags {
+	flags := pipeline.RescaleFlags{Cluster: e.Config.RescaleEnabledCluster()}
+	seen := make(map[string]bool)
+	for _, req := range requests {
+		ns := req.Namespace
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		if enabled, hasLocal := e.Config.RescaleEnabledForNamespaceLocal(ns); hasLocal && enabled {
+			if flags.ByNamespace == nil {
+				flags.ByNamespace = make(map[string]bool)
+			}
+			flags.ByNamespace[ns] = true
+		}
+	}
+	return flags
 }
 
 // optimizeV2 runs the V2 token-based optimizer path (saturation-token-based).
@@ -795,14 +874,14 @@ func (e *Engine) selectV2Optimizer(
 func (e *Engine) optimizeV2(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
-) []interfaces.VariantDecision {
+	currentAllocations map[string]*domain.Allocation,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Stage 1: Collect ModelScalingRequests for all models
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
-	modelReplicaMetrics := make(map[string][]interfaces.ReplicaMetrics)
+	modelReplicaMetrics := make(map[string][]domain.ReplicaMetrics)
 	// modelScaleTargets carries each model's scale targets into stage 3, where
 	// applyScaleToZeroEnforcement needs them to gate the enforcer. Captured here
 	// because data.scaleTargets is only in scope during this collection loop.
@@ -861,6 +940,11 @@ func (e *Engine) optimizeV2(
 
 	// Stage 2: Compute GPU constraints and call optimizer
 	optimizer, constraints := e.selectV2Optimizer(ctx, requests)
+	// Scope-coupled rescale enablement (cluster + per-namespace) is resolved from
+	// config and handed to the GPU-aware optimizer for this cycle.
+	if g, ok := optimizer.(*pipeline.GreedyByScoreOptimizer); ok {
+		g.Rescale = e.resolveRescaleFlags(requests)
+	}
 	allDecisions := optimizer.Optimize(ctx, requests, constraints)
 	logScalingDecisions(ctx, requests, allDecisions)
 
@@ -893,8 +977,8 @@ func (e *Engine) BuildVariantStates(
 	vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	k8sClient client.Client,
-) []interfaces.VariantReplicaState {
-	states := make([]interfaces.VariantReplicaState, 0, len(vas))
+) []domain.VariantReplicaState {
+	states := make([]domain.VariantReplicaState, 0, len(vas))
 
 	for _, va := range vas {
 		// Get current replicas using ScaleTargetRef
@@ -963,7 +1047,7 @@ func (e *Engine) BuildVariantStates(
 		if va.Status.DesiredOptimizedAlloc.NumReplicas != nil {
 			desiredReplicas = int(*va.Status.DesiredOptimizedAlloc.NumReplicas)
 		}
-		states = append(states, interfaces.VariantReplicaState{
+		states = append(states, domain.VariantReplicaState{
 			VariantName:     va.Name,
 			CurrentReplicas: currentReplicas,
 			DesiredReplicas: desiredReplicas,
@@ -982,15 +1066,15 @@ func (e *Engine) BuildVariantStates(
 // Returns "prefill", "decode", or "both" (default when no role label is present).
 func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string {
 	if scaleTarget == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
 	if podTemplateSpec == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	labels := podTemplateSpec.Labels
 	if labels == nil {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	if val, ok := labels["llm-d.ai/role"]; ok {
 		switch val {
@@ -999,10 +1083,10 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 		case "decode":
 			return "decode"
 		default:
-			return interfaces.RoleBoth
+			return domain.RoleBoth
 		}
 	}
-	return interfaces.RoleBoth
+	return domain.RoleBoth
 }
 
 // convertSaturationTargetsToDecisions converts saturation-only targets to VariantDecisions.
@@ -1010,21 +1094,21 @@ func getRoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string 
 func (e *Engine) convertSaturationTargetsToDecisions(
 	ctx context.Context,
 	saturationTargets map[string]int,
-	saturationAnalysis *interfaces.ModelSaturationAnalysis,
-	variantStates []interfaces.VariantReplicaState,
-) []interfaces.VariantDecision {
+	saturationAnalysis *domain.ModelSaturationAnalysis,
+	variantStates []domain.VariantReplicaState,
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
-	decisions := make([]interfaces.VariantDecision, 0, len(saturationTargets))
+	decisions := make([]domain.VariantDecision, 0, len(saturationTargets))
 
 	// Build variant analysis map for quick lookup
-	vaMap := make(map[string]*interfaces.VariantSaturationAnalysis)
+	vaMap := make(map[string]*domain.VariantSaturationAnalysis)
 	for i := range saturationAnalysis.VariantAnalyses {
 		va := &saturationAnalysis.VariantAnalyses[i]
 		vaMap[va.VariantName] = va
 	}
 
 	// Build state map for quick lookup
-	stateMap := make(map[string]interfaces.VariantReplicaState)
+	stateMap := make(map[string]domain.VariantReplicaState)
 	for _, state := range variantStates {
 		stateMap[state.VariantName] = state
 	}
@@ -1033,14 +1117,14 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 		state := stateMap[variantName]
 		va := vaMap[variantName]
 
-		var action interfaces.SaturationAction
+		var action domain.SaturationAction
 		switch {
 		case targetReplicas > state.CurrentReplicas:
-			action = interfaces.ActionScaleUp
+			action = domain.ActionScaleUp
 		case targetReplicas < state.CurrentReplicas:
-			action = interfaces.ActionScaleDown
+			action = domain.ActionScaleDown
 		default:
-			action = interfaces.ActionNoChange
+			action = domain.ActionNoChange
 		}
 
 		// Use GPUsPerReplica from variant state (extracted from scale target)
@@ -1049,7 +1133,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			gpusPerReplica = 1 // Fallback default
 		}
 
-		decision := interfaces.VariantDecision{
+		decision := domain.VariantDecision{
 			VariantName:            variantName,
 			Namespace:              saturationAnalysis.Namespace,
 			ModelID:                saturationAnalysis.ModelID,
@@ -1066,7 +1150,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 			MinReplicas:            state.MinReplicas,
 			MaxReplicas:            state.MaxReplicas,
 		}
-		decision.SetDecisionReason(action, interfaces.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(interfaces.DecisionReasonSaturationOnly), string(action)))
+		decision.SetDecisionReason(action, domain.DecisionReasonSaturationOnly, fmt.Sprintf("%s: %s", string(domain.DecisionReasonSaturationOnly), string(action)))
 
 		if va != nil {
 			decision.AcceleratorName = va.AcceleratorName
@@ -1093,7 +1177,7 @@ func (e *Engine) convertSaturationTargetsToDecisions(
 //
 // Aggregation is keyed by (modelID, variantName) — not just variantName — because
 // variant names can collide across different models in the same reconcile cycle.
-func enrichDecisionsWithKvTokenData(decisions []interfaces.VariantDecision, modelReplicaMetrics map[string][]interfaces.ReplicaMetrics) {
+func enrichDecisionsWithKvTokenData(decisions []domain.VariantDecision, modelReplicaMetrics map[string][]domain.ReplicaMetrics) {
 	type kvAgg struct {
 		kvUsed  int64
 		kvTotal int64
@@ -1127,7 +1211,7 @@ func enrichDecisionsWithKvTokenData(decisions []interfaces.VariantDecision, mode
 }
 
 // hasMinReplicasAboveZero returns true if any variant in the states has MinReplicas > 0.
-func hasMinReplicasAboveZero(states []interfaces.VariantReplicaState) bool {
+func hasMinReplicasAboveZero(states []domain.VariantReplicaState) bool {
 	for _, state := range states {
 		if state.MinReplicas != nil && *state.MinReplicas > 0 {
 			return true
@@ -1169,9 +1253,9 @@ func scaleToZeroSupportedForEngines(scaleTargets map[string]scaletarget.ScaleTar
 func (e *Engine) applyScaleToZeroEnforcement(
 	ctx context.Context,
 	modelID, namespace, optimizerName string,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
-	variantStates []interfaces.VariantReplicaState,
+	variantStates []domain.VariantReplicaState,
 ) bool {
 	if len(decisions) == 0 {
 		return false
@@ -1205,7 +1289,7 @@ func (e *Engine) applyScaleToZeroEnforcement(
 // deployment carries a role label.
 func normalizeRole(role string) string {
 	if role == "" {
-		return interfaces.RoleBoth
+		return domain.RoleBoth
 	}
 	return role
 }
@@ -1213,8 +1297,8 @@ func normalizeRole(role string) string {
 // groupByRole sub-groups variant states by their P/D role.
 // Returns a map keyed by normalized role ("both", "prefill", "decode").
 // For non-disaggregated models (all "both"/""), the map contains a single entry.
-func groupByRole(states []interfaces.VariantReplicaState) map[string][]interfaces.VariantReplicaState {
-	groups := make(map[string][]interfaces.VariantReplicaState)
+func groupByRole(states []domain.VariantReplicaState) map[string][]domain.VariantReplicaState {
+	groups := make(map[string][]domain.VariantReplicaState)
 	for _, s := range states {
 		key := normalizeRole(s.Role)
 		groups[key] = append(groups[key], s)
@@ -1227,7 +1311,7 @@ func groupByRole(states []interfaces.VariantReplicaState) map[string][]interface
 // easier debugging). The caller is expected to pass a map whose keys were
 // produced by groupByRole, which has already canonicalized empty roles to
 // "both"; the resulting lexicographic order is then "both" < "decode" < "prefill".
-func sortedRoleKeys(groups map[string][]interfaces.VariantReplicaState) []string {
+func sortedRoleKeys(groups map[string][]domain.VariantReplicaState) []string {
 	keys := make([]string, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -1239,12 +1323,12 @@ func sortedRoleKeys(groups map[string][]interfaces.VariantReplicaState) []string
 // filterReplicaMetricsByVariants returns only the replica metrics whose VariantName
 // appears in the given variant state slice. Used to split per-model metrics into
 // per-role subsets without re-querying Prometheus.
-func filterReplicaMetricsByVariants(metrics []interfaces.ReplicaMetrics, states []interfaces.VariantReplicaState) []interfaces.ReplicaMetrics {
+func filterReplicaMetricsByVariants(metrics []domain.ReplicaMetrics, states []domain.VariantReplicaState) []domain.ReplicaMetrics {
 	allowed := make(map[string]struct{}, len(states))
 	for _, s := range states {
 		allowed[s.VariantName] = struct{}{}
 	}
-	filtered := make([]interfaces.ReplicaMetrics, 0, len(metrics))
+	filtered := make([]domain.ReplicaMetrics, 0, len(metrics))
 	for _, m := range metrics {
 		if _, ok := allowed[m.VariantName]; ok {
 			filtered = append(filtered, m)
@@ -1258,7 +1342,7 @@ func filterReplicaMetricsByVariants(metrics []interfaces.ReplicaMetrics, states 
 // safety-net metric emission.
 func filterVAsByVariantStates(
 	vas []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	states []interfaces.VariantReplicaState,
+	states []domain.VariantReplicaState,
 ) []llmdVariantAutoscalingV1alpha1.VariantAutoscaling {
 	allowed := make(map[string]struct{}, len(states))
 	for _, s := range states {
@@ -1274,7 +1358,7 @@ func filterVAsByVariantStates(
 }
 
 // variantNames returns variant names from states for logging.
-func variantNames(states []interfaces.VariantReplicaState) []string {
+func variantNames(states []domain.VariantReplicaState) []string {
 	names := make([]string, len(states))
 	for i, s := range states {
 		names[i] = s.VariantName
@@ -1286,12 +1370,12 @@ func variantNames(states []interfaces.VariantReplicaState) []string {
 type modelData struct {
 	modelID             string
 	namespace           string
-	replicaMetrics      []interfaces.ReplicaMetrics
+	replicaMetrics      []domain.ReplicaMetrics
 	scaleTargets        map[string]scaletarget.ScaleTargetAccessor
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling
 	variantCosts        map[string]float64
-	variantStates       []interfaces.VariantReplicaState
-	schedulerQueue      *interfaces.SchedulerQueueMetrics
+	variantStates       []domain.VariantReplicaState
+	schedulerQueue      *domain.SchedulerQueueMetrics
 }
 
 // prepareModelData collects metrics and builds lookup maps for a model's VAs.
@@ -1382,14 +1466,14 @@ func (e *Engine) prepareModelData(
 // applySaturationDecisions updates VA status and emits metrics based on Saturation decisions.
 func (e *Engine) applySaturationDecisions(
 	ctx context.Context,
-	decisions []interfaces.VariantDecision,
+	decisions []domain.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
-	decisionMap := make(map[string]interfaces.VariantDecision)
+	decisionMap := make(map[string]domain.VariantDecision)
 	for _, d := range decisions {
 		decisionMap[utils.GetNamespacedKey(d.Namespace, d.VariantName)] = d
 	}
@@ -1616,7 +1700,7 @@ func (e *Engine) applySaturationDecisions(
 		// reconcile trigger is needed.
 
 		if hasDecision {
-			if decision.Action != interfaces.ActionNoChange {
+			if decision.Action != domain.ActionNoChange {
 				if err := e.metricsEmitter.EmitReplicaScalingMetrics(ctx, &updateVa, decision.Action, decision.ReasonCategory()); err != nil {
 					logger.Error(err, "Failed to emit replica scaling metrics")
 				}
@@ -1650,7 +1734,7 @@ func (e *Engine) emitAcceleratorNotResolvedEvent(va *llmdVariantAutoscalingV1alp
 func (e *Engine) emitSafetyNetMetrics(
 	ctx context.Context,
 	modelVAs []llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAllocations map[string]*interfaces.Allocation,
+	currentAllocations map[string]*domain.Allocation,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 ) {
 	logger := ctrl.LoggerFrom(ctx)

@@ -7,20 +7,20 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 )
 
-// fakeAnalyzerWithResult is a minimal interfaces.Analyzer whose Analyze result
+// fakeAnalyzerWithResult is a minimal domain.Analyzer whose Analyze result
 // is set at construction time. Used to inject controlled saturation/spy output
 // into runAnalyzersAndScore without needing a real SaturationAnalyzer.
 type fakeAnalyzerWithResult struct {
 	analyzerName string
-	result       *interfaces.AnalyzerResult
+	result       *domain.AnalyzerResult
 }
 
 func (f *fakeAnalyzerWithResult) Name() string { return f.analyzerName }
-func (f *fakeAnalyzerWithResult) Analyze(_ context.Context, _ interfaces.AnalyzerInput) (*interfaces.AnalyzerResult, error) {
+func (f *fakeAnalyzerWithResult) Analyze(_ context.Context, _ domain.AnalyzerInput) (*domain.AnalyzerResult, error) {
 	return f.result, nil
 }
 
@@ -63,8 +63,17 @@ var _ = Describe("Engine config-population helpers", func() {
 	})
 
 	Describe("effectiveEnabled", func() {
-		It("returns true when the analyzer is absent from config", func() {
-			Expect(effectiveEnabled("throughput", config.SaturationScalingConfig{})).To(BeTrue())
+		It("returns false when the analyzer is absent from config (opt-in)", func() {
+			Expect(effectiveEnabled("throughput", config.SaturationScalingConfig{})).To(BeFalse())
+		})
+
+		It("returns false when other analyzers are configured but the target is absent", func() {
+			cfg := config.SaturationScalingConfig{
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "other"},
+				},
+			}
+			Expect(effectiveEnabled("throughput", cfg)).To(BeFalse())
 		})
 
 		It("returns true when Enabled is nil for the matching entry", func() {
@@ -101,9 +110,9 @@ var _ = Describe("Engine config-population helpers", func() {
 
 		// minEngine builds a minimal Engine suitable for calling runAnalyzersAndScore.
 		// satFake is used as saturationV2Analyzer; spies is the additional snapshot.
-		minEngine := func(satFake interfaces.Analyzer, spies ...analyzerEntry) *Engine {
+		minEngine := func(satFake domain.Analyzer, spies ...analyzerEntry) *Engine {
 			snapshot := append(
-				[]analyzerEntry{{name: interfaces.SaturationAnalyzerName, analyzer: satFake}},
+				[]analyzerEntry{{name: domain.SaturationAnalyzerName, analyzer: satFake}},
 				spies...,
 			)
 			return &Engine{
@@ -114,21 +123,21 @@ var _ = Describe("Engine config-population helpers", func() {
 		}
 
 		zeroSat := &fakeAnalyzerWithResult{
-			analyzerName: interfaces.SaturationAnalyzerName,
-			result:       &interfaces.AnalyzerResult{},
+			analyzerName: domain.SaturationAnalyzerName,
+			result:       &domain.AnalyzerResult{},
 		}
 
 		It("populates Score from AnalyzerScoreConfig.Score into the returned slice", func() {
 			spy := &fakeAnalyzerWithResult{
 				analyzerName: "spy",
-				result:       &interfaces.AnalyzerResult{},
+				result:       &domain.AnalyzerResult{},
 			}
 			e := minEngine(zeroSat, analyzerEntry{name: "spy", analyzer: spy})
 			cfg := config.SaturationScalingConfig{
 				ScaleUpThreshold:  0.85,
 				ScaleDownBoundary: 0.70,
 				Analyzers: []config.AnalyzerScoreConfig{
-					{Name: interfaces.SaturationAnalyzerName, Score: 2.0},
+					{Name: domain.SaturationAnalyzerName, Score: 2.0},
 					{Name: "spy", Score: 0.5},
 				},
 			}
@@ -138,20 +147,23 @@ var _ = Describe("Engine config-population helpers", func() {
 			Expect(results).To(HaveLen(2))
 
 			byName := namedByName(results)
-			Expect(byName[interfaces.SaturationAnalyzerName].Score).To(Equal(2.0))
+			Expect(byName[domain.SaturationAnalyzerName].Score).To(Equal(2.0))
 			Expect(byName["spy"].Score).To(Equal(0.5))
 		})
 
 		It("defaults Score to 1.0 when the analyzer has no Analyzers entry", func() {
 			spy := &fakeAnalyzerWithResult{
 				analyzerName: "spy",
-				result:       &interfaces.AnalyzerResult{},
+				result:       &domain.AnalyzerResult{},
 			}
 			e := minEngine(zeroSat, analyzerEntry{name: "spy", analyzer: spy})
 			cfg := config.SaturationScalingConfig{
 				ScaleUpThreshold:  0.85,
 				ScaleDownBoundary: 0.70,
-				// No Analyzers entries — both default to 1.0.
+				// spy has an entry (so it participates, opt-in) but no Score — defaults to 1.0.
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "spy"},
+				},
 			}
 
 			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
@@ -159,7 +171,7 @@ var _ = Describe("Engine config-population helpers", func() {
 			Expect(results).To(HaveLen(2))
 
 			byName := namedByName(results)
-			Expect(byName[interfaces.SaturationAnalyzerName].Score).To(Equal(1.0))
+			Expect(byName[domain.SaturationAnalyzerName].Score).To(Equal(1.0))
 			Expect(byName["spy"].Score).To(Equal(1.0))
 		})
 
@@ -167,7 +179,7 @@ var _ = Describe("Engine config-population helpers", func() {
 			// spy returns TotalDemand=100, everything else zero.
 			spy := &fakeAnalyzerWithResult{
 				analyzerName: "spy",
-				result:       &interfaces.AnalyzerResult{TotalDemand: 100},
+				result:       &domain.AnalyzerResult{TotalDemand: 100},
 			}
 			e := minEngine(zeroSat, analyzerEntry{name: "spy", analyzer: spy})
 
@@ -175,6 +187,9 @@ var _ = Describe("Engine config-population helpers", func() {
 			cfgGlobal := config.SaturationScalingConfig{
 				ScaleUpThreshold:  0.85,
 				ScaleDownBoundary: 0.70,
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "spy"},
+				},
 			}
 			resultsGlobal, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgGlobal, nil, nil, nil, nil)
 			Expect(err).NotTo(HaveOccurred())

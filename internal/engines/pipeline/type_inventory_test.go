@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // mockDiscovery implements discovery.CapacityDiscovery for testing.
@@ -260,7 +260,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(16)) // H100: 16-4=12, A100: 8-4=4
 
 			// Allocate from H100 pool
-			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &domain.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -292,7 +292,7 @@ var _ = Describe("TypeInventory", func() {
 			Expect(allocator.Remaining()).To(Equal(2))
 
 			// Request more than available - should get partial allocation
-			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &domain.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -313,7 +313,7 @@ var _ = Describe("TypeAllocator", func() {
 
 	Describe("TryAllocate", func() {
 		DescribeTable("should allocate GPUs correctly",
-			func(initialByType map[string]int, decision *interfaces.VariantDecision, gpusRequested int, expectedAllocated int, expectedRemaining map[string]int, expectError bool) {
+			func(initialByType map[string]int, decision *domain.VariantDecision, gpusRequested int, expectedAllocated int, expectedRemaining map[string]int, expectError bool) {
 				// Calculate initial total
 				total := 0
 				for _, count := range initialByType {
@@ -341,56 +341,56 @@ var _ = Describe("TypeAllocator", func() {
 			},
 			Entry("allocate from available pool",
 				map[string]int{"H100": 16, "A100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
 				4, 4,
 				map[string]int{"H100": 12, "A100": 8},
 				false,
 			),
 			Entry("allocate entire pool",
 				map[string]int{"H100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
 				8, 8,
 				map[string]int{"H100": 0},
 				false,
 			),
 			Entry("partial allocation when pool exhausted",
 				map[string]int{"H100": 4},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
 				8, 4,
 				map[string]int{"H100": 0},
 				false,
 			),
 			Entry("no allocation when type not available",
 				map[string]int{"A100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
 				4, 0,
 				map[string]int{"A100": 8},
 				false,
 			),
 			Entry("resolve empty accelerator in homogeneous cluster",
 				map[string]int{"H100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default"},
 				4, 4,
 				map[string]int{"H100": 4},
 				false,
 			),
 			Entry("return zero for empty accelerator in heterogeneous cluster",
 				map[string]int{"H100": 8, "A100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default"},
 				4, 0,
 				map[string]int{"H100": 8, "A100": 8},
 				false,
 			),
 			Entry("zero request returns zero",
 				map[string]int{"H100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "H100"},
 				0, 0,
 				map[string]int{"H100": 8},
 				false,
 			),
 			Entry("types are isolated",
 				map[string]int{"H100": 4, "A100": 8},
-				&interfaces.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "A100"},
+				&domain.VariantDecision{VariantName: "model-a", Namespace: "default", AcceleratorName: "A100"},
 				6, 6,
 				map[string]int{"H100": 4, "A100": 2},
 				false,
@@ -408,7 +408,7 @@ var _ = Describe("TypeAllocator", func() {
 			ctx := context.Background()
 
 			// First allocation: 4 H100 GPUs
-			allocated, err := allocator.TryAllocate(ctx, &interfaces.VariantDecision{
+			allocated, err := allocator.TryAllocate(ctx, &domain.VariantDecision{
 				VariantName:     "model-a",
 				Namespace:       "default",
 				AcceleratorName: "H100",
@@ -420,7 +420,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(20))
 
 			// Second allocation: 6 A100 GPUs
-			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &domain.VariantDecision{
 				VariantName:     "model-b",
 				Namespace:       "default",
 				AcceleratorName: "A100",
@@ -432,7 +432,7 @@ var _ = Describe("TypeAllocator", func() {
 			Expect(allocator.Remaining()).To(Equal(14))
 
 			// Third allocation: more H100 than available
-			allocated, err = allocator.TryAllocate(ctx, &interfaces.VariantDecision{
+			allocated, err = allocator.TryAllocate(ctx, &domain.VariantDecision{
 				VariantName:     "model-c",
 				Namespace:       "default",
 				AcceleratorName: "H100",

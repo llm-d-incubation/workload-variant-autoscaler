@@ -21,15 +21,41 @@ metadata:
     app.kubernetes.io/name: workload-variant-autoscaler
     app.kubernetes.io/managed-by: kustomize
 data:
-  # Global defaults applied to all variants unless overridden
+  # Global defaults applied to all variants unless overridden.
+  #
+  # The `analyzers` section selects the V2 (token/capacity-based) saturation
+  # analyzer — the default since v0.9.0. Remove the `analyzers` section (and the
+  # V2-only thresholds) to opt out to the legacy V1 (percentage-based) analyzer.
+  # See docs/developer-guide/saturation-scaling-config.md.
   default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    # V2-only thresholds:
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    # Shared by V1 and V2:
     kvCacheThreshold: 0.80
     queueLengthThreshold: 5
+    # V1-only (ignored by V2):
     kvSpareTrigger: 0.1
     queueSpareTrigger: 3
     # Enable GPU limiter to constrain scaling based on available cluster resources
     # When true, scale-up decisions are limited by available GPU capacity
     enableLimiter: false
+    # Enable priority-weighted rescale: under GPU contention the V2 optimizer
+    # redistributes the whole budget by priority x demand, reclaiming from
+    # lower-priority models so higher-priority work can run. Off by default.
+    # Budget-scope flag (read only from this `default` entry): the value here
+    # governs the cluster budget; a namespace-local config's `default` governs
+    # that namespace's quota budget. Has no effect without a same-scope GPU budget.
+    enableRescale: false
+
+  # Per-model overrides inherit the default's analyzer selection (V2) via
+  # field-level merge, so they only need the thresholds they change. Under V2,
+  # kvCacheThreshold/queueLengthThreshold apply; kvSpareTrigger/queueSpareTrigger
+  # are V1-only and are ignored (they take effect only if the default is opted
+  # back to V1 by removing its `analyzers:` section).
 
   # Example per-model override for granite model in lab namespace
   # Uncomment and customize as needed
@@ -38,8 +64,6 @@ data:
   #   namespace: lab-namespace
   #   kvCacheThreshold: 0.75
   #   queueLengthThreshold: 10
-  #   kvSpareTrigger: 0.15
-  #   queueSpareTrigger: 5
 
   # Example per-model override for llama model in production namespace
   # Shows partial override (only some fields specified, rest inherit from default)
@@ -47,4 +71,3 @@ data:
   #   model_id: meta/llama-70b
   #   namespace: production
   #   kvCacheThreshold: 0.85
-  #   kvSpareTrigger: 0.15

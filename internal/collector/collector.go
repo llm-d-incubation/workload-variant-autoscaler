@@ -2,7 +2,7 @@
 //
 // The collector package provides a pluggable metrics collection system with support for
 // multiple backends (Prometheus, EPP). Use factory.NewMetricsCollector() to create collector
-// instances, and the MetricsCollector interface from internal/interfaces to interact with them.
+// instances, and the MetricsCollector interface from internal/domain to interact with them.
 //
 // Note: Some legacy functions in this package (ValidateMetricsAvailability, AddMetricsToOptStatus)
 // are deprecated. See individual function documentation for details.

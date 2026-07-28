@@ -7,7 +7,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 )
 
 // Config is the unified configuration structure for the WVA controller.
@@ -25,6 +25,7 @@ type Config struct {
 	qmAnalyzer  qmAnalyzerConfig  // namespace-aware
 	scaleToZero scaleToZeroConfig // namespace-aware
 	coordinator coordinatorConfig
+	limiter     limiterConfig // startup-only: selects inventory vs quota
 }
 
 // coordinatorConfig holds Coordinator loop configuration. Plugin
@@ -33,6 +34,42 @@ type Config struct {
 type coordinatorConfig struct {
 	enabled  bool
 	interval time.Duration
+}
+
+// LimiterType selects which pipeline.Limiter implementation
+// pipeline.NewLimiterFromConfig builds at startup. The two values are
+// mutually exclusive in the initial implementation — composing physical and
+// quota bounds (min(physical, quota)) is the limiter chain's job, tracked in
+// issue #1003.
+type LimiterType string
+
+const (
+	// LimiterTypeInventory builds the TypeInventory-backed limiter
+	// (physical GPU discovery via the GPU operator). Default.
+	LimiterTypeInventory LimiterType = "inventory"
+
+	// LimiterTypeQuota builds one or more QuotaInventory-backed limiters
+	// from an operator-supplied YAML file. Multiple entries are wrapped in
+	// a CompositeLimiter that applies them sequentially.
+	LimiterTypeQuota LimiterType = "quota"
+)
+
+// limiterConfig holds the operator-chosen GPU limiter selection and any
+// supporting configuration loaded at startup. Set once during config.Load
+// and read by main.go / the engine factory — there is no live-reload path.
+type limiterConfig struct {
+	// limiterType is one of LimiterTypeInventory (default) or
+	// LimiterTypeQuota. Selects which pipeline.Limiter implementation
+	// NewLimiterFromConfig builds.
+	limiterType LimiterType
+	// quotaConfigFile is the path to the YAML file containing
+	// QuotaLimiterEntries. Required when limiterType == LimiterTypeQuota;
+	// ignored otherwise.
+	quotaConfigFile string
+	// quotaEntries is the parsed and validated quota config. Populated only
+	// when limiterType == LimiterTypeQuota and quotaConfigFile loads
+	// successfully.
+	quotaEntries []QuotaLimiterConfig
 }
 
 // configSyncState tracks configuration sync state used for startup/readiness checks.
@@ -86,7 +123,7 @@ type SaturationScalingConfigPerModel map[string]SaturationScalingConfig
 
 // QMAnalyzerConfigPerModel represents queueing model scaling configuration
 // for all models. Maps model ID (or "default" key) to its configuration.
-type QMAnalyzerConfigPerModel map[string]interfaces.QueueingModelScalingConfig
+type QMAnalyzerConfigPerModel map[string]domain.QueueingModelScalingConfig
 
 // saturationConfig holds saturation scaling configuration (namespace-aware)
 type saturationConfig struct {
@@ -382,6 +419,32 @@ func (c *Config) SaturationConfigForNamespace(namespace string) map[string]Satur
 	return copySaturationConfig(sourceConfig)
 }
 
+// RescaleEnabledForNamespaceLocal reports the EnableRescale flag from a namespace's
+// OWN saturation config `default` entry, and whether that namespace has its own
+// (non-global) config. It intentionally does NOT fall back to the global config: the
+// scope-coupled rescale flag for a namespace quota is governed only by that
+// namespace's own config, so the cluster (global) flag never leaks onto it.
+func (c *Config) RescaleEnabledForNamespaceLocal(namespace string) (enabled bool, hasLocal bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if namespace == "" {
+		return false, false
+	}
+	nsCfg, ok := c.saturation.namespaceConfigs[namespace]
+	if !ok || len(nsCfg) == 0 {
+		return false, false
+	}
+	return nsCfg["default"].EnableRescale, true
+}
+
+// RescaleEnabledCluster reports the EnableRescale flag from the global saturation
+// config `default` entry — the cluster-budget scope.
+func (c *Config) RescaleEnabledCluster() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.saturation.global["default"].EnableRescale
+}
+
 // copySaturationConfig creates a deep copy of the saturation config map.
 func copySaturationConfig(src map[string]SaturationScalingConfig) map[string]SaturationScalingConfig {
 	if src == nil {
@@ -513,7 +576,7 @@ func (c *Config) UpdateScaleToZeroConfigForNamespace(namespace string, config Sc
 // QMAnalyzerConfig returns the current global queueing model scaling configuration.
 // Thread-safe. Returns a copy to prevent external modifications.
 // For namespace-aware lookups, use QMAnalyzerConfigForNamespace instead.
-func (c *Config) QMAnalyzerConfig() map[string]interfaces.QueueingModelScalingConfig {
+func (c *Config) QMAnalyzerConfig() map[string]domain.QueueingModelScalingConfig {
 	return c.QMAnalyzerConfigForNamespace("")
 }
 
@@ -521,7 +584,7 @@ func (c *Config) QMAnalyzerConfig() map[string]interfaces.QueueingModelScalingCo
 // Resolution order: namespace-local > global
 // Thread-safe. Returns a copy to prevent external modifications.
 // If namespace is empty, returns global config.
-func (c *Config) QMAnalyzerConfigForNamespace(namespace string) map[string]interfaces.QueueingModelScalingConfig {
+func (c *Config) QMAnalyzerConfigForNamespace(namespace string) map[string]domain.QueueingModelScalingConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	sourceConfig := c.resolveQMAnalyzerConfig(namespace)
@@ -530,7 +593,7 @@ func (c *Config) QMAnalyzerConfigForNamespace(namespace string) map[string]inter
 
 // resolveQMAnalyzerConfig resolves queueing model config for a namespace (namespace-local > global).
 // Must be called while holding at least a read lock.
-func (c *Config) resolveQMAnalyzerConfig(namespace string) map[string]interfaces.QueueingModelScalingConfig {
+func (c *Config) resolveQMAnalyzerConfig(namespace string) map[string]domain.QueueingModelScalingConfig {
 	// Check namespace-local first (if namespace is provided)
 	if namespace != "" {
 		if nsConfig, exists := c.qmAnalyzer.namespaceConfigs[namespace]; exists {
@@ -549,11 +612,11 @@ func (c *Config) resolveQMAnalyzerConfig(namespace string) map[string]interfaces
 }
 
 // copyQMAnalyzerConfig creates a deep copy of the queueing model config map.
-func copyQMAnalyzerConfig(src map[string]interfaces.QueueingModelScalingConfig) map[string]interfaces.QueueingModelScalingConfig {
+func copyQMAnalyzerConfig(src map[string]domain.QueueingModelScalingConfig) map[string]domain.QueueingModelScalingConfig {
 	if src == nil {
-		return make(map[string]interfaces.QueueingModelScalingConfig)
+		return make(map[string]domain.QueueingModelScalingConfig)
 	}
-	result := make(map[string]interfaces.QueueingModelScalingConfig, len(src))
+	result := make(map[string]domain.QueueingModelScalingConfig, len(src))
 	for k, v := range src {
 		result[k] = v
 	}
@@ -563,19 +626,19 @@ func copyQMAnalyzerConfig(src map[string]interfaces.QueueingModelScalingConfig) 
 // UpdateQMAnalyzerConfig updates the global queueing model scaling configuration.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
 // For namespace-local updates, use UpdateQMAnalyzerConfigForNamespace instead.
-func (c *Config) UpdateQMAnalyzerConfig(config map[string]interfaces.QueueingModelScalingConfig) {
+func (c *Config) UpdateQMAnalyzerConfig(config map[string]domain.QueueingModelScalingConfig) {
 	c.UpdateQMAnalyzerConfigForNamespace("", config)
 }
 
 // UpdateQMAnalyzerConfigForNamespace updates the queueing model scaling configuration for the given namespace.
 // If namespace is empty, updates global config.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
-func (c *Config) UpdateQMAnalyzerConfigForNamespace(namespace string, config map[string]interfaces.QueueingModelScalingConfig) {
+func (c *Config) UpdateQMAnalyzerConfigForNamespace(namespace string, config map[string]domain.QueueingModelScalingConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Make a copy to prevent external modifications
-	newConfig := make(map[string]interfaces.QueueingModelScalingConfig, len(config))
+	newConfig := make(map[string]domain.QueueingModelScalingConfig, len(config))
 	maps.Copy(newConfig, config)
 
 	var oldCount int
@@ -706,6 +769,31 @@ func (c *Config) setPrometheusBaseURLForTesting(baseURL string) {
 	c.prometheus.baseURL = baseURL
 }
 
+// SetLimiterForTest sets the limiter selection on a test Config. Used by the
+// pipeline and saturation packages' tests to drive NewLimiterFromConfig /
+// the inventory gate without going through the full Viper loader. It is
+// exported (rather than living in export_test.go) because those callers are in
+// other packages and cannot see config's test-only symbols. Not for production
+// use.
+func SetLimiterForTest(c *Config, limiterType LimiterType, quotaConfigFile string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.limiter.limiterType = limiterType
+	c.limiter.quotaConfigFile = quotaConfigFile
+	c.limiter.quotaEntries = nil
+}
+
+// ReloadQuotaForTest re-runs the quota config file loader against the path
+// already stored on the Config, populating quotaEntries. Used by cross-package
+// tests that build a quota YAML in a temp dir and want the parsed entries
+// available to NewLimiterFromConfig. Exported for the same reason as
+// SetLimiterForTest. Not for production use.
+func ReloadQuotaForTest(c *Config) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return loadQuotaLimiterEntries(&c.limiter)
+}
+
 // --- Bootstrap State Management ---
 
 // ConfigMapsBootstrapComplete returns true once the initial ConfigMap bootstrap has completed.
@@ -746,4 +834,41 @@ func (c *Config) MarkConfigMapsBootstrapFailed(err error) {
 		return
 	}
 	c.configSync.lastConfigMapsSyncError = ""
+}
+
+// LimiterMode returns the operator-selected GPU limiter implementation
+// (LimiterTypeInventory by default, or LimiterTypeQuota). Set at startup
+// via the --limiter-type flag / LIMITER_TYPE env var.
+// Thread-safe.
+func (c *Config) LimiterMode() LimiterType {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.limiter.limiterType
+}
+
+// QuotaConfigFile returns the path to the YAML file containing
+// QuotaLimiterEntries. Empty unless --limiter-type=quota was selected.
+// Thread-safe.
+func (c *Config) QuotaConfigFile() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.limiter.quotaConfigFile
+}
+
+// QuotaEntries returns a deep copy of the parsed quota limiter entries.
+// Empty when --limiter-type != "quota". Each returned entry's ClusterQuotas /
+// NamespaceQuotas maps and Exclude slice are cloned, so callers may read or
+// mutate the result freely without affecting the config-owned snapshot.
+// Thread-safe.
+func (c *Config) QuotaEntries() []QuotaLimiterConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.limiter.quotaEntries) == 0 {
+		return nil
+	}
+	out := make([]QuotaLimiterConfig, len(c.limiter.quotaEntries))
+	for i, e := range c.limiter.quotaEntries {
+		out[i] = e.clone()
+	}
+	return out
 }

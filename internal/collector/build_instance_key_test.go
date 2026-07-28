@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
@@ -160,3 +162,43 @@ func TestBuildInstanceKey_VANameExtraction(t *testing.T) {
 		})
 	}
 }
+
+// mockLocator implements locator.PodLocator for testing.
+type mockLocator struct {
+	locateFunc       func(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error)
+	getPodLabelsFunc func(ctx context.Context, namespace, podName string) map[string]string
+}
+
+func (m *mockLocator) Locate(ctx context.Context, namespace, podName string) (*locator.ManagedScaler, error) {
+	if m == nil || m.locateFunc == nil {
+		return nil, nil
+	}
+	return m.locateFunc(ctx, namespace, podName)
+}
+
+func (m *mockLocator) LocateByVariant(_ context.Context, _, _ string) (*locator.ManagedScaler, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// TODO(va-removal): remove ResolveScaleTarget from the mock when the CRD-based
+// dual-mode fallback (and the interface method) are removed.
+func (m *mockLocator) ResolveScaleTarget(_ context.Context, _, _ string) (autoscalingv2.CrossVersionObjectReference, bool, error) {
+	return autoscalingv2.CrossVersionObjectReference{}, false, nil
+}
+
+func (m *mockLocator) GetPodLabels(ctx context.Context, namespace, podName string) map[string]string {
+	if m == nil || m.getPodLabelsFunc == nil {
+		return nil
+	}
+	return m.getPodLabelsFunc(ctx, namespace, podName)
+}
+
+// TODO(va-removal): three VA-CRD-based tests were removed here because the
+// VariantAutoscaling CRD and its indexer (VAScaleTargetKey, VAScaleTargetIndexFunc)
+// have been deleted. The tests were:
+//   - TestBuildInstanceKey_VACRDNameDiffersFromHPAName
+//   - TestBuildInstanceKey_UnmanagedHPAFallsBackToVALookup
+//   - TestBuildInstanceKey_UnmanagedHPANoMatchingVA

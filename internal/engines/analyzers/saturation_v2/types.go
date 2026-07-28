@@ -40,7 +40,12 @@ type ReplicaCapacity struct {
 	K2Priority            k2Source // how k2 was computed
 	EffectiveCapacity     int64    // min(k1, k2)
 	IsSaturated           bool
-	ReplicaDemand         int64 // tokensInUse + queueLength * avgInputTokens
+	// ReplicaDemand is the replica's resident KV tokens — TokensInUse on the main
+	// path, kvCacheUsage * effectiveCapacity on the fallback path — plus the
+	// role-aware waiting-queue footprint: queueLength * avgInputTokens for
+	// prefill replicas, and queueLength * (avgInputTokens + avgOutputTokens) for
+	// decode/"both". See waitingQueueDemand.
+	ReplicaDemand int64
 }
 
 // classifyOutputLength returns a workload bucket name based on average

@@ -31,7 +31,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/testutil"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/testutil"
 )
 
 var _ = Describe("ConfigMap Bootstrap", func() {

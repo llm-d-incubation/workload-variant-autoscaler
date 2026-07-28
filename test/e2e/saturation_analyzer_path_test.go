@@ -22,6 +22,13 @@ import (
 // TODO(cleanup): Unify analyzer-path configuration across algorithms
 // (saturation config fields vs queueing-model config presence), then simplify
 // this spec to a single explicit analyzer selector contract.
+//
+// NOTE (v0.9.0): V2 is the default analyzer since v0.9.0. This suite is
+// self-guarded — it snapshots the base ConfigMap and writes its own explicit
+// config for each arc (V1 cases set analyzerName:"" to select the legacy V1
+// path), so the default flip does not affect it. The V1 arcs below deliberately
+// exercise the still-selectable legacy analyzer.
+// TODO(v1-removal): drop the V1 arcs (analyzerName:"") when V1 is removed.
 
 // V1 saturation calibration via the simulator's --fake-metrics flag.
 //

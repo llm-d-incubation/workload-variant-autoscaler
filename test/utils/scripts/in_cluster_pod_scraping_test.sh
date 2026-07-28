@@ -2,34 +2,45 @@
 #
 # This script is embedded in the test Job (via //go:embed) and verifies that:
 # 1. The EPP pod metrics endpoint is accessible (HTTP 200)
-# 2. Bearer token authentication works correctly
-# 3. The response contains valid Prometheus-format metrics
+# 2. The response contains valid Prometheus-format metrics
 #
 # This is used by TestInClusterScraping to verify end-to-end scraping functionality
 # when running inside the Kubernetes cluster (where pod IPs are accessible).
 #
-# TODO: Consider migrating to a ConfigMap-based approach for better maintainability
-# and to avoid embedding scripts as command-line arguments.
+# Environment:
+#   TARGET_URL (required) - the metrics endpoint URL to scrape
 #
-# This script expects TARGET_URL and BEARER_TOKEN as environment variables.
+# The bearer token is read from the mounted epp-metrics-token secret at
+# /var/run/secrets/epp-metrics/token, mirroring the production controller path.
 
 set -e
 
-if [ -z "$TARGET_URL" ] || [ -z "$BEARER_TOKEN" ]; then
-  echo "ERROR: Missing required environment variables"
-  echo "Expected: TARGET_URL and BEARER_TOKEN"
+if [ -z "$TARGET_URL" ]; then
+  echo "ERROR: Missing required environment variable TARGET_URL"
   exit 1
+fi
+
+TOKEN_PATH="/var/run/secrets/epp-metrics/token"
+BEARER_TOKEN=""
+if [ -f "$TOKEN_PATH" ]; then
+  BEARER_TOKEN=$(cat "$TOKEN_PATH")
 fi
 
 echo "Testing metrics scraping from inside cluster..."
 echo "Target URL: ${TARGET_URL}"
+echo "Auth: $([ -n "$BEARER_TOKEN" ] && echo "bearer token loaded" || echo "no token")"
 echo ""
 
 # Test 1: Verify endpoint is accessible
 echo "Test 1: Checking if metrics endpoint is accessible..."
-HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
-  -H "Authorization: Bearer ${BEARER_TOKEN}" \
-  "${TARGET_URL}" || echo "000")
+if [ -n "$BEARER_TOKEN" ]; then
+  HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
+    -H "Authorization: Bearer ${BEARER_TOKEN}" \
+    "${TARGET_URL}" || echo "000")
+else
+  HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" --max-time 10 \
+    "${TARGET_URL}" || echo "000")
+fi
 
 if [ "$HTTP_CODE" != "200" ]; then
   echo "ERROR: Metrics endpoint returned HTTP $HTTP_CODE"

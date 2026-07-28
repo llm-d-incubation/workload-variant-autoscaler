@@ -51,15 +51,16 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
@@ -161,7 +162,7 @@ func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
 //   - variantCosts: Map of VariantAutoscaling namespace/name to cost value
 //
 // Returns:
-//   - []interfaces.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
+//   - []domain.ReplicaMetrics: Per-pod metrics for saturation and queueing model analysis
 //   - error: Any error that occurred during collection
 func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	ctx context.Context,
@@ -171,7 +172,7 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	vaEventTracker map[string]bool,
 	variantCosts map[string]float64,
-) ([]interfaces.ReplicaMetrics, error) {
+) ([]domain.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
 
 	// Determine if metrics are available in this cycle
@@ -285,6 +286,31 @@ func (c *ReplicaMetricsCollector) buildInstanceKey(ctx context.Context, namespac
 	return instanceKey, podName, vaName
 }
 
+// isLWSWorker checks if a pod is part of an LWS and is a worker (non-leader).
+// Returns true if the pod has the leaderworkerset.sigs.k8s.io/worker-index label
+// with a value other than "0" (leader pods have worker-index="0").
+// Returns false for non-LWS pods or LWS leader pods.
+// Uses the locator's GetPodLabels which reuses the same pod fetch that Locate performs.
+func (c *ReplicaMetricsCollector) isLWSWorker(ctx context.Context, namespace, podName string) bool {
+	if podName == "" || c.locator == nil {
+		return false
+	}
+
+	labels := c.locator.GetPodLabels(ctx, namespace, podName)
+	if labels == nil {
+		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("isLWSWorker: nil labels, treating pod as non-worker",
+			"pod", podName, "namespace", namespace)
+		return false
+	}
+
+	workerIndex, hasLabel := labels[lwsv1.WorkerIndexLabelKey]
+	if !hasLabel {
+		return false
+	}
+
+	return workerIndex != "0"
+}
+
 // collectReplicaMetrics is the internal implementation that collects per-replica metrics.
 func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	ctx context.Context,
@@ -293,7 +319,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	variantCosts map[string]float64,
-) ([]interfaces.ReplicaMetrics, error) {
+) ([]domain.ReplicaMetrics, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	params := map[string]string{
@@ -823,7 +849,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	vaMetricsFreshnessStatus := make(map[string]map[string]int)
 
 	// Build replica metrics from pod data
-	replicaMetrics := make([]interfaces.ReplicaMetrics, 0, len(podData))
+	replicaMetrics := make([]domain.ReplicaMetrics, 0, len(podData))
 	collectedAt := time.Now()
 
 	for instanceKey, data := range podData {
@@ -875,6 +901,18 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 				"pod", podName,
 				"instance", instanceKey,
 				"scale targets", getScaleTargetNames(scaleTargets))
+			continue
+		}
+
+		// Skip LWS worker pods (non-leaders). Only LWS leader pods (worker-index="0")
+		// should be included in ReplicaMetrics, as they represent the LWS replica.
+		// For LWS, each leader pod emits vLLM metrics representing the entire replica
+		// (leader + workers), so including worker pods would double-count metrics.
+		if c.isLWSWorker(ctx, namespace, podName) {
+			logger.V(logging.DEBUG).Info("Skipping LWS worker pod (non-leader)",
+				"pod", podName,
+				"instance", instanceKey,
+				"namespace", namespace)
 			continue
 		}
 
@@ -936,7 +974,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 
 		// Track freshness for metrics in this pod
 		trackMetricFreshness(vaName, data, collectedAt, vaMetricsFreshnessStatus)
-		metric := interfaces.ReplicaMetrics{
+		metric := domain.ReplicaMetrics{
 			PodName:               podName,
 			ModelID:               modelID,
 			Namespace:             namespace,
@@ -959,7 +997,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			GenerationTokenRate:   data.generationTokenRate,
 			KvUsageInstant:        data.kvUsageInstant,
 			RequestRate:           data.requestRate,
-			Metadata: &interfaces.ReplicaMetricsMetadata{
+			Metadata: &domain.ReplicaMetricsMetadata{
 				CollectedAt:     collectedAt,
 				Age:             0, // Fresh
 				FreshnessStatus: "fresh",
@@ -993,7 +1031,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 	ctx context.Context,
 	modelID string,
-) *interfaces.SchedulerQueueMetrics {
+) *domain.SchedulerQueueMetrics {
 	logger := ctrl.LoggerFrom(ctx)
 
 	params := map[string]string{
@@ -1045,7 +1083,7 @@ func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 		"queueSize", queueSize,
 		"queueBytes", queueBytes)
 
-	return &interfaces.SchedulerQueueMetrics{
+	return &domain.SchedulerQueueMetrics{
 		QueueSize:  queueSize,
 		QueueBytes: queueBytes,
 	}

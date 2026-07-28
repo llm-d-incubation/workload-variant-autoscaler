@@ -2,12 +2,13 @@ package pipeline
 
 import (
 	"context"
+	"maps"
 	"math"
 	"sort"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -21,7 +22,12 @@ import (
 //   - Fair-shares GPUs across models (highest-priority model gets GPUs first)
 //   - Disaggregated models use paired (n_P, n_D) allocation via the paired helpers
 //   - Scale-down uses scaleDownRoleIterated (role-iterated unified path)
-type GreedyByScoreOptimizer struct{}
+type GreedyByScoreOptimizer struct {
+	// Rescale carries the resolved, scope-coupled rescale enablement for the
+	// current cycle (set by the engine before Optimize). Zero value = off, which
+	// keeps the additive fair-share behaviour unchanged.
+	Rescale RescaleFlags
+}
 
 // NewGreedyByScoreOptimizer creates a new GreedyByScoreOptimizer.
 func NewGreedyByScoreOptimizer() *GreedyByScoreOptimizer {
@@ -36,12 +42,12 @@ func (o *GreedyByScoreOptimizer) Name() string {
 // modelWork tracks per-model allocation state during fair-share iteration.
 type modelWork struct {
 	req       ModelScalingRequest
-	s         []NamedAnalyzerResult      // working slice; Remaining/Spare decremented in place
-	satEntry  *interfaces.AnalyzerResult // variant metadata keeper (Cost, AcceleratorName, Role)
-	ps        RolePairedState            // picker-local per-role demand (from initRoleState)
-	roles     []string                   // active roles for this model
-	remaining float64                    // fair-share priority metric (negative = fully satisfied)
-	targets   map[string]int             // variant name → target replicas (ALL variants)
+	s         []NamedAnalyzerResult  // working slice; Remaining/Spare decremented in place
+	satEntry  *domain.AnalyzerResult // variant metadata keeper (Cost, AcceleratorName, Role)
+	ps        RolePairedState        // picker-local per-role demand (from initRoleState)
+	roles     []string               // active roles for this model
+	remaining float64                // fair-share priority metric (negative = fully satisfied)
+	targets   map[string]int         // variant name → target replicas (ALL variants)
 }
 
 // fairShareValue computes the fair-share priority metric for one model.
@@ -92,14 +98,30 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	ctx context.Context,
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
-) []interfaces.VariantDecision {
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	available := mergeConstraints(constraints)
+	availableByNS := mergeNamespaceConstraints(constraints)
+
+	// Rescale pre-pass: for enabled, contended (type, budget-scope) groups, compute
+	// priority-weighted targets and produce reclaim/fill decisions, consuming free
+	// GPUs from `available`/`availableByNS` so the additive path below sees the
+	// reduced budget. Models it handles are excluded from the additive path. When
+	// rescale is off or no group is contended, `handled` is empty and behaviour is
+	// unchanged.
+	var rescaleDecisions []domain.VariantDecision
+	var handled map[string]bool
+	if o.Rescale.any() {
+		rescaleDecisions, handled = o.applyRescale(ctx, requests, available, availableByNS)
+	}
 
 	var scaleUpWork []*modelWork
 	var otherRequests []ModelScalingRequest
 
 	for _, req := range requests {
+		if handled[modelKey(req)] {
+			continue
+		}
 		satEntry := saturationEntry(req.AnalyzerResults)
 		if satEntry == nil {
 			continue
@@ -118,9 +140,9 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		}
 	}
 
-	o.fairShareScaleUp(ctx, scaleUpWork, available)
+	o.fairShareScaleUp(ctx, scaleUpWork, available, availableByNS)
 
-	allDecisions := make([]interfaces.VariantDecision, 0, len(scaleUpWork))
+	allDecisions := make([]domain.VariantDecision, 0, len(scaleUpWork))
 
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)
@@ -154,11 +176,12 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		allDecisions = append(allDecisions, decisions...)
 	}
 
+	allDecisions = append(allDecisions, rescaleDecisions...)
 	return allDecisions
 }
 
 // buildScaleUpWork creates a single work unit for a scale-up request.
-func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, satEntry *interfaces.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
+func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, satEntry *domain.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
 	if fsv <= 0 {
 		return nil
 	}
@@ -178,6 +201,7 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 	ctx context.Context,
 	work []*modelWork,
 	available map[string]int,
+	availableByNS map[string]map[string]int,
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -189,6 +213,13 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 
 		totalGPUs := 0
 		for _, v := range available {
+			// An unbounded (math.MaxInt) budget marks an unlimited quota type;
+			// saturate rather than overflow the sum, which is only used for the
+			// "== 0" stop check below.
+			if v == math.MaxInt {
+				totalGPUs = math.MaxInt
+				break
+			}
 			totalGPUs += v
 		}
 		if totalGPUs == 0 {
@@ -210,7 +241,7 @@ func (o *GreedyByScoreOptimizer) fairShareScaleUp(
 			allocationMean = mean - (w.remaining / float64(len(active)))
 		}
 
-		allocated := o.allocateForModel(ctx, w, allocationMean, available)
+		allocated := o.allocateForModel(ctx, w, allocationMean, available, availableByNS)
 
 		if !allocated {
 			w.remaining = -1
@@ -235,6 +266,7 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 	w *modelWork,
 	mean float64,
 	available map[string]int,
+	availableByNS map[string]map[string]int,
 ) bool {
 	target := w.remaining - mean
 	if target <= 0 {
@@ -256,23 +288,106 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 		}
 	}
 
+	// This model belongs to one namespace, so its per-type budget is the
+	// minimum of the cluster-wide budget and this namespace's quota. The shared
+	// allocateForModelPaired only understands a flat per-type budget, so we pass
+	// the effective copy and reconcile consumption back to both budgets
+	// afterwards. A non-nil nsBudget means a closed namespace-quota allowlist
+	// (see effectiveAvailable); nil means the namespace is open (cluster-scope
+	// quota or an excluded namespace).
+	//
+	// nsBudget is a reference into the cycle-wide availableByNS map, shared by
+	// every model in this namespace; the reconcile below decrements it in place,
+	// so later same-namespace models correctly see the reduced remaining budget.
+	nsBudget := availableByNS[w.req.Namespace]
+	effAvail := effectiveAvailable(available, nsBudget)
+	beforeEff := maps.Clone(effAvail)
+
 	// Unified path: fairShareRolePick behind the RolePickFn interface.
 	// α logic removed in commit 3.
 	pick := fairShareRolePick(target, w.s, w.roles)
-	allocateForModelPaired(ctx, w.s, w.satEntry.VariantCapacities, stateMap, available,
+	allocateForModelPaired(ctx, w.s, w.satEntry.VariantCapacities, stateMap, effAvail,
 		w.targets, pick, ps, w.roles)
+
+	// Reconcile: apply what was consumed (before − after) to the cluster-wide
+	// budget and, where this namespace caps the type, to the namespace budget.
+	// Only decrement the cluster budget for types it actually constrains (a type
+	// present in `available`); a type bounded solely by the namespace must not
+	// drive the cluster budget negative and pollute the loop's totalGPUs check.
+	for accType, before := range beforeEff {
+		consumed := before - effAvail[accType]
+		if consumed <= 0 {
+			continue
+		}
+		// Decrement only a FINITE cluster budget. An unbounded (math.MaxInt)
+		// budget marks an unlimited-quota type and must stay exactly math.MaxInt:
+		// depleting it to MaxInt-consumed would (a) be meaningless (you cannot
+		// draw down infinity) and (b) defeat the fairShareScaleUp stop-check,
+		// whose `== math.MaxInt` guard would then miss it and let the totalGPUs
+		// sum overflow with two or more unlimited types.
+		if cur, clusterCapped := available[accType]; clusterCapped && cur != math.MaxInt {
+			available[accType] -= consumed
+		}
+		if nsBudget != nil {
+			// Decrement only finite namespace caps; the unlimited sentinel
+			// (negative) imposes no budget to draw down.
+			if nsCap, capped := nsBudget[accType]; capped && nsCap >= 0 {
+				nsBudget[accType] -= consumed
+			}
+		}
+	}
 
 	// Recompute w.remaining for fair-share ordering.
 	// For "both" (non-disag): use fresh ps so applyAllocation-decremented
 	// s[i].Remaining is read (budget-capped ps is already 0).
 	// For P/D: use local capped ps which correctly reaches 0 when both roles served.
-	if len(w.roles) == 1 && w.roles[0] == interfaces.RoleBoth {
+	if len(w.roles) == 1 && w.roles[0] == domain.RoleBoth {
 		_, freshPs := initRoleState(w.s)
 		w.remaining = fairShareValue(w.req.Priority, w.s, freshPs, w.roles)
 	} else {
 		w.remaining = fairShareValue(w.req.Priority, w.s, ps, w.roles)
 	}
 	return w.remaining < oldRemaining
+}
+
+// effectiveAvailable returns the per-type budget the optimizer may spend on a
+// model in this namespace, given the cluster-wide budget and the namespace's
+// quota. A budget value < 0 in nsBudget is the "unlimited" sentinel for that
+// (namespace, type); all other values are finite GPU counts.
+//
+// nsBudget == nil → the namespace is OPEN (a cluster-scope quota, or an
+// excluded namespace): the model is bound only by the cluster budget, so the
+// result is a copy of `available`.
+//
+// nsBudget != nil → the namespace is a CLOSED allowlist (namespace-scope
+// quota), mirroring the V1 tryAllocateNamespace contract: the model may use
+// ONLY the accelerator types the namespace lists. The result is therefore built
+// from nsBudget alone — a type the namespace does not list is absent, and the
+// optimizer's gpusAvail==0 check denies it (no fall-through to the cluster
+// aggregate, which previously let one namespace draw on another's quota). For a
+// listed type: a finite cap binds at min(cluster, cap); an unlimited cap binds
+// at the cluster budget for that type, or is unbounded (math.MaxInt) when the
+// cluster does not constrain it.
+func effectiveAvailable(available, nsBudget map[string]int) map[string]int {
+	if nsBudget == nil {
+		return maps.Clone(available)
+	}
+	eff := make(map[string]int, len(nsBudget))
+	for accType, nsAvail := range nsBudget {
+		if nsAvail < 0 { // unlimited for this (namespace, type)
+			if cv, ok := available[accType]; ok {
+				eff[accType] = cv
+			} else {
+				eff[accType] = math.MaxInt
+			}
+			continue
+		}
+		eff[accType] = nsAvail
+		if cv, ok := available[accType]; ok && cv < nsAvail {
+			eff[accType] = cv
+		}
+	}
+	return eff
 }
 
 // fairShareRolePick returns a RolePickFn for the unified allocateForModelPaired loop.
@@ -284,8 +399,8 @@ func fairShareRolePick(target float64, s []NamedAnalyzerResult, roles []string) 
 	return func(
 		role string,
 		_ []NamedAnalyzerResult,
-		variants []interfaces.VariantCapacity,
-		stateMap map[string]interfaces.VariantReplicaState,
+		variants []domain.VariantCapacity,
+		stateMap map[string]domain.VariantReplicaState,
 		available map[string]int,
 		targets map[string]int,
 	) (string, int) {
@@ -351,7 +466,7 @@ func sortByRemainingDesc(active []*modelWork) {
 }
 
 // prcFromVCs returns the PerReplicaCapacity for variant v from a slice of VCs.
-func prcFromVCs(vcs []interfaces.VariantCapacity, v string) float64 {
+func prcFromVCs(vcs []domain.VariantCapacity, v string) float64 {
 	for _, vc := range vcs {
 		if vc.VariantName == v {
 			return vc.PerReplicaCapacity
@@ -361,7 +476,7 @@ func prcFromVCs(vcs []interfaces.VariantCapacity, v string) float64 {
 }
 
 // accFromVCs returns the AcceleratorName for variant v from a slice of VCs.
-func accFromVCs(vcs []interfaces.VariantCapacity, v string) string {
+func accFromVCs(vcs []domain.VariantCapacity, v string) string {
 	for _, vc := range vcs {
 		if vc.VariantName == v {
 			return vc.AcceleratorName
@@ -371,7 +486,7 @@ func accFromVCs(vcs []interfaces.VariantCapacity, v string) string {
 }
 
 // gpusPerReplicaFromState returns GPUsPerReplica for variant v, defaulting to 1.
-func gpusPerReplicaFromState(stateMap map[string]interfaces.VariantReplicaState, v string) int {
+func gpusPerReplicaFromState(stateMap map[string]domain.VariantReplicaState, v string) int {
 	if state, ok := stateMap[v]; ok && state.GPUsPerReplica > 0 {
 		return state.GPUsPerReplica
 	}

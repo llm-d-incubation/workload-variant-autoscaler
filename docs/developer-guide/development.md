@@ -109,13 +109,13 @@ The simulator samples are under `config/samples/simulator/` and support three co
 
 ```bash
 # Decode only
-kubectl apply -k config/samples/simulator/decode/
+kubectl apply -k config/samples/simulator/nodeSelector/decode/
 
 # Prefill only
-kubectl apply -k config/samples/simulator/prefill/
+kubectl apply -k config/samples/simulator/nodeSelector/prefill/
 
 # Both prefill and decode (disaggregated serving)
-kubectl apply -k config/samples/simulator/disaggregated/
+kubectl apply -k config/samples/simulator/nodeSelector/disaggregated/
 ```
 
 Each configuration creates a Deployment (using `llm-d-inference-sim:v0.9.0`), a Service, a ServiceMonitor, and an HPA in the `llm-d-sim` namespace. The HPAs carry `llm-d.ai/managed: "true"` annotations so WVA discovers them without a VariantAutoscaling CRD and begins emitting `wva_desired_replicas` metrics.
@@ -123,9 +123,9 @@ Each configuration creates a Deployment (using `llm-d-inference-sim:v0.9.0`), a 
 To clean up the simulator, use the same path you applied:
 
 ```bash
-kubectl delete -k config/samples/simulator/decode/
+kubectl delete -k config/samples/simulator/nodeSelector/decode/
 # or
-kubectl delete -k config/samples/simulator/disaggregated/
+kubectl delete -k config/samples/simulator/nodeSelector/disaggregated/
 ```
 
 To tear down the cluster entirely:
@@ -241,7 +241,7 @@ See [Testing Guide](testing.md) and [E2E Test Suite README](../../test/e2e/READM
 2. **Deploy simulator model service:**
 
    ```bash
-   kubectl apply -k config/samples/simulator/disaggregated/
+   kubectl apply -k config/samples/simulator/nodeSelector/disaggregated/
    ```
 
 3. **Monitor controller logs:**

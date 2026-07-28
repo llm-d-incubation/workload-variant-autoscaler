@@ -17,10 +17,7 @@ type PodScrapingSourceConfig struct {
 	MetricsScheme string // provided by client, default: "http"
 
 	// Authentication
-	MetricsReaderSecretName      string
-	MetricsReaderSecretNamespace string // namespace where the secret is located; defaults to ServiceNamespace if empty
-	MetricsReaderSecretKey       string // default: "token"
-	BearerToken                  string // optional: explicit token override
+	BearerToken string
 
 	// Scraping behavior
 	ScrapeTimeout        time.Duration // default: 5s per pod
@@ -28,16 +25,4 @@ type PodScrapingSourceConfig struct {
 
 	// Cache configuration
 	DefaultTTL time.Duration // default: 30s
-}
-
-// DefaultPodScrapingSourceConfig returns sensible defaults.
-func DefaultPodScrapingSourceConfig() PodScrapingSourceConfig {
-	return PodScrapingSourceConfig{
-		MetricsPath:            "/metrics",
-		MetricsScheme:          "http",
-		MetricsReaderSecretKey: "token",
-		ScrapeTimeout:          5 * time.Second,
-		MaxConcurrentScrapes:   10,
-		DefaultTTL:             30 * time.Second,
-	}
 }

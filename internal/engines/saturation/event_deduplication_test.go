@@ -27,7 +27,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
@@ -55,13 +55,13 @@ func TestEventDeduplication(t *testing.T) {
 	}
 
 	// First scaling event should be recorded
-	engine.recordScalingEvent(va, interfaces.ActionScaleUp, 3, "First scale up")
+	engine.recordScalingEvent(va, domain.ActionScaleUp, 3, "First scale up")
 
 	// Second scaling event should be deduplicated (not recorded)
-	engine.recordScalingEvent(va, interfaces.ActionScaleDown, 2, "Scale down attempt")
+	engine.recordScalingEvent(va, domain.ActionScaleDown, 2, "Scale down attempt")
 
 	// Third scaling event should also be deduplicated (not recorded)
-	engine.recordScalingEvent(va, interfaces.ActionScaleUp, 4, "Second scale up")
+	engine.recordScalingEvent(va, domain.ActionScaleUp, 4, "Second scale up")
 
 	// Count recorded events - should only be 1
 	eventCount := 0
@@ -108,7 +108,7 @@ func TestEventDeduplicationResourceConstrainedException(t *testing.T) {
 	}
 
 	// Record a scaling event first
-	engine.recordScalingEvent(va, interfaces.ActionScaleUp, 3, "Scale up")
+	engine.recordScalingEvent(va, domain.ActionScaleUp, 3, "Scale up")
 
 	// ResourceConstrained event should still be recorded (exception to deduplication)
 	engine.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, "Limited by resources")
@@ -167,7 +167,7 @@ func TestEventDeduplicationNilTracker(t *testing.T) {
 
 	// Should not panic with nil tracker
 	assert.NotPanics(t, func() {
-		engine.recordScalingEvent(va, interfaces.ActionScaleUp, 3, "Scale up")
+		engine.recordScalingEvent(va, domain.ActionScaleUp, 3, "Scale up")
 	})
 
 	// Event should still be recorded
@@ -219,16 +219,16 @@ func TestEventDeduplicationMultipleVAs(t *testing.T) {
 	}
 
 	// Record event for first VA
-	engine.recordScalingEvent(va1, interfaces.ActionScaleUp, 3, "VA1 scale up")
+	engine.recordScalingEvent(va1, domain.ActionScaleUp, 3, "VA1 scale up")
 
 	// Record event for second VA (should be recorded - different VA)
-	engine.recordScalingEvent(va2, interfaces.ActionScaleUp, 2, "VA2 scale up")
+	engine.recordScalingEvent(va2, domain.ActionScaleUp, 2, "VA2 scale up")
 
 	// Try to record another event for first VA (should be deduplicated)
-	engine.recordScalingEvent(va1, interfaces.ActionScaleDown, 1, "VA1 scale down")
+	engine.recordScalingEvent(va1, domain.ActionScaleDown, 1, "VA1 scale down")
 
 	// Try to record another event for second VA (should be deduplicated)
-	engine.recordScalingEvent(va2, interfaces.ActionScaleDown, 1, "VA2 scale down")
+	engine.recordScalingEvent(va2, domain.ActionScaleDown, 1, "VA2 scale down")
 
 	// Count recorded events - should be 2 (one for each VA)
 	eventCount := 0

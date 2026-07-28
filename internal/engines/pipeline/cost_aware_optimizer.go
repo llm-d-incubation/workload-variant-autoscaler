@@ -8,7 +8,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -40,9 +40,9 @@ func (o *CostAwareOptimizer) Optimize(
 	ctx context.Context,
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
-) []interfaces.VariantDecision {
+) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
-	var allDecisions []interfaces.VariantDecision
+	var allDecisions []domain.VariantDecision
 
 	for _, req := range requests {
 		satEntry := saturationEntry(req.AnalyzerResults)
@@ -81,8 +81,8 @@ func (o *CostAwareOptimizer) Optimize(
 func costGreedyRolePick(
 	role string,
 	_ []NamedAnalyzerResult,
-	variants []interfaces.VariantCapacity,
-	stateMap map[string]interfaces.VariantReplicaState,
+	variants []domain.VariantCapacity,
+	stateMap map[string]domain.VariantReplicaState,
 	_ map[string]int,
 	targets map[string]int,
 ) (string, int) {
@@ -110,11 +110,11 @@ func costGreedyRolePick(
 // onRemove is invoked after committing n so the caller can update its spare bookkeeping.
 func scaleDownVariantSet(
 	ctx context.Context,
-	sortedVariants []interfaces.VariantCapacity,
+	sortedVariants []domain.VariantCapacity,
 	targets map[string]int,
-	states map[string]interfaces.VariantReplicaState,
-	maxRemovable func(vc interfaces.VariantCapacity) int,
-	onRemove func(vc interfaces.VariantCapacity, n int),
+	states map[string]domain.VariantReplicaState,
+	maxRemovable func(vc domain.VariantCapacity) int,
+	onRemove func(vc domain.VariantCapacity, n int),
 ) {
 	logger := ctrl.LoggerFrom(ctx)
 	for i, vc := range sortedVariants {
@@ -158,7 +158,7 @@ func scaleDownVariantSet(
 //
 // With a single analyzer (Score=1) this reduces to Cost-desc then PRC-asc, i.e.
 // #1237's existing tie-break.
-func sortVariantsForScaleDown(s []NamedAnalyzerResult, roleVCs []interfaces.VariantCapacity) []interfaces.VariantCapacity {
+func sortVariantsForScaleDown(s []NamedAnalyzerResult, roleVCs []domain.VariantCapacity) []domain.VariantCapacity {
 	weighted := func(name string) float64 {
 		sum := 0.0
 		for _, e := range s {
@@ -169,7 +169,7 @@ func sortVariantsForScaleDown(s []NamedAnalyzerResult, roleVCs []interfaces.Vari
 		}
 		return sum
 	}
-	out := append([]interfaces.VariantCapacity(nil), roleVCs...)
+	out := append([]domain.VariantCapacity(nil), roleVCs...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Cost != out[j].Cost {
 			return out[i].Cost > out[j].Cost
@@ -184,7 +184,7 @@ func sortVariantsForScaleDown(s []NamedAnalyzerResult, roleVCs []interfaces.Vari
 }
 
 // anyHasReplicas reports whether any of the given variants has a positive target.
-func anyHasReplicas(variants []interfaces.VariantCapacity, targets map[string]int) bool {
+func anyHasReplicas(variants []domain.VariantCapacity, targets map[string]int) bool {
 	for _, vc := range variants {
 		if targets[vc.VariantName] > 0 {
 			return true
@@ -194,8 +194,8 @@ func anyHasReplicas(variants []interfaces.VariantCapacity, targets map[string]in
 }
 
 // buildStateMap creates a lookup map from variant name to VariantReplicaState.
-func buildStateMap(states []interfaces.VariantReplicaState) map[string]interfaces.VariantReplicaState {
-	m := make(map[string]interfaces.VariantReplicaState, len(states))
+func buildStateMap(states []domain.VariantReplicaState) map[string]domain.VariantReplicaState {
+	m := make(map[string]domain.VariantReplicaState, len(states))
 	for _, s := range states {
 		m[s.VariantName] = s
 	}
@@ -203,8 +203,8 @@ func buildStateMap(states []interfaces.VariantReplicaState) map[string]interface
 }
 
 // buildCapacityMap creates a lookup map from variant name to VariantCapacity.
-func buildCapacityMap(capacities []interfaces.VariantCapacity) map[string]interfaces.VariantCapacity {
-	m := make(map[string]interfaces.VariantCapacity, len(capacities))
+func buildCapacityMap(capacities []domain.VariantCapacity) map[string]domain.VariantCapacity {
+	m := make(map[string]domain.VariantCapacity, len(capacities))
 	for _, vc := range capacities {
 		m[vc.VariantName] = vc
 	}
@@ -212,7 +212,7 @@ func buildCapacityMap(capacities []interfaces.VariantCapacity) map[string]interf
 }
 
 // initTargets creates initial targets from current replica counts.
-func initTargets(states []interfaces.VariantReplicaState) map[string]int {
+func initTargets(states []domain.VariantReplicaState) map[string]int {
 	targets := make(map[string]int, len(states))
 	for _, s := range states {
 		targets[s.VariantName] = s.CurrentReplicas
@@ -221,8 +221,8 @@ func initTargets(states []interfaces.VariantReplicaState) map[string]int {
 }
 
 // sortByCostEfficiencyAsc returns variants sorted by cost/perReplicaCapacity ascending.
-func sortByCostEfficiencyAsc(capacities []interfaces.VariantCapacity) []interfaces.VariantCapacity {
-	sorted := make([]interfaces.VariantCapacity, len(capacities))
+func sortByCostEfficiencyAsc(capacities []domain.VariantCapacity) []domain.VariantCapacity {
+	sorted := make([]domain.VariantCapacity, len(capacities))
 	copy(sorted, capacities)
 	sort.Slice(sorted, func(i, j int) bool {
 		return costEfficiency(sorted[i]) < costEfficiency(sorted[j])
@@ -231,7 +231,7 @@ func sortByCostEfficiencyAsc(capacities []interfaces.VariantCapacity) []interfac
 }
 
 // costEfficiency returns the cost per unit of capacity.
-func costEfficiency(vc interfaces.VariantCapacity) float64 {
+func costEfficiency(vc domain.VariantCapacity) float64 {
 	if vc.PerReplicaCapacity <= 0 {
 		return math.MaxFloat64
 	}
@@ -242,12 +242,12 @@ func costEfficiency(vc interfaces.VariantCapacity) float64 {
 // optimizerName is included in reason strings for observability.
 func buildDecisionsWithOptimizer(
 	req ModelScalingRequest,
-	stateMap map[string]interfaces.VariantReplicaState,
-	vcMap map[string]interfaces.VariantCapacity,
+	stateMap map[string]domain.VariantReplicaState,
+	vcMap map[string]domain.VariantCapacity,
 	targets map[string]int,
 	optimizerName string,
-) []interfaces.VariantDecision {
-	decisions := make([]interfaces.VariantDecision, 0, len(targets))
+) []domain.VariantDecision {
+	decisions := make([]domain.VariantDecision, 0, len(targets))
 	// satEntry carries the model-level RequiredCapacity/SpareCapacity computed by
 	// applyUniversalThreshold; per-variant Utilization is on each VariantCapacity.
 	// These feed the saturation gauges (utilization/required/spare). SpareCapacity is
@@ -258,25 +258,25 @@ func buildDecisionsWithOptimizer(
 		state := stateMap[name]
 		vc := vcMap[name]
 
-		var action interfaces.SaturationAction
-		var decisionReason interfaces.DecisionReason
+		var action domain.SaturationAction
+		var decisionReason domain.DecisionReason
 		var detailedReason string
 		switch {
 		case target > state.CurrentReplicas:
-			action = interfaces.ActionScaleUp
-			decisionReason = interfaces.DecisionReasonV2
+			action = domain.ActionScaleUp
+			decisionReason = domain.DecisionReasonV2
 			detailedReason = fmt.Sprintf("%s (optimizer: %s)", string(decisionReason), optimizerName)
 		case target < state.CurrentReplicas:
-			action = interfaces.ActionScaleDown
-			decisionReason = interfaces.DecisionReasonV2
+			action = domain.ActionScaleDown
+			decisionReason = domain.DecisionReasonV2
 			detailedReason = fmt.Sprintf("%s (optimizer: %s)", string(decisionReason), optimizerName)
 		default:
-			action = interfaces.ActionNoChange
-			decisionReason = interfaces.DecisionReasonV2
+			action = domain.ActionNoChange
+			decisionReason = domain.DecisionReasonV2
 			detailedReason = string(decisionReason)
 		}
 
-		decision := interfaces.VariantDecision{
+		decision := domain.VariantDecision{
 			VariantName:     name,
 			ModelID:         req.ModelID,
 			Namespace:       req.Namespace,
@@ -304,7 +304,7 @@ func buildDecisionsWithOptimizer(
 			reqCap, spareCap := satEntry.RequiredCapacity, satEntry.SpareCapacity
 			role := state.Role
 			if role == "" {
-				role = interfaces.RoleBoth
+				role = domain.RoleBoth
 			}
 			if rc, ok := satEntry.RoleCapacities[role]; ok {
 				reqCap, spareCap = rc.RequiredCapacity, rc.SpareCapacity
@@ -327,6 +327,20 @@ func mergeConstraints(constraints []*ResourceConstraints) map[string]int {
 			continue
 		}
 		for accType, pool := range c.Pools {
+			if pool.Limit < 0 {
+				// Unlimited sentinel: no finite cap. Represent it as an
+				// unbounded budget (math.MaxInt) so the optimizer allocates the
+				// type up to the model's fair-share demand. Leaving it absent
+				// would let fairShareRolePick read a 0 budget and silently deny
+				// the type — inverting the -1 = unlimited semantic. A finite
+				// pool from any provider still wins via the min() below, since
+				// Available() < math.MaxInt; only set the sentinel when no finite
+				// budget is present yet.
+				if _, ok := merged[accType]; !ok {
+					merged[accType] = math.MaxInt
+				}
+				continue
+			}
 			if existing, ok := merged[accType]; !ok || pool.Available() < existing {
 				merged[accType] = pool.Available()
 			}
@@ -335,33 +349,87 @@ func mergeConstraints(constraints []*ResourceConstraints) map[string]int {
 	return merged
 }
 
+// mergeNamespaceConstraints merges the per-(namespace, accelerator type) pools
+// across providers into available-GPU budgets, taking the most restrictive
+// (minimum available) where providers overlap. Returns nil when no provider
+// carries namespace pools, so the per-type-only path is unaffected.
+//
+// A namespace present in any provider's NamespacePools is materialized in the
+// result even when its inner map is empty — its presence marks a CLOSED
+// allowlist (deny-all when empty) that the optimizer enforces by allocating
+// only the listed types. An unlimited (-1 sentinel) pool is carried through as
+// a negative budget so the optimizer can distinguish "unlimited" from a finite
+// cap; tighterBudget treats it as +infinity when taking the minimum.
+func mergeNamespaceConstraints(constraints []*ResourceConstraints) map[string]map[string]int {
+	var merged map[string]map[string]int
+	for _, c := range constraints {
+		if c == nil {
+			continue
+		}
+		for ns, perType := range c.NamespacePools {
+			if merged == nil {
+				merged = make(map[string]map[string]int)
+			}
+			inner, ok := merged[ns]
+			if !ok {
+				inner = make(map[string]int)
+				merged[ns] = inner // present (even if empty) marks a closed namespace
+			}
+			for accType, pool := range perType {
+				budget := nsPoolBudget(pool)
+				if existing, ok := inner[accType]; ok {
+					inner[accType] = tighterBudget(existing, budget)
+				} else {
+					inner[accType] = budget
+				}
+			}
+		}
+	}
+	return merged
+}
+
+// nsPoolBudget returns a namespace ResourcePool's remaining budget for the
+// optimizer — the available (not total) GPU count. A negative Limit is the
+// "unlimited" sentinel and is preserved as -1; any other Limit yields the
+// finite available count (Limit - Used, clamped to 0).
+func nsPoolBudget(pool ResourcePool) int {
+	if pool.Limit < 0 {
+		return -1
+	}
+	return pool.Available()
+}
+
+// tighterBudget returns the more restrictive of two namespace budgets, treating
+// a negative (unlimited) budget as +infinity. The result is unlimited only when
+// both inputs are unlimited.
+func tighterBudget(a, b int) int {
+	switch {
+	case a < 0:
+		return b
+	case b < 0:
+		return a
+	case b < a:
+		return b
+	default:
+		return a
+	}
+}
+
 // scaleDownRoleIterated removes replicas role-by-role using the generalized
 // scaleDownVariantSet primitive. Roles are sorted for determinism.
 // Arity-1 (roles=["both"]) handles non-disaggregated models.
 func scaleDownRoleIterated(
 	ctx context.Context,
 	s []NamedAnalyzerResult,
-	variants []interfaces.VariantCapacity,
+	variants []domain.VariantCapacity,
 	targets map[string]int,
-	stateMap ...map[string]interfaces.VariantReplicaState,
+	stateMap ...map[string]domain.VariantReplicaState,
 ) {
-	var states map[string]interfaces.VariantReplicaState
+	var states map[string]domain.VariantReplicaState
 	if len(stateMap) > 0 {
 		states = stateMap[0]
 	}
-	rolesSet := make(map[string]struct{})
-	for _, vc := range variants {
-		role := vc.Role
-		if role == "" {
-			role = interfaces.RoleBoth
-		}
-		rolesSet[role] = struct{}{}
-	}
-	roles := make([]string, 0, len(rolesSet))
-	for role := range rolesSet {
-		roles = append(roles, role)
-	}
-	sort.Strings(roles)
+	roles := rolesOf(variants)
 
 	for _, role := range roles {
 		if !needsScaleDownForRole(s, role) {
@@ -373,10 +441,10 @@ func scaleDownRoleIterated(
 		}
 		sorted := sortVariantsForScaleDown(s, roleVCs)
 		scaleDownVariantSet(ctx, sorted, targets, states,
-			func(vc interfaces.VariantCapacity) int {
+			func(vc domain.VariantCapacity) int {
 				return safeRemovalReplicasForRole(s, vc.VariantName, role)
 			},
-			func(vc interfaces.VariantCapacity, n int) {
+			func(vc domain.VariantCapacity, n int) {
 				applyDeallocationForRole(s, vc.VariantName, role, n)
 			},
 		)

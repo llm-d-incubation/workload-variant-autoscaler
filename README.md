@@ -88,6 +88,40 @@ spec:
 
 More examples in [config/samples/hpa/](config/samples/hpa/) and [config/samples/keda/](config/samples/keda/).
 
+## Upgrading
+
+### Upgrading to v0.9.0 — V2 saturation analyzer is now the default
+
+**Behavioral change.** The default saturation analyzer changes from **V1**
+(percentage/spare-capacity-based) to **V2** (token/capacity-based). The shipped
+`default` entry in the saturation ConfigMap now includes an `analyzers:` section,
+which selects V2. No code change or image rebuild is involved — analyzer selection
+is driven entirely by config.
+
+V2 may produce different scaling decisions than V1 for the same workload. Review
+your dashboards and alert thresholds after upgrading.
+
+**Staying on V1 (opt-out).** Remove the `analyzers:` section (and the V2-only
+`scaleUpThreshold` / `scaleDownBoundary` fields) from the `default` entry of your
+saturation ConfigMap. The remaining `kvCacheThreshold`, `queueLengthThreshold`,
+`kvSpareTrigger`, and `queueSpareTrigger` fields drive V1:
+
+```yaml
+data:
+  default: |
+    kvCacheThreshold: 0.80
+    queueLengthThreshold: 5
+    kvSpareTrigger: 0.1
+    queueSpareTrigger: 3
+```
+
+Apply with `kubectl apply -f deploy/configmap-saturation-scaling.yaml`; the change
+takes effect immediately (the controller watches the ConfigMap).
+
+> V1 is deprecated and scheduled for removal in a future release. See the
+> [saturation scaling configuration guide](docs/developer-guide/saturation-scaling-config.md#analyzer-selection-v1-vs-v2)
+> for threshold ownership (which fields each analyzer reads) and migration details.
+
 ## Contributing
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

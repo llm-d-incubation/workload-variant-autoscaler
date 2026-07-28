@@ -11,6 +11,51 @@ The Workload Variant Autoscaler supports saturation-based scaling using KV cache
 - ✅ **Thread-safe** concurrent access with RWMutex
 - ✅ Graceful degradation if ConfigMap missing (V2 has hardcoded defaults; V1 requires ConfigMap — see [Default Configuration](#default-configuration))
 
+## Analyzer Selection (V1 vs V2)
+
+There are two saturation analyzers:
+
+- **V2** (token/capacity-based) — **the default since v0.9.0**. Selected whenever
+  the config carries a non-empty `analyzers:` list (or `analyzerName: "saturation"`).
+- **V1** (percentage/spare-capacity-based) — legacy. Selected when no analyzer is
+  specified (empty `analyzers:` **and** empty `analyzerName`).
+
+The shipped `default` entry (`deploy/configmap-saturation-scaling.yaml` and
+`config/base/manager/saturation-scaling-configmap.yaml`) includes an `analyzers:`
+section, so a fresh install runs V2. **To opt out to V1, remove the `analyzers:`
+section** (and the V2-only thresholds) from the `default` entry. No code change or
+image rebuild is required — selection is driven entirely by config.
+
+> This is a behavioral change introduced in v0.9.0. See the repository README
+> "Upgrading to v0.9.0" note for migration guidance.
+
+> **Analyzer selection is global; thresholds are per-model/namespace.** Selection
+> is resolved once from the **global** `default` entry, while thresholds are
+> resolved from the per-model override and namespace-local ConfigMap when present.
+> Because these can disagree, the engine defaults the V2-only `scaleUpThreshold` /
+> `scaleDownBoundary` on the **final resolved config** (after merging the override
+> onto the base), so a per-model override or namespace-local entry written V1-style
+> (no `analyzers:`) still runs **calibrated** when the global selection routes it to
+> V2. Defaulting happens post-merge — not on the stored entries — so a V1-style
+> override does not clobber a tuned global threshold. To use non-default V2
+> thresholds for a specific model or namespace, set `scaleUpThreshold` /
+> `scaleDownBoundary` explicitly in that entry; the explicit value is honored
+> regardless of whether the entry carries an `analyzers:` section.
+
+### Threshold ownership
+
+Not every threshold applies to both analyzers. When switching between V1 and V2,
+keep the fields that the target analyzer actually reads:
+
+| Threshold | V1 | V2 | Notes |
+|-----------|----|----|-------|
+| `kvCacheThreshold` | ✅ | ✅ | Shared — replica saturated when KV cache ≥ threshold |
+| `queueLengthThreshold` | ✅ | ✅ | Shared — replica saturated when queue length ≥ threshold |
+| `kvSpareTrigger` | ✅ | — | **V1-only** — ignored by V2 |
+| `queueSpareTrigger` | ✅ | — | **V1-only** — ignored by V2 |
+| `scaleUpThreshold` | — | ✅ | **V2-only** — engine post-step (default 0.85) |
+| `scaleDownBoundary` | — | ✅ | **V2-only** — engine post-step (default 0.70) |
+
 ## Configuration
 
 ### ConfigMap Structure
@@ -36,7 +81,7 @@ These parameters apply when `analyzerName: "saturation"` is set or when the `ana
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `analyzerName` | string | Selects the V2 token-based analyzer: set to `"saturation"`. Empty string uses V1. | `""` |
+| `analyzerName` | string | Legacy selector for the V2 token-based analyzer: set to `"saturation"`. Empty string uses V1. Prefer the `analyzers:` list, which the shipped default uses. | `""` |
 | `priority` | float64 | Multiplier for this model's scaling urgency in fair-share GPU allocation | 1.0 |
 | `analyzers` | list | Multi-analyzer pipeline registration — see [Multi-Analyzer Registration](#multi-analyzer-registration) | `[{name: "saturation", score: 1.0}]` |
 
@@ -44,7 +89,26 @@ These parameters apply when `analyzerName: "saturation"` is set or when the `ana
 
 ### Default Configuration
 
-The recommended values for the V1 (percentage-based) saturation analyzer are:
+Since v0.9.0 the shipped `default` entry selects **V2** (token/capacity-based) via
+the `analyzers:` list:
+
+```yaml
+analyzers:
+  - name: saturation
+    score: 1.0
+# V2-only thresholds:
+scaleUpThreshold: 0.85
+scaleDownBoundary: 0.70
+# Shared by V1 and V2:
+kvCacheThreshold: 0.80
+queueLengthThreshold: 5
+# V1-only (ignored by V2):
+kvSpareTrigger: 0.1
+queueSpareTrigger: 3
+```
+
+To opt out to the legacy **V1** (percentage-based) analyzer, remove the `analyzers:`
+section (and the V2-only thresholds); the remaining shared + V1-only thresholds drive V1:
 
 ```yaml
 kvCacheThreshold: 0.80
@@ -53,14 +117,21 @@ kvSpareTrigger: 0.1
 queueSpareTrigger: 3
 ```
 
-> **Important:** These V1 threshold values are **not hardcoded** in the analyzer code.
-> If the ConfigMap is missing or has no `default` entry, all V1 thresholds default to zero,
-> which will cause every replica to appear saturated and trigger continuous scale-up.
-> Always deploy the ConfigMap with a `default` entry containing valid thresholds.
+> **Important:** The V1 threshold values are **not hardcoded** in the analyzer code.
+> If you opt out to V1 and the ConfigMap is missing or has no `default` entry, all V1
+> thresholds default to zero, which will cause every replica to appear saturated and
+> trigger continuous scale-up. Always deploy the ConfigMap with a `default` entry
+> containing valid thresholds. (V2 has hardcoded fallbacks for its own thresholds.)
 
 ### How Scale-Up Triggers Work
 
-The saturation analyzer uses a **spare capacity model** to determine when to scale up. Instead of waiting for replicas to become fully saturated, WVA proactively scales when the average spare capacity across non-saturated replicas falls below configured thresholds.
+> **Applies to V1 only.** The spare-capacity / `kvSpareTrigger` / `queueSpareTrigger`
+> model described here is the legacy **V1** analyzer's logic. The default **V2**
+> analyzer uses a token/capacity model driven by `scaleUpThreshold` /
+> `scaleDownBoundary` and ignores the spare triggers (see
+> [Analyzer Selection](#analyzer-selection-v1-vs-v2)).
+
+The V1 saturation analyzer uses a **spare capacity model** to determine when to scale up. Instead of waiting for replicas to become fully saturated, WVA proactively scales when the average spare capacity across non-saturated replicas falls below configured thresholds.
 
 **Scale-up logic:**
 
@@ -145,7 +216,10 @@ analyzers:
     score: 1.0
 ```
 
-When `analyzers:` is omitted, it defaults to `[{name: "saturation", score: 1.0}]`.
+When `analyzers:` is omitted **and** `analyzerName: "saturation"` is set, the list
+defaults to `[{name: "saturation", score: 1.0}]`. When both are omitted, no analyzer
+is selected and the engine falls back to V1 (see
+[Analyzer Selection](#analyzer-selection-v1-vs-v2)).
 
 ### AnalyzerScoreConfig Fields
 
@@ -188,6 +262,69 @@ converts queue depth/bytes into demand in its own unit (sat_v2:
 kv-tokens; throughput: tokens/sec). Each analyzer also decides how to
 attribute that demand across roles or variants — sat_v2 splits it among
 active roles.
+
+#### Per-replica demand and the role-aware waiting-queue charge
+
+Distinct from `SchedulerQueue` above, each replica also reports its own **local
+engine queue** (`vllm:num_requests_waiting` / `sglang:num_queue_reqs`) — requests
+already admitted to that pod but not yet generating. sat_v2 charges them to the
+replica, so per-replica demand has two terms:
+
+```
+replicaDemand = <resident KV tokens> + QueueLength × <per-request charge>
+```
+
+The resident term is `TokensInUse` on the main path, or
+`KvCacheUsage × effectiveCapacity` on the fallback path (no
+`vllm:cache_config_info`). The per-request charge depends on the variant's P/D
+role, because a replica only pays for KV it actually materializes:
+
+| Role | Per-request charge | Rationale |
+|------|--------------------|-----------|
+| `prefill` | `AvgInputTokens` | Prompt KV only; output is generated on a decode pod |
+| `decode` | `AvgInputTokens + AvgOutputTokens` | Holds prompt KV and grows it per generated token |
+| `both` (default) | `AvgInputTokens + AvgOutputTokens` | Handles the full request lifecycle |
+
+An absent or empty role canonicalizes to `both`, so **non-disaggregated
+deployments take the decode-style charge** — correct for a replica serving the
+whole request, but it means the majority of deployments include output tokens.
+
+`AvgInputTokens + AvgOutputTokens` is the footprint at a request's *final* decode
+step, chosen as a peak / no-preemption planning charge: KV grows monotonically
+once generation starts and cannot be shed without preemption and recompute.
+
+**`I + O` is the saturation analyzer's demand-side unit; `ILeff + O/2` is the
+throughput analyzer's.** The two are separate analyzers with separate
+demand/supply models, so the difference is by design, not an inconsistency:
+
+| Analyzer | Per-request KV unit | Meaning |
+|----------|--------------------|---------|
+| Saturation V2 (demand) | `I + O` | Peak footprint — what a replica must be able to hold |
+| Throughput (`WorkloadShape.KVreq`) | `ILeff + O/2` | Time-averaged residency (`ILeff = I × (1 − PrefixHitRate)`) |
+
+One asymmetry *is* internal to saturation V2 and should not be confused with the
+above: its own k2 derivation (`estimateCapacityFromParams`) prices a *concurrent*
+request at `I + O/2`. So a queued request is charged more than it occupies on
+average, biasing this term toward scale-up — accepted deliberately, since
+under-provisioning decode capacity causes preemption thrash. Changing it means
+moving the demand/capacity pair together. See the `waitingQueueDemand` doc
+comment for the full trade-off.
+
+Note both demand terms derive from 1-minute maxima (`max_over_time` on
+`kv_cache_usage_perc` and `num_requests_waiting`), whose peaks need not coincide,
+so their sum can exceed any single instant's demand. That is a property of the
+collector's queries, not of the role charge.
+
+> **Operational note.** Because the default role is `both`, enabling or upgrading
+> into this behavior raises computed demand wherever replicas have a non-empty
+> local queue and report token metrics. `wva_saturation_utilization` and
+> `wva_required_capacity{unit="continuous"}` step up, `wva_spare_capacity` steps
+> down, and `wva_desired_replicas` may take a one-time step.
+> `wva_kv_cache_tokens_used` is unaffected — it sums raw `TokensInUse` and does
+> not include the queue projection. Utilization-based alerts (such as the sample
+> `wva_saturation_utilization > 0.85` in
+> [prometheus.md](prometheus.md)) may need re-baselining. The resolved role is
+> emitted per variant on the `analyzer-result` log line.
 
 #### Linearity invariant
 
@@ -296,10 +433,13 @@ metadata:
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
+    analyzers:                    # selects V2 (default since v0.9.0)
+      - name: saturation
+        score: 1.0
     kvCacheThreshold: 0.80        # Should match EPP kvCacheUtilThreshold
     queueLengthThreshold: 5       # Should match EPP queueDepthThreshold
-    kvSpareTrigger: 0.10          # WVA-specific (scale-up trigger)
-    queueSpareTrigger: 3          # WVA-specific (scale-up trigger)
+    kvSpareTrigger: 0.10          # WVA-specific scale-up trigger (V1-only, ignored by V2)
+    queueSpareTrigger: 3          # WVA-specific scale-up trigger (V1-only, ignored by V2)
 ```
 
 #### EPP Saturation Detector Configuration
@@ -439,7 +579,9 @@ WARN Saturation scaling ConfigMap not found
 
 ### 2. Customizing Global Defaults
 
-Edit `deploy/configmap-saturation-scaling.yaml`:
+Edit `deploy/configmap-saturation-scaling.yaml`. Keep the `analyzers:` section to
+stay on the default **V2** analyzer — a `default` entry **without** it selects the
+legacy V1 analyzer (see [Analyzer Selection](#analyzer-selection-v1-vs-v2)):
 
 ```yaml
 apiVersion: v1
@@ -449,10 +591,15 @@ metadata:
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
-    kvCacheThreshold: 0.75
-    queueLengthThreshold: 10
-    kvSpareTrigger: 0.15
-    queueSpareTrigger: 5
+    analyzers:
+      - name: saturation
+        score: 1.0
+    scaleUpThreshold: 0.85      # V2-only
+    scaleDownBoundary: 0.70     # V2-only
+    kvCacheThreshold: 0.75      # shared by V1 and V2
+    queueLengthThreshold: 10    # shared by V1 and V2
+    kvSpareTrigger: 0.15        # V1-only (ignored by V2)
+    queueSpareTrigger: 5        # V1-only (ignored by V2)
 ```
 
 Apply the ConfigMap:
@@ -482,13 +629,19 @@ metadata:
   namespace: <workload-variant-autoscaler-namespace>
 data:
   default: |
+    analyzers:              # selects V2 (default since v0.9.0)
+      - name: saturation
+        score: 1.0
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
     kvCacheThreshold: 0.80
     queueLengthThreshold: 5
     kvSpareTrigger: 0.1
     queueSpareTrigger: 3
 
-  # Override for granite model in production namespace
-  # Only fields specified here are overridden; the rest inherit from `default`
+  # Override for granite model in production namespace. Overrides inherit the
+  # default's analyzer selection (V2) via field-level merge, so they only list the
+  # thresholds they change.
   "ibm/granite-13b#production": |
     kvCacheThreshold: 0.85
     kvSpareTrigger: 0.15
@@ -638,10 +791,16 @@ WARN Invalid saturation scaling config entry, skipping key=my-config error=...
 WARN No 'default' entry in saturation scaling ConfigMap, using hardcoded defaults
 ```
 
-**Solution:** Add a `default` entry to the ConfigMap:
+**Solution:** Add a `default` entry to the ConfigMap (keep the `analyzers:` section
+to stay on the default V2 analyzer; omitting it selects legacy V1):
 ```yaml
 data:
   default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
     kvCacheThreshold: 0.80
     queueLengthThreshold: 5
     kvSpareTrigger: 0.1
@@ -722,14 +881,21 @@ metadata:
   name: wva-saturation-scaling-config
   namespace: <workload-variant-autoscaler-namespace>
 data:
-  # Conservative defaults for most workloads
+  # Conservative defaults for most workloads (V2 analyzer — the default since v0.9.0)
   default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
     kvCacheThreshold: 0.80
     queueLengthThreshold: 5
     kvSpareTrigger: 0.1
     queueSpareTrigger: 3
 
-  # High-priority production workload - scale aggressively
+  # High-priority production workload - scale aggressively.
+  # Per-model overrides inherit the default's analyzer selection (V2 here) via
+  # field-level merge, so they need only the thresholds they change.
   "ibm/granite-13b#production": |
     kvCacheThreshold: 0.70
     queueLengthThreshold: 3

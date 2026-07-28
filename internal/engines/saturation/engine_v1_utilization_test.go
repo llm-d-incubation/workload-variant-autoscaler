@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
@@ -16,10 +16,10 @@ func TestConvertSaturationTargetsToDecisions_V1Utilization(t *testing.T) {
 	engine := &Engine{}
 	ctx := context.Background()
 
-	saturationAnalysis := &interfaces.ModelSaturationAnalysis{
+	saturationAnalysis := &domain.ModelSaturationAnalysis{
 		ModelID:   "test-model",
 		Namespace: "test-ns",
-		VariantAnalyses: []interfaces.VariantSaturationAnalysis{
+		VariantAnalyses: []domain.VariantSaturationAnalysis{
 			{
 				VariantName:        "variant-a",
 				AcceleratorName:    "nvidia-a100",
@@ -42,7 +42,7 @@ func TestConvertSaturationTargetsToDecisions_V1Utilization(t *testing.T) {
 		"variant-b": 5,
 	}
 
-	variantStates := []interfaces.VariantReplicaState{
+	variantStates := []domain.VariantReplicaState{
 		{VariantName: "variant-a", CurrentReplicas: 2, DesiredReplicas: 0, GPUsPerReplica: 1},
 		{VariantName: "variant-b", CurrentReplicas: 4, DesiredReplicas: 0, GPUsPerReplica: 2},
 	}
@@ -54,7 +54,7 @@ func TestConvertSaturationTargetsToDecisions_V1Utilization(t *testing.T) {
 	}
 
 	// Find decisions by variant name
-	decisionMap := make(map[string]interfaces.VariantDecision)
+	decisionMap := make(map[string]domain.VariantDecision)
 	for _, d := range decisions {
 		decisionMap[d.VariantName] = d
 	}

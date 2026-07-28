@@ -133,6 +133,35 @@ var _ = Describe("SaturationScalingConfig", func() {
 				ScaleUpThreshold:     0,
 				ScaleDownBoundary:    0,
 			}, false),
+			// A V1-style entry's explicit V2 thresholds can still reach the V2 path via
+			// Merge (selection is global), so out-of-range/inverted values are rejected
+			// even though the entry itself is not V2.
+			Entry("V1-style entry with out-of-range explicit scaleUpThreshold is rejected", SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "",
+				ScaleUpThreshold:     1.5,
+			}, true),
+			Entry("V1-style entry with inverted explicit V2 thresholds is rejected", SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "",
+				ScaleUpThreshold:     0.60,
+				ScaleDownBoundary:    0.70,
+			}, true),
+			Entry("V1-style entry with valid explicit V2 thresholds is accepted", SaturationScalingConfig{
+				KvCacheThreshold:     0.80,
+				QueueLengthThreshold: 5,
+				KvSpareTrigger:       0.10,
+				QueueSpareTrigger:    3,
+				AnalyzerName:         "",
+				ScaleUpThreshold:     0.90,
+				ScaleDownBoundary:    0.60,
+			}, false),
 			Entry("valid priority", SaturationScalingConfig{
 				KvCacheThreshold:     0.80,
 				QueueLengthThreshold: 5,
@@ -215,7 +244,7 @@ var _ = Describe("SaturationScalingConfig", func() {
 			Expect(config.ScaleDownBoundary).To(Equal(0.60))
 		})
 
-		It("should apply V1 defaults when not V2", func() {
+		It("should keep V2 thresholds zero on ApplyDefaults when not V2, then calibrate via ApplyV2ThresholdDefaults", func() {
 			config := SaturationScalingConfig{
 				AnalyzerName: "",
 			}
@@ -224,9 +253,29 @@ var _ = Describe("SaturationScalingConfig", func() {
 			Expect(config.QueueLengthThreshold).To(Equal(DefaultQueueLengthThreshold))
 			Expect(config.KvSpareTrigger).To(Equal(DefaultKvSpareTrigger))
 			Expect(config.QueueSpareTrigger).To(Equal(DefaultQueueSpareTrigger))
+			// V2 thresholds stay zero for a V1-style entry: defaulting them on the stored
+			// entry would let a V1-style override clobber a tuned global during Merge.
 			Expect(config.ScaleUpThreshold).To(Equal(0.0))
 			Expect(config.ScaleDownBoundary).To(Equal(0.0))
+			// The analyzer list is NOT seeded, so selection stays V1 (IsV2 false).
 			Expect(config.Analyzers).To(BeEmpty())
+			Expect(config.IsV2()).To(BeFalse())
+			// The final resolved config is calibrated post-merge, independent of IsV2().
+			config.ApplyV2ThresholdDefaults()
+			Expect(config.ScaleUpThreshold).To(Equal(DefaultScaleUpThreshold))
+			Expect(config.ScaleDownBoundary).To(Equal(DefaultScaleDownBoundary))
+		})
+
+		It("ApplyV2ThresholdDefaults should not overwrite already-set (tuned) V2 thresholds", func() {
+			// The whole point of applying this post-merge instead of in ApplyDefaults:
+			// an inherited/tuned value must survive, so it must be a no-op when non-zero.
+			config := SaturationScalingConfig{
+				ScaleUpThreshold:  0.95,
+				ScaleDownBoundary: 0.55,
+			}
+			config.ApplyV2ThresholdDefaults()
+			Expect(config.ScaleUpThreshold).To(Equal(0.95))
+			Expect(config.ScaleDownBoundary).To(Equal(0.55))
 		})
 
 		It("should not overwrite explicit V1 values", func() {

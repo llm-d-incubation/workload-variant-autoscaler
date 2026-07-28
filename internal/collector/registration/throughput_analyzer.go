@@ -14,7 +14,7 @@ import (
 //
 // Only three queries are registered here — those that are genuinely new and not
 // provided by other analyzer registrations. The remaining TA inputs are already
-// collected and exposed via interfaces.ReplicaMetrics; the TA reads those fields
+// collected and exposed via domain.ReplicaMetrics; the TA reads those fields
 // directly instead of re-registering duplicate PromQL templates.
 //
 // TA notation → ReplicaMetrics field (query / registration):
@@ -45,11 +45,11 @@ const (
 	// 1-minute high-water mark that could overestimate load and trigger premature
 	// scale-up after a transient spike.
 	//
-	// max by (pod): deduplication only. vllm:kv_cache_usage_perc is a single scalar
-	// gauge per vLLM process; there is one series per pod in normal deployment. The
-	// max by (pod) collapses any duplicate series that arise when a pod is scraped by
-	// multiple targets (e.g., PodMonitor + ServiceMonitor). Since duplicates carry the
-	// same value, max = avg — the choice has no effect on correctness.
+	// max by (instance, pod, llm_d_ai_variant): deduplication only. vllm:kv_cache_usage_perc
+	// is a single scalar gauge per vLLM process; there is one series per pod in normal
+	// deployment. The max by (...) collapses any duplicate series that arise when a pod
+	// is scraped by multiple targets (e.g., PodMonitor + ServiceMonitor). Since duplicates
+	// carry the same value, max = avg — the choice has no effect on correctness.
 	// Source: vllm:kv_cache_usage_perc (gauge)
 	QueryKvUsageInstant = "kv_usage_instant"
 
@@ -77,7 +77,7 @@ const (
 //   - QueryKvUsageInstant      — k*: instantaneous KV cache utilization per pod
 //   - QueryRequestRate     — fallback λ_req: completion rate per pod when EPP absent
 //
-// Additional TA inputs are read from interfaces.ReplicaMetrics fields populated by
+// Additional TA inputs are read from domain.ReplicaMetrics fields populated by
 // RegisterSaturationQueries (TotalKvCapacityTokens, AvgOutputTokens, AvgInputTokens,
 // PrefixCacheHitRate) and RegisterQueueingModelQueries (AvgITL, ArrivalRate).
 // See the package-level constant block for the full TA notation → field mapping.

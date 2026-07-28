@@ -9,17 +9,17 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 )
 
 // withSatEntryV2 adds a single-saturation AnalyzerResults to req from r.
 // Mirrors the helper in cost_aware_optimizer_test.go for use in the saturation package.
-func withSatEntryV2(r *interfaces.AnalyzerResult, req pipeline.ModelScalingRequest) pipeline.ModelScalingRequest {
+func withSatEntryV2(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) pipeline.ModelScalingRequest {
 	if r != nil {
 		req.AnalyzerResults = []pipeline.NamedAnalyzerResult{{
-			Name:      interfaces.SaturationAnalyzerName,
+			Name:      domain.SaturationAnalyzerName,
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
@@ -34,11 +34,11 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should scale up cheapest variant by cost-efficiency", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "variant-cheap", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "variant-expensive", AcceleratorName: "H100", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 				},
@@ -47,7 +47,7 @@ var _ = Describe("V2 Engine Integration", func() {
 				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 2},
 						{VariantName: "variant-expensive", CurrentReplicas: 1},
 					},
@@ -65,11 +65,11 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should scale down most expensive variant", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:       "model-1",
 				Namespace:     "default",
 				SpareCapacity: 25000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 3, PerReplicaCapacity: 10000},
 					{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 2, PerReplicaCapacity: 20000},
 				},
@@ -78,7 +78,7 @@ var _ = Describe("V2 Engine Integration", func() {
 				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 3},
 						{VariantName: "variant-expensive", CurrentReplicas: 2},
 					},
@@ -94,11 +94,11 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should protect cheapest variant at 1 during scale-down", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:       "model-1",
 				Namespace:     "default",
 				SpareCapacity: 30000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "variant-expensive", Cost: 15.0, ReplicaCount: 1, PerReplicaCapacity: 20000},
 					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 1, PerReplicaCapacity: 10000},
 				},
@@ -107,7 +107,7 @@ var _ = Describe("V2 Engine Integration", func() {
 				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "variant-expensive", CurrentReplicas: 1},
 						{VariantName: "variant-cheap", CurrentReplicas: 1},
 					},
@@ -123,11 +123,11 @@ var _ = Describe("V2 Engine Integration", func() {
 
 		It("should not skip variants with pending replicas", func() {
 			optimizer := pipeline.NewCostAwareOptimizer()
-			r := &interfaces.AnalyzerResult{
+			r := &domain.AnalyzerResult{
 				ModelID:          "model-1",
 				Namespace:        "default",
 				RequiredCapacity: 5000,
-				VariantCapacities: []interfaces.VariantCapacity{
+				VariantCapacities: []domain.VariantCapacity{
 					{VariantName: "variant-cheap", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 10000},
 					{VariantName: "variant-mid", Cost: 10.0, ReplicaCount: 1, PerReplicaCapacity: 15000},
 				},
@@ -136,7 +136,7 @@ var _ = Describe("V2 Engine Integration", func() {
 				withSatEntryV2(r, pipeline.ModelScalingRequest{
 					ModelID:   "model-1",
 					Namespace: "default",
-					VariantStates: []interfaces.VariantReplicaState{
+					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "variant-cheap", CurrentReplicas: 2, PendingReplicas: 1},
 						{VariantName: "variant-mid", CurrentReplicas: 1},
 					},
@@ -277,6 +277,79 @@ var _ = Describe("resolveSaturationConfig", func() {
 		Expect(cfg.QueueLengthThreshold).To(Equal(5.0))
 		Expect(cfg.KvSpareTrigger).To(Equal(0.10))
 		Expect(cfg.QueueSpareTrigger).To(Equal(3.0))
+		// A V1-style entry stays V1 (selection is decided globally, not here), but the
+		// RESOLVED config is calibrated post-merge so that if the global default routes
+		// this model to the V2 path it runs with valid thresholds rather than zeros
+		// (which would disable the scale-up/scale-down post-step).
+		Expect(cfg.IsV2()).To(BeFalse())
+		Expect(cfg.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))
+		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
+	})
+
+	It("should not let a V1-style override clobber a tuned global V2 threshold (production parse order)", func() {
+		// Regression guard: entries are ApplyDefaults()'d individually at parse time
+		// before storage (see parseSaturationConfig). Build the map that way, then
+		// resolve. A V1-style override that omits scaleUpThreshold must INHERIT the
+		// operator-tuned global 0.95, not silently revert to the 0.85 default.
+		def := config.SaturationScalingConfig{
+			Analyzers:        []config.AnalyzerScoreConfig{{Name: "saturation"}},
+			ScaleUpThreshold: 0.95, // operator tuned away from the 0.85 default
+			KvCacheThreshold: 0.80,
+		}
+		def.ApplyDefaults()
+		override := config.SaturationScalingConfig{KvCacheThreshold: 0.90} // V1-style, no V2 thresholds
+		override.ApplyDefaults()
+		configMap := map[string]config.SaturationScalingConfig{
+			"default":                   def,
+			"meta/llama-70b#production": override,
+		}
+		cfg := resolveSaturationConfig(configMap, "meta/llama-70b", "production")
+		Expect(cfg.KvCacheThreshold).To(Equal(0.90))
+		Expect(cfg.ScaleUpThreshold).To(Equal(0.95), "tuned global scaleUpThreshold must survive a V1-style override")
+		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
+	})
+
+	It("should default the sibling V2 threshold post-merge for a fully V1-style namespace map", func() {
+		// Namespace-local map that is V1-style end-to-end (no analyzers anywhere), as
+		// when a tenant ships their own saturation ConfigMap. Global selection routes
+		// these models to V2. The override sets ONLY scaleUpThreshold; the merged
+		// config's IsV2() stays false, so ApplyV2ThresholdDefaults() is the ONLY thing
+		// that fills the missing scaleDownBoundary — this test fails if that post-merge
+		// call is removed (the explicit ApplyDefaults V2-branch never runs here).
+		def := config.SaturationScalingConfig{KvCacheThreshold: 0.80} // V1-style, no analyzers
+		def.ApplyDefaults()
+		override := config.SaturationScalingConfig{ScaleUpThreshold: 0.90} // only scaleUp set
+		override.ApplyDefaults()
+		configMap := map[string]config.SaturationScalingConfig{
+			"default":      def,
+			"model-1#ns-1": override,
+		}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.IsV2()).To(BeFalse())
+		Expect(cfg.ScaleUpThreshold).To(Equal(0.90), "explicit override must win")
+		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary), "missing sibling must be defaulted post-merge")
+	})
+
+	It("should reset an inverted V2 threshold pair produced by a cross-entry merge", func() {
+		// Base scaleUpThreshold 0.85; a V1-style override raises scaleDownBoundary above
+		// it. Each entry is valid on its own (so load-time validation passes), but the
+		// merged pair is inverted — resolveSaturationConfig must fall back to defaults
+		// rather than feed the optimizer scaleUp <= scaleDown.
+		def := config.SaturationScalingConfig{
+			Analyzers:        []config.AnalyzerScoreConfig{{Name: "saturation"}},
+			KvCacheThreshold: 0.80,
+		}
+		def.ApplyDefaults() // scaleUp=0.85, scaleDown=0.70
+		override := config.SaturationScalingConfig{ScaleDownBoundary: 0.95}
+		override.ApplyDefaults()
+		configMap := map[string]config.SaturationScalingConfig{
+			"default":      def,
+			"model-1#ns-1": override,
+		}
+		cfg := resolveSaturationConfig(configMap, "model-1", "ns-1")
+		Expect(cfg.ScaleUpThreshold).To(Equal(config.DefaultScaleUpThreshold))
+		Expect(cfg.ScaleDownBoundary).To(Equal(config.DefaultScaleDownBoundary))
+		Expect(cfg.ScaleUpThreshold).To(BeNumerically(">", cfg.ScaleDownBoundary))
 	})
 })
 
@@ -284,15 +357,15 @@ var _ = Describe("runAnalyzersAndScore call ordering", func() {
 
 	It("calls each enabled non-saturation analyzer exactly once in registration order", func() {
 		fakeSat := &fakeAnalyzerWithResult{
-			analyzerName: interfaces.SaturationAnalyzerName,
-			result:       &interfaces.AnalyzerResult{},
+			analyzerName: domain.SaturationAnalyzerName,
+			result:       &domain.AnalyzerResult{},
 		}
 		ta := &spyAnalyzer{name: "throughput"}
 		slo := &spyAnalyzer{name: "slo"}
 		e := &Engine{
 			saturationV2Analyzer: fakeSat,
 			analyzersSnapshot: []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: fakeSat},
+				{name: domain.SaturationAnalyzerName, analyzer: fakeSat},
 				{name: "throughput", analyzer: ta},
 				{name: "slo", analyzer: slo},
 			},
@@ -301,6 +374,10 @@ var _ = Describe("runAnalyzersAndScore call ordering", func() {
 		cfg := config.SaturationScalingConfig{
 			ScaleUpThreshold:  0.85,
 			ScaleDownBoundary: 0.70,
+			Analyzers: []config.AnalyzerScoreConfig{
+				{Name: "throughput"},
+				{Name: "slo"},
+			},
 		}
 
 		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
@@ -311,7 +388,7 @@ var _ = Describe("runAnalyzersAndScore call ordering", func() {
 		Expect(slo.callCount).To(Equal(1))
 		// saturationV2Analyzer is called via runV2AnalysisOnly, not the loop;
 		// the snapshot entry for saturation is skipped by the name guard.
-		Expect(fakeSat.Name()).To(Equal(interfaces.SaturationAnalyzerName)) // sanity
+		Expect(fakeSat.Name()).To(Equal(domain.SaturationAnalyzerName)) // sanity
 	})
 })
 
@@ -319,14 +396,14 @@ var _ = Describe("runAnalyzersAndScore disabled-analyzer gate", func() {
 
 	It("disabled analyzer is not appended and its Analyze is never called", func() {
 		fakeSat := &fakeAnalyzerWithResult{
-			analyzerName: interfaces.SaturationAnalyzerName,
-			result:       &interfaces.AnalyzerResult{SpareCapacity: 1000},
+			analyzerName: domain.SaturationAnalyzerName,
+			result:       &domain.AnalyzerResult{SpareCapacity: 1000},
 		}
 		spy := &spyAnalyzer{name: "spy"}
 		e := &Engine{
 			saturationV2Analyzer: fakeSat,
 			analyzersSnapshot: []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: fakeSat},
+				{name: domain.SaturationAnalyzerName, analyzer: fakeSat},
 				{name: "spy", analyzer: spy},
 			},
 			started: true,
@@ -343,7 +420,7 @@ var _ = Describe("runAnalyzersAndScore disabled-analyzer gate", func() {
 		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(results).To(HaveLen(1), "only saturation entry — disabled spy must not be appended")
-		Expect(results[0].Name).To(Equal(interfaces.SaturationAnalyzerName))
+		Expect(results[0].Name).To(Equal(domain.SaturationAnalyzerName))
 		Expect(spy.callCount).To(Equal(0), "Analyze must not be called for a disabled analyzer")
 	})
 })
@@ -352,13 +429,13 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 
 	It("sets Disaggregated=true when any variant has a non-both role", func() {
 		fakeSat := &fakeAnalyzerWithResult{
-			analyzerName: interfaces.SaturationAnalyzerName,
-			result:       &interfaces.AnalyzerResult{},
+			analyzerName: domain.SaturationAnalyzerName,
+			result:       &domain.AnalyzerResult{},
 		}
 		e := &Engine{
 			saturationV2Analyzer: fakeSat,
 			analyzersSnapshot: []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: fakeSat},
+				{name: domain.SaturationAnalyzerName, analyzer: fakeSat},
 			},
 			started: true,
 		}
@@ -366,7 +443,7 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 			ScaleUpThreshold:  0.85,
 			ScaleDownBoundary: 0.70,
 		}
-		variantStates := []interfaces.VariantReplicaState{
+		variantStates := []domain.VariantReplicaState{
 			{VariantName: "prefill-v1", Role: "prefill"},
 			{VariantName: "decode-v1", Role: "decode"},
 		}
@@ -378,13 +455,13 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 
 	It("sets Disaggregated=false when all variants have role 'both' or empty", func() {
 		fakeSat := &fakeAnalyzerWithResult{
-			analyzerName: interfaces.SaturationAnalyzerName,
-			result:       &interfaces.AnalyzerResult{},
+			analyzerName: domain.SaturationAnalyzerName,
+			result:       &domain.AnalyzerResult{},
 		}
 		e := &Engine{
 			saturationV2Analyzer: fakeSat,
 			analyzersSnapshot: []analyzerEntry{
-				{name: interfaces.SaturationAnalyzerName, analyzer: fakeSat},
+				{name: domain.SaturationAnalyzerName, analyzer: fakeSat},
 			},
 			started: true,
 		}
@@ -392,8 +469,8 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 			ScaleUpThreshold:  0.85,
 			ScaleDownBoundary: 0.70,
 		}
-		variantStates := []interfaces.VariantReplicaState{
-			{VariantName: "v1", Role: interfaces.RoleBoth},
+		variantStates := []domain.VariantReplicaState{
+			{VariantName: "v1", Role: domain.RoleBoth},
 			{VariantName: "v2", Role: ""},
 		}
 
@@ -403,8 +480,8 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 	})
 })
 
-func decisionsByVariant(decisions []interfaces.VariantDecision) map[string]interfaces.VariantDecision {
-	m := make(map[string]interfaces.VariantDecision, len(decisions))
+func decisionsByVariant(decisions []domain.VariantDecision) map[string]domain.VariantDecision {
+	m := make(map[string]domain.VariantDecision, len(decisions))
 	for _, d := range decisions {
 		m[d.VariantName] = d
 	}

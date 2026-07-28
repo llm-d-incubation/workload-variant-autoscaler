@@ -9,24 +9,21 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/prometheus/common/model"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	interfaces "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/resources"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
-	infernoConfig "github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,201 +56,6 @@ func UpdateStatusWithBackoff[T client.Object](ctx context.Context, c client.Clie
 		}
 		return true, nil
 	})
-}
-
-// Adapter to create wva system data types from config maps.
-// Note: WVA operates in unlimited mode, so capacity data is not used.
-func CreateSystemData(
-	acceleratorCm map[string]map[string]string,
-	serviceClassCm map[string]string) *infernoConfig.SystemData {
-
-	systemData := &infernoConfig.SystemData{
-		Spec: infernoConfig.SystemSpec{
-			Accelerators:   infernoConfig.AcceleratorData{},
-			Models:         infernoConfig.ModelData{},
-			ServiceClasses: infernoConfig.ServiceClassData{},
-			Servers:        infernoConfig.ServerData{},
-			Optimizer:      infernoConfig.OptimizerData{},
-			Capacity:       infernoConfig.CapacityData{},
-		},
-	}
-
-	// get accelerator data
-	acceleratorData := []infernoConfig.AcceleratorSpec{}
-	for key, val := range acceleratorCm {
-		cost, err := strconv.ParseFloat(val["cost"], 32)
-		if err != nil {
-			ctrl.Log.Info("failed to parse accelerator cost in configmap, skipping accelerator", "name", key)
-			continue
-		}
-		acceleratorData = append(acceleratorData, infernoConfig.AcceleratorSpec{
-			Name:         key,
-			Type:         val["device"],
-			Multiplicity: 1,                         // TODO: multiplicity should be in the configured accelerator spec
-			Power:        infernoConfig.PowerSpec{}, // Not currently used
-			Cost:         float32(cost),
-		})
-	}
-	systemData.Spec.Accelerators.Spec = acceleratorData
-
-	// Capacity data is not used in unlimited mode - initialize empty for future limited mode work
-	systemData.Spec.Capacity.Count = []infernoConfig.AcceleratorCount{}
-
-	// get service class data
-	serviceClassData := []infernoConfig.ServiceClassSpec{}
-	for key, val := range serviceClassCm {
-		var sc interfaces.ServiceClass
-		if err := yaml.Unmarshal([]byte(val), &sc); err != nil {
-			ctrl.Log.Info("failed to parse service class data, skipping service class", "key", key, "err", err)
-			continue
-		}
-		serviceClassSpec := infernoConfig.ServiceClassSpec{
-			Name:         sc.Name,
-			Priority:     sc.Priority,
-			ModelTargets: make([]infernoConfig.ModelTarget, len(sc.Data)),
-		}
-		for i, entry := range sc.Data {
-			serviceClassSpec.ModelTargets[i] = infernoConfig.ModelTarget{
-				Model:    entry.Model,
-				SLO_ITL:  float32(entry.SLOTPOT),
-				SLO_TTFT: float32(entry.SLOTTFT),
-			}
-		}
-		serviceClassData = append(serviceClassData, serviceClassSpec)
-	}
-	systemData.Spec.ServiceClasses.Spec = serviceClassData
-
-	// set optimizer configuration
-	// TODO: make it configurable
-	systemData.Spec.Optimizer.Spec = infernoConfig.OptimizerSpec{
-		Unlimited: true,
-		// SaturationPolicy omitted - defaults to "None" (not relevant in unlimited mode)
-	}
-
-	// initialize model data
-	systemData.Spec.Models.PerfData = []infernoConfig.ModelAcceleratorPerfData{}
-
-	// initialize dynamic server data
-	systemData.Spec.Servers.Spec = []infernoConfig.ServerSpec{}
-
-	return systemData
-}
-
-// add model accelerator pair profile data to inferno system data
-
-// Add server specs to inferno system data
-func AddServerInfoToSystemData(
-	sd *infernoConfig.SystemData,
-	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	currentAlloc *interfaces.Allocation,
-	className string) (err error) {
-
-	// server load statistics
-	var arrivalRate, avgOutputTokens, avgInputTokens, cost, itlAverage, ttftAverage float64
-	if currentAlloc == nil {
-		// Use empty/default values if no current allocation
-		currentAlloc = &interfaces.Allocation{}
-	}
-
-	if arrivalRate, err = strconv.ParseFloat(currentAlloc.Load.ArrivalRate, 32); err != nil || !CheckValue(arrivalRate) {
-		arrivalRate = 0
-	}
-	if avgOutputTokens, err = strconv.ParseFloat(currentAlloc.Load.AvgOutputTokens, 32); err != nil || !CheckValue(avgOutputTokens) {
-		avgOutputTokens = 0
-	}
-	if avgInputTokens, err = strconv.ParseFloat(currentAlloc.Load.AvgInputTokens, 32); err != nil || !CheckValue(avgInputTokens) {
-		avgInputTokens = 0
-	}
-
-	serverLoadSpec := &infernoConfig.ServerLoadSpec{
-		ArrivalRate:  float32(arrivalRate),
-		AvgInTokens:  int(avgInputTokens),
-		AvgOutTokens: int(avgOutputTokens),
-	}
-
-	// server allocation
-	// Calculate cost from Spec.VariantCost (unit cost) * Replicas
-	var unitCost float64
-	if va.Spec.VariantCost != "" {
-		if val, err := strconv.ParseFloat(va.Spec.VariantCost, 64); err == nil {
-			unitCost = val
-		}
-	}
-	// TODO: Use a constant for default cost if not set, or rely on CRD defaulting
-	if unitCost == 0 {
-		unitCost = 10.0 // Fallback/Default
-	}
-
-	cost = unitCost * float64(currentAlloc.NumReplicas)
-	if !CheckValue(cost) {
-		cost = 0
-	}
-	if itlAverage, err = strconv.ParseFloat(currentAlloc.ITLAverage, 32); err != nil || !CheckValue(itlAverage) {
-		itlAverage = 0
-	}
-	if ttftAverage, err = strconv.ParseFloat(currentAlloc.TTFTAverage, 32); err != nil || !CheckValue(ttftAverage) {
-		ttftAverage = 0
-	}
-
-	AllocationData := &infernoConfig.AllocationData{
-		Accelerator: currentAlloc.Accelerator,
-		NumReplicas: currentAlloc.NumReplicas,
-		MaxBatch:    currentAlloc.MaxBatch,
-		Cost:        float32(cost),
-		ITLAverage:  float32(itlAverage),
-		TTFTAverage: float32(ttftAverage),
-		Load:        *serverLoadSpec,
-	}
-
-	// all server data
-	minNumReplicas := 1 // scale to zero is disabled by default
-	if os.Getenv("WVA_SCALE_TO_ZERO") == "true" {
-		minNumReplicas = 0
-	}
-	serverSpec := &infernoConfig.ServerSpec{
-		Name:            FullName(va.Name, va.Namespace),
-		Class:           className,
-		Model:           va.Spec.ModelID,
-		KeepAccelerator: true,
-		MinNumReplicas:  minNumReplicas,
-		CurrentAlloc:    *AllocationData,
-		DesiredAlloc:    infernoConfig.AllocationData{},
-	}
-
-	// set max batch size if configured
-	maxBatchSize := 32 // Default value now that ModelProfile is removed
-
-	// set max batch size if configured - now handled by capacity/hardcoded or label-based lookups
-	// For now, removing the dependency on ModelProfile.
-	// TODO: Retrieve this from a ConfigMap or other source if needed.
-
-	if maxBatchSize > 0 {
-		serverSpec.MaxBatchSize = maxBatchSize
-	}
-
-	sd.Spec.Servers.Spec = append(sd.Spec.Servers.Spec, *serverSpec)
-	return nil
-}
-
-// Adapter from inferno alloc solution to optimized alloc
-func CreateOptimizedAlloc(name string,
-	namespace string,
-	allocationSolution *infernoConfig.AllocationSolution) (*llmdVariantAutoscalingV1alpha1.OptimizedAlloc, error) {
-
-	serverName := FullName(name, namespace)
-	var allocationData infernoConfig.AllocationData
-	var exists bool
-	if allocationData, exists = allocationSolution.Spec[serverName]; !exists {
-		return nil, fmt.Errorf("server %s not found", serverName)
-	}
-	ctrl.Log.Info("Setting accelerator name ", "Name ", allocationData.Accelerator, "allocationData ", allocationData)
-	numReplicas := int32(allocationData.NumReplicas)
-	optimizedAlloc := &llmdVariantAutoscalingV1alpha1.OptimizedAlloc{
-		LastRunTime: metav1.NewTime(time.Now()),
-		Accelerator: allocationData.Accelerator,
-		NumReplicas: &numReplicas,
-	}
-	return optimizedAlloc, nil
 }
 
 // Helper to create a (unique) full name from name and namespace
@@ -292,9 +94,9 @@ func MarshalStructToJsonString(t any) string {
 }
 
 // Helper to find SLOs for a model variant
-func FindModelSLO(cmData map[string]string, targetModel string) (*interfaces.ServiceClassEntry, string /* class name */, error) {
+func FindModelSLO(cmData map[string]string, targetModel string) (*domain.ServiceClassEntry, string /* class name */, error) {
 	for key, val := range cmData {
-		var sc interfaces.ServiceClass
+		var sc domain.ServiceClass
 		if err := yaml.Unmarshal([]byte(val), &sc); err != nil {
 			return nil, "", fmt.Errorf("failed to parse %s: %w", key, err)
 		}

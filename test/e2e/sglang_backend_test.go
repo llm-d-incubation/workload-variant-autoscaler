@@ -6,6 +6,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
@@ -41,12 +43,44 @@ var _ = Describe("SGLang backend", Label("full"), Ordered, func() {
 		ctx      = context.Background()
 		appLabel = baseName + decodeSuffix
 		modelID  = "e2ewva/sglang-model"
+
+		// Saturation ConfigMap snapshot for the V1 guard (see BeforeAll).
+		cmName          string
+		cmNamespace     string
+		cmOriginal      *corev1.ConfigMap
+		cmExistedBefore bool
 	)
 
 	BeforeAll(func() {
 		if !cfg.UseSimulator {
 			Skip("SGLang e2e uses a CPU-only metrics emitter; it runs in the kind-emulator environment (UseSimulator=true)")
 		}
+
+		// V1 guard (v0.9.0 V2-default flip): this suite relies on the shipped
+		// saturation ConfigMap, and its scale-up assertion is calibrated to the V1
+		// (percentage-based) analyzer. The fixture emits a fixed operating point
+		// (token_usage=0.85, num_queue_reqs=3) that deterministically saturates V1's
+		// default thresholds, but sits exactly at V2's scaleUpThreshold=0.85 (V2 must
+		// *exceed* it) — so under the new V2 default the scale-up is no longer
+		// deterministic. Pin this suite to V1 by overwriting the `default` entry with
+		// a V1 config, and restore the original in AfterAll. Analyzer selection is
+		// re-resolved from the watched ConfigMap each cycle, so no controller restart
+		// is needed.
+		// TODO(v2): recalibrate the SGLang fixture metrics + assertion for the V2
+		// (token/capacity-based) analyzer and drop this guard.
+		cmNamespace = cfg.WVANamespace
+		cmName = saturationConfigMapName()
+		cm, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
+		if err == nil {
+			cmExistedBefore = true
+			cmOriginal = cm.DeepCopy()
+		} else if !errors.IsNotFound(err) {
+			// Fail fast on a real API error: a false "did not exist" here would make
+			// AfterAll delete the shared ConfigMap without recreating it.
+			Expect(err).NotTo(HaveOccurred(), "reading existing saturation configmap")
+		}
+		By("Pinning the saturation analyzer to V1 for this suite (V2 is the default since v0.9.0)")
+		Expect(upsertSaturationConfigEntry(ctx, cmNamespace, cmName, defaultConfigKey, buildSaturationConfigYAML(""))).To(Succeed())
 
 		By("Deploying the synthetic SGLang model server")
 		Expect(fixtures.CreateSGLangEmulator(ctx, k8sClient, cfg.LLMDNamespace, baseName, modelID, variantName)).To(Succeed())
@@ -62,6 +96,11 @@ var _ = Describe("SGLang backend", Label("full"), Ordered, func() {
 		Expect(fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName, appLabel, variantName, 1, 10, cfg.MonitoringNS,
 			fixtures.WithScaledObjectWVAAnnotations(modelID, "30.0"))).To(Succeed())
 		DeferCleanup(func() { _ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, baseName) })
+	})
+
+	AfterAll(func() {
+		By("Restoring the saturation ConfigMap (V1 guard teardown)")
+		restoreSaturationConfigMap(ctx, cmNamespace, cmName, cmOriginal, cmExistedBefore)
 	})
 
 	It("detects SGLang and emits wva_desired_replicas from sglang:* metrics", func() {

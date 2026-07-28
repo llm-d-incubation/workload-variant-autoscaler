@@ -8,14 +8,14 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/aggregation"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
 // ThroughputAnalyzer accumulates per-variant workload shape and ITL observations
 // across reconcile cycles and computes a μ_dec supply vs λ_dec demand scaling signal.
-// It implements interfaces.Analyzer.
+// It implements domain.Analyzer.
 //
 // State is tracked per variant (keyed by "namespace|modelID|variantName") because
 // different variants may run on different hardware with different ITL coefficients,
@@ -78,7 +78,7 @@ func (a *ThroughputAnalyzer) Observe(
 	ctx context.Context,
 	now time.Time,
 	modelID, namespace string,
-	metrics []interfaces.ReplicaMetrics,
+	metrics []domain.ReplicaMetrics,
 ) map[string]SanityReport {
 	if err := ctx.Err(); err != nil {
 		return nil
@@ -165,7 +165,7 @@ func (a *ThroughputAnalyzer) Observe(
 	return reports
 }
 
-// Analyze implements interfaces.Analyzer. It calls Observe to update internal
+// Analyze implements domain.Analyzer. It calls Observe to update internal
 // state, then computes a supply vs demand scaling signal for each variant using
 // a two-tier ITL model resolution strategy:
 //
@@ -194,8 +194,8 @@ func (a *ThroughputAnalyzer) Observe(
 // the OL guard in computeLocalDemand.
 func (a *ThroughputAnalyzer) Analyze(
 	ctx context.Context,
-	input interfaces.AnalyzerInput,
-) (*interfaces.AnalyzerResult, error) {
+	input domain.AnalyzerInput,
+) (*domain.AnalyzerResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -232,7 +232,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		totalDecodeITLSat      float64
 		nDecodeVariants        int
 	)
-	variantCapacities := make([]interfaces.VariantCapacity, 0, len(byVariant))
+	variantCapacities := make([]domain.VariantCapacity, 0, len(byVariant))
 
 	for variantName, variantMetrics := range byVariant {
 		key := variantKey(input.Namespace, input.ModelID, variantName)
@@ -296,7 +296,7 @@ func (a *ThroughputAnalyzer) Analyze(
 			anyEPP = true
 		}
 		// Track ITL(k_sat) across non-prefill variants for queue demand estimation.
-		if state.role != interfaces.RolePrefill {
+		if state.role != domain.RolePrefill {
 			totalDecodeITLSat += itlSat
 			nDecodeVariants++
 		}
@@ -328,7 +328,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		// TotalCapacity is the product ReplicaCount × PerReplicaCapacity (the VariantCapacity
 		// contract, and what aggregation.SumTotalSupply recomputes); equals supply for nKV ≥ 1.
 		totalCapacity := float64(nKV) * perReplicaSupply
-		variantCapacities = append(variantCapacities, interfaces.VariantCapacity{
+		variantCapacities = append(variantCapacities, domain.VariantCapacity{
 			VariantName:        variantName,
 			Role:               state.role,
 			ReplicaCount:       nKV,
@@ -372,7 +372,7 @@ func (a *ThroughputAnalyzer) Analyze(
 	_ = anyEPP
 	_ = anyGPSMismatch
 
-	return &interfaces.AnalyzerResult{
+	return &domain.AnalyzerResult{
 		AnalyzerName:           AnalyzerName,
 		ModelID:                input.ModelID,
 		Namespace:              input.Namespace,
@@ -461,7 +461,7 @@ func (a *ThroughputAnalyzer) getOrCreateVariantState(key string) *variantState {
 // is extended to iterate variants with state but no current replica metrics.
 //
 // Must be called with a.mu held.
-func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []interfaces.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, string, bool) {
+func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []domain.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, string, bool) {
 	// Tier 1: OLS fit.
 	if state.observationWindow.Ready() {
 		obs := state.observationWindow.Observations()
@@ -527,7 +527,7 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 // AvgOutputTokens == 0), the function falls through to the engine request-rate proxy
 // so the caller can use computeLocalDemand when both paths yield zero. isEPP still
 // reflects "EPP present" so the anyEPP tracking in Analyze is unaffected.
-func computeDemand(metrics []interfaces.ReplicaMetrics) (float64, bool) {
+func computeDemand(metrics []domain.ReplicaMetrics) (float64, bool) {
 	var lambdaDec float64
 	var isEPP bool
 	for _, m := range metrics {
@@ -564,7 +564,7 @@ func computeDemand(metrics []interfaces.ReplicaMetrics) (float64, bool) {
 // KV_max = 0 are excluded (no meaningful signal at idle).
 // This path is scale-up only: k*-based demand may undercount arriving load
 // without EPP. The engine post-step determines SC from the published totals.
-func computeLocalDemand(metrics []interfaces.ReplicaMetrics, shape WorkloadShape, model ITLModel) float64 {
+func computeLocalDemand(metrics []domain.ReplicaMetrics, shape WorkloadShape, model ITLModel) float64 {
 	if shape.KVreq <= 0 || shape.AvgOutputTokens <= DefaultMinDecodeOLForLocalDemand {
 		return 0
 	}
@@ -591,7 +591,7 @@ func computeLocalDemand(metrics []interfaces.ReplicaMetrics, shape WorkloadShape
 //
 // ITL(k_sat) is used as the reference latency so that admitted queue demand
 // bounds per-request queueing time to ≤ QueueDrainFactor × ITL(k_sat) × avgOL.
-func estimateQueueDemand(sq *interfaces.SchedulerQueueMetrics, itlSat, drainFactor float64) float64 {
+func estimateQueueDemand(sq *domain.SchedulerQueueMetrics, itlSat, drainFactor float64) float64 {
 	if sq == nil || sq.QueueSize <= 0 || itlSat <= 0 || drainFactor <= 0 {
 		return 0
 	}
@@ -603,7 +603,7 @@ func estimateQueueDemand(sq *interfaces.SchedulerQueueMetrics, itlSat, drainFact
 // Per replica: N_dec_sat = DefaultKSat × KV_max / KVreq; μ_dec_sat = N_dec_sat / itlSat.
 // Returns (totalSupply Σμ_dec_sat, perReplicaSupply mean(μ_dec_sat), nKV count of
 // KV-capable replicas). All are zero when no replica has KV capacity data.
-func computeVariantSupply(metrics []interfaces.ReplicaMetrics, shape WorkloadShape, itlSat float64) (total, perReplica float64, nKV int) {
+func computeVariantSupply(metrics []domain.ReplicaMetrics, shape WorkloadShape, itlSat float64) (total, perReplica float64, nKV int) {
 	var sum float64
 	var n int
 	for _, m := range metrics {
@@ -622,8 +622,8 @@ func computeVariantSupply(metrics []interfaces.ReplicaMetrics, shape WorkloadSha
 }
 
 // groupByVariant partitions a slice of ReplicaMetrics by VariantName.
-func groupByVariant(metrics []interfaces.ReplicaMetrics) map[string][]interfaces.ReplicaMetrics {
-	groups := make(map[string][]interfaces.ReplicaMetrics)
+func groupByVariant(metrics []domain.ReplicaMetrics) map[string][]domain.ReplicaMetrics {
+	groups := make(map[string][]domain.ReplicaMetrics)
 	for _, m := range metrics {
 		groups[m.VariantName] = append(groups[m.VariantName], m)
 	}
@@ -634,7 +634,7 @@ func groupByVariant(metrics []interfaces.ReplicaMetrics) map[string][]interfaces
 // prefix hit rate across a slice of replica metrics. Replicas with zero or
 // negative IL or OL are excluded. When all eligible replicas have zero
 // RequestRate, falls back to an unweighted mean.
-func averageShapeMetrics(metrics []interfaces.ReplicaMetrics) (il, ol, hitRate float64) {
+func averageShapeMetrics(metrics []domain.ReplicaMetrics) (il, ol, hitRate float64) {
 	var sumIL, sumOL, sumHitRate float64 // weighted accumulators
 	var sumILu, sumOLu, sumHRu float64   // unweighted fallback
 	var totalWeight, count float64
@@ -665,8 +665,8 @@ func averageShapeMetrics(metrics []interfaces.ReplicaMetrics) (il, ol, hitRate f
 // filterHealthyForShape returns only the replicas that pass all per-replica
 // sanity checks. Replicas with cold-start (ITL=0), stale metrics, or missing
 // KV capacity are excluded so a single bad pod cannot block the variant.
-func filterHealthyForShape(metrics []interfaces.ReplicaMetrics) []interfaces.ReplicaMetrics {
-	healthy := make([]interfaces.ReplicaMetrics, 0, len(metrics))
+func filterHealthyForShape(metrics []domain.ReplicaMetrics) []domain.ReplicaMetrics {
+	healthy := make([]domain.ReplicaMetrics, 0, len(metrics))
 	for _, m := range metrics {
 		if len(checkReplicaMetrics(m)) == 0 {
 			healthy = append(healthy, m)
@@ -695,7 +695,7 @@ func safeDivide(num, denom float64) float64 {
 //     suggesting IL, OL, or prefix-hit-rate parameters are wrong.
 func checkVariantGPSMismatch(
 	ctx context.Context,
-	metrics []interfaces.ReplicaMetrics,
+	metrics []domain.ReplicaMetrics,
 	shape WorkloadShape,
 	model ITLModel,
 	namespace, modelID, variantName string,
@@ -778,7 +778,7 @@ func checkVariantGPSMismatch(
 // distributeQueueDemandByRole splits queueDemand evenly across active non-prefill
 // roles derived from vcs. Queue demand is decode-rate-denominated so prefill roles
 // are excluded. Returns nil when queueDemand is zero or no non-prefill roles exist.
-func distributeQueueDemandByRole(queueDemand float64, vcs []interfaces.VariantCapacity) map[string]float64 {
+func distributeQueueDemandByRole(queueDemand float64, vcs []domain.VariantCapacity) map[string]float64 {
 	if queueDemand == 0 {
 		return nil
 	}
@@ -786,9 +786,9 @@ func distributeQueueDemandByRole(queueDemand float64, vcs []interfaces.VariantCa
 	for _, vc := range vcs {
 		role := vc.Role
 		if role == "" {
-			role = interfaces.RoleBoth
+			role = domain.RoleBoth
 		}
-		if role != interfaces.RolePrefill {
+		if role != domain.RolePrefill {
 			roles[role] = struct{}{}
 		}
 	}
@@ -808,16 +808,16 @@ func distributeQueueDemandByRole(queueDemand float64, vcs []interfaces.VariantCa
 // TotalDemand (nil is safe — treated as zero). Returns nil for non-disaggregated
 // models (all variants role "" or "both"). RequiredCapacity and SpareCapacity are
 // left zero — the engine's universal threshold post-step writes them.
-func aggregateRoleCapacities(vcs []interfaces.VariantCapacity, queueDemandByRole map[string]float64) map[string]interfaces.RoleCapacity {
+func aggregateRoleCapacities(vcs []domain.VariantCapacity, queueDemandByRole map[string]float64) map[string]domain.RoleCapacity {
 	byRole := aggregation.AggregateByRole(vcs)
 	// Non-disaggregated: only a "both" bucket (or nothing) — no per-role breakdown.
-	if _, hasBoth := byRole[interfaces.RoleBoth]; len(byRole) == 0 || (len(byRole) == 1 && hasBoth) {
+	if _, hasBoth := byRole[domain.RoleBoth]; len(byRole) == 0 || (len(byRole) == 1 && hasBoth) {
 		return nil
 	}
 
-	result := make(map[string]interfaces.RoleCapacity, len(byRole))
+	result := make(map[string]domain.RoleCapacity, len(byRole))
 	for role, t := range byRole {
-		result[role] = interfaces.RoleCapacity{
+		result[role] = domain.RoleCapacity{
 			Role:                   role,
 			TotalSupply:            t.TotalSupply,
 			TotalAnticipatedSupply: t.TotalAnticipatedSupply,

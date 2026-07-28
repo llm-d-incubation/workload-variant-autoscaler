@@ -143,6 +143,12 @@ The `llm-d.ai/epp-inference-pool` annotation on each HPA is the on/off gate:
 
 `poc-starvation` strips the annotation; `poc-rebalance` adds it back.
 
+Ceiling patches use optimistic concurrency (`MergeFromWithOptimisticLock`): the
+patch pins the object's `resourceVersion`, so a concurrent `maxReplicas` change
+is rejected with a `409 Conflict` instead of being silently overwritten. On
+conflict the Coordinator re-reads the object and re-applies its computed target
+(bounded retry); the Coordinator remains authoritative for the ceiling.
+
 ## Known limitations and TODOs
 
 | Area | Status | Detail |
@@ -152,7 +158,7 @@ The `llm-d.ai/epp-inference-pool` annotation on each HPA is the on/off gate:
 | `minReplicas` floor | TODO | The allocation floor is hardcoded to 1. If an HPA has `spec.minReplicas > 1`, patching `maxReplicas` below it produces an invalid object. Floor should be `max(1, hpa.Spec.MinReplicas)`. |
 | n HPAs > quota | TODO | When more HPAs exist than GPU slots, every pool is clamped to 1 and total allocation exceeds quota. Top-N ranking by queue depth is needed. |
 | Wobble | TODO | Noisy queue readings cause 1-replica flips every tick. A minimum-delta guard and per-HPA cooldown (or EWMA smoothing) are needed. |
-| Stale patch | TODO | `MergeFrom` can silently overwrite a concurrent `maxReplicas` change. Should use `MergeFromWithOptimisticLock`. |
+| Stale patch | Done | Ceiling patches use `MergeFromWithOptimisticLock` with a bounded conflict retry, so a concurrent `maxReplicas` change is no longer silently overwritten. |
 | Pool name collision | TODO | Queue query has no namespace label; pools with the same name in different namespaces inflate each other's readings. |
 
 ## Files
