@@ -30,8 +30,8 @@ optimizer actually receives.
   "scaleUpThreshold": 1.1,
   "scaleDownBoundary": 0.7,
   "variants": [
-    {"name": "primary", "prc": 1152000, "reason": "P3-k2"},
-    {"name": "v2",      "prc":  403391, "reason": "P1-obs"}
+    {"name": "primary", "prc": 1152000, "role": "both", "reason": "P3-k2"},
+    {"name": "v2",      "prc":  403391, "role": "both", "reason": "P1-obs"}
   ]
 }
 ```
@@ -42,7 +42,7 @@ optimizer actually receives.
 | `namespace` | Kubernetes namespace |
 | `analyzer` | Analyzer name, e.g. `"saturation"`, `"throughput"` |
 | `supply` | Total token supply across ready replicas (readyCount × perReplicaCapacity) |
-| `demand` | Total observed token demand |
+| `demand` | Total token demand. Not purely observed: for saturation V2 it is the sum of three terms — resident KV tokens, a role-aware projection of requests waiting in each replica's local engine queue, and a model-level, prefix-cache-discounted projection of requests still queued upstream in llm-d flow control (`SchedulerQueue`, not attributed to any variant). See [saturation-scaling-config.md](saturation-scaling-config.md) |
 | `util` | `demand / supply`; > 1.0 means the model is over capacity |
 | `rc` | Required capacity signal (post-threshold): > 0 triggers scale-up |
 | `sc` | Spare capacity signal (post-threshold): > 0 permits scale-down |
@@ -50,6 +50,7 @@ optimizer actually receives.
 | `scaleDownBoundary` | Scale-down boundary resolved for this analyzer (from config) |
 | `variants[].name` | Variant name |
 | `variants[].prc` | Per-replica capacity in analyzer units (tokens for saturation) |
+| `variants[].role` | Resolved P/D role: `prefill`, `decode`, or `both`. Renders as `both` both when the scale target has no `llm-d.ai/role` label and when the analyzer does not populate the role at all. Saturation V2 charges waiting requests by this role, so it is needed to interpret `demand` |
 | `variants[].reason` | How the variant's capacity was computed (see below) |
 
 If an analyzer does not compute per-variant capacity, `variants` is an empty

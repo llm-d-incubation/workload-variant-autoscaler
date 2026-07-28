@@ -430,15 +430,28 @@ func logAnalyzerResult(ctx context.Context, modelID, namespace string, nr pipeli
 	logger := ctrl.LoggerFrom(ctx)
 
 	type variantEntry struct {
-		Name   string  `json:"name"`
-		PRC    float64 `json:"prc"`
-		Reason string  `json:"reason,omitempty"`
+		Name string  `json:"name"`
+		PRC  float64 `json:"prc"`
+		// Role is included because V2 charges waiting requests by P/D role, so
+		// demand is not interpretable without knowing which role was resolved —
+		// a missing llm-d.ai/role label reads as "both" and changes the charge.
+		// Emitted unconditionally: an analyzer that leaves Role unset (the
+		// queueing model does) is treated as "both" downstream, so the value is
+		// canonicalized below and the field always carries a meaningful role
+		// rather than being absent.
+		Role   string `json:"role"`
+		Reason string `json:"reason,omitempty"`
 	}
 	variants := make([]variantEntry, 0, len(nr.Result.VariantCapacities))
 	for _, vc := range nr.Result.VariantCapacities {
+		role := vc.Role
+		if role == "" {
+			role = domain.RoleBoth
+		}
 		variants = append(variants, variantEntry{
 			Name:   vc.VariantName,
 			PRC:    vc.PerReplicaCapacity,
+			Role:   role,
 			Reason: vc.Reason,
 		})
 	}

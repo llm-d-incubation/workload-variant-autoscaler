@@ -510,7 +510,7 @@ With WVA metrics, the value for the label `namespace` is the WVA controller name
 
 ### `wva_saturation_utilization`
 - **Type**: Gauge
-- **Description**: Per-variant utilization ratio (0.0-1.0) from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
+- **Description**: Per-variant utilization ratio from saturation analysis. V1 path: mean of per-replica KV-cache-usage fractions, bounded 0.0-1.0 (matches the per-replica threshold V1 checks). V2 path: TotalDemand / TotalCapacity from the analyzer result — **unbounded above**, where > 1.0 means demand exceeds supply. Numerically equivalent for uniform-capacity replicas; V2 is capacity-weighted for mixed-capacity cases.
 - **Labels**:
   - `variant_name`: Name of the variant
   - `namespace`: Kubernetes namespace
