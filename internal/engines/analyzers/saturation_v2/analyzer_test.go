@@ -2,6 +2,7 @@ package saturation_v2
 
 import (
 	"context"
+	"math"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1015,7 +1016,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			TotalKvCapacityTokens: 0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).To(BeNil())
 	})
 
@@ -1031,7 +1032,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			KvCacheUsage: 0.5,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).To(BeNil())
 	})
 
@@ -1051,7 +1052,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			TotalKvCapacityTokens: 0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 (KvCacheThreshold) = 8000
 		Expect(result.EffectiveCapacity).To(Equal(int64(8000)))
@@ -1075,7 +1076,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			TotalKvCapacityTokens: 0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 = 8000
 		// demand = 1.0 * 8000 = 8000 >= 8000
@@ -1100,7 +1101,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			TotalKvCapacityTokens: 0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 = 8000
 		// demand = 0.9 * 8000 = 7200
@@ -1129,7 +1130,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			AvgInputTokens:        500,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 = 8000
 		// demand = 0.5 * 8000 + 3 * 500 = 4000 + 1500 = 5500
@@ -1137,7 +1138,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 		Expect(result.IsSaturated).To(BeFalse())
 	})
 
-	It("should not add queue demand when avg input tokens is zero", func() {
+	It("should not add queue demand when token metrics are unavailable", func() {
 		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
 			AcceleratorName:   "H100",
 			EffectiveCapacity: 10000,
@@ -1154,11 +1155,73 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			AvgInputTokens:        0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 = 8000
 		// demand = 0.3 * 8000 = 2400 (no queue contribution)
 		Expect(result.ReplicaDemand).To(Equal(int64(2400)))
+	})
+
+	It("should charge queue demand by role", func() {
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 10000,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := domain.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.5,
+			TotalKvCapacityTokens: 0,
+			QueueLength:           3,
+			AvgInputTokens:        500,
+			AvgOutputTokens:       250,
+		}
+
+		// effectiveCapacity = 10000 * 0.8 = 8000; resident = 0.5 * 8000 = 4000.
+		prefill := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RolePrefill)
+		Expect(prefill).NotTo(BeNil())
+		// 4000 + 3 * 500 = 5500 — output tokens excluded.
+		Expect(prefill.ReplicaDemand).To(Equal(int64(5500)))
+
+		decode := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleDecode)
+		Expect(decode).NotTo(BeNil())
+		// 4000 + 3 * (500 + 250) = 6250 — output tokens included.
+		Expect(decode.ReplicaDemand).To(Equal(int64(6250)))
+	})
+
+	It("should not report saturation for an idle replica with a shallow queue", func() {
+		// The fallback denominator is a per-step batched-token budget, while the
+		// queue charge is in absolute KV tokens — a dimensional mismatch this
+		// path inherits. Raising the per-request charge moves the point where
+		// that mismatch invents saturation, so pin the safe end: a mostly-idle
+		// replica with a few queued requests must not read as saturated.
+		store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+			AcceleratorName:   "H100",
+			EffectiveCapacity: 8192,
+			LearnedFrom:       "deployment",
+		})
+
+		rm := domain.ReplicaMetrics{
+			PodName:               "pod-1",
+			VariantName:           "variant-a",
+			AcceleratorName:       "H100",
+			KvCacheUsage:          0.10,
+			TotalKvCapacityTokens: 0,
+			QueueLength:           2,
+			AvgInputTokens:        200,
+			AvgOutputTokens:       100,
+		}
+
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleDecode)
+		Expect(result).NotTo(BeNil())
+		// effectiveCapacity = 8192 * 0.8 = 6553
+		// demand = 0.10 * 6553 + 2 * (200 + 100) = 655 + 600 = 1255
+		Expect(result.EffectiveCapacity).To(Equal(int64(6553)))
+		Expect(result.ReplicaDemand).To(Equal(int64(1255)))
+		Expect(result.IsSaturated).To(BeFalse())
 	})
 
 	It("should populate all ReplicaCapacity fields correctly", func() {
@@ -1176,7 +1239,7 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 			TotalKvCapacityTokens: 0,
 		}
 
-		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns")
+		result := analyzer.computeReplicaCapacityFallback(rm, cfg, "test-model", "test-ns", domain.RoleBoth)
 		Expect(result).NotTo(BeNil())
 		// effectiveCapacity = 10000 * 0.8 = 8000
 		Expect(result.PodName).To(Equal("pod-1"))
@@ -1189,6 +1252,249 @@ var _ = Describe("computeReplicaCapacityFallback", func() {
 		// demand = 0.4 * 8000 = 3200
 		Expect(result.TokensInUse).To(Equal(int64(3200)))
 		Expect(result.ReplicaDemand).To(Equal(int64(3200)))
+	})
+})
+
+var _ = Describe("waitingQueueDemand", func() {
+	// Average request shape shared by the role cases: a waiting request costs
+	// 100 input tokens and, once it starts generating, 50 more output tokens.
+	rm := domain.ReplicaMetrics{
+		QueueLength:     4,
+		AvgInputTokens:  100,
+		AvgOutputTokens: 50,
+	}
+
+	It("charges prefill replicas for input tokens only", func() {
+		// Prompt KV is all a prefill replica materializes: 4 * 100.
+		Expect(waitingQueueDemand(rm, domain.RolePrefill)).To(Equal(int64(400)))
+	})
+
+	It("charges decode replicas for input plus output tokens", func() {
+		// Decode holds the transferred prompt KV and grows it per generated
+		// token: 4 * (100 + 50).
+		Expect(waitingQueueDemand(rm, domain.RoleDecode)).To(Equal(int64(600)))
+	})
+
+	It("charges 'both' replicas for input plus output tokens", func() {
+		Expect(waitingQueueDemand(rm, domain.RoleBoth)).To(Equal(int64(600)))
+	})
+
+	It("treats an empty role as 'both'", func() {
+		Expect(waitingQueueDemand(rm, "")).To(Equal(int64(600)))
+	})
+
+	It("treats an unknown role as 'both'", func() {
+		Expect(waitingQueueDemand(rm, "some-future-role")).To(Equal(int64(600)))
+	})
+
+	It("returns zero for an empty queue regardless of role", func() {
+		empty := rm
+		empty.QueueLength = 0
+		for _, role := range []string{domain.RolePrefill, domain.RoleDecode, domain.RoleBoth, ""} {
+			Expect(waitingQueueDemand(empty, role)).To(BeZero())
+		}
+	})
+
+	It("returns zero for a negative queue length", func() {
+		negative := rm
+		negative.QueueLength = -1
+		Expect(waitingQueueDemand(negative, domain.RoleDecode)).To(BeZero())
+	})
+
+	It("returns zero when no token metrics are available", func() {
+		noTokens := domain.ReplicaMetrics{QueueLength: 10}
+		Expect(waitingQueueDemand(noTokens, domain.RolePrefill)).To(BeZero())
+		Expect(waitingQueueDemand(noTokens, domain.RoleDecode)).To(BeZero())
+	})
+
+	It("returns zero for non-finite token metrics", func() {
+		// Converting a non-finite float64 to int64 is implementation-defined in
+		// Go, so an unguarded NaN yields garbage demand — hugely negative on
+		// amd64. A `<= 0` check does not catch NaN, hence the explicit guard.
+		for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+			Expect(waitingQueueDemand(
+				domain.ReplicaMetrics{QueueLength: 3, AvgInputTokens: bad}, domain.RolePrefill)).To(BeZero())
+			Expect(waitingQueueDemand(
+				domain.ReplicaMetrics{QueueLength: 3, AvgOutputTokens: bad}, domain.RoleDecode)).To(BeZero())
+			Expect(waitingQueueDemand(
+				domain.ReplicaMetrics{QueueLength: 3, AvgInputTokens: 100, AvgOutputTokens: bad}, domain.RoleDecode)).To(BeZero())
+		}
+	})
+
+	It("returns zero for finite token metrics too large for an int64", func() {
+		// Finite but out of int64 range hits the same implementation-defined
+		// conversion as NaN, so the guard must cover it too.
+		Expect(waitingQueueDemand(
+			domain.ReplicaMetrics{QueueLength: 3, AvgInputTokens: 1e300}, domain.RolePrefill)).To(BeZero())
+		Expect(waitingQueueDemand(
+			domain.ReplicaMetrics{QueueLength: 1e9, AvgInputTokens: 1e12}, domain.RoleDecode)).To(BeZero())
+
+		// Exactly 2^63: float64(math.MaxInt64) rounds up to this value, so a
+		// `>` bound would admit it and overflow to MinInt64.
+		Expect(waitingQueueDemand(
+			domain.ReplicaMetrics{QueueLength: 2, AvgInputTokens: math.Pow(2, 62)}, domain.RolePrefill)).To(BeZero())
+	})
+
+	It("charges decode replicas for output even when input tokens are unreported", func() {
+		// A decode replica whose prompt-token metric is missing still pays for
+		// generation; the old input-only formula returned 0 here.
+		outputOnly := domain.ReplicaMetrics{QueueLength: 4, AvgOutputTokens: 50}
+		Expect(waitingQueueDemand(outputOnly, domain.RoleDecode)).To(Equal(int64(200)))
+		Expect(waitingQueueDemand(outputOnly, domain.RolePrefill)).To(BeZero())
+	})
+})
+
+var _ = Describe("Analyze per-replica waiting-queue demand by role", func() {
+	var (
+		analyzer *SaturationAnalyzer
+		store    *CapacityKnowledgeStore
+		ctx      context.Context
+		satCfg   *config.SaturationScalingConfig
+	)
+
+	BeforeEach(func() {
+		store = NewCapacityKnowledgeStore()
+		analyzer = NewSaturationAnalyzer(store)
+		ctx = context.Background()
+		satCfg = &config.SaturationScalingConfig{
+			KvCacheThreshold:     0.8,
+			QueueLengthThreshold: 5,
+			KvSpareTrigger:       0.1,
+			QueueSpareTrigger:    3,
+			AnalyzerName:         "saturation",
+			ScaleUpThreshold:     0.85,
+			ScaleDownBoundary:    0.70,
+		}
+	})
+
+	// replicaFor builds a replica with 1000 tokens resident and 4 requests
+	// waiting, each averaging 100 input and 50 output tokens.
+	replicaFor := func(variant string) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{
+			PodName:               variant + "-pod-1",
+			VariantName:           variant,
+			AcceleratorName:       "H100",
+			ModelID:               "test-model",
+			Namespace:             "test-ns",
+			Cost:                  10.0,
+			TotalKvCapacityTokens: 10000,
+			TokensInUse:           1000,
+			QueueLength:           4,
+			AvgInputTokens:        100,
+			AvgOutputTokens:       50,
+		}
+	}
+
+	demandFor := func(role string) float64 {
+		input := domain.AnalyzerInput{
+			ModelID:        "test-model",
+			Namespace:      "test-ns",
+			ReplicaMetrics: []domain.ReplicaMetrics{replicaFor("variant-a")},
+			VariantStates: []domain.VariantReplicaState{
+				{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1, Role: role},
+			},
+			Config: satCfg,
+		}
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.VariantCapacities).To(HaveLen(1))
+		return result.VariantCapacities[0].TotalDemand
+	}
+
+	It("excludes output tokens for a prefill variant", func() {
+		// 1000 resident + 4 * 100 input = 1400
+		Expect(demandFor(domain.RolePrefill)).To(BeNumerically("==", 1400))
+	})
+
+	It("includes output tokens for a decode variant", func() {
+		// 1000 resident + 4 * (100 + 50) = 1600
+		Expect(demandFor(domain.RoleDecode)).To(BeNumerically("==", 1600))
+	})
+
+	It("includes output tokens for a 'both' variant", func() {
+		Expect(demandFor(domain.RoleBoth)).To(BeNumerically("==", 1600))
+	})
+
+	// The fallback path (no vllm:cache_config_info) must honour the role too.
+	// These go through Analyze so they pin the role forwarding from
+	// computeReplicaCapacity into computeReplicaCapacityFallback, not just the
+	// helper — hardcoding a role at that hand-off would otherwise go unnoticed.
+	Context("on the fallback path (no cache_config_info)", func() {
+		fallbackDemandFor := func(role string) float64 {
+			store.Update("test-ns", "test-model", "variant-a", CapacityRecord{
+				AcceleratorName:   "H100",
+				EffectiveCapacity: 10000,
+				LearnedFrom:       "deployment",
+			})
+
+			rm := replicaFor("variant-a")
+			rm.TotalKvCapacityTokens = 0 // forces the fallback
+			rm.TokensInUse = 0           // fallback derives demand from KvCacheUsage
+			rm.KvCacheUsage = 0.5
+
+			input := domain.AnalyzerInput{
+				ModelID:        "test-model",
+				Namespace:      "test-ns",
+				ReplicaMetrics: []domain.ReplicaMetrics{rm},
+				VariantStates: []domain.VariantReplicaState{
+					{VariantName: "variant-a", CurrentReplicas: 1, GPUsPerReplica: 1, Role: role},
+				},
+				Config: satCfg,
+			}
+
+			result, err := analyzer.Analyze(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.VariantCapacities).To(HaveLen(1))
+			return result.VariantCapacities[0].TotalDemand
+		}
+
+		It("excludes output tokens for a prefill variant", func() {
+			// effectiveCapacity = 10000 * 0.8 = 8000
+			// 0.5 * 8000 + 4 * 100 input = 4000 + 400 = 4400
+			Expect(fallbackDemandFor(domain.RolePrefill)).To(BeNumerically("==", 4400))
+		})
+
+		It("includes output tokens for a decode variant", func() {
+			// 0.5 * 8000 + 4 * (100 + 50) = 4000 + 600 = 4600
+			Expect(fallbackDemandFor(domain.RoleDecode)).To(BeNumerically("==", 4600))
+		})
+	})
+
+	It("includes output tokens when the role is unset", func() {
+		// An unset role canonicalizes to "both", so non-disaggregated
+		// deployments get the full-lifecycle charge.
+		Expect(demandFor("")).To(BeNumerically("==", 1600))
+	})
+
+	It("charges each role correctly in a P/D disaggregated model", func() {
+		input := domain.AnalyzerInput{
+			ModelID:   "test-model",
+			Namespace: "test-ns",
+			ReplicaMetrics: []domain.ReplicaMetrics{
+				replicaFor("prefill-variant"),
+				replicaFor("decode-variant"),
+			},
+			VariantStates: []domain.VariantReplicaState{
+				{VariantName: "prefill-variant", CurrentReplicas: 1, GPUsPerReplica: 1, Role: domain.RolePrefill},
+				{VariantName: "decode-variant", CurrentReplicas: 1, GPUsPerReplica: 1, Role: domain.RoleDecode},
+			},
+			Config: satCfg,
+		}
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.VariantCapacities).To(HaveLen(2))
+
+		byVariant := map[string]float64{}
+		for _, vc := range result.VariantCapacities {
+			byVariant[vc.VariantName] = vc.TotalDemand
+		}
+		Expect(byVariant["prefill-variant"]).To(BeNumerically("==", 1400))
+		Expect(byVariant["decode-variant"]).To(BeNumerically("==", 1600))
+
+		// Model-level demand is the sum of both roles.
+		Expect(result.TotalDemand).To(BeNumerically("==", 3000))
 	})
 })
 
@@ -1415,5 +1721,47 @@ var _ = Describe("k2SourceLabel", func() {
 
 	It("returns empty string when replicas slice is empty", func() {
 		Expect(k2SourceLabel(nil)).To(Equal(""))
+	})
+})
+
+var _ = Describe("aggregateByVariant DP>1 with pending replicas", func() {
+	var (
+		analyzer *SaturationAnalyzer
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		analyzer = NewSaturationAnalyzer(NewCapacityKnowledgeStore())
+		ctx = context.Background()
+	})
+
+	It("converts pending pods to instance units in anticipated supply", func() {
+		// One ready pod hosts 8 DP-rank instances (8 ReplicaMetrics sharing a
+		// PodName). State: 1 ready + 1 pending pod → instances-per-pod = 8/1 = 8,
+		// so the pending pod must count as 8 instances, not 1.
+		metrics := make([]domain.ReplicaMetrics, 0, 8)
+		for i := 0; i < 8; i++ {
+			metrics = append(metrics, makeReplicaMetrics("pod-1", "decode-v1", "H100", 10.0,
+				8000, 16000, 0, 100, 50))
+		}
+
+		input := makeAnalyzerInput(
+			metrics,
+			[]domain.VariantReplicaState{
+				{VariantName: "decode-v1", CurrentReplicas: 2, PendingReplicas: 1, GPUsPerReplica: 8},
+			},
+		)
+
+		result, err := analyzer.Analyze(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.VariantCapacities).To(HaveLen(1))
+
+		vc := result.VariantCapacities[0]
+		Expect(vc.ReplicaCount).To(Equal(8))    // 8 scraped instances
+		Expect(vc.PendingReplicas).To(Equal(8)) // 1 pending pod × 8 instances-per-pod
+
+		// TotalAnticipatedSupply = (ReplicaCount + PendingReplicas) × PerReplicaCapacity
+		want := float64(vc.ReplicaCount+vc.PendingReplicas) * vc.PerReplicaCapacity
+		Expect(result.TotalAnticipatedSupply).To(Equal(want))
 	})
 })

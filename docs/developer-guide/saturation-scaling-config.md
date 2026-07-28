@@ -263,6 +263,69 @@ kv-tokens; throughput: tokens/sec). Each analyzer also decides how to
 attribute that demand across roles or variants — sat_v2 splits it among
 active roles.
 
+#### Per-replica demand and the role-aware waiting-queue charge
+
+Distinct from `SchedulerQueue` above, each replica also reports its own **local
+engine queue** (`vllm:num_requests_waiting` / `sglang:num_queue_reqs`) — requests
+already admitted to that pod but not yet generating. sat_v2 charges them to the
+replica, so per-replica demand has two terms:
+
+```
+replicaDemand = <resident KV tokens> + QueueLength × <per-request charge>
+```
+
+The resident term is `TokensInUse` on the main path, or
+`KvCacheUsage × effectiveCapacity` on the fallback path (no
+`vllm:cache_config_info`). The per-request charge depends on the variant's P/D
+role, because a replica only pays for KV it actually materializes:
+
+| Role | Per-request charge | Rationale |
+|------|--------------------|-----------|
+| `prefill` | `AvgInputTokens` | Prompt KV only; output is generated on a decode pod |
+| `decode` | `AvgInputTokens + AvgOutputTokens` | Holds prompt KV and grows it per generated token |
+| `both` (default) | `AvgInputTokens + AvgOutputTokens` | Handles the full request lifecycle |
+
+An absent or empty role canonicalizes to `both`, so **non-disaggregated
+deployments take the decode-style charge** — correct for a replica serving the
+whole request, but it means the majority of deployments include output tokens.
+
+`AvgInputTokens + AvgOutputTokens` is the footprint at a request's *final* decode
+step, chosen as a peak / no-preemption planning charge: KV grows monotonically
+once generation starts and cannot be shed without preemption and recompute.
+
+**`I + O` is the saturation analyzer's demand-side unit; `ILeff + O/2` is the
+throughput analyzer's.** The two are separate analyzers with separate
+demand/supply models, so the difference is by design, not an inconsistency:
+
+| Analyzer | Per-request KV unit | Meaning |
+|----------|--------------------|---------|
+| Saturation V2 (demand) | `I + O` | Peak footprint — what a replica must be able to hold |
+| Throughput (`WorkloadShape.KVreq`) | `ILeff + O/2` | Time-averaged residency (`ILeff = I × (1 − PrefixHitRate)`) |
+
+One asymmetry *is* internal to saturation V2 and should not be confused with the
+above: its own k2 derivation (`estimateCapacityFromParams`) prices a *concurrent*
+request at `I + O/2`. So a queued request is charged more than it occupies on
+average, biasing this term toward scale-up — accepted deliberately, since
+under-provisioning decode capacity causes preemption thrash. Changing it means
+moving the demand/capacity pair together. See the `waitingQueueDemand` doc
+comment for the full trade-off.
+
+Note both demand terms derive from 1-minute maxima (`max_over_time` on
+`kv_cache_usage_perc` and `num_requests_waiting`), whose peaks need not coincide,
+so their sum can exceed any single instant's demand. That is a property of the
+collector's queries, not of the role charge.
+
+> **Operational note.** Because the default role is `both`, enabling or upgrading
+> into this behavior raises computed demand wherever replicas have a non-empty
+> local queue and report token metrics. `wva_saturation_utilization` and
+> `wva_required_capacity{unit="continuous"}` step up, `wva_spare_capacity` steps
+> down, and `wva_desired_replicas` may take a one-time step.
+> `wva_kv_cache_tokens_used` is unaffected — it sums raw `TokensInUse` and does
+> not include the queue projection. Utilization-based alerts (such as the sample
+> `wva_saturation_utilization > 0.85` in
+> [prometheus.md](prometheus.md)) may need re-baselining. The resolved role is
+> emitted per variant on the `analyzer-result` log line.
+
 #### Linearity invariant
 
 The optimizer's per-variant scaling math (`bottleneckReplicas`, `safeRemovalReplicas`, `applyAllocation`) assumes that `n` replicas of variant `v` reduce model-level RC by exactly `n × PRC[v]`. That means `Total*` must equal the canonical sum over variants:

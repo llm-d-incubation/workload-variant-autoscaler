@@ -35,6 +35,9 @@ const RoleBoth = "both"
 // RolePrefill represents the prefill-only role in a P/D disaggregated deployment.
 const RolePrefill = "prefill"
 
+// RoleDecode represents the decode-only role in a P/D disaggregated deployment.
+const RoleDecode = "decode"
+
 // ReplicaMetrics holds per-replica metrics used by both the saturation analyzer
 // and the queueing model analyzer. Saturation analysis uses KV cache, queue, and
 // token-capacity fields, while the queueing model analyzer uses

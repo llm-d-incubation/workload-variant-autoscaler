@@ -67,8 +67,9 @@ analyzers:
 // so a static value is stable. With the simulator's kv-cache-size=1 × block-size=8 (kvMax=8)
 // and throughputBothEnabledConfig (kvCacheThreshold=0.80 → perReplicaCapacity≈6.4,
 // scaleUpThreshold=0.85), RequiredCapacity > 0 requires kv·8/0.85 > 6.4, i.e. kv > 0.68;
-// 0.9 clears it with margin. running/waiting are cosmetic for V2 (queue demand uses the
-// rate-based AvgInputTokens, which is 0 under static fakes).
+// 0.9 clears it with margin. running/waiting are cosmetic for V2: these variants carry no
+// llm-d.ai/role label, so they resolve to role "both" and queue demand charges the
+// rate-based AvgInputTokens + AvgOutputTokens — both of which are 0 under static fakes.
 const throughputScaleUpFakeMetricsJSON = `{"kv-cache-usage":0.9,"running-requests":5,"waiting-requests":20}`
 
 // throughputSustainedLoadScript is an inline shell script for a Kubernetes Job that
