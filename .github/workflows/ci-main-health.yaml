@@ -1,0 +1,59 @@
+name: CI - Main Health Canary
+
+# Post-merge safety net: runs the fast build/lint/tidy checks against main itself,
+# right after each merge. It does NOT prevent breakage (that is the merge queue's
+# job) — it surfaces a red main within minutes when a semantic conflict slips
+# through (e.g. two individually-green PRs that only break once combined), instead
+# of the breakage first appearing on the next contributor's unrelated PR.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-main-health-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  main-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Extract Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        uses: actions/setup-go@v6
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Verify go.mod / go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum \
+            || { echo "::error::main go.mod/go.sum are not tidy."; exit 1; }
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.8.0
+          args: ""
+
+      - name: Unit tests
+        run: make test
