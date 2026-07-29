@@ -15,7 +15,6 @@ COPY go.mod ./
 COPY go.sum ./
 COPY cmd/main.go cmd/main.go
 COPY internal/ internal/
-COPY pkg/ pkg/
 RUN go mod download && \
     CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOEXPERIMENT=${GOEXPERIMENT} go build -a -o ${APP_ROOT}/manager cmd/main.go
 
