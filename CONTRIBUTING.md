@@ -82,17 +82,11 @@ workload-variant-autoscaler/
 ├── internal/             # Private application code
 │   ├── controller/      # Main reconciliation logic
 │   ├── collector/       # Metrics collection
-│   ├── optimizer/       # Optimization engine
+│   ├── engines/         # Scaling engines, analyzers, and optimizers
 │   ├── actuator/        # Metric emission & actuation
-│   ├── modelanalyzer/   # Model performance analysis
+│   ├── queueing/        # Queue theory models & config (analyzer, config)
 │   ├── metrics/         # Metrics definitions
 │   └── utils/           # Utility functions
-├── pkg/                  # Public libraries (inferno optimizer)
-│   ├── analyzer/        # Queue theory models
-│   ├── solver/          # Optimization algorithms
-│   ├── core/            # Core domain models
-│   ├── config/          # Configuration structures
-│   └── manager/         # Optimization manager
 ├── test/                 # Tests
 │   ├── e2e/             # End-to-end tests
 │   └── utils/           # Test utilities
@@ -205,7 +199,7 @@ Verify all commands and examples work:
 
 ### Performance Modeling
 
-When modifying queue models in `pkg/analyzer/`:
+When modifying queue models in `internal/queueing/analyzer/`:
 - Ensure mathematical correctness
 - Add comprehensive unit tests
 - Validate against real workload data when possible
@@ -213,7 +207,7 @@ When modifying queue models in `pkg/analyzer/`:
 
 ### Optimization Algorithms
 
-When modifying solvers in `pkg/solver/`:
+When modifying optimizers in `internal/engines/pipeline/`:
 - Consider computational complexity
 - Test edge cases (zero load, overload, etc.)
 - Ensure feasibility checking

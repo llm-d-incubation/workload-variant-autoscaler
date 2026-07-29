@@ -1,4 +1,4 @@
-package saturation
+package saturationv1
 
 // Saturation analyzer constants
 const (

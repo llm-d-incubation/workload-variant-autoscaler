@@ -132,7 +132,7 @@ Analyzers are configured via `SaturationScalingConfig.Analyzers` (YAML key
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `name` | string | required | Must match the name returned by `Analyzer.Name()` |
-| `enabled` | bool | true | Set false to disable without removing the analyzer |
+| `enabled` | bool | true (when the entry is present) | Set false to disable without removing the analyzer |
 | `score` | float64 | 1.0 | Weight in the fair-share priority formula |
 | `scaleUpThreshold` | float64 | global | Overrides the model-level `scaleUpThreshold` for this analyzer |
 | `scaleDownBoundary` | float64 | global | Overrides the model-level `scaleDownBoundary` for this analyzer |
@@ -152,6 +152,17 @@ analyzers:
 
 When `enabled` is false the analyzer is neither called nor included in the
 result slice, so it cannot veto scale-down decisions.
+
+**Participation is opt-in.** An analyzer registered in code
+(`Engine.RegisterAnalyzer`) participates in a cycle only when it has an
+explicit entry in `analyzers` with `enabled` `true` or unset. An analyzer with
+no entry at all does not run and is not included in the result slice,
+exactly as if `enabled: false` had been set. This prevents a
+registered-but-unconfigured analyzer from returning `SpareCapacity=0` and
+silently vetoing scale-down, since the per-role scale-down decision requires
+every analyzer in the slice to agree. Saturation is exempt from this gate —
+it is always run, independent of `analyzers` config, because the engine
+identifies it by name before this check applies.
 
 ---
 

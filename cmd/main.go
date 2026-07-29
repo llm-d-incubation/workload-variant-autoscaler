@@ -97,11 +97,12 @@ func init() {
 
 // throughputAnalyzerEnabled reports whether any saturation config entry lists
 // the throughput analyzer with enabled != false. Startup-time gate: when no
-// entry enables throughput the analyzer is never registered, so it cannot
-// participate in scaling decisions and cannot veto scale-down.
+// entry enables throughput anywhere, the analyzer is never registered, so it
+// cannot participate in scaling decisions and cannot veto scale-down.
 //
-// This is a stopgap until the per-cycle consumption gate (effectiveEnabled
-// opt-in fix) lands. Runtime enablement after controller start requires a
+// This is independent of the per-cycle effectiveEnabled opt-in check in the
+// saturation engine, which governs participation per namespace/model once the
+// analyzer is registered. Runtime enablement after controller start requires a
 // restart because RegisterAnalyzer is frozen after StartOptimizeLoop.
 func throughputAnalyzerEnabled(cfg *config.Config) bool {
 	for _, sc := range cfg.SaturationConfig() {
@@ -535,6 +536,10 @@ func main() {
 				return err
 			}
 			setupLog.Info("ThroughputAnalyzer registered (enabled in saturation config)")
+		} else {
+			setupLog.Info("ThroughputAnalyzer NOT registered — no saturation config entry " +
+				"enables 'throughput'. Add it to the analyzers config and restart the " +
+				"controller to enable it.")
 		}
 		go engine.StartOptimizeLoop(ctx)
 		return nil

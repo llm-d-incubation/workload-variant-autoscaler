@@ -33,6 +33,18 @@ type SaturationScalingConfig struct {
 	// Default is false (limiter disabled).
 	EnableLimiter bool `yaml:"enableLimiter,omitempty"`
 
+	// EnableRescale: When true, the V2 GPU-constrained optimizer may run the
+	// priority-weighted rescale pass — under contention it redistributes the whole
+	// budget by priority x demand, reclaiming from lower-priority models so
+	// higher-priority work can run. Default is false (additive fair-share only).
+	//
+	// This is a BUDGET-SCOPE flag, read only from the "default" entry: the value in
+	// the global config governs the cluster budget, and a namespace-local config's
+	// "default" governs that namespace's quota budget. It is ignored on per-model
+	// override entries and has no effect unless a same-scope GPU budget exists
+	// (see docs/plans/engine/rescale-alpha.md).
+	EnableRescale bool `yaml:"enableRescale,omitempty"`
+
 	// AnalyzerName selects which saturation analyzer to use.
 	// "saturation" uses the V2 token-based analyzer.
 	// Empty string (default) uses the V1 percentage-based analyzer.

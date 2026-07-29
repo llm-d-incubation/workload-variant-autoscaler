@@ -9,7 +9,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel/tuner"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/analyzer"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/queueing/analyzer"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 

@@ -45,7 +45,7 @@ BENCHMARK_NAMESPACE  ?= # set via BENCHMARK_NAMESPACE=<namespace>
 BENCHMARK_GATEWAY_URL ?= http://infra-llmdbench-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80
 BENCHMARK_WORKSPACE  ?= $(CURDIR)
 BENCHMARK_HARNESS    ?= guidellm
-BENCHMARK_WORKLOAD   ?= prefill_heavy.yaml
+BENCHMARK_WORKLOAD   ?= prefill_heavy
 BENCHMARK_FORCE      ?= true
 BENCHMARK_MONITORING ?= true
 BENCHMARK_UV         ?= false

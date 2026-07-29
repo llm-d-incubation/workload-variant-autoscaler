@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/analyzer"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/queueing/analyzer"
 )
 
 var testConfig = &analyzer.Configuration{

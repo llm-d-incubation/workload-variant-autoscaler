@@ -22,6 +22,10 @@ const (
 	DecisionReasonSaturationOnly DecisionReason = "saturation-only mode"
 	// DecisionReasonScaleFromZero indicates scale-up from zero replicas.
 	DecisionReasonScaleFromZero DecisionReason = "scale-from-zero"
+	// DecisionReasonRescale indicates a priority-weighted rescale reclaim — a
+	// deliberate, redistributive scale-down (not flappy demand), which downstream
+	// stabilization must not damp as if it were noise.
+	DecisionReasonRescale DecisionReason = "rescale"
 	// DecisionReasonTest is used for test scenarios.
 	DecisionReasonTest DecisionReason = "test"
 )

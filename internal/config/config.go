@@ -419,6 +419,32 @@ func (c *Config) SaturationConfigForNamespace(namespace string) map[string]Satur
 	return copySaturationConfig(sourceConfig)
 }
 
+// RescaleEnabledForNamespaceLocal reports the EnableRescale flag from a namespace's
+// OWN saturation config `default` entry, and whether that namespace has its own
+// (non-global) config. It intentionally does NOT fall back to the global config: the
+// scope-coupled rescale flag for a namespace quota is governed only by that
+// namespace's own config, so the cluster (global) flag never leaks onto it.
+func (c *Config) RescaleEnabledForNamespaceLocal(namespace string) (enabled bool, hasLocal bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if namespace == "" {
+		return false, false
+	}
+	nsCfg, ok := c.saturation.namespaceConfigs[namespace]
+	if !ok || len(nsCfg) == 0 {
+		return false, false
+	}
+	return nsCfg["default"].EnableRescale, true
+}
+
+// RescaleEnabledCluster reports the EnableRescale flag from the global saturation
+// config `default` entry — the cluster-budget scope.
+func (c *Config) RescaleEnabledCluster() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.saturation.global["default"].EnableRescale
+}
+
 // copySaturationConfig creates a deep copy of the saturation config map.
 func copySaturationConfig(src map[string]SaturationScalingConfig) map[string]SaturationScalingConfig {
 	if src == nil {

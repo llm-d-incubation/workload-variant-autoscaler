@@ -429,19 +429,7 @@ func scaleDownRoleIterated(
 	if len(stateMap) > 0 {
 		states = stateMap[0]
 	}
-	rolesSet := make(map[string]struct{})
-	for _, vc := range variants {
-		role := vc.Role
-		if role == "" {
-			role = domain.RoleBoth
-		}
-		rolesSet[role] = struct{}{}
-	}
-	roles := make([]string, 0, len(rolesSet))
-	for role := range rolesSet {
-		roles = append(roles, role)
-	}
-	sort.Strings(roles)
+	roles := rolesOf(variants)
 
 	for _, role := range roles {
 		if !needsScaleDownForRole(s, role) {
