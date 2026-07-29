@@ -225,25 +225,45 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 }
 
 func (p *Plugin) namespaceGPUQuota(ctx context.Context, ns string) (int64, error) {
-	// TODO: a namespace can have multiple ResourceQuotas; the effective GPU limit
-	// is the minimum across all of them, not the first one found. Returning the
-	// first match can overestimate the budget and allow over-scheduling.
-
-	// TODO: ResourceQuotas can carry a spec.scopeSelector that restricts which
-	// pods they apply to (e.g. only BestEffort or Terminating pods). This code
-	// ignores scope selectors and treats any quota with a GPU field as the full
-	// namespace budget, which may overstate the applicable limit.
+	log := ctrl.LoggerFrom(ctx).WithName("gpu-rebalance")
 
 	list := &corev1.ResourceQuotaList{}
 	if err := p.client.List(ctx, list, client.InNamespace(ns)); err != nil {
 		return 0, err
 	}
+
+	var (
+		quota int64
+		found bool
+	)
 	for i := range list.Items {
-		if q, ok := list.Items[i].Spec.Hard[corev1.ResourceName(gpuQuotaResource)]; ok {
-			return q.Value(), nil
+		rq := &list.Items[i]
+		q, ok := rq.Spec.Hard[corev1.ResourceName(gpuQuotaResource)]
+		if !ok {
+			continue
+		}
+
+		// A scoped ResourceQuota governs only the subset of pods its scopes match
+		// (for example BestEffort, Terminating, or a particular PriorityClass), so
+		// its hard limit is not the namespace-wide budget. Skip it rather than
+		// mistaking a partial limit for the full ceiling.
+		if len(rq.Spec.Scopes) > 0 || rq.Spec.ScopeSelector != nil {
+			log.Info("Ignoring scoped ResourceQuota when computing the GPU budget",
+				"namespace", ns, "resourceQuota", rq.Name)
+			continue
+		}
+
+		// A pod must satisfy every ResourceQuota that applies to it, so when more
+		// than one carries a GPU limit the effective ceiling is the smallest.
+		if v := q.Value(); !found || v < quota {
+			quota, found = v, true
 		}
 	}
-	return 0, nil
+
+	if !found {
+		return 0, nil
+	}
+	return quota, nil
 }
 
 func (p *Plugin) queryQueue(ctx context.Context, inferencePool string) (float64, error) {
