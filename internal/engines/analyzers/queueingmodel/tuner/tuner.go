@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/queueing/config"
 	"gonum.org/v1/gonum/mat"
 
-	analyzer "github.com/llm-d/llm-d-workload-variant-autoscaler/pkg/analyzer"
+	analyzer "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/queueing/analyzer"
 	kalman "github.com/llm-inferno/kalman-filter/pkg/core"
 )
 

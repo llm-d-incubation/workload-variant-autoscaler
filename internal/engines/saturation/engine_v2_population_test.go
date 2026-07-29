@@ -63,8 +63,17 @@ var _ = Describe("Engine config-population helpers", func() {
 	})
 
 	Describe("effectiveEnabled", func() {
-		It("returns true when the analyzer is absent from config", func() {
-			Expect(effectiveEnabled("throughput", config.SaturationScalingConfig{})).To(BeTrue())
+		It("returns false when the analyzer is absent from config (opt-in)", func() {
+			Expect(effectiveEnabled("throughput", config.SaturationScalingConfig{})).To(BeFalse())
+		})
+
+		It("returns false when other analyzers are configured but the target is absent", func() {
+			cfg := config.SaturationScalingConfig{
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "other"},
+				},
+			}
+			Expect(effectiveEnabled("throughput", cfg)).To(BeFalse())
 		})
 
 		It("returns true when Enabled is nil for the matching entry", func() {
@@ -151,7 +160,10 @@ var _ = Describe("Engine config-population helpers", func() {
 			cfg := config.SaturationScalingConfig{
 				ScaleUpThreshold:  0.85,
 				ScaleDownBoundary: 0.70,
-				// No Analyzers entries — both default to 1.0.
+				// spy has an entry (so it participates, opt-in) but no Score — defaults to 1.0.
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "spy"},
+				},
 			}
 
 			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
@@ -175,6 +187,9 @@ var _ = Describe("Engine config-population helpers", func() {
 			cfgGlobal := config.SaturationScalingConfig{
 				ScaleUpThreshold:  0.85,
 				ScaleDownBoundary: 0.70,
+				Analyzers: []config.AnalyzerScoreConfig{
+					{Name: "spy"},
+				},
 			}
 			resultsGlobal, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgGlobal, nil, nil, nil, nil)
 			Expect(err).NotTo(HaveOccurred())

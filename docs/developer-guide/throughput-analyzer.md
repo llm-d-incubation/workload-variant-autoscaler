@@ -23,10 +23,12 @@ operating point, and scales before demand exceeds that supply.
 > analyzer is not registered and never participates in scaling. The default config ships with
 > saturation only, so throughput is off by default.
 >
-> **Runtime toggling requires a restart.** Registration is frozen after `StartOptimizeLoop`.
-> Editing the configmap to add `throughput` takes effect only after a controller restart.
-> This is a stopgap; the per-cycle consumption gate (effectiveEnabled opt-in fix) is the
-> correct long-term home and will remove the need for a restart when it lands.
+> **Runtime toggling requires a restart.** Registration is frozen after `StartOptimizeLoop`;
+> editing the configmap to add `throughput` takes effect only after a controller restart.
+> This restart requirement is about registration, not participation: the per-cycle
+> `effectiveEnabled` gate (see the [multi-analyzer pipeline guide](multi-analyzer-pipeline.md))
+> governs whether an already-registered analyzer participates in a given cycle, and is
+> independent of this startup-time registration gate.
 
 ## Table of Contents
 
@@ -105,7 +107,7 @@ and queueing model registrations.
 #### QueryGenerationTokenRate (`generation_token_rate`)
 
 ```promql
-sum by (pod) (rate(vllm:request_generation_tokens_sum{namespace="...",model_name="..."}[1m]))
+sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_sum{namespace="...",model_name="..."}[1m]))
 ```
 
 **What it measures:** Observed generation (decode) token rate per pod in tokens/sec.
@@ -122,7 +124,7 @@ replica. A deviation > 15% at k* ≥ 0.30 suppresses SpareCapacity for the cycle
 #### QueryKvUsageInstant (`kv_usage_instant`)
 
 ```promql
-max by (pod) (vllm:kv_cache_usage_perc{namespace="...",model_name="..."})
+max by (instance, pod, llm_d_ai_variant) (vllm:kv_cache_usage_perc{namespace="...",model_name="..."})
 ```
 
 **What it measures:** Instantaneous KV cache utilization fraction per pod (0.0–1.0).
@@ -138,20 +140,20 @@ Throughput Analyzer sees the current operating point k*, not a high-water mark f
 spike that has since subsided. Using the peak would overestimate load and cause premature
 scale-up. Both fields coexist on `ReplicaMetrics` for their respective purposes.
 
-**Why `max by (pod)` and not `avg by (pod)`:** `vllm:kv_cache_usage_perc` is a scalar gauge
-per vLLM process, so there is one Prometheus series per pod in normal deployment. The
-`max by (pod)` clause is purely deduplication: if the same pod is scraped by multiple targets
-(e.g., a PodMonitor and a ServiceMonitor), duplicate series with identical values appear under
-the same pod label. `max` collapses them. Since duplicates carry the same value, `max = avg`
-— the choice has no effect on correctness. This follows the convention used by every other
-per-pod query in this codebase.
+**Why `max by (instance, pod, llm_d_ai_variant)` and not `avg by (...)`:** `vllm:kv_cache_usage_perc`
+is a scalar gauge per vLLM process, so there is one Prometheus series per pod in normal
+deployment. The `max by (...)` clause is purely deduplication: if the same pod is scraped by
+multiple targets (e.g., a PodMonitor and a ServiceMonitor), duplicate series with identical
+values appear under the same pod label. `max` collapses them. Since duplicates carry the same
+value, `max = avg` — the choice has no effect on correctness. This follows the convention used
+by every other per-pod query in this codebase.
 
 ---
 
 #### QueryRequestRate (`request_rate`)
 
 ```promql
-sum by (pod) (rate(vllm:request_generation_tokens_count{namespace="...",model_name="..."}[1m]))
+sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_count{namespace="...",model_name="..."}[1m]))
 ```
 
 **What it measures:** Engine-side request completion rate per pod (req/s), derived from the
@@ -203,15 +205,15 @@ namespace filtering limitation of the scheduler metric.
 
 | Query / Field | Source | Aggregation | Window | Purpose in TA |
 |---|---|---|---|---|
-| `QueryGenerationTokenRate` | vLLM | `sum by (pod)` | 1m rate | μ_dec^obs per pod (observability) |
-| `QueryKvUsageInstant` | vLLM | `max by (pod)` | instant | k* (no max_over_time) |
-| `QueryRequestRate` | vLLM | `sum by (pod)` | 1m rate | Fallback λ_req; histogram weight |
+| `QueryGenerationTokenRate` | vLLM | `sum by (instance, pod, llm_d_ai_variant)` | 1m rate | μ_dec^obs per pod (observability) |
+| `QueryKvUsageInstant` | vLLM | `max by (instance, pod, llm_d_ai_variant)` | instant | k* (no max_over_time) |
+| `QueryRequestRate` | vLLM | `sum by (instance, pod, llm_d_ai_variant)` | 1m rate | Fallback λ_req; histogram weight |
 | `TotalKvCapacityTokens` | `KvCacheConfigInfo` labels | derived | static | KV_max = blocks × block_size |
-| `AvgITL` | `QueryAvgITL` | `max by (pod)` | 1m rate | ITL_obs for OLS calibration |
-| `AvgOutputTokens` | `QueryAvgOutputTokens` | `max by (pod)` | 5m rate | OL for KV_req and λ_dec |
-| `AvgInputTokens` | `QueryAvgInputTokens` | `max by (pod)` | 5m rate | IL for IL_eff = IL × (1−H％) |
-| `PrefixCacheHitRate` | `QueryPrefixCacheHitRate` | `max by (pod)` | 5m rate | H％ for IL_eff |
-| `ArrivalRate` | `QuerySchedulerDispatchRate` | `sum by (pod_name, namespace)` | 1m rate | λ_req per pod (primary) |
+| `AvgITL` | `QueryAvgITL` | `max by (instance, pod, llm_d_ai_variant)` | 1m rate | ITL_obs for OLS calibration |
+| `AvgOutputTokens` | `QueryAvgOutputTokens` | `max by (instance, pod, llm_d_ai_variant)` | 5m rate | OL for KV_req and λ_dec |
+| `AvgInputTokens` | `QueryAvgInputTokens` | `max by (instance, pod, llm_d_ai_variant)` | 5m rate | IL for IL_eff = IL × (1−H％) |
+| `PrefixCacheHitRate` | `QueryPrefixCacheHitRate` | `max by (instance, pod, llm_d_ai_variant)` | 5m rate | H％ for IL_eff |
+| `ArrivalRate` | `QuerySchedulerDispatchRate` | `sum by (pod_name, port, namespace)` | 1m rate | λ_req per pod (primary) |
 
 ## Architecture
 
@@ -227,7 +229,6 @@ internal/engines/analyzers/throughput/
 ├── observation_window.go      ObservationWindow: rolling (k,ITL) pairs, Ready flag
 ├── sanity.go                  CheckModelMetrics: 6 SanityIssue types
 ├── itl_model.go               ITLModel{A,B}, FitITLModel (OLS), ITLAt(k)
-├── itl_knowledge_store.go     itlKnowledgeStore: tier-3 skeleton (not yet wired)
 └── analyzer.go                ThroughputAnalyzer: Observe() + full Analyze()
 ```
 
@@ -420,9 +421,10 @@ survives shape-change window resets. When no prior Tier-1 fit has occurred (`has
 false), B falls back to `DefaultBaselineITLSec` (0.006 s — H100 baseline at near-zero load).
 `lastFittedB` and `hasFittedB` are exposed in `ThroughputVariantState` for observability.
 
-**Tier 3 (not yet wired):** `itlKnowledgeStore` is present in the package for a future
-zero-replica fallback using the last successful tier-1 fit. It is not wired into the current
-`Analyze()` loop because that loop only iterates variants with active replica metrics.
+**Tier 3 (not implemented):** a zero-replica fallback — reusing the last successful Tier-1 fit
+when a variant has scaled to zero replicas — is not implemented. The current `Analyze()` loop
+only iterates variants with active replica metrics, so a scaled-to-zero variant has no ITL
+model to fall back to.
 
 ## Supply Estimation
 
@@ -435,7 +437,11 @@ N_dec_sat = DefaultKSat × KV_max / KVreq      # in-flight requests at k_sat
 μ_dec_sat = N_dec_sat / ITL(k_sat)            # decode tokens/sec at saturation operating point
 ```
 
-Per-variant totals: `totalSupply = Σ μ_dec_sat`, `perReplicaSupply = totalSupply / n`.
+Per-variant totals: `totalSupply = Σ μ_dec_sat`, `perReplicaSupply = totalSupply / n`, where
+`n` is the count of KV-capable replicas (`nKV`) — replicas actually reporting KV metrics, not
+a raw spec/status replica count. This `n` becomes `ReplicaCount_v` in the Scaling Signal
+formulas below, mirroring the saturation analyzer's `readyCount`; still-booting KV=0 replicas
+are excluded here and counted separately via `PendingReplicas_v` below instead.
 
 `DefaultKSat = 0.85` — the KV utilization at which μ_dec_sat is evaluated. This is a
 per-analyzer constant pending alignment with the EPP system-wide k_sat (see open items).

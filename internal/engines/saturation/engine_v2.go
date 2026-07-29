@@ -187,19 +187,24 @@ func resolveThresholds(analyzerName string, cfg config.SaturationScalingConfig) 
 	return cfg.ScaleUpThreshold, cfg.ScaleDownBoundary
 }
 
-// effectiveEnabled returns false only when the analyzer has an explicit
-// Enabled:false entry in cfg.Analyzers. Absent entries and nil Enabled
-// pointers default to true (consistent with ApplyDefaults).
+// effectiveEnabled reports whether the named analyzer should participate in this
+// cycle's scaling decision. An analyzer is opt-in: it participates only when it has
+// an explicit entry in cfg.Analyzers whose Enabled is true (or nil, i.e. present but
+// not yet defaulted). An analyzer registered in code but ABSENT from cfg.Analyzers
+// does NOT participate — this prevents a registered-but-unconfigured analyzer (e.g.
+// throughput) from returning SpareCapacity=0 and silently vetoing scale-down.
+// Saturation is exempt: it is guarded by the SaturationAnalyzerName check upstream
+// (engine_v2.go ~L136) before effectiveEnabled is ever called.
 func effectiveEnabled(analyzerName string, cfg config.SaturationScalingConfig) bool {
 	for _, aw := range cfg.Analyzers {
 		if aw.Name == analyzerName {
 			if aw.Enabled != nil {
 				return *aw.Enabled
 			}
-			return true
+			return true // present, not yet defaulted → participates
 		}
 	}
-	return true
+	return false // absent → opt-in: does not participate
 }
 
 // runRegisteredAnalyzer invokes a single non-saturation analyzer's Analyze

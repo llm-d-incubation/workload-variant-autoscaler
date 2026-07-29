@@ -22,7 +22,12 @@ import (
 //   - Fair-shares GPUs across models (highest-priority model gets GPUs first)
 //   - Disaggregated models use paired (n_P, n_D) allocation via the paired helpers
 //   - Scale-down uses scaleDownRoleIterated (role-iterated unified path)
-type GreedyByScoreOptimizer struct{}
+type GreedyByScoreOptimizer struct {
+	// Rescale carries the resolved, scope-coupled rescale enablement for the
+	// current cycle (set by the engine before Optimize). Zero value = off, which
+	// keeps the additive fair-share behaviour unchanged.
+	Rescale RescaleFlags
+}
 
 // NewGreedyByScoreOptimizer creates a new GreedyByScoreOptimizer.
 func NewGreedyByScoreOptimizer() *GreedyByScoreOptimizer {
@@ -98,10 +103,25 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	available := mergeConstraints(constraints)
 	availableByNS := mergeNamespaceConstraints(constraints)
 
+	// Rescale pre-pass: for enabled, contended (type, budget-scope) groups, compute
+	// priority-weighted targets and produce reclaim/fill decisions, consuming free
+	// GPUs from `available`/`availableByNS` so the additive path below sees the
+	// reduced budget. Models it handles are excluded from the additive path. When
+	// rescale is off or no group is contended, `handled` is empty and behaviour is
+	// unchanged.
+	var rescaleDecisions []domain.VariantDecision
+	var handled map[string]bool
+	if o.Rescale.any() {
+		rescaleDecisions, handled = o.applyRescale(ctx, requests, available, availableByNS)
+	}
+
 	var scaleUpWork []*modelWork
 	var otherRequests []ModelScalingRequest
 
 	for _, req := range requests {
+		if handled[modelKey(req)] {
+			continue
+		}
 		satEntry := saturationEntry(req.AnalyzerResults)
 		if satEntry == nil {
 			continue
@@ -156,6 +176,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		allDecisions = append(allDecisions, decisions...)
 	}
 
+	allDecisions = append(allDecisions, rescaleDecisions...)
 	return allDecisions
 }
 

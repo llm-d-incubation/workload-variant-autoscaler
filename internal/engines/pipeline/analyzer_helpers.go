@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -10,6 +12,20 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
+
+// rolesOf returns the distinct roles among the given variants, sorted for
+// determinism. A variant with no role is the synthetic RoleBoth.
+func rolesOf(vcs []domain.VariantCapacity) []string {
+	set := make(map[string]struct{}, len(vcs))
+	for _, vc := range vcs {
+		r := vc.Role
+		if r == "" {
+			r = domain.RoleBoth
+		}
+		set[r] = struct{}{}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
 
 // applyAllocation subtracts the capacity provided by n replicas of variant v
 // from each analyzer's Remaining counter. Clamps to 0. The slice is the working

@@ -317,7 +317,7 @@ Prometheus / vLLM metrics per pod
 | Tuner defaults        | `internal/engines/analyzers/queueingmodel/tuner/defaults.go`     |
 | Tuner configurator    | `internal/engines/analyzers/queueingmodel/tuner/configurator.go` |
 | Tuner environment     | `internal/engines/analyzers/queueingmodel/tuner/environment.go`  |
-| QueueAnalyzer         | `pkg/analyzer/queueanalyzer.go`                                  |
+| QueueAnalyzer         | `internal/queueing/analyzer/queueanalyzer.go`                    |
 | Engine integration    | `internal/engines/saturation/engine_queueing_model.go`           |
 | ConfigMap interface   | `internal/domain/queueing_model_scaling.go`                      |
 | ConfigMap YAML        | `deploy/configmap-queueing-model.yaml`                           |

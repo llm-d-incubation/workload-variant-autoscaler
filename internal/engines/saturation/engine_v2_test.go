@@ -374,6 +374,10 @@ var _ = Describe("runAnalyzersAndScore call ordering", func() {
 		cfg := config.SaturationScalingConfig{
 			ScaleUpThreshold:  0.85,
 			ScaleDownBoundary: 0.70,
+			Analyzers: []config.AnalyzerScoreConfig{
+				{Name: "throughput"},
+				{Name: "slo"},
+			},
 		}
 
 		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)

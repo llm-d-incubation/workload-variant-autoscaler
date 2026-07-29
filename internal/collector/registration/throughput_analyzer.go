@@ -45,11 +45,11 @@ const (
 	// 1-minute high-water mark that could overestimate load and trigger premature
 	// scale-up after a transient spike.
 	//
-	// max by (pod): deduplication only. vllm:kv_cache_usage_perc is a single scalar
-	// gauge per vLLM process; there is one series per pod in normal deployment. The
-	// max by (pod) collapses any duplicate series that arise when a pod is scraped by
-	// multiple targets (e.g., PodMonitor + ServiceMonitor). Since duplicates carry the
-	// same value, max = avg — the choice has no effect on correctness.
+	// max by (instance, pod, llm_d_ai_variant): deduplication only. vllm:kv_cache_usage_perc
+	// is a single scalar gauge per vLLM process; there is one series per pod in normal
+	// deployment. The max by (...) collapses any duplicate series that arise when a pod
+	// is scraped by multiple targets (e.g., PodMonitor + ServiceMonitor). Since duplicates
+	// carry the same value, max = avg — the choice has no effect on correctness.
 	// Source: vllm:kv_cache_usage_perc (gauge)
 	QueryKvUsageInstant = "kv_usage_instant"
 

@@ -1,4 +1,4 @@
-# Only go.mod, go.sum, cmd/, api/, internal/, and pkg/ are needed by the Dockerfile.
+# Only go.mod, go.sum, cmd/, api/, and internal/ are needed by the Dockerfile.
 
 # Version control and IDE
 .git

@@ -12,7 +12,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturationv1"
 )
 
 // RequestCountFuncType is the signature for functions that retrieve the total request count
@@ -157,7 +157,7 @@ func (e *Enforcer) ensureMinimumReplicasOnDecisions(
 		}
 		cost := d.Cost
 		if cost <= 0 {
-			cost = saturation.DefaultVariantCost
+			cost = saturationv1.DefaultVariantCost
 		}
 		if cheapestCost < 0 || cost < cheapestCost || (cost == cheapestCost && d.VariantName < decisions[cheapestIdx].VariantName) {
 			cheapestIdx = i
