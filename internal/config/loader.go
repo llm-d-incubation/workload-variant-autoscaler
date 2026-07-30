@@ -34,6 +34,40 @@ var flagBindings = map[string]string{
 	"QUOTA_CONFIG_FILE":              "quota-config-file",
 }
 
+const (
+	// DefaultOptimizationInterval is the optimize-loop cadence used when
+	// GLOBAL_OPT_INTERVAL is unset or unusable. It matches the value shipped in
+	// config/base/manager/manager-configmap.yaml.
+	DefaultOptimizationInterval = 15 * time.Second
+
+	// MinOptimizationInterval is the shortest usable GLOBAL_OPT_INTERVAL. The
+	// value drives the polling executor directly, so anything shorter would spin
+	// the optimize loop against Prometheus and the API server.
+	MinOptimizationInterval = time.Second
+)
+
+// sanitizeOptimizationInterval returns interval, or DefaultOptimizationInterval
+// when it is unusable. raw is the value as written by the operator, logged so the
+// cause is visible.
+//
+// Two misconfigurations land here: viper yields 0 for a value it cannot parse,
+// and nanoseconds for a unit-less one ("15" parses as 15ns, which is positive and
+// would otherwise look valid). Neither is worth refusing to start over — the
+// controller keeps running at the default cadence and says so.
+func sanitizeOptimizationInterval(interval time.Duration, raw string) time.Duration {
+	if interval >= MinOptimizationInterval {
+		return interval
+	}
+	ctrl.Log.Error(
+		fmt.Errorf("GLOBAL_OPT_INTERVAL must be at least %v", MinOptimizationInterval),
+		"Unusable optimization interval, using default",
+		"value", raw,
+		"parsed", interval,
+		"default", DefaultOptimizationInterval,
+	)
+	return DefaultOptimizationInterval
+}
+
 // Load loads and validates the unified configuration.
 // Precedence: flags > env > config file > defaults
 // The main configuration is read from a mounted YAML file, but can be overridden
@@ -86,7 +120,9 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("WVA_SCALE_TO_ZERO", false)
 	v.SetDefault("WVA_LIMITED_MODE", false)
 	v.SetDefault("SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY", 10)
-	v.SetDefault("GLOBAL_OPT_INTERVAL", "60s")
+	// Matches config/base/manager/manager-configmap.yaml so a deployment without
+	// the ConfigMap key runs at the same cadence as the shipped default.
+	v.SetDefault("GLOBAL_OPT_INTERVAL", DefaultOptimizationInterval.String())
 	v.SetDefault("EXPERIMENTAL_COORDINATOR_ENABLED", false)
 	v.SetDefault("COORDINATOR_INTERVAL", "15s")
 	v.SetDefault("LIMITER_TYPE", "inventory")
@@ -126,7 +162,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 		secureMetrics:        v.GetBool("METRICS_SECURE"),
 		watchNamespace:       v.GetString("WATCH_NAMESPACE"),
 		loggerVerbosity:      v.GetInt("V"),
-		optimizationInterval: v.GetDuration("GLOBAL_OPT_INTERVAL"),
+		optimizationInterval: sanitizeOptimizationInterval(
+			v.GetDuration("GLOBAL_OPT_INTERVAL"), v.GetString("GLOBAL_OPT_INTERVAL")),
 	}
 
 	cfg.tls = tlsConfig{

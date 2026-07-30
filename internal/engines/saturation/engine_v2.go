@@ -7,6 +7,7 @@ import (
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
@@ -41,7 +42,7 @@ func (e *Engine) runV2AnalysisOnly(
 			continue
 		}
 		// Get accelerator name from scale target nodeSelector/nodeAffinity or VA label
-		accelerator := utils.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+		accelerator := accelerator.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 		gpuCount := scaleTarget.GetTotalGPUsPerReplica()
 		e.capacityStore.LoadFromScaleTarget(namespace, modelID, va.Name, accelerator, gpuCount, scaleTarget)
 		logger.V(logging.DEBUG).Info("Pre-populated capacity store from scale target",

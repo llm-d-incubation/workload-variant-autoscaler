@@ -60,9 +60,6 @@ func InactiveVariantAutoscalingByModel(ctx context.Context, client client.Client
 	return GroupVariantAutoscalingByModel(vas), nil
 }
 
-// AcceleratorNameLabel is the label key used to specify the accelerator name for a VA.
-const AcceleratorNameLabel = "inference.optimization/acceleratorName"
-
 // GroupVariantAutoscalingByModel groups VariantAutoscalings by model ID and namespace.
 // Variants of the same model on different accelerators are grouped together to enable
 // cost-based optimization (scale up cheaper variants, scale down expensive variants).
@@ -215,7 +212,7 @@ func annotationSourcedVariants(ctx context.Context, k8sClient client.Client) ([]
 		if !annotations.IsManaged(hpa) || !hpa.DeletionTimestamp.IsZero() {
 			continue
 		}
-		va, err := VariantAutoscalingFromHPA(hpa)
+		va, err := annotations.VariantAutoscalingFromHPA(hpa)
 		if err != nil {
 			logger.V(logging.DEBUG).Info("Skipping HPA with invalid WVA annotations",
 				"namespace", hpa.Namespace, "name", hpa.Name, "error", err)
@@ -246,7 +243,7 @@ func annotationSourcedVariants(ctx context.Context, k8sClient client.Client) ([]
 			if !annotations.IsManaged(so) || !so.DeletionTimestamp.IsZero() {
 				continue
 			}
-			va, err := VariantAutoscalingFromScaledObject(so)
+			va, err := annotations.VariantAutoscalingFromScaledObject(so)
 			if err != nil {
 				logger.V(logging.DEBUG).Info("Skipping ScaledObject with invalid WVA annotations",
 					"namespace", so.Namespace, "name", so.Name, "error", err)

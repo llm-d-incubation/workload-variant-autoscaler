@@ -178,8 +178,12 @@ func ServiceMonitorPredicate() predicate.Predicate {
 
 In addition to event-driven reconciliation, the controller performs **periodic reconciliation** of all VariantAutoscaling resources:
 
-- **Default Interval**: 60 seconds
-- **Configurable**: Via `GLOBAL_OPT_INTERVAL` in ConfigMap
+- **Default Interval**: 15 seconds
+- **Configurable**: Via `GLOBAL_OPT_INTERVAL` in ConfigMap. The value needs a
+  duration unit (`"15s"`, not `"15"` — the latter parses as 15 nanoseconds) and
+  must be at least `1s`. A value the controller cannot use is logged and replaced
+  by the 15s default rather than blocking startup. The interval is read once at
+  startup, so changing it requires a controller restart.
 - **Purpose**: Ensures eventual consistency and handles:
   - Metric collection and analysis
   - Optimization decisions

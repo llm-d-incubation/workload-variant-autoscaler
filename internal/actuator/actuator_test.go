@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	ctrlutils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -339,7 +340,7 @@ var _ = Describe("Actuator", func() {
 					Name:      contextResourceName,
 					Namespace: namespace,
 					Labels: map[string]string{
-						ctrlutils.AcceleratorNameLabel: testAcceleratorA100,
+						accelerator.AcceleratorNameLabel: testAcceleratorA100,
 					},
 				},
 				Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{

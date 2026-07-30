@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
@@ -63,6 +64,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturationv1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -372,7 +374,7 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeCacheConfig)
 
 	if err != nil {
-		reason := utils.CategorizePrometheusError(err)
+		reason := prometheus.CategorizePrometheusError(err)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeKVCache, reason)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeCacheConfig, reason)
@@ -924,10 +926,10 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 			key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
 			if scaleTarget, found := scaleTargets[key]; found {
 				// Get accelerator name from Deployment/LWS nodeSelector/nodeAffinity or VA label
-				acceleratorName = utils.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+				acceleratorName = accelerator.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 			} else {
 				// Deployment/LWS not cached, fall back to VA label via nil scale target
-				acceleratorName = utils.GetAcceleratorNameFromScaleTarget(va, nil)
+				acceleratorName = accelerator.GetAcceleratorNameFromScaleTarget(va, nil)
 			}
 		}
 

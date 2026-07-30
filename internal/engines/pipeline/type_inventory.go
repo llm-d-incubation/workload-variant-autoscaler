@@ -8,11 +8,11 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
 // TypeInventory tracks GPU capacity, usage, and availability per accelerator type (H100, A100, etc.).
@@ -135,7 +135,7 @@ func (i *TypeInventory) Refresh(ctx context.Context) error {
 	for _, accelerators := range nodeInventory {
 		for fullModelName, info := range accelerators {
 			// Normalize "NVIDIA-A100-PCIE-80GB" -> "A100"
-			shortName := utils.NormalizeAcceleratorName(fullModelName)
+			shortName := accelerator.NormalizeAcceleratorName(fullModelName)
 			byType[shortName] += info.Count
 			total += info.Count
 		}

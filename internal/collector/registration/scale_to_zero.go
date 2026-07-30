@@ -16,7 +16,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
 )
 
 // Query name constants for scale-to-zero metrics.
@@ -110,7 +110,7 @@ func CollectModelRequestCountForEngine(
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Convert Go duration to Prometheus duration format
-	retentionPeriodStr := utils.FormatPrometheusDuration(retentionPeriod)
+	retentionPeriodStr := prometheus.FormatPrometheusDuration(retentionPeriod)
 
 	params := map[string]string{
 		source.ParamModelID:   modelID,
@@ -130,7 +130,7 @@ func CollectModelRequestCountForEngine(
 	metrics.ObserveMetricsCollectionDuration(duration, constants.QueryTypeRequestCount)
 
 	if err != nil {
-		reason := utils.CategorizePrometheusError(err)
+		reason := prometheus.CategorizePrometheusError(err)
 		metrics.IncMetricsCollectionErrors(constants.QueryTypeRequestCount, reason)
 		logger.V(logging.VERBOSE).Info("Failed to query model request count",
 			"model", modelID,

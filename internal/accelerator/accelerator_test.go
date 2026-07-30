@@ -1,4 +1,4 @@
-package utils
+package accelerator
 
 import (
 	"testing"

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils_test
+package annotations_test
 
 import (
 	"testing"
@@ -25,7 +25,6 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 )
 
 func wvaAnnotations(modelID, cost string) map[string]string {
@@ -58,12 +57,12 @@ func TestVariantAutoscalingFromScaledObject(t *testing.T) {
 		},
 	}
 
-	va, err := utils.VariantAutoscalingFromScaledObject(so)
+	va, err := annotations.VariantAutoscalingFromScaledObject(so)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !utils.IsSynthetic(va) {
+	if !annotations.IsSynthetic(va) {
 		t.Error("expected IsSynthetic to return true")
 	}
 	if va.Name != "my-scaler" {
@@ -100,7 +99,7 @@ func TestVariantAutoscalingFromScaledObject_DefaultKind(t *testing.T) {
 			ScaleTargetRef: &kedav1alpha1.ScaleTarget{Name: "my-deploy"},
 		},
 	}
-	va, err := utils.VariantAutoscalingFromScaledObject(so)
+	va, err := annotations.VariantAutoscalingFromScaledObject(so)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +120,7 @@ func TestVariantAutoscalingFromScaledObject_NoScaleTargetRef(t *testing.T) {
 		},
 		Spec: kedav1alpha1.ScaledObjectSpec{ScaleTargetRef: nil},
 	}
-	if _, err := utils.VariantAutoscalingFromScaledObject(so); err == nil {
+	if _, err := annotations.VariantAutoscalingFromScaledObject(so); err == nil {
 		t.Error("expected error for nil scaleTargetRef")
 	}
 }
@@ -146,12 +145,12 @@ func TestVariantAutoscalingFromHPA(t *testing.T) {
 		},
 	}
 
-	va, err := utils.VariantAutoscalingFromHPA(hpa)
+	va, err := annotations.VariantAutoscalingFromHPA(hpa)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !utils.IsSynthetic(va) {
+	if !annotations.IsSynthetic(va) {
 		t.Error("expected IsSynthetic to return true")
 	}
 	if va.Name != "my-hpa" {
@@ -179,13 +178,13 @@ func TestVariantAutoscalingFromHPA_MissingAnnotations(t *testing.T) {
 			MaxReplicas:    2,
 		},
 	}
-	if _, err := utils.VariantAutoscalingFromHPA(hpa); err == nil {
+	if _, err := annotations.VariantAutoscalingFromHPA(hpa); err == nil {
 		t.Error("expected error for missing managed annotation")
 	}
 }
 
 func TestIsSynthetic_False(t *testing.T) {
-	va, _ := utils.VariantAutoscalingFromHPA(&autoscalingv2.HorizontalPodAutoscaler{
+	va, _ := annotations.VariantAutoscalingFromHPA(&autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "h", Namespace: "ns",
 			Annotations: wvaAnnotations("m", ""),
@@ -195,13 +194,13 @@ func TestIsSynthetic_False(t *testing.T) {
 			MaxReplicas:    1,
 		},
 	})
-	if !utils.IsSynthetic(va) {
+	if !annotations.IsSynthetic(va) {
 		t.Error("synthesized VA must be marked synthetic")
 	}
 
 	// Remove the synthetic annotation to simulate a CRD-sourced VA
 	delete(va.Annotations, annotations.Synthetic)
-	if utils.IsSynthetic(va) {
+	if annotations.IsSynthetic(va) {
 		t.Error("VA without synthetic annotation must not be synthetic")
 	}
 }
@@ -227,7 +226,7 @@ func TestVariantAutoscalingFromScaledObject_ScaleToZero(t *testing.T) {
 			MaxReplicaCount: ptr.To(int32(5)),
 		},
 	}
-	va, err := utils.VariantAutoscalingFromScaledObject(so)
+	va, err := annotations.VariantAutoscalingFromScaledObject(so)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
@@ -51,7 +52,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 						Name:      "va-a100",
 						Namespace: "default",
 						Labels: map[string]string{
-							AcceleratorNameLabel: "A100",
+							accelerator.AcceleratorNameLabel: "A100",
 						},
 					},
 					Spec: wvav1alpha1.VariantAutoscalingSpec{
@@ -63,7 +64,7 @@ func TestGroupVariantAutoscalingByModel(t *testing.T) {
 						Name:      "va-h100",
 						Namespace: "default",
 						Labels: map[string]string{
-							AcceleratorNameLabel: "H100",
+							accelerator.AcceleratorNameLabel: "H100",
 						},
 					},
 					Spec: wvav1alpha1.VariantAutoscalingSpec{
@@ -324,7 +325,7 @@ func TestReadyVariantAutoscalings(t *testing.T) {
 		if result[0].Name != "hpa-ann" || result[0].Spec.ModelID != "model-ann" {
 			t.Errorf("unexpected synthetic variant: name=%q modelID=%q", result[0].Name, result[0].Spec.ModelID)
 		}
-		if !IsSynthetic(&result[0]) {
+		if !annotations.IsSynthetic(&result[0]) {
 			t.Error("want annotation-sourced variant to be marked synthetic")
 		}
 	})
