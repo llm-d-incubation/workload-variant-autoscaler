@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package annotations
 
 import (
 	"fmt"
@@ -24,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	wvav1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
@@ -32,14 +31,14 @@ import (
 // rather than read from a VariantAutoscaling CRD instance.
 // Synthetic VAs exist only in-memory and must never be written to the Kubernetes API server.
 func IsSynthetic(va *wvav1alpha1.VariantAutoscaling) bool {
-	return va.GetAnnotations()[annotations.Synthetic] == "true"
+	return va.GetAnnotations()[Synthetic] == enabledValue
 }
 
 // VariantAutoscalingFromScaledObject builds an in-memory VariantAutoscaling from a KEDA
 // ScaledObject that bears the llm-d.ai/managed: "true" annotation.
 // Returns an error if required annotations are absent or the scaleTargetRef is empty.
 func VariantAutoscalingFromScaledObject(so *kedav1alpha1.ScaledObject) (*wvav1alpha1.VariantAutoscaling, error) {
-	parsed, err := annotations.Parse(so)
+	parsed, err := Parse(so)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +64,7 @@ func VariantAutoscalingFromScaledObject(so *kedav1alpha1.ScaledObject) (*wvav1al
 			Namespace: so.Namespace,
 			Labels:    so.Labels,
 			Annotations: map[string]string{
-				annotations.Synthetic: "true",
+				Synthetic: enabledValue,
 			},
 		},
 		Spec: wvav1alpha1.VariantAutoscalingSpec{
@@ -88,7 +87,7 @@ func VariantAutoscalingFromScaledObject(so *kedav1alpha1.ScaledObject) (*wvav1al
 // that bears the llm-d.ai/managed: "true" annotation.
 // Returns an error if required annotations are absent or the scaleTargetRef is empty.
 func VariantAutoscalingFromHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) (*wvav1alpha1.VariantAutoscaling, error) {
-	parsed, err := annotations.Parse(hpa)
+	parsed, err := Parse(hpa)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func VariantAutoscalingFromHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) (*wva
 			Namespace: hpa.Namespace,
 			Labels:    hpa.Labels,
 			Annotations: map[string]string{
-				annotations.Synthetic: "true",
+				Synthetic: enabledValue,
 			},
 		},
 		Spec: wvav1alpha1.VariantAutoscalingSpec{

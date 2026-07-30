@@ -3,6 +3,7 @@ package utils
 import (
 	"strconv"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
@@ -37,7 +38,7 @@ func BuildAllocationFromMetrics(
 	// nodeSelector (common in homogeneous GPU clusters). The GPU limiter resolves
 	// the sentinel to the real type in homogeneous clusters before it reaches
 	// status or metrics.
-	acc := GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+	acc := accelerator.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
 
 	// Calculate variant cost
 	// VariantCost removed from Status as it is duplicated from Spec (per-replica cost)

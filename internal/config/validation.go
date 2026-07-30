@@ -15,7 +15,10 @@ func Validate(cfg *Config) error {
 		return errors.New("prometheus BaseURL is required")
 	}
 
-	// Optimization interval must be positive
+	// Optimization interval must be positive. Configs built by Load never trip
+	// this: sanitizeOptimizationInterval already replaced anything below
+	// MinOptimizationInterval with the default. This guards a Config assembled
+	// directly in code.
 	interval := cfg.OptimizationInterval()
 	if interval <= 0 {
 		return fmt.Errorf("optimization interval must be positive, got %v", interval)

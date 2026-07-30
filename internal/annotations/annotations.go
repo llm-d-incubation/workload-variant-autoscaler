@@ -47,6 +47,10 @@ const (
 
 	// defaultVariantCost matches the kubebuilder default on VariantAutoscalingConfigSpec.
 	defaultVariantCost = "10.0"
+
+	// enabledValue is the annotation value that turns a boolean WVA annotation
+	// (Managed, Synthetic) on.
+	enabledValue = "true"
 )
 
 // Parsed holds the validated WVA annotation values extracted from a Kubernetes object.
@@ -57,14 +61,14 @@ type Parsed struct {
 
 // IsManaged returns true if obj bears llm-d.ai/managed: "true".
 func IsManaged(obj metav1.Object) bool {
-	return obj.GetAnnotations()[Managed] == "true"
+	return obj.GetAnnotations()[Managed] == enabledValue
 }
 
 // Parse extracts and validates WVA annotations from obj.
 // Returns an error if required annotations are missing or have invalid values.
 func Parse(obj metav1.Object) (*Parsed, error) {
 	ann := obj.GetAnnotations()
-	if ann[Managed] != "true" {
+	if ann[Managed] != enabledValue {
 		return nil, fmt.Errorf("annotation %s must be \"true\"", Managed)
 	}
 	modelID := ann[ModelID]

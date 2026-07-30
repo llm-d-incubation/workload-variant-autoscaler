@@ -41,8 +41,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.EnableLeaderElection() != false {
 		t.Errorf("Expected EnableLeaderElection default false, got %v", cfg.EnableLeaderElection())
 	}
-	if cfg.OptimizationInterval() != 60*time.Second {
-		t.Errorf("Expected OptimizationInterval default 60s, got %v", cfg.OptimizationInterval())
+	if cfg.OptimizationInterval() != DefaultOptimizationInterval {
+		t.Errorf("Expected OptimizationInterval default %v, got %v", DefaultOptimizationInterval, cfg.OptimizationInterval())
 	}
 	if cfg.PrometheusAllowHTTP() {
 		t.Error("Expected PrometheusAllowHTTP default to be false")
@@ -303,9 +303,46 @@ func TestLoad_Validation_OptimizationInterval(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	// Default should be valid (> 0)
-	if cfg.OptimizationInterval() <= 0 {
-		t.Errorf("Expected positive optimization interval, got %v", cfg.OptimizationInterval())
+	// Default should be usable (>= MinOptimizationInterval)
+	if cfg.OptimizationInterval() < MinOptimizationInterval {
+		t.Errorf("Expected optimization interval >= %v, got %v", MinOptimizationInterval, cfg.OptimizationInterval())
+	}
+}
+
+// TestLoad_OptimizationIntervalBounds pins what an unusable GLOBAL_OPT_INTERVAL
+// does: the controller starts on the default rather than failing. The unit-less
+// case is the one worth guarding — viper parses "15" as 15ns, which is positive
+// and would otherwise drive the polling executor into a busy loop.
+func TestLoad_OptimizationIntervalBounds(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        string
+		wantInterval time.Duration
+	}{
+		{name: "unit-less value falls back to the default", value: `"15"`, wantInterval: DefaultOptimizationInterval},
+		{name: "sub-second value falls back to the default", value: `"500ms"`, wantInterval: DefaultOptimizationInterval},
+		{name: "zero falls back to the default", value: `"0s"`, wantInterval: DefaultOptimizationInterval},
+		{name: "unparsable value falls back to the default", value: `"soon"`, wantInterval: DefaultOptimizationInterval},
+		{name: "the minimum is honoured", value: `"1s"`, wantInterval: time.Second},
+		{name: "a normal value is honoured", value: `"60s"`, wantInterval: 60 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = os.Setenv("PROMETHEUS_BASE_URL", "https://prometheus:9090")
+			defer func() { _ = os.Unsetenv("PROMETHEUS_BASE_URL") }()
+
+			configFile := writeTestConfigFile(t, "GLOBAL_OPT_INTERVAL: "+tt.value)
+
+			cfg, err := Load(nil, configFile)
+			if err != nil {
+				t.Fatalf("Load() failed for GLOBAL_OPT_INTERVAL=%s: %v", tt.value, err)
+			}
+			if cfg.OptimizationInterval() != tt.wantInterval {
+				t.Errorf("GLOBAL_OPT_INTERVAL=%s: expected OptimizationInterval %v, got %v",
+					tt.value, tt.wantInterval, cfg.OptimizationInterval())
+			}
+		})
 	}
 }
 
@@ -319,8 +356,8 @@ func TestLoad_NoConfigFile(t *testing.T) {
 	}
 
 	// Should use defaults
-	if cfg.OptimizationInterval() != 60*time.Second {
-		t.Errorf("Expected default OptimizationInterval 60s, got %v", cfg.OptimizationInterval())
+	if cfg.OptimizationInterval() != DefaultOptimizationInterval {
+		t.Errorf("Expected default OptimizationInterval %v, got %v", DefaultOptimizationInterval, cfg.OptimizationInterval())
 	}
 }
 

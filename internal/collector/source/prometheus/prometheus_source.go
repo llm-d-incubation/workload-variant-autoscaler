@@ -17,7 +17,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
+	prometheusutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
 )
 
 // PrometheusSourceConfig contains configuration for the Prometheus source.
@@ -142,7 +142,7 @@ func (p *PrometheusSource) executeQuery(ctx context.Context, queryName string, p
 	}
 
 	// Execute query with backoff
-	val, warnings, err := utils.QueryPrometheusWithBackoff(queryCtx, p.api, queryStr)
+	val, warnings, err := prometheusutil.QueryPrometheusWithBackoff(queryCtx, p.api, queryStr)
 	if err != nil {
 		return &source.MetricResult{
 			QueryName:   queryName,
