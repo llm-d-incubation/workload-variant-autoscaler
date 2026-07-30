@@ -68,6 +68,52 @@ If you see incorrect namespace groupings in per-variant panels (e.g., all varian
 
 Setting `honorLabels: false` is a security best practice that prevents scraped applications from spoofing infrastructure labels. For example, it prevents a pod from claiming to be in a different namespace via its exported metrics.
 
+## Trace-Log Correlation
+
+When OpenTelemetry tracing is enabled, every log line emitted inside an active span carries the IDs of that span, so a log line can be resolved to the exact trace of the reconcile cycle that produced it, and a trace can be resolved back to its logs.
+
+| Field | Description |
+|-------|-------------|
+| `trace_id` | 32-hex-character ID of the trace the log line belongs to. Shared by every span and every log line of one reconcile cycle. |
+| `span_id` | 16-hex-character ID of the innermost active span (for example the `wva.optimize` stage), not the root span. |
+
+The field names follow the OpenTelemetry log data model, which is what Grafana Loki, Tempo, and Jaeger expect by default.
+
+A correlated log line looks like this:
+
+```json
+{"level":"info","ts":"2026-02-11T09:14:22.417Z","logger":"controller","msg":"Optimization completed","variantAutoscaling":"default/vllm-llama-3-8b","desiredReplicas":4,"trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7"}
+```
+
+To jump from a log line to its trace in Grafana, add a derived field to the Loki data source that maps `trace_id` to the Tempo/Jaeger data source:
+
+```yaml
+jsonData:
+  derivedFields:
+    - name: TraceID
+      matcherType: label
+      matcherRegex: trace_id
+      url: '${__value.raw}'
+      datasourceUid: tempo
+```
+
+When tracing is disabled, no span is active, and log output is exactly as it is without this feature: the fields are omitted rather than emitted empty.
+
+### Instrumenting New Code
+
+Start spans through `internal/tracing` rather than calling a tracer directly, so span creation and logger enrichment cannot drift apart:
+
+```go
+ctx, span := tracing.StartSpan(ctx, "wva.optimize")
+defer span.End()
+
+// Every log.FromContext / ctrl.LoggerFrom caller downstream of this ctx,
+// in this function and in everything it calls, is correlated automatically.
+log.FromContext(ctx).Info("Optimization completed")
+```
+
+Log through the context logger (`log.FromContext(ctx)` or `ctrl.LoggerFrom(ctx)`) rather than the package-level `ctrl.Log`; the latter has no context, so its lines cannot be correlated.
+
 ## Troubleshooting
 ### services "kube-prometheus-stack-grafana" not found
   - Make sure to install WVA cluster with `DEPLOY_OPERATIONAL_DASHBOARD=true` (default) as this would install Grafana.
