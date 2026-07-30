@@ -51,7 +51,7 @@ func (r *ScaledObjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, so); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
-			r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
+			r.MetricsEmitter.DeleteReplicaMetrics(ctx, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -59,7 +59,7 @@ func (r *ScaledObjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !so.DeletionTimestamp.IsZero() || !annotations.IsManaged(so) {
 		r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
-		r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
+		r.MetricsEmitter.DeleteReplicaMetrics(ctx, req.Name, req.Namespace)
 	} else {
 		r.Datastore.NamespaceTrack("AnnotatedScaler", req.Name, req.Namespace)
 	}

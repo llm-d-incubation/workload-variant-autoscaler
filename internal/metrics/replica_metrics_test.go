@@ -156,7 +156,6 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 		Expect(InitMetrics(registry)).To(Succeed())
 		emitter = NewMetricsEmitter()
 		ctx = context.Background()
-		_ = ctx // used by EmitReplicaMetrics
 	})
 
 	series := func(name string) []*dto.Metric {
@@ -178,7 +177,7 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 		Expect(series(constants.WVACurrentReplicas)).To(HaveLen(1))
 		Expect(series(constants.WVADesiredRatio)).To(HaveLen(1))
 
-		emitter.DeleteReplicaMetrics("va-x", "ns")
+		emitter.DeleteReplicaMetrics(ctx, "va-x", "ns")
 
 		Expect(series(constants.WVADesiredReplicas)).To(BeEmpty(), "desired_replicas series must be evicted")
 		Expect(series(constants.WVACurrentReplicas)).To(BeEmpty(), "current_replicas series must be evicted")
@@ -195,7 +194,7 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 		replicaSeriesMu.Unlock()
 		Expect(had).To(BeTrue(), "map must contain the entry before deletion")
 
-		emitter.DeleteReplicaMetrics("va-y", "ns")
+		emitter.DeleteReplicaMetrics(ctx, "va-y", "ns")
 
 		replicaSeriesMu.Lock()
 		_, still := replicaSeriesAccel[key]
@@ -209,7 +208,7 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 
 		Expect(series(constants.WVADesiredReplicas)).To(HaveLen(2))
 
-		emitter.DeleteReplicaMetrics("va-del", "ns")
+		emitter.DeleteReplicaMetrics(ctx, "va-del", "ns")
 
 		remaining := series(constants.WVADesiredReplicas)
 		Expect(remaining).To(HaveLen(1), "only the deleted variant's series should be removed")
@@ -219,7 +218,7 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 	It("is a no-op when EmitReplicaMetrics was never called for the variant", func() {
 		// No emit; delete should not panic or affect other series.
 		Expect(emitter.EmitReplicaMetrics(ctx, newReplicaTestVA("other", "ns"), 1, 2, "A100")).To(Succeed())
-		emitter.DeleteReplicaMetrics("never-emitted", "ns")
+		emitter.DeleteReplicaMetrics(ctx, "never-emitted", "ns")
 		Expect(series(constants.WVADesiredReplicas)).To(HaveLen(1), "unrelated series must survive a no-op delete")
 	})
 
@@ -227,7 +226,7 @@ var _ = Describe("DeleteReplicaMetrics", func() {
 		va := newReplicaTestVA("va-unresolved", "ns")
 		Expect(emitter.EmitReplicaMetrics(ctx, va, 1, 2, "")).To(Succeed())
 
-		emitter.DeleteReplicaMetrics("va-unresolved", "ns")
+		emitter.DeleteReplicaMetrics(ctx, "va-unresolved", "ns")
 
 		Expect(series(constants.WVADesiredReplicas)).To(BeEmpty(), "unresolved-accel series must be evicted")
 	})

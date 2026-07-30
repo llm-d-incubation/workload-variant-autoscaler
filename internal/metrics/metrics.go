@@ -579,8 +579,14 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 		return l
 	}
 
-	// Set the current series first so a concurrent scrape never sees a gap.
+	// Update the tracking map and Set the Prometheus series under the same lock
+	// so that a concurrent DeleteReplicaMetrics cannot remove the map entry and
+	// then delete these series between our Set and our map write.
 	baseLabels := labelsFor(acceleratorType)
+	key := replicaSeriesKey(va.Name, va.Namespace)
+	replicaSeriesMu.Lock()
+	prev, had := replicaSeriesAccel[key]
+	replicaSeriesAccel[key] = acceleratorType
 	currentReplicas.With(baseLabels).Set(float64(current))
 	desiredReplicas.With(baseLabels).Set(float64(desired))
 	// Avoid division by 0 if current replicas is zero: set the ratio to the desired replicas.
@@ -590,14 +596,11 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	} else {
 		desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
 	}
-
-	// If the accelerator label changed since the last emit for this VA, evict the
-	// stale prior series (done after Set, so there is no zero-value window).
-	key := replicaSeriesKey(va.Name, va.Namespace)
-	replicaSeriesMu.Lock()
-	prev, had := replicaSeriesAccel[key]
-	replicaSeriesAccel[key] = acceleratorType
 	replicaSeriesMu.Unlock()
+
+	// Evict the stale prior series if the accelerator label changed (done after
+	// Set so there is no zero-value window; safe to do outside the lock because
+	// we already wrote the new accel to the map).
 	if had && prev != acceleratorType {
 		stale := labelsFor(prev)
 		currentReplicas.Delete(stale)
@@ -613,22 +616,24 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 // deleted or de-annotated so that stale series are evicted immediately rather
 // than persisting until a controller restart.
 //
+// The map removal and the Prometheus Delete calls are performed under the same
+// lock so that a concurrent EmitReplicaMetrics cannot interleave its own Set
+// between the two steps and produce a stale re-leaked series.
+//
 // If EmitReplicaMetrics was never called for this variant (no entry in the
 // tracking map), this is a no-op.
-func (m *MetricsEmitter) DeleteReplicaMetrics(variantName, namespace string) {
+func (m *MetricsEmitter) DeleteReplicaMetrics(ctx context.Context, variantName, namespace string) {
 	if currentReplicas == nil || desiredReplicas == nil || desiredRatio == nil {
 		return
 	}
 	key := replicaSeriesKey(variantName, namespace)
 	replicaSeriesMu.Lock()
+	defer replicaSeriesMu.Unlock()
 	accel, had := replicaSeriesAccel[key]
-	if had {
-		delete(replicaSeriesAccel, key)
-	}
-	replicaSeriesMu.Unlock()
 	if !had {
 		return
 	}
+	delete(replicaSeriesAccel, key)
 	labels := prometheus.Labels{
 		constants.LabelVariantName:     variantName,
 		constants.LabelNamespace:       namespace,

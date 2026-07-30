@@ -50,7 +50,7 @@ func (r *HPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if err := r.Get(ctx, req.NamespacedName, hpa); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
-			r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
+			r.MetricsEmitter.DeleteReplicaMetrics(ctx, req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -58,7 +58,7 @@ func (r *HPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	if !hpa.DeletionTimestamp.IsZero() || !annotations.IsManaged(hpa) {
 		r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
-		r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
+		r.MetricsEmitter.DeleteReplicaMetrics(ctx, req.Name, req.Namespace)
 	} else {
 		r.Datastore.NamespaceTrack("AnnotatedScaler", req.Name, req.Namespace)
 	}
