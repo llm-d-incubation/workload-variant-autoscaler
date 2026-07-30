@@ -177,7 +177,8 @@ func main() {
 		}
 		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
 	} else {
-		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
+		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode); " +
+			"support requires a controller restart, which happens automatically if the CRD is installed later")
 	}
 
 	// Detect KEDA for annotation-based ScaledObject discovery
@@ -185,11 +186,27 @@ func main() {
 	if kedaEnabled {
 		setupLog.Info("KEDA ScaledObject CRD detected - annotation-based ScaledObject discovery enabled")
 	} else {
-		setupLog.Info("KEDA ScaledObject CRD not found - annotation-based discovery limited to HPAs")
+		setupLog.Info("KEDA ScaledObject CRD not found - annotation-based discovery limited to HPAs; " +
+			"support requires a controller restart, which happens automatically if the CRD is installed later")
 	}
 	// Gate the pod locator's ScaledObject lookups on KEDA availability. Set before
 	// the saturation engine goroutine constructs its locator.
 	locator.SetKEDAEnabled(kedaEnabled)
+
+	crdTargets := []crd.Target{
+		{
+			CRDName:       "leaderworkersets.leaderworkerset.x-k8s.io",
+			GroupVersion:  "leaderworkerset.x-k8s.io/v1",
+			Kind:          "LeaderWorkerSet",
+			PresentAtBoot: lwsEnabled,
+		},
+		{
+			CRDName:       "scaledobjects.keda.sh",
+			GroupVersion:  "keda.sh/v1alpha1",
+			Kind:          "ScaledObject",
+			PresentAtBoot: kedaEnabled,
+		},
+	}
 
 	tlsOpts := []func(*tls.Config){
 		func(c *tls.Config) {
@@ -611,6 +628,11 @@ func main() {
 		setupLog.Info("Coordinator disabled (experimental feature; set EXPERIMENTAL_COORDINATOR_ENABLED=true to enable)")
 	}
 
+	if err := mgr.Add(crd.NewWatcher(restConfig, crdTargets)); err != nil {
+		setupLog.Error(err, "unable to add CRD watcher to manager")
+		os.Exit(1)
+	}
+
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")
 		if err := mgr.Add(metricsCertWatcher); err != nil {
@@ -662,6 +684,10 @@ func main() {
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		if errors.Is(err, crd.ErrRestartRequired) {
+			setupLog.Info("restarting to enable support for a CRD installed after startup", "reason", err.Error())
+			os.Exit(1)
+		}
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
