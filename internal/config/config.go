@@ -544,6 +544,11 @@ func (c *Config) UpdateSaturationConfigForNamespace(namespace string, config map
 
 // UpdateScaleToZeroConfig updates the global scale-to-zero configuration.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
+// For namespace-local updates, use UpdateScaleToZeroConfigForNamespace instead.
+func (c *Config) UpdateScaleToZeroConfig(config ScaleToZeroConfigData) {
+	c.UpdateScaleToZeroConfigForNamespace("", config)
+}
+
 // LimiterConfig returns the namespace-scoped GPU inventory limiter
 // configuration. It is populated once at startup; the engine constructs the
 // namespace limiter from it during initialization, so changes require a
@@ -560,11 +565,6 @@ func (c *Config) UpdateLimiterConfig(config LimiterConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nsInventory = config
-}
-
-// For namespace-local updates, use UpdateScaleToZeroConfigForNamespace instead.
-func (c *Config) UpdateScaleToZeroConfig(config ScaleToZeroConfigData) {
-	c.UpdateScaleToZeroConfigForNamespace("", config)
 }
 
 // UpdateScaleToZeroConfigForNamespace updates the scale-to-zero configuration for the given namespace.

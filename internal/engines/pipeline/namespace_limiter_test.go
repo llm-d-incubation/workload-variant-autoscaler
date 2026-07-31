@@ -1,19 +1,3 @@
-/*
-Copyright 2025 The llm-d Authors
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package pipeline
 
 import (
@@ -140,6 +124,33 @@ var _ = Describe("NamespaceLimiter", func() {
 
 		// 10 pool - 6 charged to the excluded namespace = 4 left for the tenant.
 		Expect(tenant.TargetReplicas).To(Equal(4))
+		Expect(tenant.WasLimited).To(BeTrue())
+	})
+
+	It("charges an excluded namespace whose accelerator arrives unresolved", func() {
+		// Same overcommit, reached through the unresolved-accelerator path:
+		// accelerator resolution must run for excluded namespaces too, otherwise
+		// the decision stays unresolved, usage accounting drops it, and its GPUs
+		// are never charged against the shared pool.
+		disc := &fakeNodeDiscovery{nodes: map[string]discovery.NodeInfo{
+			"n1": gpuNode("n1", map[string]string{"pool": "shared"}, "NVIDIA-A100-PCIE-80GB", 10),
+		}}
+		l := newLimiter(disc, sets.New("kube-system"), map[string]labels.Selector{
+			DefaultSelectorKey: labels.SelectorFromSet(labels.Set{"pool": "shared"}),
+		})
+
+		excluded := &domain.VariantDecision{
+			VariantName: "kube-system-x", Namespace: "kube-system",
+			AcceleratorName: constants.DefaultAcceleratorName, // unresolved
+			CurrentReplicas: 6, TargetReplicas: 6, GPUsPerReplica: 1,
+		}
+		tenant := scaleUpDecision("ns-a", "A100", 0, 20)
+		Expect(l.Limit(ctx, []*domain.VariantDecision{excluded, tenant})).To(Succeed())
+
+		Expect(excluded.AcceleratorName).To(Equal("A100"),
+			"excluded namespaces are resolved so their usage can be charged")
+		Expect(tenant.TargetReplicas).To(Equal(4),
+			"the excluded namespace's 6 GPUs still debit the shared pool")
 		Expect(tenant.WasLimited).To(BeTrue())
 	})
 

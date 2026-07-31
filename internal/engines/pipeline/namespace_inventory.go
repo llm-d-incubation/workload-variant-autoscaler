@@ -1,25 +1,10 @@
-/*
-Copyright 2025 The llm-d Authors
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package pipeline
 
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -163,13 +148,10 @@ func (i *NamespaceInventory) Refresh(ctx context.Context) error {
 	}
 
 	// Named bucket keys in deterministic order for unambiguous node assignment.
-	namedBuckets := make([]string, 0, len(i.selectors))
-	for bucket := range i.selectors {
-		if bucket != DefaultSelectorKey {
-			namedBuckets = append(namedBuckets, bucket)
-		}
-	}
-	sort.Strings(namedBuckets)
+	namedBuckets := slices.Sorted(maps.Keys(i.selectors))
+	namedBuckets = slices.DeleteFunc(namedBuckets, func(b string) bool {
+		return b == DefaultSelectorKey
+	})
 
 	logger := ctrl.LoggerFrom(ctx)
 	for _, node := range nodes {
@@ -227,12 +209,7 @@ func (i *NamespaceInventory) assignNode(node discovery.NodeInfo, namedBuckets []
 func (i *NamespaceInventory) bucketAcceleratorTypes(bucket string) []string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	byType := i.limitByBucketType[bucket]
-	types := make([]string, 0, len(byType))
-	for t := range byType {
-		types = append(types, t)
-	}
-	return types
+	return slices.Collect(maps.Keys(i.limitByBucketType[bucket]))
 }
 
 // SetUsed satisfies the Inventory interface. NamespaceInventory requires
@@ -246,14 +223,7 @@ func (i *NamespaceInventory) SetUsed(_ map[string]int) {}
 func (i *NamespaceInventory) SetUsedByBucket(usedByBucketType map[string]map[string]int) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.usedByBucketType = make(map[string]map[string]int, len(usedByBucketType))
-	for bucket, byType := range usedByBucketType {
-		cp := make(map[string]int, len(byType))
-		for t, n := range byType {
-			cp[t] = n
-		}
-		i.usedByBucketType[bucket] = cp
-	}
+	i.usedByBucketType = copyNestedIntMap(usedByBucketType)
 }
 
 // CreateAllocator returns a namespaceTypeAllocator that allocates from

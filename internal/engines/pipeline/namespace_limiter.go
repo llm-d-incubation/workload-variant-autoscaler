@@ -1,19 +1,3 @@
-/*
-Copyright 2025 The llm-d Authors
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package pipeline
 
 import (
@@ -97,13 +81,21 @@ func (l *NamespaceLimiter) Limit(ctx context.Context, decisions []*domain.Varian
 // namespace still debit that pool even when the cluster as a whole is
 // heterogeneous; otherwise their usage would go uncounted and a sibling
 // decision could over-allocate.
+//
+// The bucket comes from chargeBucket, not resolve, so excluded namespaces are
+// resolved too. Resolution only needs the pool a namespace draws from, and an
+// excluded namespace still occupies GPUs there: skipping it would leave the
+// accelerator unresolved, calculateUsedByBucket would drop the decision, and
+// chargeBucket would never charge it — letting a shared pool hand out GPUs that
+// are physically occupied. Resolving does not cap the namespace, since the
+// allocator still passes excluded namespaces through.
 func (l *NamespaceLimiter) resolveUnknownAccelerators(decisions []*domain.VariantDecision) {
 	for _, d := range decisions {
 		if constants.IsAcceleratorResolved(d.AcceleratorName) {
 			continue
 		}
-		bucket, excluded, hasPool := l.inventory.resolver.resolve(d.Namespace)
-		if excluded || !hasPool {
+		bucket, ok := l.inventory.resolver.chargeBucket(d.Namespace)
+		if !ok {
 			continue
 		}
 		if types := l.inventory.bucketAcceleratorTypes(bucket); len(types) == 1 {
