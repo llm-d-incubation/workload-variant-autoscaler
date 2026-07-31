@@ -8,16 +8,30 @@ import (
 )
 
 var _ = Describe("shouldCollectClusterInventory", func() {
+	// withLimiters returns a test Config whose global "default" saturation entry
+	// declares the given inline limiters.
+	withLimiters := func(limiters ...config.QuotaLimiterConfig) *config.Config {
+		cfg := config.NewTestConfig()
+		cfg.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+			"default": {Limiters: limiters},
+		})
+		return cfg
+	}
 
-	DescribeTable("limiter type determines whether cluster inventory is collected",
-		func(limiterType config.LimiterType, want bool) {
-			cfg := config.NewTestConfig()
-			config.SetLimiterForTest(cfg, limiterType, "")
-			Expect(shouldCollectClusterInventory(cfg)).To(Equal(want))
-		},
-		Entry("inventory mode allows inventory collection", config.LimiterTypeInventory, true),
-		Entry("quota mode blocks inventory collection", config.LimiterTypeQuota, false),
-		Entry("empty limiter type is treated as non-inventory", config.LimiterType(""), false),
-		Entry("unknown limiter type is treated as non-inventory", config.LimiterType("bogus"), false),
-	)
+	It("collects inventory when no limiters are configured (inventory default)", func() {
+		Expect(shouldCollectClusterInventory(config.NewTestConfig())).To(BeTrue())
+	})
+
+	It("collects inventory when a gpu-inventory limiter is configured", func() {
+		cfg := withLimiters(config.QuotaLimiterConfig{Type: "gpu-inventory"})
+		Expect(shouldCollectClusterInventory(cfg)).To(BeTrue())
+	})
+
+	It("skips inventory collection when an inline quota limiter is configured", func() {
+		cfg := withLimiters(config.QuotaLimiterConfig{
+			Type: "quota", Name: "cluster", Scope: config.QuotaScopeCluster,
+			ClusterQuotas: map[string]int{"H100": 8},
+		})
+		Expect(shouldCollectClusterInventory(cfg)).To(BeFalse())
+	})
 })

@@ -10,7 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/throughput"
 )
+
+// TestThroughputAnalyzerName_MatchesCanonical guards the throughput analyzer
+// name that config.go duplicates as a literal (throughputAnalyzerName) against
+// the canonical throughput.AnalyzerName. The literal is duplicated to keep
+// internal/config from depending on the analyzers layer; this test restores the
+// coupling at test time so a future rename of throughput.AnalyzerName fails here
+// instead of silently making ThroughputAnalyzerEnabled always return false.
+func TestThroughputAnalyzerName_MatchesCanonical(t *testing.T) {
+	if throughputAnalyzerName != throughput.AnalyzerName {
+		t.Fatalf("throughputAnalyzerName = %q, want %q (canonical throughput.AnalyzerName); the duplicated literal has drifted",
+			throughputAnalyzerName, throughput.AnalyzerName)
+	}
+}
 
 // TestConfig_ThreadSafeUpdates tests that concurrent reads and writes to DynamicConfig
 // are thread-safe and don't cause race conditions or data corruption.
@@ -560,4 +574,78 @@ func TestQMAnalyzerConfig_ReturnsCopy(t *testing.T) {
 // Helper function to create bool pointer
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// TestConfig_ThroughputAnalyzerEnabled covers the predicate shared by
+// cmd/main.go's startup registration gate and the ConfigMapReconciler's
+// runtime-divergence check (migrated from cmd/main_test.go when the
+// predicate moved to (*Config).ThroughputAnalyzerEnabled).
+func TestConfig_ThroughputAnalyzerEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		analyzer []AnalyzerScoreConfig
+		want     bool
+	}{
+		{
+			name:     "absent — no saturation config entries",
+			analyzer: nil,
+			want:     false,
+		},
+		{
+			name: "absent — other analyzers present, throughput missing",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: "saturation"},
+			},
+			want: false,
+		},
+		{
+			name: "enabled — explicit Enabled:true",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: throughputAnalyzerName, Enabled: boolPtr(true)},
+			},
+			want: true,
+		},
+		{
+			name: "enabled — present with Enabled nil (defaults true)",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: throughputAnalyzerName},
+			},
+			want: true,
+		},
+		{
+			name: "disabled — explicit Enabled:false",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: throughputAnalyzerName, Enabled: boolPtr(false)},
+			},
+			want: false,
+		},
+		{
+			name: "enabled — matched via Type override, Name differs (EffectiveType, not Name)",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: "my-throughput-analyzer", Type: throughputAnalyzerName},
+			},
+			want: true,
+		},
+		{
+			name: "absent — Name is throughput but Type overrides to something else",
+			analyzer: []AnalyzerScoreConfig{
+				{Name: throughputAnalyzerName, Type: "saturation"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := NewTestConfig()
+			cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{
+				"default": {Analyzers: tt.analyzer},
+			})
+
+			got := cfg.ThroughputAnalyzerEnabled()
+			if got != tt.want {
+				t.Errorf("ThroughputAnalyzerEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

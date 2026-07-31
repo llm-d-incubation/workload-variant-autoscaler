@@ -45,6 +45,13 @@ type AnalyzerInput struct {
 	// roles or variants is each analyzer's choice.
 	// Nil when flow control is disabled or metrics are unavailable.
 	SchedulerQueue *SchedulerQueueMetrics
+
+	// ArrivalRate is the model-level request arrival rate (requests/sec) from the
+	// llm-d inference scheduler, summed across the whole model with no per-pod
+	// labels to reconcile. Zero when the metric is unavailable (EPP absent or no
+	// traffic yet). Any analyzer with a demand model may convert this into its
+	// own unit (e.g. tokens/sec for the throughput analyzer).
+	ArrivalRate float64
 }
 
 // SchedulerQueueMetrics holds model-level queue metrics from the llm-d

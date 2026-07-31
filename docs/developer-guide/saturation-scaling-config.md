@@ -56,6 +56,87 @@ keep the fields that the target analyzer actually reads:
 | `scaleUpThreshold` | — | ✅ | **V2-only** — engine post-step (default 0.85) |
 | `scaleDownBoundary` | — | ✅ | **V2-only** — engine post-step (default 0.70) |
 
+## ScalingPolicy Schema (Phase 1)
+
+Phase 1 of the [ScalingPolicy proposal](https://github.com/llm-d/llm-d-workload-variant-autoscaler/pull/1245)
+extends this ConfigMap — additively, with no CRD, migration, or new install steps —
+with a plugin envelope on each entry. Existing flat entries keep working unchanged;
+adoption is optional per entry.
+
+### Analyzer plugin envelope (`type` / `parameters`)
+
+Each `analyzers:` entry accepts a `type` and a free-form `parameters` map:
+
+```yaml
+analyzers:
+  - type: saturation
+    parameters: { scaleUpThreshold: 0.95 }
+```
+
+- `type` selects the analyzer plugin (`saturation`, `queueing-model`, `throughput`).
+  It falls back to `name` when omitted, so the legacy `- name: saturation` form still
+  works and is treated as `type: saturation`.
+- `parameters` carries plugin configuration. The well-known keys `scaleUpThreshold`,
+  `scaleDownBoundary`, `score`, and `enabled` are equivalent to the corresponding
+  top-level/typed fields (an explicit typed field wins over the same key in
+  `parameters`). Unknown keys are tolerated (forward-compatible); a wrongly-typed
+  known key fails validation and the entry is skipped.
+
+**Opting out to V1 is unchanged:** delete the `analyzers:` section (and don't set
+`analyzerName: saturation`) — see [Analyzer Selection](#analyzer-selection-v1-vs-v2).
+
+### `scaleToZero`
+
+An entry may set scale-to-zero inline:
+
+```yaml
+scaleToZero: { enabled: false }
+```
+
+When present, it **overrides** the separate `wva-model-scale-to-zero-config` ConfigMap
+for that model/namespace. When omitted, that ConfigMap (and the `WVA_SCALE_TO_ZERO`
+env fallback) governs, exactly as before. The retention period is unaffected — it
+always comes from the scale-to-zero ConfigMap.
+
+### `limiters` (cluster-default only, live)
+
+The `default` entry selects the GPU limiter for the scaling pipeline. This is the
+**sole source** — there is no `--limiter-type` flag or quota config file — and it is
+applied **live**: editing the ConfigMap switches the limiter without a controller
+restart (the engine rebuilds it on the next optimization cycle).
+
+A `limiters:` list selects a **single mode**, so declare **one** of these forms:
+
+```yaml
+# (a) physical-capacity limiter (also the default when no limiters: is declared):
+default: |
+  analyzers:
+    - type: saturation
+  limiters:
+    - type: gpu-inventory            # alias: inventory
+
+# (b) operator-declared quota limiter:
+default: |
+  analyzers:
+    - type: saturation
+  limiters:
+    - type: quota                    # inline quota entry — same schema as QuotaLimiterConfig
+      name: cluster-h100
+      scope: cluster
+      quotas: { H100: 32 }
+```
+
+- **Single mode.** If a list contains both a `quota` and a `gpu-inventory` entry, the
+  quota entry wins and the `gpu-inventory` entry is ignored — only one limiter is built.
+  (Composition of physical + quota caps is tracked separately in #1003.)
+- `type: quota` uses the **same schema** as `QuotaLimiterConfig`, so `scope`, `quotas`,
+  `namespaceQuotas`, and `exclude` all apply; multiple quota entries are composed.
+- **Cluster-default only.** The list is read only from the global (system-namespace)
+  `default` entry — a budget-scope setting, like `enableRescale` — so a tenant cannot
+  widen a cap via a per-model or namespace-local entry. A `limiters:` block placed on any
+  other entry parses and validates but is **silently ignored** at runtime.
+- With no `limiters:` block, the physical-inventory limiter is used.
+
 ## Configuration
 
 ### ConfigMap Structure
@@ -693,6 +774,15 @@ The controller validates all configuration entries on load. Invalid entries are 
 3. **KvSpareTrigger:** Must be between 0.0 and 1.0
 4. **QueueSpareTrigger:** Must be ≥ 0
 5. **Consistency:** `kvCacheThreshold` must be ≥ `kvSpareTrigger`
+6. **Priority:** Must be ≥ 0
+7. **V2 thresholds** (when set): `scaleUpThreshold` and `scaleDownBoundary` must be in (0, 1],
+   and `scaleUpThreshold` must be > `scaleDownBoundary`. Per-analyzer overrides are range-checked too.
+8. **Limiters:** each `type` must be `gpu-inventory`/`inventory` or `quota`; a `gpu-inventory` entry
+   must carry no quota fields; `quota` entries are validated end-to-end against the `QuotaLimiterConfig`
+   schema (name uniqueness, scope, per-type ranges).
+
+> Analyzer `type`/`name` values are **not** restricted to a fixed set — an unrecognized analyzer is
+> simply ignored at runtime, so externally-registered analyzers and newer built-ins do not fail validation.
 
 ### Example Validation Errors
 
@@ -935,29 +1025,44 @@ type SaturationScalingConfig struct {
     KvSpareTrigger       float64               `yaml:"kvSpareTrigger"`
     QueueSpareTrigger    float64               `yaml:"queueSpareTrigger"`
     EnableLimiter        bool                  `yaml:"enableLimiter,omitempty"`
+    EnableRescale        bool                  `yaml:"enableRescale,omitempty"`
     AnalyzerName         string                `yaml:"analyzerName,omitempty"`
     ScaleUpThreshold     float64               `yaml:"scaleUpThreshold,omitempty"`   // default 0.85
     ScaleDownBoundary    float64               `yaml:"scaleDownBoundary,omitempty"`  // default 0.70
     Priority             float64               `yaml:"priority,omitempty"`           // default 1.0
     Analyzers            []AnalyzerScoreConfig `yaml:"analyzers,omitempty"`
+    ScaleToZero          *ScaleToZeroEnvelope  `yaml:"scaleToZero,omitempty"`        // Phase 1: inline scale-to-zero
+    Limiters             []QuotaLimiterConfig  `yaml:"limiters,omitempty"`           // Phase 1: cluster-default-only GPU limiters
 }
 
 // AnalyzerScoreConfig configures one analyzer in the multi-analyzer pipeline.
-// On this branch, only `Name` is consumed (it must match a RegisterAnalyzer
-// call); `Enabled`, `Score`, and the per-analyzer threshold overrides are
-// reserved for follow-up PRs.
+// Type/Parameters implement the Phase 1 plugin envelope; well-known parameter
+// keys are folded into the typed fields by Normalize(). Type falls back to Name.
 type AnalyzerScoreConfig struct {
-    Name              string   `yaml:"name"`
-    Enabled           *bool    `yaml:"enabled,omitempty"`           // default true
-    Score             float64  `yaml:"score,omitempty"`             // default 1.0
-    ScaleUpThreshold  *float64 `yaml:"scaleUpThreshold,omitempty"`  // overrides global (saturation only today)
-    ScaleDownBoundary *float64 `yaml:"scaleDownBoundary,omitempty"` // overrides global (saturation only today)
+    Type              string         `yaml:"type,omitempty"`              // plugin type; falls back to Name
+    Name              string         `yaml:"name"`
+    Enabled           *bool          `yaml:"enabled,omitempty"`           // default true
+    Score             float64        `yaml:"score,omitempty"`             // default 1.0
+    ScaleUpThreshold  *float64       `yaml:"scaleUpThreshold,omitempty"`  // overrides global (saturation only today)
+    ScaleDownBoundary *float64       `yaml:"scaleDownBoundary,omitempty"` // overrides global (saturation only today)
+    Parameters        map[string]any `yaml:"parameters,omitempty"`        // plugin params; folded by Normalize
+}
+
+// ScaleToZeroEnvelope is the inline scale-to-zero setting on an entry.
+type ScaleToZeroEnvelope struct {
+    Enabled *bool `yaml:"enabled,omitempty"` // nil = inherit from the scale-to-zero ConfigMap
 }
 ```
 
+`Limiters` reuses `QuotaLimiterConfig` (`internal/config/quota_limiter.go`); a
+`gpu-inventory` entry carries no quota fields, a `quota` entry uses the full quota
+schema. See [ScalingPolicy Schema (Phase 1)](#scalingpolicy-schema-phase-1).
+
 **Methods:**
+- `Normalize() error` - Folds each analyzer's `parameters` into the typed fields; call at parse time before `ApplyDefaults()`/`Validate()`
 - `ApplyDefaults()` - Fills in zero-valued V2 fields with their defaults and seeds the `Analyzers` list when empty (V1 fields have no hardcoded defaults)
-- `Validate() error` - Validates configuration values (thresholds in range, consistency checks, per-analyzer overrides)
+- `Validate() error` - Validates configuration values (thresholds in range, consistency checks, per-analyzer overrides, analyzer/limiter types)
+- `EffectiveType()` (on `AnalyzerScoreConfig`) - Returns `Type`, or `Name` when `Type` is empty
 
 ## Architecture Notes
 

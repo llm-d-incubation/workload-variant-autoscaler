@@ -29,6 +29,17 @@ operating point, and scales before demand exceeds that supply.
 > `effectiveEnabled` gate (see the [multi-analyzer pipeline guide](multi-analyzer-pipeline.md))
 > governs whether an already-registered analyzer participates in a given cycle, and is
 > independent of this startup-time registration gate.
+>
+> **Editing the ConfigMap without restarting is surfaced, not silent.** When the
+> `ConfigMapReconciler` processes an edit to the **global** `wva-saturation-scaling-config`
+> ConfigMap and the live throughput-analyzer enablement now differs from the registration
+> decision frozen at startup, it emits a Kubernetes Warning event on the ConfigMap (reason
+> `ThroughputAnalyzerRestartRequired`, visible via `kubectl describe configmap
+> wva-saturation-scaling-config -n <system-namespace>`) and logs a message telling the operator
+> to restart `wva-controller-manager` to apply the change. This fires in both directions —
+> enabling or disabling `throughput` at runtime. **Namespace-local saturation ConfigMaps are not
+> covered**: startup registration reads only the global config, so a namespace-local edit can
+> never diverge from it and this check does not run for that path.
 
 ## Table of Contents
 
@@ -199,6 +210,16 @@ namespaced, and model-scoped — correctly isolating traffic to a specific varia
 per-replica λ_dec in the analyzer rather than using a model-level query, which avoids the
 namespace filtering limitation of the scheduler metric.
 
+**Note on metric freshness:** the collector derives each replica's
+`ReplicaMetricsMetadata.Age`/`FreshnessStatus` from the same scrape timestamps used for the
+aggregate `wva_metrics_freshness_status` gauge — the least-fresh status across a pod's *present*
+metrics, and the age of the oldest one. Metrics that are absent by design (e.g. the EPP arrival
+rate when no EPP is deployed, or the prefix-cache metrics when prefix caching is off) leave a zero
+timestamp and are skipped rather than reported as `missing`, so a healthy replica is not
+mislabelled and a genuinely stale metric is not masked. `CheckModelMetrics` (`sanity.go`) flags a
+replica as `SanityIssueStaleMetrics` when `FreshnessStatus == "stale"`. This is currently detection
+only: the stale-metrics sanity issue is reported but not currently used to gate a scaling decision.
+
 ---
 
 ### Query Design Decisions
@@ -368,7 +389,7 @@ On leader failover the incoming leader starts with an empty analyzer. During war
 │    demand: EPP primary → engine fallback → k*-local      │
 │                                                          │
 │  model-level:                                            │
-│    + queue demand from QueueSize / (factor×ITL)          │
+│    demand: ArrivalRate×avgOL + queue demand              │
 │    TotalSupply, TotalDemand, TotalAnticipatedSupply       │
 │    RequiredCapacity = 0, SpareCapacity = 0 (engine fills) │
 └──────┬───────────────────────────────────────────────────┘
@@ -399,8 +420,10 @@ utilization k. It is calibrated independently per variant (different hardware �
 
 When `ObservationWindow.Ready()` is true (≥ 10 samples spanning ≥ 30% of the k range),
 `FitITLModel` fits A and B by ordinary least squares, minimizing `Σ(ITL_i − A·k_i − B)²`.
-The fit is accepted only when A > 0 (physically required: more concurrent requests → higher
-latency). On success, the fitted model is used for both supply and demand estimation this cycle.
+The fit is accepted only when the resulting `(A, B)` passes `validITLModel` — finite, a
+meaningfully positive slope, and positive ITL at saturation (physically required: more
+concurrent requests → higher latency). On success, the fitted model is used for both supply
+and demand estimation this cycle.
 
 ### Tier 2 — Constrained OLS
 
@@ -412,8 +435,9 @@ A = Σ((ITL_i − B) · k_i) / Σ(k_i²)
 
 This is least-squares with B fixed, applied to all replicas with k* > 0. For a single replica
 it reduces to the single-point formula `A = (ITL − B) / k*`. For multiple replicas it is
-strictly better — same OLS criterion as tier-1 but with one fewer degree of freedom.
-Accepted only when A > 0.
+strictly better — same OLS criterion as tier-1 but with one fewer degree of freedom. The
+resulting `(A, B)` is accepted through the same `validITLModel` predicate as Tier 1, so Tier 2
+cannot accept a model Tier 1 would reject.
 
 **B selection:** B is taken from `variantState.lastFittedB` when a prior successful Tier-1 fit
 exists for this variant. B reflects hardware/model characteristics (not workload shape), so it
@@ -448,57 +472,93 @@ per-analyzer constant pending alignment with the EPP system-wide k_sat (see open
 
 ## Demand Estimation
 
-### Priority Chain
+### Model-Level Decode Demand
 
-Demand is resolved in priority order per variant. The cascade falls through to the next
-source whenever the current source yields zero.
+TA's decode demand is a **model-level** quantity, not a sum of per-variant
+contributions:
 
-**1. EPP primary**  
-When any replica has `ArrivalRate > 0`:
 ```
-λ_dec = Σ ArrivalRate_r × AvgOutputTokens_r
+avgOL               = Σ_v (nKV_v × shape_v.AvgOutputTokens) / Σ_v nKV_v
+                      over non-prefill variants v (tracked WorkloadShape,
+                      weighted by each variant's replica count — see below)
+arrivalDecodeDemand = AnalyzerInput.ArrivalRate × avgOL
 ```
-Each replica contributes its own arrival rate × output length. This avoids averaging-the-averages
-when replicas have different throughput.
 
-If EPP is present but all `AvgOutputTokens == 0` (warm-up: scheduler is dispatching
-requests but no generation tokens have completed yet), this path yields zero and the
-cascade falls through. `isEPP` remains true so the engine is aware EPP is deployed.
+`AnalyzerInput.ArrivalRate` is collected from a single model-level
+`sum by (namespace) (rate(inference_extension_scheduler_attempts_total{...}))` query with no
+`pod`/`port`/`instance` labels — unlike the per-pod `ReplicaMetrics.ArrivalRate`
+(`QuerySchedulerDispatchRate`), it cannot partially mis-attribute: it either matches the model
+filter (correct) or returns zero (filter/EPP absent). No witness metric is needed.
 
-**2. Engine-rate fallback**  
-When EPP is absent **or** EPP is present but yielded zero (warm-up), and `RequestRate > 0`:
-```
-λ_dec = Σ RequestRate_r × AvgOutputTokens_r
-```
-Same structure as primary but using the engine-side completion rate. The engine rate counts
-only served (completed) requests and undercounts arriving demand under load.
+`ReplicaMetrics.ArrivalRate` (per-pod) is **retained** — `queueingmodel` and
+`internal/utils/allocation` still depend on it — but no longer drives TA's `TotalDemand`. The
+per-instance EPP↔vLLM key merge that previously fed it into TA's demand (and could orphan and
+drop it when ports differed) is no longer on TA's critical path.
 
-**3. k\*-based local** (scale-up only)  
-When EPP and the engine rate both yield zero (EPP absent or warm-up; engine rate also zero), demand
-is derived from the current KV utilization:
-```
-λ_local = Σ_r  k_r* × KV_max_r / KVreq / ITL(k_r*)
-```
-Each replica's in-flight request count `N_r = k_r* × KV_max / KVreq` is divided by `ITL(k_r*)`
-to approximate its current throughput. This path is scale-up only (no EPP → demand may be
-underestimated; TA publishes the raw `TotalDemand` and the engine post-step determines SC).
+### Warm-Up Safety and Weighting
+
+`avgOL` is computed from each variant's **tracked** `WorkloadShape.AvgOutputTokens`
+(`state.shapeTracker.Current()`), never a fresh average over the current cycle's live
+`ReplicaMetrics`. This matters during EPP warm-up: a replica can report `ArrivalRate > 0` (EPP
+dispatching) but `AvgOutputTokens == 0` this cycle (no completions yet). Averaging live data
+would zero `avgOL` and, with it, `TotalDemand` — reintroducing the exact spurious-scale-down bug
+that the per-variant EPP-warm-up fix (`computeDemand` falling through to `computeLocalDemand`
+when `AvgOutputTokens == 0`, see below) was written to prevent. The tracked shape is robust to
+a single zero-OL cycle.
+
+Combining each variant's tracked OL into one model-level `avgOL` must be **weighted by replica
+count** (`nKV`), not an unweighted mean-of-variant-means — otherwise a variant with one replica
+and a variant with ten replicas would contribute equally to `avgOL`, diverging from the true
+per-replica/request-weighted model-level average whenever non-prefill variants have different OL
+profiles and/or different replica counts. With a single non-prefill variant the distinction is
+invisible; it only matters with 2+ (e.g. canary/blue-green, multiple GPU tiers).
+
+### Per-Variant Demand (Introspection Only)
+
+Each variant still resolves its own demand via the same three-tier priority chain as before —
+the cascade falls through to the next source whenever the current source yields zero — but the
+result now only populates `VariantCapacity.TotalDemand` / `Utilization` (surfaced via
+`VariantState()`); it no longer feeds model-level `TotalDemand`.
+
+**1. EPP primary** — when any replica has `ArrivalRate > 0`:
+`λ_dec = Σ ArrivalRate_r × AvgOutputTokens_r`. If EPP is present but all `AvgOutputTokens == 0`
+(warm-up), this yields zero and the cascade falls through; `isEPP` still reflects EPP presence.
+
+**2. Engine-rate fallback** — when EPP is absent or yielded zero, and `RequestRate > 0`:
+`λ_dec = Σ RequestRate_r × AvgOutputTokens_r`. Counts only served (completed) requests.
+
+**3. k\*-based local** (scale-up only) — when both above yield zero:
+`λ_local = Σ_r k_r* × KV_max_r / KVreq / ITL(k_r*)`. A replica is skipped from the sum (rather
+than counted as zero) when its `KvUsageInstant` or the model's `ITLAt(KvUsageInstant)` is
+missing, non-positive, or NaN, or when `KvUsageInstant` is out of the valid `[0, 1]` range — so a
+single bad metric cannot poison the total.
+
+**Deferred:** with demand model-level, `AnalyzerInput.ArrivalRate` is the sole driver of
+`TotalDemand`'s arrival component. When EPP is absent model-wide, `ArrivalRate` is legitimately
+0 (no signal — not "zero traffic"), and unlike before this cascade's k\*-local fallback no
+longer backfills model-level `TotalDemand` in that case; it remains per-variant only. This is a
+deliberate simplification, not a bug — revisit when `k_knee` (an arrival-driven
+operating knee) is implemented.
 
 ### Scheduler Queue Demand
 
-After all per-variant contributions are summed, scheduler queue demand is added to model-level
-`totalDemand` (non-prefill roles only):
+The scheduler queue term is combined **alongside** the arrival decode term at model level —
+not folded into it, not double-counted:
 
 ```
 avgDecodeITLSat  = mean(ITL(k_sat)) over decode/both variants
 queueDemand      = QueueSize / (DefaultQueueDrainFactor × avgDecodeITLSat)
+TotalDemand      = arrivalDecodeDemand + queueDemand
 ```
 
 `DefaultQueueDrainFactor = 2.0` bounds per-request queueing time to
 ≤ 2 × ITL(k_sat) × avgOL. The output-length factor cancels in the derivation, so the result
 is independent of OL.
 
-Queue demand appears in model-level `TotalDemand` but is **not attributed to any specific
-variant** — `Σ VariantCapacity.TotalDemand ≤ result.TotalDemand` when a queue is present.
+Both `arrivalDecodeDemand` and `queueDemand` are split across active non-prefill roles by the
+same helper (`distributeDemandByRole`) and folded into `RoleCapacities[*].TotalDemand` — see
+Role-Aware Aggregation. Neither is attributed back to individual variants:
+`Σ VariantCapacity.TotalDemand` no longer sums to `result.TotalDemand`; the per-role sum does.
 
 **Note:** `SchedulerQueueMetrics` is passed via `AnalyzerInput.SchedulerQueue`. The TA handles
 nil correctly (queue demand = 0 when absent). The engine currently always passes nil due to a
@@ -517,9 +577,11 @@ TotalSupply            = aggregation.SumTotalSupply(VariantCapacities)
                        = Σ_v ReplicaCount_v × PerReplicaCapacity_v
 TotalAnticipatedSupply = aggregation.SumTotalAnticipatedSupply(VariantCapacities)
                        = Σ_v (ReplicaCount_v + PendingReplicas_v) × PerReplicaCapacity_v
-TotalDemand            = aggregation.SumTotalDemand(VariantCapacities)
+TotalDemand            = (AnalyzerInput.ArrivalRate × avgOL)
                        + QueueSize / (DefaultQueueDrainFactor × ITL(k_sat))
 ```
+`TotalDemand` no longer derives from `aggregation.SumTotalDemand(VariantCapacities)` — see
+Demand Estimation above.
 
 `PendingReplicas` (booting replicas not yet in service) are included in anticipated supply
 to suppress redundant scale-up requests while pods are starting.
@@ -594,12 +656,16 @@ use the same decode-rate framework.
 
 - TA publishes `TotalSupply`, `TotalAnticipatedSupply`, and `TotalDemand` per role.
   `RequiredCapacity` and `SpareCapacity` are left zero — the engine post-step fills them.
-- **Prefill role:** `TotalDemand` is negligible after the OL guard in `computeLocalDemand`
-  (EPP and vLLM demand multiply by `AvgOutputTokens ≈ 0` for prefill pods; k*-based local demand
-  is also gated on `AvgOutputTokens > DefaultMinDecodeOLForLocalDemand`). The engine post-step
-  therefore produces RC ≈ 0 for the prefill role naturally.
-- **Queue demand attribution:** queue demand is decode-rate-denominated and split evenly across
-  active non-prefill roles (`distributeQueueDemandByRole`).
+- **Prefill role:** `RoleCapacities["prefill"].TotalDemand` is 0 by construction —
+  `distributeDemandByRole` excludes the prefill role from both the model-level arrival decode
+  term and the queue term (both decode-rate-denominated), so neither contributes a prefill
+  share. (Per-variant `VariantCapacity.TotalDemand` for a prefill variant is separately
+  negligible via the OL guard in `computeLocalDemand`, but that value no longer feeds
+  `RoleCapacities` — see Demand Estimation.) The engine post-step therefore produces RC ≈ 0 for
+  the prefill role naturally.
+- **Demand attribution:** both the model-level arrival decode term and the scheduler queue term
+  are decode-rate-denominated and split evenly across active non-prefill roles by the same
+  helper (`distributeDemandByRole`).
 - `RoleCapacities` is nil when all variants have role `""` or `"both"` (non-disaggregated model).
 
 ## Constants and Tuning

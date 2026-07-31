@@ -1,5 +1,7 @@
 package saturation_v2
 
+import "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
+
 // learnedFromLive indicates a capacity record was derived from live metrics.
 const learnedFromLive = "live"
 
@@ -23,7 +25,10 @@ var k2Labels = map[k2Source]string{
 
 const (
 	satReasonP0Store = "P0-store" // capacity from store or compatible-variant record; no live replicas
-	satReasonNoData  = "no-data"  // no live replicas and no store record
+	// satReasonNoData marks a variant with no live replicas and no store record.
+	// It aliases the shared pipeline sentinel so this producer and the engine's
+	// liveness gate (pipeline.ResultIsInformative) cannot drift apart.
+	satReasonNoData = pipeline.ReasonNoData
 )
 
 // ReplicaCapacity holds the per-replica capacity breakdown computed by

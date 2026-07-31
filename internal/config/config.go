@@ -25,7 +25,6 @@ type Config struct {
 	qmAnalyzer  qmAnalyzerConfig  // namespace-aware
 	scaleToZero scaleToZeroConfig // namespace-aware
 	coordinator coordinatorConfig
-	limiter     limiterConfig // startup-only: selects inventory vs quota
 }
 
 // coordinatorConfig holds Coordinator loop configuration. Plugin
@@ -53,24 +52,6 @@ const (
 	// a CompositeLimiter that applies them sequentially.
 	LimiterTypeQuota LimiterType = "quota"
 )
-
-// limiterConfig holds the operator-chosen GPU limiter selection and any
-// supporting configuration loaded at startup. Set once during config.Load
-// and read by main.go / the engine factory — there is no live-reload path.
-type limiterConfig struct {
-	// limiterType is one of LimiterTypeInventory (default) or
-	// LimiterTypeQuota. Selects which pipeline.Limiter implementation
-	// NewLimiterFromConfig builds.
-	limiterType LimiterType
-	// quotaConfigFile is the path to the YAML file containing
-	// QuotaLimiterEntries. Required when limiterType == LimiterTypeQuota;
-	// ignored otherwise.
-	quotaConfigFile string
-	// quotaEntries is the parsed and validated quota config. Populated only
-	// when limiterType == LimiterTypeQuota and quotaConfigFile loads
-	// successfully.
-	quotaEntries []QuotaLimiterConfig
-}
 
 // configSyncState tracks configuration sync state used for startup/readiness checks.
 type configSyncState struct {
@@ -351,6 +332,35 @@ func (c *Config) LimitedModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.features.limitedModeEnabled
+}
+
+// throughputAnalyzerName is the analyzer name used by the throughput
+// analyzer's saturation-config entry. Duplicated as a literal (rather than
+// importing internal/engines/analyzers/throughput.AnalyzerName) because
+// internal/config is a lower layer than the analyzers package.
+const throughputAnalyzerName = "throughput"
+
+// ThroughputAnalyzerEnabled reports whether any saturation config entry lists
+// the throughput analyzer with Enabled nil-or-true. Startup-time gate: when
+// no entry enables throughput anywhere, the analyzer is never registered, so
+// it cannot participate in scaling decisions and cannot veto scale-down.
+//
+// This is independent of the per-cycle effectiveEnabled opt-in check in the
+// saturation engine, which governs participation per namespace/model once
+// the analyzer is registered. Runtime enablement after controller start
+// requires a restart because RegisterAnalyzer is frozen after
+// StartOptimizeLoop (cmd/main.go); the ConfigMapReconciler uses this method
+// to detect that kind of live-config divergence from the frozen decision.
+// Thread-safe (SaturationConfig acquires its own lock).
+func (c *Config) ThroughputAnalyzerEnabled() bool {
+	for _, sc := range c.SaturationConfig() {
+		for _, aw := range sc.Analyzers {
+			if aw.EffectiveType() == throughputAnalyzerName && (aw.Enabled == nil || *aw.Enabled) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ScaleFromZeroMaxConcurrency returns the scale-from-zero max concurrency.
@@ -769,29 +779,15 @@ func (c *Config) setPrometheusBaseURLForTesting(baseURL string) {
 	c.prometheus.baseURL = baseURL
 }
 
-// SetLimiterForTest sets the limiter selection on a test Config. Used by the
-// pipeline and saturation packages' tests to drive NewLimiterFromConfig /
-// the inventory gate without going through the full Viper loader. It is
-// exported (rather than living in export_test.go) because those callers are in
-// other packages and cannot see config's test-only symbols. Not for production
-// use.
-func SetLimiterForTest(c *Config, limiterType LimiterType, quotaConfigFile string) {
+// SetOptimizationIntervalForTest overrides the optimization interval on a test
+// Config, including to a non-positive value — Load() always sanitizes it to at
+// least MinOptimizationInterval, so this is the only way to exercise a caller's
+// handling of a Config that (however it got there) reports a non-positive
+// interval. Not for production use.
+func SetOptimizationIntervalForTest(c *Config, interval time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.limiter.limiterType = limiterType
-	c.limiter.quotaConfigFile = quotaConfigFile
-	c.limiter.quotaEntries = nil
-}
-
-// ReloadQuotaForTest re-runs the quota config file loader against the path
-// already stored on the Config, populating quotaEntries. Used by cross-package
-// tests that build a quota YAML in a temp dir and want the parsed entries
-// available to NewLimiterFromConfig. Exported for the same reason as
-// SetLimiterForTest. Not for production use.
-func ReloadQuotaForTest(c *Config) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return loadQuotaLimiterEntries(&c.limiter)
+	c.infrastructure.optimizationInterval = interval
 }
 
 // --- Bootstrap State Management ---
@@ -836,39 +832,37 @@ func (c *Config) MarkConfigMapsBootstrapFailed(err error) {
 	c.configSync.lastConfigMapsSyncError = ""
 }
 
-// LimiterMode returns the operator-selected GPU limiter implementation
-// (LimiterTypeInventory by default, or LimiterTypeQuota). Set at startup
-// via the --limiter-type flag / LIMITER_TYPE env var.
+// EffectiveLimiterMode returns the GPU limiter implementation to construct. The
+// limiters: list on the global saturation "default" entry is the sole source: a
+// quota entry selects LimiterTypeQuota, otherwise a gpu-inventory/inventory entry
+// selects LimiterTypeInventory. With no limiters: declared, the default is
+// LimiterTypeInventory. Because it reads the live saturation config, the value
+// changes without a restart when the ConfigMap changes.
 // Thread-safe.
-func (c *Config) LimiterMode() LimiterType {
+func (c *Config) EffectiveLimiterMode() LimiterType {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.limiter.limiterType
+	for _, l := range c.saturation.global["default"].Limiters {
+		if l.Type == string(LimiterTypeQuota) {
+			return LimiterTypeQuota
+		}
+	}
+	return LimiterTypeInventory
 }
 
-// QuotaConfigFile returns the path to the YAML file containing
-// QuotaLimiterEntries. Empty unless --limiter-type=quota was selected.
+// EffectiveQuotaEntries returns the quota entries the quota limiter should
+// enforce, taken from the inline quota entries on the global saturation "default"
+// entry (each deep-copied). Empty when none are declared. Reads the live config,
+// so changes take effect without a restart.
 // Thread-safe.
-func (c *Config) QuotaConfigFile() string {
+func (c *Config) EffectiveQuotaEntries() []QuotaLimiterConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.limiter.quotaConfigFile
-}
-
-// QuotaEntries returns a deep copy of the parsed quota limiter entries.
-// Empty when --limiter-type != "quota". Each returned entry's ClusterQuotas /
-// NamespaceQuotas maps and Exclude slice are cloned, so callers may read or
-// mutate the result freely without affecting the config-owned snapshot.
-// Thread-safe.
-func (c *Config) QuotaEntries() []QuotaLimiterConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if len(c.limiter.quotaEntries) == 0 {
-		return nil
+	var inline []QuotaLimiterConfig
+	for _, l := range c.saturation.global["default"].Limiters {
+		if l.Type == string(LimiterTypeQuota) {
+			inline = append(inline, l.clone())
+		}
 	}
-	out := make([]QuotaLimiterConfig, len(c.limiter.quotaEntries))
-	for i, e := range c.limiter.quotaEntries {
-		out[i] = e.clone()
-	}
-	return out
+	return inline
 }

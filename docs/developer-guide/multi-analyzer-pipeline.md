@@ -67,8 +67,8 @@ over it via shared free functions in `internal/engines/pipeline/`.
 │       pick(role) → variant; joint Δ_util commit          │
 │       applyAllocation → decrement Remaining              │
 │   • Scale-down: scaleDownRoleIterated                    │
-│       needsScaleDownForRole → veto gate (ALL must agree) │
-│       safeRemovalReplicasForRole → min across analyzers  │
+│       needsScaleDownForRole → veto gate (ALL live agree) │
+│       safeRemovalReplicasForRole → min across live       │
 │       applyDeallocationForRole → decrement RoleSpare     │
 └──────────────────────────┬───────────────────────────────┘
                            │
@@ -84,7 +84,7 @@ over it via shared free functions in `internal/engines/pipeline/`.
 | **`VariantCapacity`** | Per-variant primitives: `ReplicaCount`, `PendingReplicas`, `PerReplicaCapacity` (analyzer-specific units), `Cost`, `AcceleratorName`, `Role`, `TotalDemand`. |
 | **`AnalyzerResult`** | Per-(model, analyzer) output: `VariantCapacities[]`, model-level `Total*`, `RoleCapacities[role]` (P/D only), `RequiredCapacity` / `SpareCapacity` (engine-written by post-step; analyzers must not populate these). |
 | **`RoleCapacity`** | Per-role aggregate within an `AnalyzerResult`: `TotalSupply`, `TotalDemand`, `TotalAnticipatedSupply`, `RequiredCapacity` / `SpareCapacity` (engine-written). Used for P/D disaggregated models only. |
-| **`NamedAnalyzerResult`** | Optimizer-side wrapper: `{Name, Result, Score, Remaining, Spare, RoleSpare}`. Working `Remaining`/`Spare`/`RoleSpare` are decremented by helpers during allocation; `Result` is never mutated. |
+| **`NamedAnalyzerResult`** | Optimizer-side wrapper: `{Name, Result, Score, Remaining, Spare, RoleSpare, Live}`. Working `Remaining`/`Spare`/`RoleSpare` are decremented by helpers during allocation; `Result` is never mutated. `Live` is set by the engine each cycle and gates scale-down participation (see "How results combine"). |
 | **Linearity invariant** | Adding *n* replicas of variant *v* reduces analyzer *i*'s working `Remaining` by exactly *n × PRC_i[v]*. Holds at model scope (non-disaggregated) and at role scope (disaggregated). |
 
 ### Responsibility table
@@ -96,6 +96,7 @@ over it via shared free functions in `internal/engines/pipeline/`.
 | Per-role `RoleCapacities[role].Total*` | Analyzer (via aggregation helpers) | Engine post-step |
 | `RequiredCapacity`, `SpareCapacity` (model + role scope) | **Engine post-step only** — analyzer-written values are overwritten | Optimizer |
 | `NamedAnalyzerResult.Remaining`, `Spare`, `RoleSpare` | Optimizer helpers (`applyAllocation`, `applyDeallocationForRole`) | Optimizer allocation loop |
+| `NamedAnalyzerResult.Live` | Engine (`runAnalyzersAndScore`, each cycle) | Scale-down veto gate (`needsScaleDownForRole`, `safeRemovalReplicasForRole`) |
 
 ---
 
@@ -189,6 +190,7 @@ Key `AnalyzerInput` fields:
 | `VariantStates` | `[]VariantReplicaState` | Current/desired/pending replica counts per variant |
 | `Config` | `AnalyzerConfig` | Resolved config (cast to your config type as needed) |
 | `SchedulerQueue` | `*SchedulerQueueMetrics` | Scheduler queue metrics; nil when flow control is off |
+| `ArrivalRate` | float64 | Model-level request arrival rate (req/s), no per-pod labels; zero when EPP absent or no traffic yet |
 
 ### Output invariants
 
@@ -240,12 +242,90 @@ analyzer-written values are discarded.
 
 ## How results combine
 
-**Scale-down gate** (`needsScaleDownForRole`): ALL non-disabled analyzers in
-the slice must have `Spare > 0` for a role to scale down. One analyzer with
+**Scale-down gate** (`needsScaleDownForRole`): ALL **live** analyzers in the
+slice must have `Spare > 0` for a role to scale down. One live analyzer with
 `RequiredCapacity > 0` (i.e., `Spare == 0`) blocks scale-down for that role.
+`safeRemovalReplicasForRole` (the safe-removal-count computation) applies the
+same live-only filter.
+
+**Liveness.** An analyzer is live for the current cycle iff it produced a
+non-error, capacity-bearing result within the staleness window (a fixed
+multiple of the optimization interval, `analyzerLivenessStaleCycles` in
+`internal/engines/saturation/engine_v2.go`). The resolved interval falls back
+to a 30s default whenever `Config` is absent **or** reports a non-positive
+value, so a misconfigured interval can never zero the staleness window and
+latch every analyzer non-live. An informative result with a zero-valued
+`AnalyzedAt` is treated as current (recorded as "now") rather than
+instantly-stale, so a forgotten timestamp on a future analyzer cannot
+silently disarm the veto. A non-live analyzer — one that
+has never produced a usable result, is currently erroring, or whose last
+usable result has aged past the staleness window — is excluded from the
+scale-down vote entirely: it neither vetoes nor constrains the safe-removal
+minimum. This prevents a registered-but-uninformative analyzer (no metrics
+yet, an error state, or a stale result) from silently blocking scale-down
+for every model it's registered against. Recovery is automatic: once the
+analyzer produces a fresh capacity-bearing result, it becomes live again on
+the next cycle. Liveness is tracked per model, not just per analyzer name,
+so one model's freshness never masks another's staleness.
+
+An analyzer reporting no usable capacity (`no-data`) does not become
+non-live immediately — it becomes non-live only once its last informative
+result ages out of the staleness window. This distinguishes three cases: an
+analyzer that never had good data (e.g. a mislabelled metric at startup)
+never sets its timestamp and is non-live from the start; a transient
+no-data blip on an analyzer with a recent good result stays live and still
+participates in the vote (the intended "uncertain, err toward not scaling
+down" behavior); and an analyzer whose good data has aged past the window
+becomes non-live. A mislabelled or broken metrics query is not treated as
+an *error* — it still returns a well-formed result, just one with no usable
+capacity — so this reason-based check, not an engine-level error signal, is
+what actually detects a durably-broken analyzer.
+
+Within the multi-analyzer engine path (`runAnalyzersAndScore`), this
+liveness filter applies uniformly to every registered analyzer, including
+saturation's own token-capacity signal — there is no name-based exemption
+inside the scale-down gate. (Saturation's separate role as the shared
+metrics-collection layer — cache size, replica cost, etc., feeding every
+analyzer and the cost optimizer — is unaffected; that collection either
+succeeds for everyone or, if it fails, every analyzer ends up non-live and
+the safety floor below applies.) The queueing-model optimize path
+(`optimizeQueueingModel`) is a separate, older code path that does not yet
+run through this liveness tracking; its `NamedAnalyzerResult` sets `Live:
+true` statically so it keeps scaling down as before. It will pick up real
+liveness tracking when it becomes a first-class multi-analyzer participant.
+
+Liveness reflects whether an analyzer has a current *capacity* (supply-side)
+signal — it does not gate on the *demand* signal. A falsely-low demand value
+only biases toward scale-down, never toward a spurious veto, so it never
+affects the veto gate; demand robustness is handled upstream by other
+mechanisms (metric sanity checks on calibration inputs, request-rate /
+local-demand fallbacks).
+
+**Demand-liveness telemetry (warn-only).** As an observability aid, the engine
+separately watches for the throughput analyzer having a live capacity signal
+while reporting no demand (`TotalDemand == 0`) for at least the staleness
+window. This usually means the request-arrival query is misconfigured or EPP
+is not reporting arrivals — supply is being measured but no load is observed,
+so scale-up will never trigger. When detected, the engine logs a warning; it
+never sets `Live`, never touches `RoleSpare`, and never gates any scaling
+decision. The signal is a timestamp gap rather than a boolean so a cold-start
+scrape lag (supply resolving a cycle or two before the first arrival scrape)
+does not false-positive: the gap only reaches the staleness window after
+demand has genuinely been absent for that long.
+
+**Safety floor.** If every analyzer in the slice is non-live for a role,
+`needsScaleDownForRole` returns false rather than falling through to "no
+vetoes, so scale down" — with zero live analyzers there is no current basis
+to scale down. This also makes leader failover safe: a freshly-elected
+leader starts with no liveness history, so scale-down for every role is
+withheld until at least one analyzer produces a fresh result (typically
+within a cycle or two).
 
 **Scale-up gate** (`anyRoleNeedsScaleUp`): ANY analyzer having `Remaining > 0`
-triggers scale-up for the corresponding role.
+triggers scale-up for the corresponding role. The liveness gate does not
+apply to scale-up — a non-live analyzer contributes `Remaining == 0`
+(from `RequiredCapacity == 0`), which is already harmless to the max-across-
+analyzers formula.
 
 The saturation entry in the slice is also the keeper of per-variant metadata
 (`Cost`, `AcceleratorName`, `Role`) that the optimizer reads from
@@ -335,10 +415,11 @@ synthetic role for non-disaggregated):
 
 ```
 for each role (sorted for determinism):
-  needsScaleDownForRole(s, role)           → gate: ALL analyzers have RoleSpare > 0
+  needsScaleDownForRole(s, role)           → gate: ALL live analyzers have RoleSpare > 0
+                                              (no live analyzer → false; see "How results combine")
   sortVariantsForScaleDown(s, vcs)         → cost-desc; tie-break: Score-weighted PRC asc
   scaleDownVariantSet(...)
-    safeRemovalReplicasForRole(s, v, role) → min_i floor(RoleSpare[i][role] / PRC_i[v])
+    safeRemovalReplicasForRole(s, v, role) → min over live i of floor(RoleSpare[i][role] / PRC_i[v])
     applyDeallocationForRole(s, v, role, n)→ decrement RoleSpare on all entries
 ```
 

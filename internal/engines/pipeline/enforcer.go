@@ -46,11 +46,12 @@ func (e *Enforcer) EnforcePolicyOnDecisions(
 	namespace string,
 	decisions []domain.VariantDecision,
 	scaleToZeroConfig config.ScaleToZeroConfigData,
+	satConfig *config.SaturationScalingConfig,
 	optimizerName string,
 ) bool {
 	logger := ctrl.LoggerFrom(ctx)
 
-	scaleToZeroEnabled := config.IsScaleToZeroEnabled(scaleToZeroConfig, modelID)
+	scaleToZeroEnabled := config.ResolveScaleToZeroEnabled(satConfig, scaleToZeroConfig, modelID)
 
 	if scaleToZeroEnabled {
 		applied := e.applyScaleToZeroOnDecisions(ctx, modelID, namespace, decisions, scaleToZeroConfig, optimizerName)

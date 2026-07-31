@@ -8,7 +8,9 @@ import (
 )
 
 // makeNamed builds a NamedAnalyzerResult with the given RC, SC, and per-variant
-// (variantName, perReplicaCapacity) pairs.
+// (variantName, perReplicaCapacity) pairs. Live defaults to true — tests
+// exercising the liveness gate (needsScaleDownForRole, safeRemovalReplicasForRole)
+// override it explicitly on the entries they want treated as non-live.
 func makeNamed(name string, rc, sc float64, vcs ...any) NamedAnalyzerResult {
 	var caps []domain.VariantCapacity
 	for i := 0; i+1 < len(vcs); i += 2 {
@@ -28,6 +30,7 @@ func makeNamed(name string, rc, sc float64, vcs ...any) NamedAnalyzerResult {
 		},
 		Remaining: rc,
 		Spare:     sc,
+		Live:      true,
 	}
 }
 
@@ -75,10 +78,42 @@ var _ = Describe("analyzer helpers", func() {
 			Expect(saturationEntry(s)).To(BeNil())
 		})
 	})
+
+	Describe("ResultIsInformative", func() {
+		It("returns false for a nil Result", func() {
+			Expect(ResultIsInformative(NamedAnalyzerResult{Result: nil})).To(BeFalse())
+		})
+
+		It("returns false when every VariantCapacity is no-data or error", func() {
+			nr := NamedAnalyzerResult{Result: &domain.AnalyzerResult{
+				VariantCapacities: []domain.VariantCapacity{
+					{VariantName: "a", Reason: "no-data"},
+					{VariantName: "b", Reason: "error"},
+				},
+			}}
+			Expect(ResultIsInformative(nr)).To(BeFalse())
+		})
+
+		It("returns false for an empty VariantCapacities slice (e.g. throughput with no resolvable ITL model)", func() {
+			nr := NamedAnalyzerResult{Result: &domain.AnalyzerResult{}}
+			Expect(ResultIsInformative(nr)).To(BeFalse())
+		})
+
+		It("returns true when at least one VariantCapacity carries a usable reason", func() {
+			nr := NamedAnalyzerResult{Result: &domain.AnalyzerResult{
+				VariantCapacities: []domain.VariantCapacity{
+					{VariantName: "a", Reason: "no-data"},
+					{VariantName: "b", Reason: "T1-ols"},
+				},
+			}}
+			Expect(ResultIsInformative(nr)).To(BeTrue())
+		})
+	})
 })
 
 // makeNamedPD builds a NamedAnalyzerResult with RoleCapacities for P/D tests.
 // RoleSpare is initialized from pSC/dSC (as initDisaggregatedRemaining would do).
+// Live defaults to true; override explicitly for non-live-analyzer scenarios.
 func makeNamedPD(name string, pRC, dRC, pSC, dSC float64, pDemand, dDemand float64, vPPRC float64, vDPRC float64) NamedAnalyzerResult {
 	return NamedAnalyzerResult{
 		Name: name,
@@ -94,6 +129,7 @@ func makeNamedPD(name string, pRC, dRC, pSC, dSC float64, pDemand, dDemand float
 		},
 		Remaining: pRC, // P-scope after initDisaggregatedRemaining
 		RoleSpare: map[string]float64{"prefill": pSC, "decode": dSC},
+		Live:      true,
 	}
 }
 
@@ -159,6 +195,14 @@ var _ = Describe("paired helpers", func() {
 			e.RoleSpare = nil
 			Expect(safeRemovalReplicasForRole([]NamedAnalyzerResult{e}, "v", "prefill")).To(Equal(0))
 		})
+
+		It("skips a non-live analyzer instead of letting its tiny spare drag the min to 0", func() {
+			live := makeNamedPD("sat", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000) // floor(20000/10000)=2
+			nonLive := makeNamedPD("throughput", 0, 0, 5000, 5000, 10000, 30000, 10000, 10000)
+			nonLive.Live = false // would compute floor(5000/10000)=0 if counted
+			s := []NamedAnalyzerResult{live, nonLive}
+			Expect(safeRemovalReplicasForRole(s, "pf", "prefill")).To(Equal(2))
+		})
 	})
 
 	Describe("applyDeallocationForRole", func() {
@@ -195,6 +239,53 @@ var _ = Describe("paired helpers", func() {
 			e := makeNamed("sat", 0, 100, "v", 10.0)
 			e.RoleSpare = nil
 			Expect(needsScaleDownForRole([]NamedAnalyzerResult{e}, "prefill")).To(BeFalse())
+		})
+
+		It("never-analyzed analyzer does not veto: a non-live analyzer with no spare is skipped", func() {
+			live := makeNamedPD("sat", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000)
+			neverAnalyzed := makeNamedPD("throughput", 0, 0, 0, 0, 0, 0, 10000, 10000)
+			neverAnalyzed.Live = false
+			neverAnalyzed.RoleSpare = nil
+			s := []NamedAnalyzerResult{live, neverAnalyzed}
+			Expect(needsScaleDownForRole(s, "prefill")).To(BeTrue())
+			Expect(needsScaleDownForRole(s, "decode")).To(BeTrue())
+		})
+
+		It("stale analyzer does not veto: a non-live analyzer with zero spare is skipped", func() {
+			// Staleness itself is computed at the engine level (see engine_v2_liveness_test.go);
+			// here Live=false stands in for "last good analysis is older than the threshold".
+			live := makeNamedPD("sat", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000)
+			stale := makeNamedPD("throughput", 0, 0, 0, 0, 0, 0, 10000, 10000)
+			stale.Live = false
+			s := []NamedAnalyzerResult{live, stale}
+			Expect(needsScaleDownForRole(s, "prefill")).To(BeTrue())
+			Expect(needsScaleDownForRole(s, "decode")).To(BeTrue())
+		})
+
+		It("safety floor: returns false when no live analyzer remains", func() {
+			a := makeNamedPD("sat", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000)
+			a.Live = false
+			b := makeNamedPD("throughput", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000)
+			b.Live = false
+			s := []NamedAnalyzerResult{a, b}
+			Expect(needsScaleDownForRole(s, "prefill")).To(BeFalse())
+			Expect(needsScaleDownForRole(s, "decode")).To(BeFalse())
+		})
+
+		It("a live analyzer with no spare still vetoes (real veto preserved)", func() {
+			live := makeNamedPD("sat", 0, 0, 0, 30000, 10000, 30000, 10000, 10000)
+			Expect(live.Live).To(BeTrue())
+			s := []NamedAnalyzerResult{live}
+			Expect(needsScaleDownForRole(s, "prefill")).To(BeFalse())
+		})
+
+		It("applies uniformly to saturation: a non-live saturation result does not veto", func() {
+			satNonLive := makeNamedPD(domain.SaturationAnalyzerName, 0, 0, 0, 0, 0, 0, 10000, 10000)
+			satNonLive.Live = false
+			live := makeNamedPD("throughput", 0, 0, 20000, 30000, 10000, 30000, 10000, 10000)
+			s := []NamedAnalyzerResult{satNonLive, live}
+			Expect(needsScaleDownForRole(s, "prefill")).To(BeTrue())
+			Expect(needsScaleDownForRole(s, "decode")).To(BeTrue())
 		})
 	})
 

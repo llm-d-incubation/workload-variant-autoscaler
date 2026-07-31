@@ -142,7 +142,7 @@ var _ = Describe("Engine config-population helpers", func() {
 				},
 			}
 
-			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
+			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil, 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(results).To(HaveLen(2))
 
@@ -166,7 +166,7 @@ var _ = Describe("Engine config-population helpers", func() {
 				},
 			}
 
-			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
+			results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil, 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(results).To(HaveLen(2))
 
@@ -191,7 +191,7 @@ var _ = Describe("Engine config-population helpers", func() {
 					{Name: "spy"},
 				},
 			}
-			resultsGlobal, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgGlobal, nil, nil, nil, nil)
+			resultsGlobal, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgGlobal, nil, nil, nil, nil, 0)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Per-analyzer ScaleUpThreshold=1.10 → RC = 100/1.10 ≈ 90.9
@@ -203,7 +203,7 @@ var _ = Describe("Engine config-population helpers", func() {
 					{Name: "spy", ScaleUpThreshold: &overrideThreshold},
 				},
 			}
-			resultsOverride, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgOverride, nil, nil, nil, nil)
+			resultsOverride, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfgOverride, nil, nil, nil, nil, 0)
 			Expect(err).NotTo(HaveOccurred())
 
 			rcGlobal := namedByName(resultsGlobal)["spy"].Remaining

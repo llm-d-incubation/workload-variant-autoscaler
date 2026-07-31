@@ -12,7 +12,7 @@ import (
 
 // Query name constants for throughput analyzer metrics.
 //
-// Only three queries are registered here — those that are genuinely new and not
+// Only four queries are registered here — those that are genuinely new and not
 // provided by other analyzer registrations. The remaining TA inputs are already
 // collected and exposed via domain.ReplicaMetrics; the TA reads those fields
 // directly instead of re-registering duplicate PromQL templates.
@@ -25,7 +25,8 @@ import (
 //	IL      (avg input tokens)        → AvgInputTokens         (QueryAvgInputTokens        / RegisterSaturationQueries)
 //	H%      (prefix cache hit rate)   → PrefixCacheHitRate     (QueryPrefixCacheHitRate    / RegisterSaturationQueries)
 //	λ_req   (per-pod arrival rate)    → ArrivalRate            (QuerySchedulerDispatchRate / RegisterQueueingModelQueries)
-//	         λ_dec = Σ_{r∈V}(ArrivalRate_r × AvgOutputTokens_r) per variant V, computed in analyzer
+//	Λ_req   (model-level arrival)     → AnalyzerInput.ArrivalRate (QueryModelArrivalRate   / RegisterThroughputAnalyzerQueries, this file)
+//	         λ_dec = Λ_req × avgOL, combined with the queue-drain term (model level, see Commit 2)
 const (
 	// QueryGenerationTokenRate is the query name for the observed generation
 	// (decode) token rate per pod (tokens/sec).
@@ -67,15 +68,28 @@ const (
 	// It undercounts when requests are queued in the scheduler. Use
 	// ArrivalRate (via QuerySchedulerDispatchRate) as the primary demand source.
 	QueryRequestRate = "request_rate"
+
+	// QueryModelArrivalRate is the query name for the model-level request arrival
+	// rate (requests/sec), summed across the whole model with no per-pod labels to
+	// reconcile — unlike QuerySchedulerDispatchRate (RegisterQueueingModelQueries),
+	// which groups by pod_name/port and belongs to QM. This is a TA-exclusive query
+	// on the same underlying source metric; it is registered here, not in
+	// queueing_model.go, because no other analyzer consumes it.
+	//
+	// No model_name fallback: inference_extension_scheduler_attempts_total has
+	// never carried a model_name label on any EPP version examined (only
+	// target_model_name) — unlike the flow-control queue metric, which does.
+	QueryModelArrivalRate = "model_arrival_rate"
 )
 
-// RegisterThroughputAnalyzerQueries registers the three TA-exclusive queries.
+// RegisterThroughputAnalyzerQueries registers the four TA-exclusive queries.
 // It must be called once at engine startup alongside other analyzer registrations.
 //
 // Registered queries:
 //   - QueryGenerationTokenRate — μ_dec^obs: observed decode token rate per pod
 //   - QueryKvUsageInstant      — k*: instantaneous KV cache utilization per pod
 //   - QueryRequestRate     — fallback λ_req: completion rate per pod when EPP absent
+//   - QueryModelArrivalRate    — Λ_req: model-level request arrival rate
 //
 // Additional TA inputs are read from domain.ReplicaMetrics fields populated by
 // RegisterSaturationQueries (TotalKvCapacityTokens, AvgOutputTokens, AvgInputTokens,
@@ -141,6 +155,20 @@ func RegisterThroughputAnalyzerQueries(sourceRegistry *source.SourceRegistry) {
 		Template:    `sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "vLLM request completion rate per pod (req/s); fallback for λ_dec when EPP metrics are unavailable",
+	})
+
+	// Model-level request arrival rate (requests/sec), summed across the whole
+	// model. Same status="success" filter as QuerySchedulerDispatchRate, but
+	// grouped only by namespace — no pod_name/port labels, so none of that
+	// query's per-instance attribution fragility. Engine-agnostic (sourced from
+	// EPP, not vLLM/SGLang), so — like QuerySchedulerDispatchRate — it is not
+	// duplicated in registerSGLangThroughputAnalyzerQueries.
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryModelArrivalRate,
+		Type:        source.QueryTypePromQL,
+		Template:    `sum by (namespace) (rate(inference_extension_scheduler_attempts_total{status="success",namespace="{{.namespace}}",target_model_name="{{.modelID}}"}[1m]))`,
+		Params:      []string{source.ParamNamespace, source.ParamModelID},
+		Description: "Model-level request arrival rate (requests/sec) from scheduler, summed across the whole model with no per-pod labels to reconcile",
 	})
 
 	registerSGLangThroughputAnalyzerQueries(registry)

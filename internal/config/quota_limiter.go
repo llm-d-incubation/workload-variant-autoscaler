@@ -128,7 +128,7 @@ func (q QuotaLimiterConfig) QuotaForNamespace(namespace string) (map[string]int,
 
 // clone returns a deep copy of q: the ClusterQuotas / NamespaceQuotas maps and
 // the Exclude slice are duplicated so the result shares no mutable state with
-// the original. Used by Config.QuotaEntries to hand out entries that callers
+// the original. Used by Config.EffectiveQuotaEntries to hand out entries that callers
 // cannot use to mutate the config-owned snapshot.
 func (q QuotaLimiterConfig) clone() QuotaLimiterConfig {
 	out := q // copies scalar fields and (to be replaced) map/slice headers

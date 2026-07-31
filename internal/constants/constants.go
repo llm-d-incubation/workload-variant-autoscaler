@@ -108,15 +108,16 @@ const (
 	ScaledObjectAPIGroup = "keda.sh"
 
 	// K8s Events
-	K8SEventScaledUp                  = "ScaledUp"
-	K8SEventScaledDown                = "ScaledDown"
-	K8SEventResourceConstrained       = "ResourceConstrained"
-	K8SEventMetricsUnavailable        = "MetricsUnavailable"
-	K8SEventScaledToZero              = "ScaledToZero"
-	K8SEventOptimizationFailed        = "OptimizationFailed"
-	K8SEventUnattributedReadyPods     = "UnattributedReadyPods"
-	EnforcerPolicyTypeScaleToZero     = "scale_to_zero"
-	EnforcerPolicyTypeMinimumReplicas = "minimum_replicas"
+	K8SEventScaledUp                          = "ScaledUp"
+	K8SEventScaledDown                        = "ScaledDown"
+	K8SEventResourceConstrained               = "ResourceConstrained"
+	K8SEventMetricsUnavailable                = "MetricsUnavailable"
+	K8SEventScaledToZero                      = "ScaledToZero"
+	K8SEventOptimizationFailed                = "OptimizationFailed"
+	K8SEventUnattributedReadyPods             = "UnattributedReadyPods"
+	K8SEventThroughputAnalyzerRestartRequired = "ThroughputAnalyzerRestartRequired"
+	EnforcerPolicyTypeScaleToZero             = "scale_to_zero"
+	EnforcerPolicyTypeMinimumReplicas         = "minimum_replicas"
 
 	// DefaultAcceleratorName is used internally by the GPU limiter when the
 	// accelerator type cannot be resolved from the scale target or VA label.

@@ -3,6 +3,7 @@ package saturation
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -10,6 +11,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/throughput"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
@@ -29,6 +31,7 @@ func (e *Engine) runV2AnalysisOnly(
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
 ) (*domain.AnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
@@ -57,6 +60,7 @@ func (e *Engine) runV2AnalysisOnly(
 		VariantStates:  variantStates,
 		Config:         &config,
 		SchedulerQueue: schedulerQueue,
+		ArrivalRate:    arrivalRate,
 	}
 
 	// 3. Run V2 analyzer
@@ -71,6 +75,13 @@ func (e *Engine) runV2AnalysisOnly(
 	// them at this point would always report 0 and be misleading.
 	return result, nil
 }
+
+// analyzerLivenessStaleCycles is the number of optimization cycles an
+// analyzer's last informative result may age before it is treated as stale
+// (non-live) for the scale-down veto gate. Fixed for now; revisit as a
+// per-deployment config field if operators need to tune it.
+// TODO: make configurable if needed.
+const analyzerLivenessStaleCycles = 3
 
 // runAnalyzersAndScore runs the V2 saturation analyzer, applies the universal
 // threshold post-step to every analyzer's result (using per-analyzer config
@@ -91,12 +102,13 @@ func (e *Engine) runAnalyzersAndScore(
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
 ) ([]pipeline.NamedAnalyzerResult, error) {
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Run saturation analyzer (always needed for PerReplicaCapacity).
 	baseResult, err := e.runV2AnalysisOnly(ctx, modelID, namespace, replicaMetrics, config,
-		variantStates, scaleTargets, variantAutoscalings, schedulerQueue)
+		variantStates, scaleTargets, variantAutoscalings, schedulerQueue, arrivalRate)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +132,7 @@ func (e *Engine) runAnalyzersAndScore(
 		VariantStates:  variantStates,
 		Config:         &config,
 		SchedulerQueue: schedulerQueue,
+		ArrivalRate:    arrivalRate,
 	}
 
 	// Collect per-analyzer results. Saturation is first; each non-saturation
@@ -156,10 +169,184 @@ func (e *Engine) runAnalyzersAndScore(
 			ScaleDownBoundary: down,
 		})
 	}
+	e.updateLivenessAndSetLive(ctx, namespace, modelID, namedResults)
+
 	for _, nr := range namedResults {
 		logAnalyzerResult(ctx, modelID, namespace, nr)
 	}
 	return namedResults, nil
+}
+
+// updateLivenessAndSetLive refreshes e.lastGoodAnalysis for this model with
+// every informative result's AnalyzedAt (or the current time, as a fail-safe,
+// when an informative result carries a zero-valued AnalyzedAt), then sets
+// nr.Live on each entry in place based on whether its last good analysis (if
+// any) is within the staleness window. Applies uniformly to every analyzer,
+// including saturation — no name-based exemption. After the liveness pass it
+// runs the warn-only demand-liveness detector (see detectDemandLiveness).
+func (e *Engine) updateLivenessAndSetLive(
+	ctx context.Context,
+	namespace, modelID string,
+	namedResults []pipeline.NamedAnalyzerResult,
+) {
+	if e.lastGoodAnalysis == nil {
+		e.lastGoodAnalysis = make(map[string]map[string]time.Time)
+	}
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	if e.lastGoodAnalysis[modelKey] == nil {
+		e.lastGoodAnalysis[modelKey] = make(map[string]time.Time)
+	}
+	perAnalyzer := e.lastGoodAnalysis[modelKey]
+
+	// Config is nil in unit tests that construct a minimal Engine directly
+	// (bypassing NewEngine, which panics on a nil Config in production). A present
+	// Config returning a non-positive interval falls back to the same 30s default —
+	// a zero/negative interval would otherwise zero the threshold below and latch
+	// every analyzer non-live, blocking all scale-down.
+	interval := 30 * time.Second
+	if e.Config != nil && e.Config.OptimizationInterval() > 0 {
+		interval = e.Config.OptimizationInterval()
+	}
+	now := time.Now()
+	threshold := analyzerLivenessStaleCycles * interval
+
+	for i := range namedResults {
+		nr := &namedResults[i]
+		if pipeline.ResultIsInformative(*nr) {
+			at := nr.Result.AnalyzedAt
+			if at.IsZero() {
+				// Fail-safe: an informative result observed this cycle is current by
+				// definition, so a forgotten AnalyzedAt cannot silently disarm the veto.
+				at = now
+			}
+			perAnalyzer[nr.Name] = at
+		}
+		lastGood, ok := perAnalyzer[nr.Name]
+		nr.Live = ok && now.Sub(lastGood) <= threshold
+	}
+
+	e.detectDemandLiveness(ctx, modelID, namespace, namedResults, perAnalyzer, now, threshold)
+}
+
+// demandLatchSuffix is appended to an analyzer name to form the synthetic inner
+// key under which a demand latch is stored in lastGoodAnalysis. The NUL byte
+// guarantees the key cannot collide with any real analyzer name (analyzer names
+// are printable identifiers), so the Live/veto path — which only reads the map
+// via keyed lookups on real analyzer names (perAnalyzer[nr.Name]) and never
+// ranges over it in the decision path — can never observe this key and can
+// never have an nr.Live flipped by it.
+//
+// DEFERRED (future, per-pod demand): when demand becomes per-replica, the demand
+// latch key extends with a pod component (analyzerName + demandLatchSuffix +
+// "\x00" + podID) and a per-replica latch is tracked alongside the model-level
+// one. Not built now — 0.9 demand is model-level only.
+const demandLatchSuffix = "\x00demand"
+
+// detectDemandLiveness emits a warn-only observability signal when the
+// throughput analyzer has a live capacity/supply signal but has reported no
+// demand (Result.TotalDemand > 0) for at least the staleness window. It never
+// sets nr.Live, never touches RoleSpare, and never gates any decision.
+//
+// Why warn-only, and why a veto here would be wrong:
+//   - Zero demand is a legitimate state, not necessarily a fault. With no
+//     served-rate floor, arrival→0 correctly drives TotalDemand→0, which only
+//     permits scale-down and never forces a scale action. A missing or zero
+//     arrival signal can therefore never cause a spurious scale-up or a spurious
+//     veto, so vetoing on "demand looks absent" would defeat the very scale-down
+//     the liveness gate exists to enable.
+//   - The veto path is already covered by the supply/capacity liveness gate: an
+//     analyzer with no capacity signal is excluded from the scale-down vote via
+//     nr.Live. This detector is strictly additive telemetry pointing a human at
+//     a likely-broken arrival query.
+//
+// The detector pairs two latches in the same per-model map:
+//   - Supply latch: perAnalyzer[throughput.AnalyzerName], the analyzer's
+//     last-informative timestamp (maintained by the liveness loop above; the
+//     throughput analyzer resolves per-replica capacity regardless of arrival).
+//   - Demand latch: perAnalyzer[throughput.AnalyzerName+demandLatchSuffix],
+//     stamped with AnalyzedAt each cycle TotalDemand > 0.
+//
+// The signal is a timestamp gap, not a boolean, so a cold-start EPP scrape lag
+// (supply comes up a cycle or two before the first arrival scrape) does not
+// false-positive: on the first cycle the demand latch is seeded to the current
+// supply timestamp, so the gap starts at zero and only reaches the staleness
+// window after demand has genuinely been absent for that long.
+func (e *Engine) detectDemandLiveness(
+	ctx context.Context,
+	modelID, namespace string,
+	namedResults []pipeline.NamedAnalyzerResult,
+	perAnalyzer map[string]time.Time,
+	now time.Time,
+	threshold time.Duration,
+) {
+	var tp *pipeline.NamedAnalyzerResult
+	for i := range namedResults {
+		if namedResults[i].Name == throughput.AnalyzerName {
+			tp = &namedResults[i]
+			break
+		}
+	}
+	if tp == nil {
+		return // throughput not participating this cycle
+	}
+
+	demandKey := throughput.AnalyzerName + demandLatchSuffix
+
+	// Stamp the demand latch whenever demand is observed.
+	if tp.Result != nil && tp.Result.TotalDemand > 0 {
+		perAnalyzer[demandKey] = tp.Result.AnalyzedAt
+	}
+
+	// Only meaningful while supply is live now; otherwise the supply liveness
+	// gate already covers the situation and there is nothing to seed or compare.
+	supplyTS, hasSupply := perAnalyzer[throughput.AnalyzerName]
+	if !hasSupply || now.Sub(supplyTS) > threshold {
+		return
+	}
+
+	// Seed the demand latch to the current supply timestamp the first time we
+	// see live supply, so a fresh model / cold start starts with a zero gap.
+	demandTS, hasDemand := perAnalyzer[demandKey]
+	if !hasDemand {
+		perAnalyzer[demandKey] = supplyTS
+		return
+	}
+
+	if supplyTS.Sub(demandTS) >= threshold {
+		logger := ctrl.LoggerFrom(ctx)
+		logger.Info("throughput analyzer has a live capacity signal but has reported no demand "+
+			"for at least the staleness window; the request-arrival query is likely misconfigured "+
+			"or EPP is not reporting arrivals — scale-up will not trigger until arrivals are observed",
+			"modelID", modelID,
+			"namespace", namespace,
+			"analyzer", throughput.AnalyzerName,
+			"noDemandFor", supplyTS.Sub(demandTS).String(),
+		)
+	}
+}
+
+// pruneLastGoodAnalysis evicts liveness state for models that are no longer
+// active. activeKeys is the set of currently-active model keys (as produced by
+// utils.GetNamespacedKey(namespace, modelID)); any outer key in
+// e.lastGoodAnalysis absent from activeKeys belongs to a departed model (its
+// VariantAutoscalings are gone) and is deleted, bounding the map to live models
+// rather than letting it grow unboundedly across the controller's lifetime.
+//
+// Guards against an empty active set: a cycle that enumerates no models (e.g.
+// saturation config not loaded yet) must not wipe accumulated state, so pruning
+// is skipped when activeKeys is empty. This also means a genuine all-models-removed
+// state is indistinguishable from a transient empty cycle here: those entries leak
+// until a model reappears. Accepted, bounded leak — distinguishing the two cases
+// would need a separate "models were present last cycle" signal.
+func (e *Engine) pruneLastGoodAnalysis(activeKeys map[string]bool) {
+	if len(activeKeys) == 0 || e.lastGoodAnalysis == nil {
+		return
+	}
+	for modelKey := range e.lastGoodAnalysis {
+		if !activeKeys[modelKey] {
+			delete(e.lastGoodAnalysis, modelKey)
+		}
+	}
 }
 
 // scoreForAnalyzer returns the AnalyzerScoreConfig.Score for the named analyzer,
@@ -168,7 +355,7 @@ func (e *Engine) runAnalyzersAndScore(
 // fair-share priority ordering across models.
 func scoreForAnalyzer(analyzerName string, cfg config.SaturationScalingConfig) float64 {
 	for _, aw := range cfg.Analyzers {
-		if aw.Name == analyzerName {
+		if aw.EffectiveType() == analyzerName {
 			if aw.Score > 0 {
 				return aw.Score
 			}
@@ -180,7 +367,7 @@ func scoreForAnalyzer(analyzerName string, cfg config.SaturationScalingConfig) f
 
 func resolveThresholds(analyzerName string, cfg config.SaturationScalingConfig) (scaleUp, scaleDown float64) {
 	for _, aw := range cfg.Analyzers {
-		if aw.Name == analyzerName {
+		if aw.EffectiveType() == analyzerName {
 			return aw.EffectiveScaleUpThreshold(cfg.ScaleUpThreshold),
 				aw.EffectiveScaleDownBoundary(cfg.ScaleDownBoundary)
 		}
@@ -198,7 +385,7 @@ func resolveThresholds(analyzerName string, cfg config.SaturationScalingConfig) 
 // (engine_v2.go ~L136) before effectiveEnabled is ever called.
 func effectiveEnabled(analyzerName string, cfg config.SaturationScalingConfig) bool {
 	for _, aw := range cfg.Analyzers {
-		if aw.Name == analyzerName {
+		if aw.EffectiveType() == analyzerName {
 			if aw.Enabled != nil {
 				return *aw.Enabled
 			}
@@ -400,9 +587,10 @@ func (e *Engine) collectV2ModelRequest(
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
 ) (*pipeline.ModelScalingRequest, error) {
 	namedResults, err := e.runAnalyzersAndScore(ctx, modelID, namespace, replicaMetrics, config,
-		variantStates, scaleTargets, variantAutoscalings, schedulerQueue)
+		variantStates, scaleTargets, variantAutoscalings, schedulerQueue, arrivalRate)
 	if err != nil {
 		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
 	}

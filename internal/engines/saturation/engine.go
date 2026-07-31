@@ -18,10 +18,12 @@ package saturation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -151,8 +153,20 @@ type Engine struct {
 	ScaleToZeroEnforcer *pipeline.Enforcer
 
 	// GPULimiter constrains scaling decisions based on available GPU resources.
-	// Only applied when EnableLimiter is true in the saturation config.
+	// Only applied when EnableLimiter is true in the saturation config. When a
+	// limiterBuilder is set (production), it is rebuilt live at the top of each
+	// optimize cycle whenever the effective limiter config changes.
 	GPULimiter pipeline.Limiter
+
+	// limiterBuilder rebuilds GPULimiter from the current effective config. Set by
+	// SetLimiterBuilder in production; nil in tests (which inject a static
+	// GPULimiter). limiterSig is the signature of the config that built the current
+	// GPULimiter, used to skip rebuilds when nothing changed. Both are read and
+	// written only from the single optimize goroutine after StartOptimizeLoop, but
+	// SetLimiterBuilder may run before it, so limiterMu guards them.
+	limiterBuilder func() (pipeline.Limiter, error)
+	limiterSig     string
+	limiterMu      sync.Mutex
 
 	// metricsRegistry is used to access metrics sources for request count queries
 	metricsRegistry *source.SourceRegistry
@@ -168,6 +182,21 @@ type Engine struct {
 
 	// capacityStore is shared with the V2 analyzer for caching capacity knowledge.
 	capacityStore *saturation_v2.CapacityKnowledgeStore
+
+	// lastGoodAnalysis records, per model (keyed by utils.GetNamespacedKey(namespace,
+	// modelID)) and analyzer name, the AnalyzedAt of the most recent informative
+	// (non-error, capacity-bearing) result. Used to gate the scale-down veto: an
+	// analyzer whose last good analysis for a model is absent or staler than
+	// analyzerLivenessStaleCycles cycles does not participate in that model's vote.
+	// Keyed per model (not just per analyzer name) because one Engine instance
+	// serves all models — a global-by-name map would leak one model's freshness
+	// into another's. In-memory only; reset on process restart / leader failover
+	// (safe: non-live → no scale-down until refreshed).
+	// Unguarded, like vaEventTracker: safe today because PollingExecutor runs
+	// optimize cycles sequentially in one goroutine and models within a cycle
+	// are processed serially. Parallelizing model processing would need to
+	// synchronize this map — the top-level per-model insert would race first.
+	lastGoodAnalysis map[string]map[string]time.Time
 
 	// analyzers is the engine's analyzer registry, mutated only during setup
 	// (NewEngine + RegisterAnalyzer). After StartOptimizeLoop it is frozen —
@@ -248,6 +277,7 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		saturationV2Analyzer:    satV2,
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
 		capacityStore:           capacityStore,
+		lastGoodAnalysis:        make(map[string]map[string]time.Time),
 		optimizer:               scalingOptimizer,
 		metricsEmitter:          metrics.NewMetricsEmitter(),
 		v1AnalyzerFactory:       defaultV1AnalyzerFactory,
@@ -341,6 +371,64 @@ func (e *Engine) recordDefaultConfigMetrics() {
 	}
 }
 
+// SetLimiterBuilder installs a builder that rebuilds the GPU limiter from the
+// current effective config. The engine calls it at the top of each optimize
+// cycle and swaps the limiter when the effective limiter mode / quota entries
+// change — so switching the ConfigMap's limiters: list takes effect without a
+// restart. Call before StartOptimizeLoop. Passing nil disables live rebuilds
+// (the injected GPULimiter is used as-is, e.g. in tests).
+func (e *Engine) SetLimiterBuilder(builder func() (pipeline.Limiter, error)) {
+	e.limiterMu.Lock()
+	defer e.limiterMu.Unlock()
+	e.limiterBuilder = builder
+	// Seed the signature from the current config so the first cycle does not
+	// rebuild the limiter that was already constructed from the same config.
+	e.limiterSig = limiterSignature(e.Config)
+}
+
+// refreshLimiter rebuilds GPULimiter when the effective limiter config changed
+// since it was last built. A build error is logged and the previous limiter is
+// kept, so a transient bad config never leaves the engine without a limiter.
+func (e *Engine) refreshLimiter(ctx context.Context) {
+	e.limiterMu.Lock()
+	defer e.limiterMu.Unlock()
+	if e.limiterBuilder == nil {
+		return
+	}
+	sig := limiterSignature(e.Config)
+	if sig == e.limiterSig && e.GPULimiter != nil {
+		return
+	}
+	limiter, err := e.limiterBuilder()
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to rebuild GPU limiter from config; keeping the previous limiter",
+			"effectiveMode", e.Config.EffectiveLimiterMode())
+		return
+	}
+	e.GPULimiter = limiter
+	e.limiterSig = sig
+	ctrl.LoggerFrom(ctx).Info("GPU limiter (re)built from config",
+		"type", e.Config.EffectiveLimiterMode(), "name", limiter.Name())
+}
+
+// limiterSignature is a deterministic fingerprint of the config inputs that
+// determine the GPU limiter, used to detect when a rebuild is needed. Quota
+// entry maps are marshaled with sorted keys by encoding/json, so equal configs
+// always produce equal signatures.
+func limiterSignature(cfg *config.Config) string {
+	entries, _ := json.Marshal(cfg.EffectiveQuotaEntries())
+	return string(cfg.EffectiveLimiterMode()) + "|" + string(entries)
+}
+
+// currentGPULimiter returns the active GPU limiter, read under limiterMu so it is
+// safe against a concurrent live rebuild in refreshLimiter (the field is written
+// only there, also under the lock).
+func (e *Engine) currentGPULimiter() pipeline.Limiter {
+	e.limiterMu.Lock()
+	defer e.limiterMu.Unlock()
+	return e.GPULimiter
+}
+
 // optimize performs the optimization logic.
 func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	start := time.Now()
@@ -355,6 +443,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	}()
 
 	logger := ctrl.LoggerFrom(ctx)
+	e.refreshLimiter(ctx)          // rebuild the GPU limiter if the ConfigMap changed its type/entries
 	e.recordDefaultConfigMetrics() // record as soon as possible to reflect any changes in configuration
 
 	if e.Config.ScaleToZeroEnabled() {
@@ -376,8 +465,8 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	e.vaEventTracker = make(map[string]bool)
 
 	// Collect accelerator inventory (only in limited mode AND only when the
-	// operator selected the inventory-based limiter). When --limiter-type=quota,
-	// the controller deliberately runs without consulting physical capacity —
+	// inventory-based limiter is active). In quota mode (an inline limiters: quota
+	// entry), the controller deliberately runs without consulting physical capacity —
 	// listing Nodes here would defeat that contract (and trigger a
 	// controller-runtime Node informer for the lifetime of the process). The
 	// collected inventory is currently only logged anyway (see comment at
@@ -665,7 +754,7 @@ func (e *Engine) optimizeV1(
 			decisionPtrs[i] = &allDecisions[i]
 		}
 
-		if err := e.GPULimiter.Limit(ctx, decisionPtrs); err != nil {
+		if err := e.currentGPULimiter().Limit(ctx, decisionPtrs); err != nil {
 			// skip record K8S events since there's no VA
 			logger.Error(err, "GPU limiter failed, proceeding with original decisions")
 		} else {
@@ -805,7 +894,7 @@ func (e *Engine) selectV2Optimizer(
 	// DefaultLimiter, or each constituent of a CompositeLimiter (so multi-entry
 	// quota configs are all consulted, and namespace-scoped providers contribute
 	// per-namespace caps via NamespacePools).
-	providers := gpuConstraintProviders(e.GPULimiter)
+	providers := gpuConstraintProviders(e.currentGPULimiter())
 	if len(providers) == 0 {
 		return pipeline.NewCostAwareOptimizer(), nil
 	}
@@ -866,6 +955,18 @@ func (e *Engine) optimizeV2(
 ) []domain.VariantDecision {
 	logger := ctrl.LoggerFrom(ctx)
 
+	// Prune liveness state for departed models. Any model still present in
+	// modelGroups is active this cycle (config-not-loaded or transient-failure
+	// models are enumerated but skipped below — they have not departed); keys
+	// absent from modelGroups belong to models whose VariantAutoscalings are
+	// gone, so their lastGoodAnalysis entries are evicted here. Keyed identically
+	// to updateLivenessAndSetLive (utils.GetNamespacedKey(namespace, modelID)).
+	activeKeys := make(map[string]bool, len(modelGroups))
+	for _, modelVAs := range modelGroups {
+		activeKeys[utils.GetNamespacedKey(modelVAs[0].Namespace, modelVAs[0].Spec.ModelID)] = true
+	}
+	e.pruneLastGoodAnalysis(activeKeys)
+
 	// Stage 1: Collect ModelScalingRequests for all models
 	requests := make([]pipeline.ModelScalingRequest, 0, len(modelGroups))
 	// modelReplicaMetrics collects per-model replica metrics for KV token enrichment
@@ -908,7 +1009,7 @@ func (e *Engine) optimizeV2(
 
 		req, err := e.collectV2ModelRequest(ctx, modelID, namespace,
 			data.replicaMetrics, saturationConfig, data.variantStates,
-			data.scaleTargets, data.variantAutoscalings, data.schedulerQueue)
+			data.scaleTargets, data.variantAutoscalings, data.schedulerQueue, data.arrivalRate)
 		if err != nil {
 			msg := "V2 analysis failed"
 			logger.Error(err, msg, "modelID", modelID)
@@ -1261,8 +1362,11 @@ func (e *Engine) applyScaleToZeroEnforcement(
 	}
 
 	scaleToZeroConfig := e.Config.ScaleToZeroConfigForNamespace(namespace)
+	// Resolve the saturation entry so an inline scaleToZero setting can override
+	// the separate scale-to-zero ConfigMap for this model/namespace.
+	satConfig := resolveSaturationConfig(e.Config.SaturationConfigForNamespace(namespace), modelID, namespace)
 	scaledToZero := e.ScaleToZeroEnforcer.EnforcePolicyOnDecisions(
-		ctx, modelID, namespace, decisions, scaleToZeroConfig, optimizerName,
+		ctx, modelID, namespace, decisions, scaleToZeroConfig, &satConfig, optimizerName,
 	)
 	if scaledToZero {
 		logger.Info("Scale-to-zero enforcement applied",
@@ -1363,6 +1467,7 @@ type modelData struct {
 	variantCosts        map[string]float64
 	variantStates       []domain.VariantReplicaState
 	schedulerQueue      *domain.SchedulerQueueMetrics
+	arrivalRate         float64
 }
 
 // prepareModelData collects metrics and builds lookup maps for a model's VAs.
@@ -1437,6 +1542,7 @@ func (e *Engine) prepareModelData(
 
 	variantStates := e.BuildVariantStates(ctx, modelVAs, scaleTargets, k8sClient)
 	schedulerQueue := e.ReplicaMetricsCollector.CollectSchedulerQueueMetrics(ctx, modelID)
+	arrivalRate := e.ReplicaMetricsCollector.CollectModelArrivalRate(ctx, modelID, namespace)
 
 	return &modelData{
 		modelID:             modelID,
@@ -1447,6 +1553,7 @@ func (e *Engine) prepareModelData(
 		variantCosts:        variantCosts,
 		variantStates:       variantStates,
 		schedulerQueue:      schedulerQueue,
+		arrivalRate:         arrivalRate,
 	}, nil
 }
 

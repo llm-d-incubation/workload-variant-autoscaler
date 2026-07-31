@@ -23,6 +23,7 @@ func withSatEntryV2(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) 
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
+			Live:      true,
 		}}
 	}
 	return req
@@ -380,7 +381,7 @@ var _ = Describe("runAnalyzersAndScore call ordering", func() {
 			},
 		}
 
-		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
+		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil, 0)
 		Expect(err).NotTo(HaveOccurred())
 		// saturation + throughput + slo all appended
 		Expect(results).To(HaveLen(3))
@@ -417,7 +418,7 @@ var _ = Describe("runAnalyzersAndScore disabled-analyzer gate", func() {
 			},
 		}
 
-		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil)
+		results, err := e.runAnalyzersAndScore(context.Background(), "m", "ns", nil, cfg, nil, nil, nil, nil, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(results).To(HaveLen(1), "only saturation entry — disabled spy must not be appended")
 		Expect(results[0].Name).To(Equal(domain.SaturationAnalyzerName))
@@ -448,7 +449,7 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 			{VariantName: "decode-v1", Role: "decode"},
 		}
 
-		req, err := e.collectV2ModelRequest(context.Background(), "m", "ns", nil, cfg, variantStates, nil, nil, nil)
+		req, err := e.collectV2ModelRequest(context.Background(), "m", "ns", nil, cfg, variantStates, nil, nil, nil, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(req.Disaggregated).To(BeTrue())
 	})
@@ -474,7 +475,7 @@ var _ = Describe("collectV2ModelRequest Disaggregated flag", func() {
 			{VariantName: "v2", Role: ""},
 		}
 
-		req, err := e.collectV2ModelRequest(context.Background(), "m", "ns", nil, cfg, variantStates, nil, nil, nil)
+		req, err := e.collectV2ModelRequest(context.Background(), "m", "ns", nil, cfg, variantStates, nil, nil, nil, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(req.Disaggregated).To(BeFalse())
 	})

@@ -43,6 +43,13 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 			metrics.RecordError(constants.ComponentController, errorType)
 			continue
 		}
+		// Fold analyzer plugin parameters into typed fields before defaulting/validation.
+		if err := satConfig.Normalize(); err != nil {
+			errorType := "Invalid saturation scaling config entry"
+			logger.Error(err, errorType, "key", key)
+			metrics.RecordError(constants.ComponentController, errorType)
+			continue
+		}
 		// Apply defaults before validation (handles omitempty zero-values like scaleUpThreshold)
 		satConfig.ApplyDefaults()
 		if err := satConfig.Validate(); err != nil {
@@ -50,6 +57,13 @@ func parseSaturationConfig(cmData map[string]string, logger logr.Logger) (config
 			logger.Error(err, errorType, "key", key)
 			metrics.RecordError(constants.ComponentController, errorType)
 			continue
+		}
+		// limiters: is a cluster-"default"-scope setting read only from the global
+		// default entry (Config.EffectiveLimiterMode). Warn if it appears elsewhere so
+		// a misplaced block is not silently ignored.
+		if key != config.GlobalDefaultsKey && len(satConfig.Limiters) > 0 {
+			logger.Info("Ignoring limiters on a non-default saturation config entry; "+
+				"the GPU limiter is selected only from the \"default\" entry", "key", key)
 		}
 		configs[key] = satConfig
 		count++

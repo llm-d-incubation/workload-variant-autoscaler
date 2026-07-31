@@ -41,6 +41,11 @@ var _ = Describe("ObservationWindow", func() {
 			Expect(window.Len()).To(Equal(0))
 		})
 
+		It("rejects NaN k", func() {
+			window.Add(float64NaN(), 0.040, now)
+			Expect(window.Len()).To(Equal(0))
+		})
+
 		It("rejects zero ITL", func() {
 			window.Add(0.50, 0.0, now)
 			Expect(window.Len()).To(Equal(0))

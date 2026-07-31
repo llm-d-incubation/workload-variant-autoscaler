@@ -27,6 +27,13 @@ type NamedAnalyzerResult struct {
 	RoleSpare         map[string]float64 // per-role mutable spare; set by initRoleState; nil for non-disaggregated
 	ScaleUpThreshold  float64            // resolved scale-up threshold used to compute RC
 	ScaleDownBoundary float64            // resolved scale-down boundary used to compute SC
+
+	// Live indicates the analyzer produced a non-error, informative result within the
+	// staleness window. Set by the engine each cycle. Non-live analyzers are excluded
+	// from the scale-down veto so a registered-but-uninformative analyzer (no metrics,
+	// error state, never analyzed) cannot block scale-down. Recovery is automatic: a
+	// fresh informative result makes it live again on the next cycle.
+	Live bool
 }
 
 // ModelScalingRequest bundles the analyzer result with variant state for one model.
