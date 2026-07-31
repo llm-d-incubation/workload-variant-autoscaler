@@ -173,7 +173,16 @@ func (a *ThroughputAnalyzer) Observe(
 //   - Tier 2 (constrained OLS): window not ready — fit A with B = DefaultBaselineITLSec
 //     using all replica (k*, ITL_obs) points: A = Σ((ITL_i−B)·k_i) / Σ(k_i²).
 //
-// Demand per variant is estimated in priority order:
+// Model-level decode demand is Λ_req × avgOL: the
+// model-level arrival rate (input.ArrivalRate, a single sum(rate(...)) query
+// with no per-pod labels — an all-or-nothing model-level signal) times avgOL, the RequestRate-weighted
+// average output length across all healthy replicas of the model. This is the
+// sole driver of TotalDemand's arrival component; it does not depend on
+// per-variant EPP attribution.
+//
+// Per-variant demand (populating VariantCapacity.TotalDemand/Utilization, for
+// introspection/VariantState() only — not summed into TotalDemand) is still
+// estimated in priority order:
 //  1. EPP primary: Σ ArrivalRate × AvgOutputTokens (when ArrivalRate > 0 on any replica).
 //  2. Engine-rate fallback: RequestRate × avgOL (when EPP absent but the engine completion rate is nonzero).
 //  3. k*-based local: Σ k_r* × KV_max_r / KVreq / ITL(k_r*) (scale-up only; no EPP needed).
@@ -185,8 +194,8 @@ func (a *ThroughputAnalyzer) Observe(
 // returned AnalyzerResult; RequiredCapacity and SpareCapacity are left zero.
 // The engine's universal threshold post-step writes RC/SC after Analyze returns.
 // PendingReplicas are included in TotalAnticipatedSupply to suppress redundant
-// scale-up while pods are starting. Scheduler queue demand is split across
-// non-prefill roles via distributeQueueDemandByRole.
+// scale-up while pods are starting. Both the arrival decode term and scheduler
+// queue demand are split across non-prefill roles via distributeDemandByRole.
 //
 // For P/D disaggregated models, RoleCapacities carries per-role Total* fields
 // (TotalSupply, TotalAnticipatedSupply, TotalDemand); RC/SC per role are also
@@ -224,13 +233,30 @@ func (a *ThroughputAnalyzer) Analyze(
 
 	byVariant := groupByVariant(input.ReplicaMetrics)
 
+	// EPP presence is now derived from the model-level arrival rate rather than
+	// per-replica ArrivalRate: a model-level sum(rate(...)) is all-or-nothing
+	// by design, so a single check here is equivalent and simpler.
+	//
+	// The per-replica ReplicaMetrics.RequestRate is deliberately NOT consulted here as
+	// a "broken arrival" cross-check (e.g. warn when arrival == 0 while ΣRequestRate > 0).
+	// RequestRate is a request completion rate, not an arrival rate: a draining engine
+	// keeps RequestRate > 0 after arrivals have legitimately fallen to zero, so that
+	// condition is a normal ramp-down state, not a fault — cross-checking it would warn
+	// constantly during scale-down. A genuine broken-arrival signal is temporal — supply
+	// live but demand never observed across a full staleness window — and is surfaced as
+	// an observability-only warning in the engine liveness path, not in this per-cycle
+	// demand math.
+	anyEPP := input.ArrivalRate > 0
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	var (
-		anyEPP, anyGPSMismatch bool
-		totalDecodeITLSat      float64
-		nDecodeVariants        int
+		anyGPSMismatch    bool
+		totalDecodeITLSat float64
+		totalDecodeOL     float64
+		totalDecodeKV     int // Σ nKV over non-prefill variants — avgOL replica-count weight
+		nDecodeVariants   int
 	)
 	variantCapacities := make([]domain.VariantCapacity, 0, len(byVariant))
 
@@ -276,7 +302,11 @@ func (a *ThroughputAnalyzer) Analyze(
 			continue
 		}
 
-		demand, isEPP := computeDemand(variantMetrics)
+		// isEPP is no longer used here — anyEPP is now derived model-level from
+		// input.ArrivalRate above — but computeDemand's own per-variant demand
+		// value is kept for VariantCapacity.TotalDemand/Utilization display and
+		// as the computeLocalDemand fallback trigger below (deferred, see plan).
+		demand, _ := computeDemand(variantMetrics)
 		// k*-based local demand: when EPP and the engine completion rate are both absent, or when
 		// EPP is present but yields zero usable demand (warm-up, no completions yet),
 		// derive demand from observed KV utilization so a busy replica is not
@@ -292,12 +322,23 @@ func (a *ThroughputAnalyzer) Analyze(
 		state.lastDemand = demand
 
 		pending := pendingByVariant[variantName]
-		if isEPP {
-			anyEPP = true
-		}
-		// Track ITL(k_sat) across non-prefill variants for queue demand estimation.
+		// Track ITL(k_sat) and avgOL across non-prefill variants: ITL(k_sat) for
+		// queue demand estimation, avgOL for the model-level arrival decode term.
+		// avgOL uses each variant's tracked/smoothed shape.AvgOutputTokens (from
+		// state.shapeTracker, robust to a single warm-up cycle reporting
+		// AvgOutputTokens==0) rather than a fresh average over live
+		// input.ReplicaMetrics, which would zero out avgOL during EPP warm-up
+		// (ArrivalRate>0, no completions yet) and reintroduce the spurious-
+		// scale-down bug regression-tested by "EPP warm-up" below. Weighted by
+		// nKV (replica count) across variants: an unweighted mean-of-means would
+		// let every non-prefill variant contribute equally regardless of its
+		// share of replicas/traffic,
+		// diverging from the plan's specified RequestRate-weighted model-level
+		// average whenever 2+ non-prefill variants have different OL profiles.
 		if state.role != domain.RolePrefill {
 			totalDecodeITLSat += itlSat
+			totalDecodeOL += float64(nKV) * shape.AvgOutputTokens
+			totalDecodeKV += nKV
 			nDecodeVariants++
 		}
 
@@ -341,24 +382,48 @@ func (a *ThroughputAnalyzer) Analyze(
 		})
 	}
 
-	// Model-level totals computed from the per-variant slice.
+	// Model-level supply totals computed from the per-variant slice.
 	// TotalAnticipatedSupply is published so the engine's post-step can compute RC/SC.
 	totalSupply := aggregation.SumTotalSupply(variantCapacities)
 	totalAnticipatedSupply := aggregation.SumTotalAnticipatedSupply(variantCapacities)
-	totalDemand := aggregation.SumTotalDemand(variantCapacities)
 
+	// Decode demand is a model-level quantity: Λ_req × avgOL,
+	// computed once from the model-level arrival rate rather than summed from each
+	// variant's computeDemand result. This replaces the retired per-variant EPP
+	// arrival contribution to TotalDemand (per-variant VariantCapacity.TotalDemand
+	// above is unaffected — it still reflects computeDemand/computeLocalDemand for
+	// per-variant introspection). avgOL is the nKV-weighted mean of tracked
+	// shape.AvgOutputTokens across non-prefill variants (totalDecodeOL /
+	// totalDecodeKV, accumulated in the loop above) — weighted, not a plain
+	// mean-of-variant-means, so a variant with more replicas contributes
+	// proportionally more. Zero when no non-prefill variant
+	// currently has a resolved ITL model, matching avgDecodeITLSat's guard below.
+	var totalDemand, arrivalDecodeDemand float64
+	var arrivalDemandByRole map[string]float64
 	// Scheduler queue demand is decode-rate-denominated and not variant-attributed.
 	// Add to model-level demand and distribute across active non-prefill roles so
 	// per-role TotalDemand satisfies the linearity invariant.
 	var queueDemandByRole map[string]float64
 	// nDecodeVariants > 0 is guaranteed here: the loop above only increments it for
-	// variants that produced supply > 0 (itlSat > 0), so totalDecodeITLSat / nDecodeVariants
-	// is safe from division-by-zero.
+	// variants that produced supply > 0 (itlSat > 0), so dividing by nDecodeVariants
+	// or totalDecodeKV (both guaranteed >= 1 in that case) is safe from
+	// division-by-zero.
 	if nDecodeVariants > 0 {
+		avgOL := totalDecodeOL / float64(totalDecodeKV)
+		// Arrival rate is the demand signal. When it is zero — EPP absent, or present
+		// but not yet scraped — arrivalDecodeDemand is legitimately zero and so is
+		// TotalDemand. Zero demand only ever permits scale-down (still governed by the
+		// multi-analyzer all-live-agree gate); it never forces a scale action and never
+		// drives scale-up. So a zero/absent arrival signal is safe here and is
+		// intentionally NOT floored to a served-rate proxy.
+		arrivalDecodeDemand = input.ArrivalRate * avgOL
+		totalDemand = arrivalDecodeDemand
+		arrivalDemandByRole = distributeDemandByRole(arrivalDecodeDemand, variantCapacities)
+
 		avgDecodeITLSat := totalDecodeITLSat / float64(nDecodeVariants)
 		queueDemand := estimateQueueDemand(input.SchedulerQueue, avgDecodeITLSat, DefaultQueueDrainFactor)
 		totalDemand += queueDemand
-		queueDemandByRole = distributeQueueDemandByRole(queueDemand, variantCapacities)
+		queueDemandByRole = distributeDemandByRole(queueDemand, variantCapacities)
 	}
 
 	// TA publishes raw Total* fields; RequiredCapacity and SpareCapacity are left
@@ -382,7 +447,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		TotalAnticipatedSupply: totalAnticipatedSupply,
 		TotalDemand:            totalDemand,
 		Utilization:            safeDivide(totalDemand, totalSupply),
-		RoleCapacities:         aggregateRoleCapacities(variantCapacities, queueDemandByRole),
+		RoleCapacities:         aggregateRoleCapacities(variantCapacities, arrivalDemandByRole, queueDemandByRole),
 	}, nil
 }
 
@@ -502,7 +567,7 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 	}
 	if n > 0 && sumK2 > 0 {
 		A := numerator / sumK2
-		if A > 0 {
+		if validITLModel(A, baselineB) {
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-2 constrained OLS fit",
 				"namespace", namespace, "modelID", modelID, "variant", variantName,
 				"A", A, "B", baselineB, "replicas", int(n),
@@ -525,8 +590,11 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 // Returns (λ_dec, isEPP). isEPP is true when at least one replica reports ArrivalRate > 0.
 // When EPP is present but yields zero usable demand (warm-up: ArrivalRate > 0 but
 // AvgOutputTokens == 0), the function falls through to the engine request-rate proxy
-// so the caller can use computeLocalDemand when both paths yield zero. isEPP still
-// reflects "EPP present" so the anyEPP tracking in Analyze is unaffected.
+// so the caller can use computeLocalDemand when both paths yield zero. The returned
+// λ_dec only feeds this variant's own VariantCapacity.TotalDemand/Utilization
+// (introspection) — Analyze's model-level TotalDemand uses input.ArrivalRate ×
+// avgOL instead (the all-or-nothing model-level design), and derives anyEPP from that model-level rate
+// rather than from this function's isEPP return.
 func computeDemand(metrics []domain.ReplicaMetrics) (float64, bool) {
 	var lambdaDec float64
 	var isEPP bool
@@ -570,11 +638,16 @@ func computeLocalDemand(metrics []domain.ReplicaMetrics, shape WorkloadShape, mo
 	}
 	var total float64
 	for _, m := range metrics {
-		if m.KvUsageInstant <= 0 || m.TotalKvCapacityTokens <= 0 {
+		if math.IsNaN(m.KvUsageInstant) || m.KvUsageInstant <= 0 || m.TotalKvCapacityTokens <= 0 {
+			continue
+		}
+		// KvUsageInstant is a KV-utilization fraction; values > 1 indicate a bad/over-committed
+		// metric. Skip rather than clamp — a single over-range replica shouldn't inflate demand.
+		if m.KvUsageInstant > 1 {
 			continue
 		}
 		itlAtK := model.ITLAt(m.KvUsageInstant)
-		if itlAtK <= 0 {
+		if math.IsNaN(itlAtK) || itlAtK <= 0 {
 			continue
 		}
 		total += m.KvUsageInstant * float64(m.TotalKvCapacityTokens) / shape.KVreq / itlAtK
@@ -775,11 +848,14 @@ func checkVariantGPSMismatch(
 	return mismatch
 }
 
-// distributeQueueDemandByRole splits queueDemand evenly across active non-prefill
-// roles derived from vcs. Queue demand is decode-rate-denominated so prefill roles
-// are excluded. Returns nil when queueDemand is zero or no non-prefill roles exist.
-func distributeQueueDemandByRole(queueDemand float64, vcs []domain.VariantCapacity) map[string]float64 {
-	if queueDemand == 0 {
+// distributeDemandByRole splits a model-level decode-rate-denominated demand
+// quantity evenly across active non-prefill roles derived from vcs. Used for
+// both the model-level arrival decode term (Λ_req × avgOL) and the scheduler
+// queue-drain term — both are decode-rate-denominated and role-agnostic at the
+// point they are computed, so prefill roles are excluded. Returns nil when
+// demand is zero or no non-prefill roles exist.
+func distributeDemandByRole(demand float64, vcs []domain.VariantCapacity) map[string]float64 {
+	if demand == 0 {
 		return nil
 	}
 	roles := make(map[string]struct{})
@@ -795,7 +871,7 @@ func distributeQueueDemandByRole(queueDemand float64, vcs []domain.VariantCapaci
 	if len(roles) == 0 {
 		return nil
 	}
-	share := queueDemand / float64(len(roles))
+	share := demand / float64(len(roles))
 	result := make(map[string]float64, len(roles))
 	for role := range roles {
 		result[role] = share
@@ -804,11 +880,16 @@ func distributeQueueDemandByRole(queueDemand float64, vcs []domain.VariantCapaci
 }
 
 // aggregateRoleCapacities groups variant capacities by P/D role and computes
-// per-role raw Total* fields. queueDemandByRole adds queue demand to each role's
-// TotalDemand (nil is safe — treated as zero). Returns nil for non-disaggregated
-// models (all variants role "" or "both"). RequiredCapacity and SpareCapacity are
-// left zero — the engine's universal threshold post-step writes them.
-func aggregateRoleCapacities(vcs []domain.VariantCapacity, queueDemandByRole map[string]float64) map[string]domain.RoleCapacity {
+// per-role raw Total* fields. TotalDemand per role is arrivalDemandByRole[role] +
+// queueDemandByRole[role] (either map nil is safe — treated as zero); it no
+// longer sums each role's per-variant computeDemand results (AggregateByRole's
+// TotalDemand is unused here), since the model-level arrival decode term
+// replaced that path — see Analyze's arrivalDecodeDemand. TotalSupply and
+// TotalAnticipatedSupply are still summed per-variant, unaffected by the demand
+// change. Returns nil for non-disaggregated models (all variants role "" or
+// "both"). RequiredCapacity and SpareCapacity are left zero — the engine's
+// universal threshold post-step writes them.
+func aggregateRoleCapacities(vcs []domain.VariantCapacity, arrivalDemandByRole, queueDemandByRole map[string]float64) map[string]domain.RoleCapacity {
 	byRole := aggregation.AggregateByRole(vcs)
 	// Non-disaggregated: only a "both" bucket (or nothing) — no per-role breakdown.
 	if _, hasBoth := byRole[domain.RoleBoth]; len(byRole) == 0 || (len(byRole) == 1 && hasBoth) {
@@ -821,7 +902,7 @@ func aggregateRoleCapacities(vcs []domain.VariantCapacity, queueDemandByRole map
 			Role:                   role,
 			TotalSupply:            t.TotalSupply,
 			TotalAnticipatedSupply: t.TotalAnticipatedSupply,
-			TotalDemand:            t.TotalDemand + queueDemandByRole[role],
+			TotalDemand:            arrivalDemandByRole[role] + queueDemandByRole[role],
 		}
 	}
 	return result

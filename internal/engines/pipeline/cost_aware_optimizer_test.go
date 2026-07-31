@@ -20,6 +20,7 @@ func withSatEntry(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalin
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
+			Live:      true,
 		}}
 	}
 	return req
@@ -744,6 +745,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Live:      true,
 				}}
 			}
 			return req
@@ -836,6 +838,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Live:      true,
 				}}
 			}
 			return req
@@ -884,6 +887,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Live:      true,
 				}}
 			}
 			return req

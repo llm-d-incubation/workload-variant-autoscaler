@@ -3,6 +3,7 @@ package throughput
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -307,6 +308,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(15)},
+				ArrivalRate:    15, // model-level, mirrors the single replica's per-pod rate
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -325,6 +327,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
+				ArrivalRate:    5, // model-level, mirrors the single replica's per-pod rate
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -357,6 +360,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica(5)},
+				ArrivalRate:    5, // model-level, mirrors the single replica's per-pod rate
 			}
 			result, _ := analyzer.Analyze(ctx, input)
 			Expect(result.VariantCapacities).To(HaveLen(1))
@@ -470,6 +474,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{tier2Replica(0.75, 15)},
+				ArrivalRate:    15, // model-level, mirrors the single replica's per-pod rate
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -734,6 +739,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
+				ArrivalRate:    45, // model-level, sum of the 3 replicas' per-pod rates
 				// No pending replicas — anticipated == current supply
 			}
 			result, err := analyzer.Analyze(ctx, input)
@@ -821,6 +827,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					{VariantName: "v-decode", Role: "decode"},
 					{VariantName: "v-prefill", Role: "prefill"},
 				},
+				ArrivalRate: 30, // model-level, sum of both variants' per-pod rates
 			}
 			result, err := analyzer.Analyze(ctx, input)
 			Expect(err).NotTo(HaveOccurred())
@@ -873,11 +880,11 @@ var _ = Describe("ThroughputAnalyzer", func() {
 	})
 
 	Describe("Analyze — k*-based local demand (no EPP)", func() {
-		// Two replicas at k*=0.95 with no EPP and no vLLM rate.
+		// Two replicas at k*=0.95 with no EPP and no vLLM rate, and no model-level
+		// input.ArrivalRate (EPP absent model-wide too).
 		// λ_local = Σ (k_r × KV_max_r / KVreq) / ITL(k_r)
 		// For each replica: N = 0.95×1024000/4600 ≈ 211.4; ITL(0.95) = 0.073×0.95+0.006 = 0.07535
-		// λ_local ≈ 2 × 211.4/0.07535 ≈ 5612 tok/s
-		// μ_sat (per replica) ≈ 2782; totalAnticipated = 2 × 2782 = 5564 < 5612 → RC > 0
+		// λ_local ≈ 211.4/0.07535 ≈ 2806 tok/s per replica (still computed per-variant).
 		const (
 			il     = 5000.0
 			ol     = 200.0
@@ -888,7 +895,15 @@ var _ = Describe("ThroughputAnalyzer", func() {
 		)
 		kValues := []float64{0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
 
-		It("emits RequiredCapacity from k* when EPP is absent", func() {
+		It("still populates per-variant demand from k*, but no longer drives model-level TotalDemand when EPP is absent", func() {
+			// DEFERRED behavior (the computeDemand per-replica A→B→k*local
+			// fallback): with demand model-level, Λ_req (input.ArrivalRate) is the
+			// sole driver of TotalDemand's arrival component. When EPP is absent
+			// model-wide, input.ArrivalRate is legitimately 0 (no signal, not "zero
+			// traffic") and — unlike before this PR — the per-variant k*-local
+			// fallback no longer backfills the model-level total; it remains
+			// per-variant only (VariantCapacity.TotalDemand / VariantState()), for
+			// introspection. Revisit when k_knee is implemented.
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
 			replicas := []domain.ReplicaMetrics{
@@ -904,13 +919,18 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
+				// ArrivalRate: 0 (default) — EPP absent model-wide, no queue either.
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TA leaves RC/SC zero; engine post-step computes them. Assert the raw
-			// supply/demand inequality that the engine interprets as RC>0.
-			Expect(result.TotalDemand).To(BeNumerically(">", result.TotalAnticipatedSupply))
+			Expect(result.VariantCapacities).To(HaveLen(1))
+			// Per-variant demand still reflects the k*-local fallback (unchanged,
+			// deferred code path) — this is what VariantState()/introspection sees.
+			Expect(result.VariantCapacities[0].TotalDemand).To(BeNumerically(">", 0),
+				"per-variant k*-local demand must still be computed for introspection")
+			// Model-level: no EPP and no queue → TotalDemand is 0 by design (not a
+			// regression — see DEFERRED note above), so RC/SC both stay zero.
+			Expect(result.TotalDemand).To(Equal(0.0))
 			Expect(result.RequiredCapacity).To(Equal(0.0))
-			// No EPP → SpareCapacity must be zero regardless.
 			Expect(result.SpareCapacity).To(Equal(0.0))
 		})
 
@@ -994,12 +1014,14 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{replica},
+				ArrivalRate:    5.0, // model-level, mirrors the single replica's per-pod rate
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// Local demand must be > 0 (k*=0.85 is busy) so Utilization > 0 and
-			// the engine does NOT emit SC (no spurious scale-down).
+			// Model-level demand must be > 0: avgOL comes from the tracked/smoothed
+			// shape (200, seeded by injectWindowObs), not this cycle's live
+			// AvgOutputTokens==0, so warm-up does not zero out avgOL (see analyzer.go).
 			Expect(result.TotalDemand).To(BeNumerically(">", 0),
-				"warm-up replica must have non-zero demand via local k* fallback")
+				"warm-up replica must have non-zero demand via tracked-shape avgOL")
 			Expect(result.RequiredCapacity).To(Equal(0.0))
 			Expect(result.SpareCapacity).To(Equal(0.0))
 		})
@@ -1023,9 +1045,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{replica},
+				ArrivalRate:    10.0, // model-level, mirrors the single replica's per-pod rate
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// EPP demand = 10×200 = 2000 tok/s; TotalDemand must reflect that.
+			// Model-level demand = 10×200 = 2000 tok/s; TotalDemand must reflect that.
 			Expect(result.TotalDemand).To(BeNumerically("~", 2000.0, 1.0))
 			Expect(result.RequiredCapacity).To(Equal(0.0))
 			Expect(result.SpareCapacity).To(Equal(0.0))
@@ -1034,10 +1057,10 @@ var _ = Describe("ThroughputAnalyzer", func() {
 
 	Describe("Analyze — scheduler queue demand", func() {
 		// OLS-ready window, single replica at k*=0.50 with no EPP and no vLLM rate.
-		// λ_local = 0.50×1024000/4600 / ITL(0.50) ≈ 111.3/0.0425 ≈ 2618 tok/s
-		// μ_sat ≈ 2782 → λ_local < μ_sat: no RC without queue.
-		// Add QueueSize=200: λ_queue = 200 / (2.0×ITL(k_sat)) = 200/(2.0×0.06805) ≈ 1469 tok/s
-		// totalDemand = 2618+1469 = 4087 > 2782 → RC ≈ 1305 > 0.
+		// EPP absent → model-level TotalDemand's arrival term is 0 (k*-local
+		// remains per-variant only, deferred — see "k*-based local demand (no EPP)"
+		// above); the queue term is the only contributor to model-level demand here.
+		// μ_sat ≈ 2782 per replica.
 		const (
 			il     = 5000.0
 			ol     = 200.0
@@ -1055,13 +1078,19 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// ArrivalRate=0: no EPP
 		}
 
-		It("adds queue demand and emits RequiredCapacity when queue is large", func() {
+		It("queue demand alone (no EPP, no k*-local) emits RequiredCapacity when queue is large", func() {
+			// DEFERRED behavior: with EPP absent (ArrivalRate=0 here, both
+			// per-pod and model-level), the k*-local fallback (λ_local≈2618 tok/s)
+			// no longer reaches model-level TotalDemand — only the scheduler queue
+			// term does. QueueSize=450: λ_queue = 450/(2.0×ITL(k_sat)) =
+			// 450/(2.0×0.06805) ≈ 3306 tok/s > μ_sat≈2782 → RC > 0 from queue alone.
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", il, ol, prefix, kvMax, B, kValues)
 
 			withQueue := domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{baseReplica},
-				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: 200},
+				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: 450},
+				// ArrivalRate: 0 (default) — EPP absent model-wide.
 			}
 			result, err := analyzer.Analyze(ctx, withQueue)
 			Expect(err).NotTo(HaveOccurred())
@@ -1117,6 +1146,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
+				ArrivalRate: 16, // model-level, sum of both variants' per-pod rates
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// Model-level: totalDemand=3200 < totalAnticipated≈5564 → no scale-up needed.
@@ -1145,6 +1175,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			}
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
+				ArrivalRate: 30, // model-level, sum of both variants' per-pod rates
 			})
 			Expect(err).NotTo(HaveOccurred())
 			// TA leaves RC/SC zero; engine post-step computes them. Assert the raw
@@ -1209,7 +1240,12 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				aggregation.SumTotalAnticipatedSupply(result.VariantCapacities), 1e-9))
 		})
 
-		It("TotalDemand equals aggregation.SumTotalDemand(VariantCapacities) plus queue demand", func() {
+		It("TotalDemand equals input.ArrivalRate×avgOL plus queue demand", func() {
+			// Commit 2 retires the old invariant (TotalDemand = SumTotalDemand
+			// (VariantCapacities) + queue demand): the model-level arrival term
+			// (input.ArrivalRate × avgOL) replaced the per-variant-summed
+			// contribution as TotalDemand's base. This verifies the new invariant
+			// with the same "queue demand added on top" structure as before.
 			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilA, olA, prefixA, kvMaxA, bA, kValuesA)
 			replicas := []domain.ReplicaMetrics{
 				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
@@ -1217,18 +1253,20 @@ var _ = Describe("ThroughputAnalyzer", func() {
 					PrefixCacheHitRate: prefixA, TotalKvCapacityTokens: kvMaxA, ArrivalRate: 5},
 			}
 			const queueSize = int64(10)
+			const modelArrivalRate = 7.0 // model-level; independent of the replica's per-pod ArrivalRate
 			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: replicas,
 				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: queueSize},
+				ArrivalRate:    modelArrivalRate,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			variantDemand := aggregation.SumTotalDemand(result.VariantCapacities)
-			// TotalDemand = variant demand + queue demand; queue demand > 0 when queue is non-empty.
-			Expect(result.TotalDemand).To(BeNumerically(">=", variantDemand))
-			// Verify queue demand was added: TotalDemand - variantDemand should be positive.
-			Expect(result.TotalDemand - variantDemand).To(BeNumerically(">", 0))
+			// avgOL is the tracked shape's AvgOutputTokens (olA), seeded by injectWindowObs.
+			arrivalDecodeDemand := modelArrivalRate * olA
+			Expect(result.TotalDemand).To(BeNumerically(">=", arrivalDecodeDemand))
+			// Verify queue demand was added on top: TotalDemand - arrivalDecodeDemand > 0.
+			Expect(result.TotalDemand - arrivalDecodeDemand).To(BeNumerically(">", 0))
 		})
 
 		It("RoleCapacities[role].TotalAnticipatedSupply matches per-role aggregation", func() {
@@ -1301,6 +1339,160 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// prefill TotalDemand unchanged (queue demand skips prefill role).
 			Expect(resultWithQ.RoleCapacities["prefill"].TotalDemand).To(
 				BeNumerically("~", resultNoQ.RoleCapacities["prefill"].TotalDemand, 1e-9))
+		})
+	})
+
+	Describe("Analyze — model-level demand invariants", func() {
+		const (
+			ilM    = 5000.0
+			olM    = 200.0 // L: model-level avgOL, tracked via injectWindowObs
+			prefix = 0.1
+			kvMax  = int64(1024000)
+			A      = 0.073
+			B      = 0.006
+		)
+		kValues := []float64{0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
+
+		It("TotalDemand's decode component equals R×L, independent of per-pod ArrivalRate", func() {
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilM, olM, prefix, kvMax, B, kValues)
+
+			const modelArrivalRate = 8.0 // R
+			replica := domain.ReplicaMetrics{
+				VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+				AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+				PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+				ArrivalRate: 999, // deliberately unrelated to R — must not affect TotalDemand
+			}
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID: modelID, Namespace: namespace,
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
+				ArrivalRate:    modelArrivalRate,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			// No queue: TotalDemand == R×L exactly.
+			Expect(result.TotalDemand).To(BeNumerically("~", modelArrivalRate*olM, 1e-6))
+		})
+
+		It("still produces demand when per-pod ArrivalRate is 0 everywhere but model-level ArrivalRate is set (orphan-merge regression backstop)", func() {
+			// Regression backstop for the benchmark symptom this PR fixes: a fragile
+			// EPP↔vLLM per-instance key merge could orphan every replica's per-pod
+			// ArrivalRate (all zero) while EPP is actually deployed and dispatching.
+			// TA must not go blind in that case now that demand is model-level.
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilM, olM, prefix, kvMax, B, kValues)
+
+			replicas := []domain.ReplicaMetrics{
+				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+					AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+					ArrivalRate: 0, // orphaned: per-pod merge failed for every replica
+				},
+				{VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+					AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+					ArrivalRate: 0,
+				},
+			}
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
+				ArrivalRate: 12, // model-level query is unaffected by the per-instance merge
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.TotalDemand).To(BeNumerically(">", 0),
+				"model-level ArrivalRate must still drive demand despite all-zero per-pod ArrivalRate")
+		})
+
+		It("combines the model-level arrival term and queue term exactly once, role-distributed with no double-count", func() {
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v-decode", ilM, olM, prefix, kvMax, B, kValues)
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v-prefill", ilM, olM, prefix, kvMax, B, kValues)
+
+			const modelArrivalRate = 6.0
+			replicas := []domain.ReplicaMetrics{
+				{VariantName: "v-decode", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+					AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax},
+				{VariantName: "v-prefill", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+					AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+					PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax},
+			}
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: replicas,
+				VariantStates: []domain.VariantReplicaState{
+					{VariantName: "v-decode", Role: "decode"},
+					{VariantName: "v-prefill", Role: "prefill"},
+				},
+				ArrivalRate:    modelArrivalRate,
+				SchedulerQueue: &domain.SchedulerQueueMetrics{QueueSize: 100},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			// avgOL is olM (only v-decode counts — v-prefill is excluded from the
+			// non-prefill accumulator), so the arrival term is exactly R×L.
+			arrivalDecodeDemand := modelArrivalRate * olM
+			queueDemand := result.TotalDemand - arrivalDecodeDemand
+			Expect(queueDemand).To(BeNumerically(">", 0), "queue term must be added on top, not folded in")
+
+			// No double-count: role sums reconstruct the model-level total exactly.
+			Expect(result.RoleCapacities).NotTo(BeNil())
+			roleSum := 0.0
+			for _, rc := range result.RoleCapacities {
+				roleSum += rc.TotalDemand
+			}
+			Expect(roleSum).To(BeNumerically("~", result.TotalDemand, 1e-6),
+				"sum of per-role TotalDemand must equal model-level TotalDemand exactly once")
+		})
+
+		It("arrival→0 reduces demand to zero even when the engine is still completing requests (no served-rate floor)", func() {
+			// No served-rate floor: a draining engine keeps RequestRate > 0 for a while after
+			// arrivals stop; that must not be used as a demand floor, or scale-down
+			// would be wrongly blocked.
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v1", ilM, olM, prefix, kvMax, B, kValues)
+
+			replica := domain.ReplicaMetrics{
+				VariantName: "v1", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+				AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: olM,
+				PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+				ArrivalRate: 0,  // no new arrivals this window
+				RequestRate: 20, // still draining in-flight/queued work from before
+			}
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID: modelID, Namespace: namespace,
+				ReplicaMetrics: []domain.ReplicaMetrics{replica},
+				ArrivalRate:    0, // model-level: no arrivals now
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.TotalDemand).To(Equal(0.0),
+				"model-level demand must not be held up by a still-nonzero RequestRate")
+		})
+
+		It("weights avgOL by replica count across non-prefill variants, not an equal-per-variant mean", func() {
+			// v-light: 1 replica, OL=100. v-heavy: 3 replicas, OL=300.
+			// Weighted (correct):   avgOL = (1×100 + 3×300) / (1+3) = 1000/4 = 250
+			// Unweighted (wrong):   avgOL = (100 + 300) / 2 = 200
+			// These must diverge — pins that the fix is weighted, not a mean-of-means.
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v-light", ilM, 100, prefix, kvMax, B, kValues)
+			injectWindowObs(analyzer, ctx, modelID, namespace, "v-heavy", ilM, 300, prefix, kvMax, B, kValues)
+
+			lightReplica := domain.ReplicaMetrics{
+				VariantName: "v-light", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+				AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: 100,
+				PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+			}
+			heavyReplica := domain.ReplicaMetrics{
+				VariantName: "v-heavy", KvCacheUsage: 0.50, KvUsageInstant: 0.50,
+				AvgITL: A*0.50 + B, AvgInputTokens: ilM, AvgOutputTokens: 300,
+				PrefixCacheHitRate: prefix, TotalKvCapacityTokens: kvMax,
+			}
+			replicas := []domain.ReplicaMetrics{lightReplica, heavyReplica, heavyReplica, heavyReplica}
+
+			const modelArrivalRate = 10.0
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID: modelID, Namespace: namespace, ReplicaMetrics: replicas,
+				ArrivalRate: modelArrivalRate,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.TotalDemand).To(BeNumerically("~", modelArrivalRate*250.0, 1e-6),
+				"avgOL must be replica-count-weighted (250), not an equal-per-variant mean (200)")
 		})
 	})
 
@@ -1626,6 +1818,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ModelID:        modelID,
 				Namespace:      namespace,
 				ReplicaMetrics: []domain.ReplicaMetrics{replicaG(kStar, 20, gps)},
+				ArrivalRate:    20, // model-level, mirrors the single replica's per-pod rate
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.SpareCapacity).To(Equal(0.0))
@@ -1839,5 +2032,44 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			// Shape is derived from the healthy pod.
 			Expect(state.Shape.KVreq).To(BeNumerically(">", 0))
 		})
+	})
+})
+
+var _ = Describe("computeLocalDemand", func() {
+	shape := WorkloadShape{
+		AvgOutputTokens: 50, // above DefaultMinDecodeOLForLocalDemand
+		KVreq:           1024,
+	}
+	model := ITLModel{A: 0.073, B: 0.006}
+
+	replicaAt := func(k float64) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{
+			KvUsageInstant:        k,
+			TotalKvCapacityTokens: 65536,
+		}
+	}
+
+	It("skips a replica with NaN KvUsageInstant but still counts the others", func() {
+		healthy := replicaAt(0.5)
+		nanReplica := replicaAt(math.NaN())
+
+		total := computeLocalDemand([]domain.ReplicaMetrics{healthy}, shape, model)
+		Expect(total).To(BeNumerically(">", 0))
+
+		withNaN := computeLocalDemand([]domain.ReplicaMetrics{healthy, nanReplica}, shape, model)
+		Expect(withNaN).To(BeNumerically("~", total, 1e-9))
+		Expect(math.IsNaN(withNaN)).To(BeFalse())
+	})
+
+	It("skips a replica with KvUsageInstant > 1", func() {
+		overRange := replicaAt(1.5)
+		total := computeLocalDemand([]domain.ReplicaMetrics{overRange}, shape, model)
+		Expect(total).To(Equal(0.0))
+	})
+
+	It("skips a replica whose model produces a NaN ITL", func() {
+		nanModel := ITLModel{A: math.NaN(), B: 0.006}
+		total := computeLocalDemand([]domain.ReplicaMetrics{replicaAt(0.5)}, shape, nanModel)
+		Expect(total).To(Equal(0.0))
 	})
 })

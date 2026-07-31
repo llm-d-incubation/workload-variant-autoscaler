@@ -12,20 +12,26 @@ the quota limiter. The implementation closes
 
 ## Enabling
 
-Two settings must both be in place for quota enforcement to take effect:
+Two settings must both be in place, **both in the saturation-scaling ConfigMap's
+`default` entry**, for quota enforcement to take effect:
 
-1. **`--limiter-type=quota`** (or `LIMITER_TYPE=quota`) at startup, plus
-   `--quota-config-file` pointing at the quota ConfigMap. This selects the quota
-   limiter as the GPU limiter built in `main.go`.
-2. **`enableLimiter: true`** in the saturation-scaling ConfigMap. The limiter is
-   only consulted on the limited optimizer path (`GreedyByScoreOptimizer`),
-   which the engine selects when `enableLimiter` is true; with the default
-   `enableLimiter: false` the engine runs the unlimited `CostAwareOptimizer`,
-   which ignores all constraints — so quota caps are **not** enforced. This is
-   the same coupling the physical-inventory limiter has.
+1. **A `limiters:` list containing a `quota` entry** on the `default` entry. This
+   is the sole source that selects the quota limiter (see
+   [Selection & lifecycle](#selection--lifecycle)); it is applied **live** — no
+   restart. With no `limiters:` list, the physical-inventory limiter is used.
+2. **`enableLimiter: true`** on the `default` entry. The limiter is only consulted
+   on the limited optimizer path (`GreedyByScoreOptimizer`), which the engine
+   selects when `enableLimiter` is true; with the default `enableLimiter: false`
+   the engine runs the unlimited `CostAwareOptimizer`, which ignores all
+   constraints — so quota caps are **not** enforced. This is the same coupling the
+   physical-inventory limiter has.
 
-With `--limiter-type=quota` set but `enableLimiter: false`, the limiter is
+With a `limiters: quota` entry but `enableLimiter: false`, the limiter is
 constructed but never applied; replicas scale unconstrained by quota.
+
+The quota entries use the same schema described below; place them inline under the
+saturation `default` entry's `limiters:` list (see
+[saturation-scaling-config.md](saturation-scaling-config.md#limiters-cluster-default-only-live)).
 
 ## Scope
 
@@ -48,13 +54,11 @@ The limiter is declared via a ConfigMap parsed into `QuotaLimiterEntries`. The
 top-level `limiters` key holds a list of entries; each entry has a `scope` of
 either `cluster` or `namespace`.
 
-> **`type:` vs `--limiter-type`.** Which limiter *implementation* runs is chosen
-> globally at startup by `--limiter-type` (see [Startup wiring](#startup-wiring)),
-> not per entry. The per-entry `type:` field is a forward-looking discriminator
-> that must currently always be `"quota"` — `type: inventory` is **not** valid
-> inside this YAML and the config is rejected if any other value is used (see
-> [Validation](#validation)). The field exists so future limiter types (e.g.
-> `reservation`) can share this schema.
+> **Entry `type:`.** Within a quota entry the `type:` field must be `"quota"`.
+> (The saturation `limiters:` list additionally accepts a `{type: gpu-inventory}`
+> entry to select the physical limiter instead — see
+> [Selection & lifecycle](#selection--lifecycle).) The field exists so future
+> limiter types (e.g. `reservation`) can share this schema.
 
 ### Cluster scope
 
@@ -157,15 +161,12 @@ configuration mistake without rejecting the ConfigMap.
 
 ### Reload lifecycle
 
-The quota configuration is read **once at startup** (from `--quota-config-file` /
-`QUOTA_CONFIG_FILE`, or the unified config file) and held in memory for the life
-of the process. The running controller does **not** watch the file or reload it.
-
-This matters when the quota file is mounted from a ConfigMap: Kubernetes updates
-the file on disk as the ConfigMap changes, but the controller keeps using the
-values it loaded at startup. A quota change therefore takes effect only after the
-controller pod restarts (e.g. `kubectl rollout restart deployment/...`). Plan
-quota edits accordingly — there is no hot reload.
+The quota configuration lives in the saturation-scaling ConfigMap and is applied
+**live**. The controller watches that ConfigMap, and the saturation engine rebuilds
+the GPU limiter at the top of the next optimization cycle whenever the effective
+limiter mode or quota entries change (`Engine.refreshLimiter`, keyed by
+`limiterSignature`). Editing the `limiters:` list therefore takes effect without a
+controller restart — no `kubectl rollout restart` required.
 
 ## Pipeline integration
 
@@ -338,12 +339,13 @@ intended model:
 - The chain takes the minimum: a decision must fit under both.
 
 In the initial implementation the two are **mutually exclusive**, not composed:
-`--limiter-type` selects either physical inventory **or** quota. There is no
-`min(physical, quota)` chain yet (tracked in sub-issue #1003), so quota mode does
-**not** enforce physical bounds at all — a deployment in quota mode will allocate
-beyond the cluster's actual capacity if the quota permits (the surplus simply
-yields `Pending` pods, not an isolation breach). Set quota caps at or below real
-capacity until composition with `TypeInventory` lands.
+the `limiters:` list selects either physical inventory **or** quota (a `quota`
+entry wins over a `gpu-inventory` entry). There is no `min(physical, quota)` chain
+yet (tracked in sub-issue #1003), so quota mode does **not** enforce physical
+bounds at all — a deployment in quota mode will allocate beyond the cluster's
+actual capacity if the quota permits (the surplus simply yields `Pending` pods,
+not an isolation breach). Set quota caps at or below real capacity until
+composition with `TypeInventory` lands.
 
 ## DecisionStep trace
 
@@ -364,18 +366,21 @@ it is a fail-closed **deny** and *does* record a `WasConstrained` step (reason
 `WasLimited` / `LimitedBy` per limiter; the DecisionStep here carries the
 finer-grained scope/type detail.
 
-## Startup wiring
+## Selection & lifecycle
 
-The controller selects between physical-inventory and quota enforcement at
-startup via the `--limiter-type` flag (or `LIMITER_TYPE` env var):
+The controller selects between physical-inventory and quota enforcement from the
+`limiters:` list on the saturation-scaling ConfigMap's **`default`** entry — the
+sole source, honored only at that cluster-scope entry (like `enableRescale`):
 
-| Value | Behavior |
-|-------|----------|
-| `inventory` (default) | Today's path — `TypeInventory` discovers physical GPUs via the GPU operator and caps decisions at `min(physical, requested)`. |
-| `quota` | Loads operator-declared quotas from `--quota-config-file` (or `QUOTA_CONFIG_FILE` env var). The two are mutually exclusive in the initial implementation (composing with physical inventory as `min(physical, quota)` is tracked in [#1003](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1003)) — quota mode does **not** consult physical inventory. |
+| `limiters:` on `default` | Behavior |
+|--------------------------|----------|
+| absent, or a `{type: gpu-inventory}` entry | `TypeInventory` discovers physical GPUs via the GPU operator and caps decisions at `min(physical, requested)`. This is the default. |
+| a `{type: quota, ...}` entry | Operator-declared quotas from the inline entries. A `quota` entry wins over any `gpu-inventory` entry in the same list. The two are mutually exclusive in the initial implementation (composing with physical inventory as `min(physical, quota)` is tracked in [#1003](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues/1003)) — quota mode does **not** consult physical inventory. |
 
-The selector lives on `*config.Config` (`LimiterMode()`, `QuotaConfigFile()`,
-`QuotaEntries()`). The factory in
+The selection is exposed on `*config.Config` as `EffectiveLimiterMode()` and
+`EffectiveQuotaEntries()`, both reading the live ConfigMap. The saturation engine
+rebuilds the limiter when they change (`Engine.refreshLimiter`), so edits apply
+without a restart. The factory in
 `internal/engines/pipeline/limiter_factory.go` translates the selection into a
 concrete `pipeline.Limiter`:
 
@@ -395,32 +400,34 @@ concrete `pipeline.Limiter`:
 `CurrentReplicas * GPUsPerReplica` summed by `(Namespace, AcceleratorName)`.
 No additional discovery or API calls are needed.
 
-### Example startup invocations
+### Example configuration
 
-Inventory mode (default; no new flags needed):
+Inventory mode is the default — no `limiters:` list is required. To select quota
+mode, add a `quota` entry to the saturation `default` entry's `limiters:` list:
 
-```bash
-manager --metrics-bind-address=:8443
+```yaml
+# saturation-scaling ConfigMap, data."default":
+default: |
+  analyzers:
+    - type: saturation
+  enableLimiter: true          # required for the limiter to actually apply
+  limiters:
+    - type: quota
+      name: cluster-h100
+      scope: cluster
+      quotas: { H100: 32 }
 ```
 
-Quota mode pointing at a YAML file:
-
-```bash
-manager --limiter-type=quota --quota-config-file=/etc/wva/quota.yaml
-```
-
-The same selection can be provided via env vars
-(`LIMITER_TYPE=quota QUOTA_CONFIG_FILE=/etc/wva/quota.yaml`) or via the unified
-config file.
-
-Validation rejects the combination `--limiter-type=quota` with no
-`--quota-config-file`, as well as a quota file that parses to an empty entries
-list, so an operator gets a clear startup error in either misconfiguration.
+Inline quota entries are validated at ConfigMap parse time
+(`SaturationScalingConfig.validateLimiters`): each `quota` entry is checked against
+the `QuotaLimiterEntries` schema (name uniqueness, scope, per-type ranges), and a
+`gpu-inventory` entry must carry no quota fields. Invalid entries are skipped with
+an error log/metric, exactly like any other invalid saturation entry.
 
 ## Resource access in quota mode
 
 Quota mode makes the controller fully independent of physical node
-discovery. With `--limiter-type=quota`:
+discovery. When the effective limiter mode is quota:
 
 - The limiter, inventory, allocator, and factory paths do not call
   `discovery.K8sWithGpuOperator.Discover` / `DiscoverUsage` /
@@ -431,18 +438,17 @@ discovery. With `--limiter-type=quota`:
   `calculateUsedGPUsByNamespace`.
 - `collector.CollectInventoryK8S` (called from the saturation engine's
   per-cycle `optimize` when `WVA_LIMITED_MODE=true`) is **also** gated on
-  the limiter type via `shouldCollectClusterInventory` — it only runs when
-  `LimiterType == "inventory"`. This keeps the "no Node API access in
-  quota mode" contract intact even if an operator combines
-  `--limiter-type=quota` with `WVA_LIMITED_MODE=true`. When that
-  combination is detected at startup, `main.go` emits an informational
-  log so the operator sees that their inventory logging is intentionally
-  suppressed.
+  the effective limiter mode via `shouldCollectClusterInventory` — it only runs
+  when `EffectiveLimiterMode() == inventory`. This keeps the "no Node API access
+  in quota mode" contract intact even if an operator combines quota mode with
+  `WVA_LIMITED_MODE=true`. When that combination is detected at startup,
+  `main.go` emits an informational log so the operator sees that their inventory
+  logging is intentionally suppressed.
 
-Combination matrix:
+Combination matrix (limiter mode is the effective mode from the ConfigMap):
 
-| `--limiter-type` | `WVA_LIMITED_MODE` | Node API access? |
-|------------------|--------------------|------------------|
+| Effective limiter mode | `WVA_LIMITED_MODE` | Node API access? |
+|------------------------|--------------------|------------------|
 | `inventory` (default) | `false` (default) | Yes, via the limiter's `Refresh` cycle. |
 | `inventory` | `true` | Yes, via both the limiter and `CollectInventoryK8S`. |
 | `quota` | `false` | **No.** |

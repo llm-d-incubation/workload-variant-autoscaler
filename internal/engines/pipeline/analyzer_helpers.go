@@ -27,6 +27,41 @@ func rolesOf(vcs []domain.VariantCapacity) []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
+// Sentinel VariantCapacity.Reason values that indicate a variant carries no
+// usable capacity signal (see domain.VariantCapacity.Reason doc). Analyzers
+// that skip a variant entirely on failure (e.g. throughput's ITL-model
+// resolution) never emit these — the variant is simply absent from
+// VariantCapacities, which ResultIsInformative also treats as uninformative.
+//
+// These are the single source of truth for the no-data/error sentinels:
+// producer packages (e.g. saturation_v2) reference them rather than
+// re-declaring the literals, so ResultIsInformative and the producers cannot
+// drift apart.
+const (
+	// ReasonNoData marks a variant for which the analyzer had no usable input
+	// (no live replicas and no store record).
+	ReasonNoData = "no-data"
+	// ReasonError marks a variant whose capacity could not be resolved due to
+	// an internal analyzer error.
+	ReasonError = "error"
+)
+
+// ResultIsInformative reports whether nr carries a usable capacity signal:
+// a non-nil Result with at least one VariantCapacity whose Reason is not a
+// no-data/error sentinel. Used by the engine to decide whether to refresh
+// the analyzer's last-good-analysis timestamp for the liveness gate.
+func ResultIsInformative(nr NamedAnalyzerResult) bool {
+	if nr.Result == nil {
+		return false
+	}
+	for _, vc := range nr.Result.VariantCapacities {
+		if vc.Reason != ReasonNoData && vc.Reason != ReasonError {
+			return true
+		}
+	}
+	return false
+}
+
 // applyAllocation subtracts the capacity provided by n replicas of variant v
 // from each analyzer's Remaining counter. Clamps to 0. The slice is the working
 // allocation state; Result.RequiredCapacity is never mutated.
@@ -204,12 +239,17 @@ func variantsForRole(vcs []domain.VariantCapacity, role string) []domain.Variant
 
 // safeRemovalReplicasForRole returns the number of replicas of variant v that
 // can safely be removed — the minimum of floor(RoleSpare[role]_i / PRC_i[v])
-// across analyzers that have variant v and a non-zero PRC. Returns 0 if any
-// contributing analyzer has RoleSpare[role] ≤ 0 or RoleSpare is nil.
+// across live analyzers that have variant v and a non-zero PRC. Non-live
+// analyzers (no metrics, error state, never analyzed, or stale) are skipped
+// and do not constrain the minimum. Returns 0 if any contributing analyzer
+// has RoleSpare[role] ≤ 0 or RoleSpare is nil.
 func safeRemovalReplicasForRole(s []NamedAnalyzerResult, v, role string) int {
 	smallest := math.MaxInt
 	found := false
 	for _, e := range s {
+		if !e.Live {
+			continue // non-live analyzers do not constrain the safe-removal minimum
+		}
 		if e.Result == nil || e.RoleSpare == nil {
 			continue
 		}
@@ -231,6 +271,10 @@ func safeRemovalReplicasForRole(s []NamedAnalyzerResult, v, role string) int {
 
 // applyDeallocationForRole decrements each analyzer's RoleSpare[role] by
 // n × PRC_i[v]. Clamps to 0. Never mutates Result.
+// Intentionally not Live-gated: non-live entries are already excluded from
+// the veto (needsScaleDownForRole) and the safe-removal minimum
+// (safeRemovalReplicasForRole), so mutating their RoleSpare here is harmless
+// — nothing reads it back.
 func applyDeallocationForRole(s []NamedAnalyzerResult, v, role string, n int) {
 	for i := range s {
 		if s[i].Result == nil || s[i].RoleSpare == nil {
@@ -247,22 +291,25 @@ func applyDeallocationForRole(s []NamedAnalyzerResult, v, role string, n int) {
 	}
 }
 
-// needsScaleDownForRole reports whether every analyzer agrees this role has
-// spare capacity (all-down gate, scoped to one role). Returns false if any
-// analyzer's RoleSpare[role] ≤ 0 or RoleSpare is nil.
+// needsScaleDownForRole reports whether every live analyzer agrees this role
+// has spare capacity (all-down gate, scoped to one role). Non-live analyzers
+// (no metrics, error state, never analyzed, or stale) do not veto — this
+// applies uniformly, including saturation's token-capacity result; there is
+// no name-based exemption. Returns false if any live analyzer's
+// RoleSpare[role] ≤ 0 or RoleSpare is nil. Safety floor: if no live analyzer
+// remains, there is no current basis to scale down, so this returns false.
 func needsScaleDownForRole(s []NamedAnalyzerResult, role string) bool {
-	if len(s) == 0 {
-		return false
-	}
+	liveCount := 0
 	for _, e := range s {
-		if e.Result == nil || e.RoleSpare == nil {
+		if !e.Live {
+			continue // non-live analyzers do not veto (no metrics / error / never analyzed)
+		}
+		if e.Result == nil || e.RoleSpare == nil || e.RoleSpare[role] <= 0 {
 			return false
 		}
-		if e.RoleSpare[role] <= 0 {
-			return false
-		}
+		liveCount++
 	}
-	return true
+	return liveCount > 0
 }
 
 // RolePickFn is the role-generic optimizer variant selector for the unified

@@ -85,6 +85,19 @@ func IsScaleToZeroEnabled(configData ScaleToZeroConfigData, modelID string) bool
 	return strings.EqualFold(os.Getenv("WVA_SCALE_TO_ZERO"), "true")
 }
 
+// ResolveScaleToZeroEnabled reports whether scale-to-zero is enabled for a model,
+// preferring the inline scaleToZero setting on the resolved saturation scaling
+// entry when present. When that inline field is nil (or sat is nil), it falls
+// back to the separate scale-to-zero ConfigMap and env precedence via
+// IsScaleToZeroEnabled. Retention period is unaffected — it always comes from the
+// scale-to-zero ConfigMap.
+func ResolveScaleToZeroEnabled(sat *SaturationScalingConfig, configData ScaleToZeroConfigData, modelID string) bool {
+	if sat != nil && sat.ScaleToZero != nil && sat.ScaleToZero.Enabled != nil {
+		return *sat.ScaleToZero.Enabled
+	}
+	return IsScaleToZeroEnabled(configData, modelID)
+}
+
 // ValidateRetentionPeriod validates a retention period string.
 // Returns the parsed duration and an error if validation fails.
 func ValidateRetentionPeriod(retentionPeriod string) (time.Duration, error) {

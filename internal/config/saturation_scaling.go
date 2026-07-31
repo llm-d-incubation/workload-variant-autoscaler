@@ -71,18 +71,131 @@ type SaturationScalingConfig struct {
 	// Analyzers configures the set of analyzers and their weights.
 	// When empty and AnalyzerName is "saturation", defaults to
 	// [{Name: "saturation", Score: 1.0, Enabled: true}].
+	//
+	// Deleting the analyzers section (and not setting analyzerName: saturation)
+	// opts this entry out to the legacy V1 engine — see IsV2.
 	Analyzers []AnalyzerScoreConfig `yaml:"analyzers,omitempty"`
+
+	// ScaleToZero optionally enables/disables scaling to zero replicas for this
+	// entry. When set, it overrides the separate wva-model-scale-to-zero-config
+	// ConfigMap for the matching model/namespace; when nil, that ConfigMap (and
+	// the WVA_SCALE_TO_ZERO env fallback) governs — see ResolveScaleToZeroEnabled.
+	ScaleToZero *ScaleToZeroEnvelope `yaml:"scaleToZero,omitempty"`
+
+	// Limiters is the sole source that selects the GPU limiter for the scaling
+	// pipeline; it is applied live (no restart) and is honored only on the cluster
+	// "default" entry (a budget-scope setting, like EnableRescale). A limiters list
+	// selects a single mode — a quota entry wins over any gpu-inventory entry.
+	// Each entry is either
+	//   - {type: gpu-inventory}  — physical GPU limiter, no quota fields; or
+	//   - {type: quota, ...}     — an inline quota entry (see QuotaLimiterConfig).
+	// With no limiters declared, the physical-inventory limiter is used.
+	// See Config.EffectiveLimiterMode / Config.EffectiveQuotaEntries.
+	Limiters []QuotaLimiterConfig `yaml:"limiters,omitempty"`
 }
+
+// ScaleToZeroEnvelope is the inline scale-to-zero setting on a scaling entry.
+// Enabled is a pointer so an absent field (nil) means "inherit from the separate
+// scale-to-zero ConfigMap" rather than "disabled".
+type ScaleToZeroEnvelope struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// limiterTypeGPUInventory is the inline Limiters type that selects the physical
+// GPU limiter. The other accepted types reuse the canonical LimiterType* values
+// ("inventory" alias, "quota"); analyzer types are not restricted to a closed set
+// so that externally-registered analyzers (see Engine.RegisterAnalyzer) work.
+const limiterTypeGPUInventory = "gpu-inventory"
 
 // AnalyzerScoreConfig configures an individual analyzer's weight in the
 // composite scoring function. Per-analyzer threshold overrides are optional;
 // when nil, the global top-level thresholds are used.
+//
+// Type and Parameters implement the ScalingPolicy plugin envelope (Phase 1 of
+// the proposal in llm-d/llm-d-workload-variant-autoscaler#1245):
+//
+//	analyzers:
+//	  - type: saturation
+//	    parameters: { scaleUpThreshold: 0.95 }
+//
+// Well-known parameter keys (scaleUpThreshold, scaleDownBoundary, score,
+// enabled) are folded into the typed fields below by Normalize(), so downstream
+// consumers keep reading the typed fields. Type falls back to Name when unset,
+// keeping the legacy `- name: saturation` form working unchanged.
 type AnalyzerScoreConfig struct {
-	Name              string   `yaml:"name"`
-	Enabled           *bool    `yaml:"enabled,omitempty"`           // default true
-	Score             float64  `yaml:"score,omitempty"`             // default 1.0
-	ScaleUpThreshold  *float64 `yaml:"scaleUpThreshold,omitempty"`  // overrides global
-	ScaleDownBoundary *float64 `yaml:"scaleDownBoundary,omitempty"` // overrides global
+	Type              string         `yaml:"type,omitempty"`              // plugin type; falls back to Name
+	Name              string         `yaml:"name"`                        //
+	Enabled           *bool          `yaml:"enabled,omitempty"`           // default true
+	Score             float64        `yaml:"score,omitempty"`             // default 1.0
+	ScaleUpThreshold  *float64       `yaml:"scaleUpThreshold,omitempty"`  // overrides global
+	ScaleDownBoundary *float64       `yaml:"scaleDownBoundary,omitempty"` // overrides global
+	Parameters        map[string]any `yaml:"parameters,omitempty"`        // plugin params; folded by Normalize
+}
+
+// EffectiveType returns the analyzer plugin type: the explicit Type when set,
+// otherwise the Name. Existing configs use `name:` as both identifier and type,
+// so this keeps them working while allowing the new `type:` form.
+func (a *AnalyzerScoreConfig) EffectiveType() string {
+	if a.Type != "" {
+		return a.Type
+	}
+	return a.Name
+}
+
+// Normalize folds well-known keys out of Parameters into the typed fields, so
+// downstream consumers keep reading Score/Enabled/ScaleUpThreshold/
+// ScaleDownBoundary. A typed field already set (from an explicit top-level key)
+// wins over the same key in Parameters. Unknown parameter keys are tolerated.
+// Returns an error if a known parameter has the wrong type.
+func (a *AnalyzerScoreConfig) Normalize() error {
+	if a.Parameters == nil {
+		return nil
+	}
+	if v, ok := a.Parameters["scaleUpThreshold"]; ok && a.ScaleUpThreshold == nil {
+		f, err := paramFloat("scaleUpThreshold", v)
+		if err != nil {
+			return err
+		}
+		a.ScaleUpThreshold = &f
+	}
+	if v, ok := a.Parameters["scaleDownBoundary"]; ok && a.ScaleDownBoundary == nil {
+		f, err := paramFloat("scaleDownBoundary", v)
+		if err != nil {
+			return err
+		}
+		a.ScaleDownBoundary = &f
+	}
+	if v, ok := a.Parameters["score"]; ok && a.Score == 0 {
+		f, err := paramFloat("score", v)
+		if err != nil {
+			return err
+		}
+		a.Score = f
+	}
+	if v, ok := a.Parameters["enabled"]; ok && a.Enabled == nil {
+		b, ok := v.(bool)
+		if !ok {
+			return fmt.Errorf("analyzer %q: parameter \"enabled\" must be a boolean, got %T", a.EffectiveType(), v)
+		}
+		a.Enabled = &b
+	}
+	return nil
+}
+
+// paramFloat coerces a YAML-decoded plugin parameter to float64. yaml.v3 decodes
+// integers as int and decimals as float64 when the target is interface{}, so both
+// are accepted.
+func paramFloat(key string, v any) (float64, error) {
+	switch n := v.(type) {
+	case float64:
+		return n, nil
+	case int:
+		return float64(n), nil
+	case int64:
+		return float64(n), nil
+	default:
+		return 0, fmt.Errorf("parameter %q must be a number, got %T", key, v)
+	}
 }
 
 // EffectiveScaleUpThreshold returns the per-analyzer threshold if set,
@@ -133,6 +246,18 @@ const (
 	DefaultScaleUpThreshold  = 0.85
 	DefaultScaleDownBoundary = 0.70
 )
+
+// Normalize folds each analyzer's Parameters into its typed fields. Call it at
+// parse time, before ApplyDefaults() and Validate(), so defaulting and validation
+// see the folded values.
+func (c *SaturationScalingConfig) Normalize() error {
+	for i := range c.Analyzers {
+		if err := c.Analyzers[i].Normalize(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // ApplyDefaults fills in zero-valued fields with their defaults.
 // V1 thresholds (KvCacheThreshold, QueueLengthThreshold, KvSpareTrigger, QueueSpareTrigger)
@@ -237,6 +362,12 @@ func (c *SaturationScalingConfig) Merge(override SaturationScalingConfig) {
 	if len(override.Analyzers) > 0 {
 		c.Analyzers = override.Analyzers
 	}
+	if override.ScaleToZero != nil {
+		c.ScaleToZero = override.ScaleToZero
+	}
+	// Limiters is intentionally NOT merged: it is a cluster-"default"-scope setting
+	// read only from the global default entry (see Config.EffectiveLimiterMode), so
+	// a per-model override's limiters would never be consumed.
 	if override.ModelID != "" {
 		c.ModelID = override.ModelID
 	}
@@ -299,25 +430,64 @@ func (c *SaturationScalingConfig) Validate() error {
 			return fmt.Errorf("scaleDownBoundary must be in (0, 1], got %.2f", c.ScaleDownBoundary)
 		}
 
-		// Per-analyzer threshold overrides
+		// Per-analyzer threshold overrides. Analyzer types are intentionally NOT
+		// restricted to a closed set: an unrecognized type is ignored at runtime
+		// (no registered analyzer matches it), and rejecting it here would drop the
+		// whole entry — breaking the Engine.RegisterAnalyzer extension path and
+		// forward-compat with analyzers added in a newer release.
 		for _, a := range c.Analyzers {
 			if a.ScaleUpThreshold != nil {
 				if *a.ScaleUpThreshold <= 0 || *a.ScaleUpThreshold > 1 {
-					return fmt.Errorf("analyzer %q: scaleUpThreshold must be in (0, 1], got %.2f", a.Name, *a.ScaleUpThreshold)
+					return fmt.Errorf("analyzer %q: scaleUpThreshold must be in (0, 1], got %.2f", a.EffectiveType(), *a.ScaleUpThreshold)
 				}
 			}
 			if a.ScaleDownBoundary != nil {
 				if *a.ScaleDownBoundary <= 0 || *a.ScaleDownBoundary > 1 {
-					return fmt.Errorf("analyzer %q: scaleDownBoundary must be in (0, 1], got %.2f", a.Name, *a.ScaleDownBoundary)
+					return fmt.Errorf("analyzer %q: scaleDownBoundary must be in (0, 1], got %.2f", a.EffectiveType(), *a.ScaleDownBoundary)
 				}
 			}
 			up := a.EffectiveScaleUpThreshold(c.ScaleUpThreshold)
 			down := a.EffectiveScaleDownBoundary(c.ScaleDownBoundary)
 			if up <= down {
-				return fmt.Errorf("analyzer %q: scaleUpThreshold (%.2f) must be > scaleDownBoundary (%.2f)", a.Name, up, down)
+				return fmt.Errorf("analyzer %q: scaleUpThreshold (%.2f) must be > scaleDownBoundary (%.2f)", a.EffectiveType(), up, down)
 			}
 		}
 	}
 
+	if err := c.validateLimiters(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateLimiters checks the inline Limiters list. gpu-inventory/inventory
+// entries must carry no quota fields; quota entries are validated end-to-end by
+// the existing QuotaLimiterEntries.Validate() (name uniqueness, scope, per-type
+// ranges), so the inline and file-based quota schemas stay identical.
+func (c *SaturationScalingConfig) validateLimiters() error {
+	if len(c.Limiters) == 0 {
+		return nil
+	}
+	var quotaOnes []QuotaLimiterConfig
+	for i, l := range c.Limiters {
+		switch l.Type {
+		case limiterTypeGPUInventory, string(LimiterTypeInventory):
+			if l.Scope != "" || len(l.ClusterQuotas) > 0 || len(l.NamespaceQuotas) > 0 || len(l.Exclude) > 0 {
+				return fmt.Errorf("limiters[%d] (type %q): must not set quota fields (scope/quotas/namespaceQuotas/exclude)", i, l.Type)
+			}
+		case string(LimiterTypeQuota):
+			quotaOnes = append(quotaOnes, l)
+		default:
+			return fmt.Errorf("limiters[%d]: unknown limiter type %q (valid: %q, %q, %q)",
+				i, l.Type, limiterTypeGPUInventory, LimiterTypeInventory, LimiterTypeQuota)
+		}
+	}
+	if len(quotaOnes) > 0 {
+		entries := QuotaLimiterEntries{Limiters: quotaOnes}
+		if _, err := entries.Validate(); err != nil {
+			return fmt.Errorf("limiters: %w", err)
+		}
+	}
 	return nil
 }

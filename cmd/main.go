@@ -95,26 +95,6 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-// throughputAnalyzerEnabled reports whether any saturation config entry lists
-// the throughput analyzer with enabled != false. Startup-time gate: when no
-// entry enables throughput anywhere, the analyzer is never registered, so it
-// cannot participate in scaling decisions and cannot veto scale-down.
-//
-// This is independent of the per-cycle effectiveEnabled opt-in check in the
-// saturation engine, which governs participation per namespace/model once the
-// analyzer is registered. Runtime enablement after controller start requires a
-// restart because RegisterAnalyzer is frozen after StartOptimizeLoop.
-func throughputAnalyzerEnabled(cfg *config.Config) bool {
-	for _, sc := range cfg.SaturationConfig() {
-		for _, aw := range sc.Analyzers {
-			if aw.Name == throughput.AnalyzerName && (aw.Enabled == nil || *aw.Enabled) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // nolint:gocyclo
 func main() {
 	// Command-line flags
@@ -157,15 +137,6 @@ func main() {
 	flag.Duration("rest-client-timeout", 60*time.Second,
 		"The timeout for REST API calls to the Kubernetes API server. "+
 			"Increased from default ~30s to 60s for better resilience against network latency.")
-
-	flag.String("limiter-type", "inventory",
-		"GPU limiter implementation: 'inventory' (default; physical-capacity-based) or "+
-			"'quota' (operator-declared per-GPU-type quotas at cluster and/or namespace scope). "+
-			"When 'quota' is selected, --quota-config-file must point at a YAML file "+
-			"containing a QuotaLimiterEntries document.")
-	flag.String("quota-config-file", "",
-		"Path to a YAML file declaring QuotaLimiterEntries. Required when --limiter-type=quota. "+
-			"See docs/developer-guide/quota-limiter.md for the schema and examples.")
 
 	opts := ctrlzap.Options{
 		Development: true,
@@ -413,6 +384,13 @@ func main() {
 	}
 	setupLog.Info("Initial ConfigMap bootstrap completed")
 
+	// Frozen registration decision: analyzer registration cannot change without
+	// a controller restart, so this value is captured once (after the bootstrap
+	// above has loaded ConfigMap-backed settings) and shared with the
+	// ConfigMapReconciler so it can detect a later live-config divergence.
+	taRegistered := cfg.ThroughputAnalyzerEnabled()
+	configMapReconciler.ThroughputRegistered = taRegistered
+
 	// Use Prometheus configuration from unified Config (already validated during Load())
 	if cfg.PrometheusBaseURL() == "" {
 		setupLog.Error(nil, "no Prometheus configuration found - this should not happen after validation")
@@ -473,39 +451,27 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Build the GPU limiter selected by --limiter-type. Validation in
-		// config.Validate already guarantees the chosen type is supported
-		// and (for quota) that the YAML loaded into a non-empty entries list.
+		// Build the initial GPU limiter from the effective limiter mode — the
+		// limiters: list on the saturation "default" config, or the inventory
+		// default when none is declared. The ConfigMaps were bootstrapped above,
+		// so the selection is already visible here. The engine rebuilds the limiter
+		// live (see SetLimiterBuilder) when the ConfigMap changes.
 		gpuLimiter, err := pipeline.NewLimiterFromConfig(cfg, mgr.GetClient())
 		if err != nil {
 			setupLog.Error(err, "failed to build GPU limiter")
 			return err
 		}
-		setupLog.Info("GPU limiter constructed", "type", cfg.LimiterMode(), "name", gpuLimiter.Name())
+		setupLog.Info("GPU limiter constructed", "type", cfg.EffectiveLimiterMode(), "name", gpuLimiter.Name())
 
 		// The GPU limiter is only consulted on the limited optimizer path, which
 		// the engine selects per-model when enableLimiter is true in the
-		// saturation-scaling ConfigMap. That flag lives in a different ConfigMap
-		// than the quota config and is not visible to config.Validate at startup,
-		// so warn explicitly: choosing --limiter-type=quota alone does NOT enforce
-		// quotas unless enableLimiter is also set.
-		if cfg.LimiterMode() == config.LimiterTypeQuota {
+		// saturation-scaling ConfigMap. Selecting quota mode via limiters: alone
+		// does NOT enforce quotas unless enableLimiter is also set, so warn.
+		if cfg.EffectiveLimiterMode() == config.LimiterTypeQuota {
 			setupLog.Info("Quota limiter selected; quota caps are enforced ONLY when " +
 				"enableLimiter: true is set in the saturation-scaling ConfigMap. " +
 				"With the default enableLimiter: false the engine runs the unlimited " +
 				"optimizer and quota caps are not applied.")
-		}
-
-		// Symmetric guard for the reverse misconfiguration: a quota file set while
-		// limiter-type stays at the default 'inventory' is silently ignored (the
-		// file is never parsed). QUOTA_CONFIG_FILE exported but --limiter-type=quota
-		// forgotten is an easy mistake, so warn loudly rather than starting in
-		// inventory mode as if quotas were active.
-		if cfg.LimiterMode() == config.LimiterTypeInventory && cfg.QuotaConfigFile() != "" {
-			setupLog.Info("A quota config file is set but --limiter-type is 'inventory'; "+
-				"the quota file is IGNORED and no quota caps are enforced. "+
-				"Set --limiter-type=quota (or LIMITER_TYPE=quota) to activate quota enforcement.",
-				"quotaConfigFile", cfg.QuotaConfigFile())
 		}
 
 		// Quota mode means "no physical-capacity discovery" — including the
@@ -513,11 +479,11 @@ func main() {
 		// at the call site (see saturation.shouldCollectClusterInventory),
 		// but warn loudly here so an operator who explicitly enabled
 		// WVA_LIMITED_MODE sees that their inventory log will be suppressed.
-		if cfg.LimiterMode() == config.LimiterTypeQuota && cfg.LimitedModeEnabled() {
+		if cfg.EffectiveLimiterMode() == config.LimiterTypeQuota && cfg.LimitedModeEnabled() {
 			setupLog.Info("Quota limiter mode is active; cluster inventory collection is disabled "+
 				"despite WVA_LIMITED_MODE=true (no Node API access in quota mode). "+
-				"To re-enable cluster inventory logging, switch to --limiter-type=inventory.",
-				"limiterType", cfg.LimiterMode(),
+				"To re-enable cluster inventory logging, switch to inventory mode.",
+				"limiterType", cfg.EffectiveLimiterMode(),
 				"limitedModeEnabled", cfg.LimitedModeEnabled())
 		}
 
@@ -530,7 +496,12 @@ func main() {
 			cfg, // Pass unified Config to engine
 			gpuLimiter,
 		)
-		if throughputAnalyzerEnabled(cfg) {
+		// Rebuild the limiter live when the saturation ConfigMap's limiters: list
+		// changes — no restart required. The builder re-reads the effective config.
+		engine.SetLimiterBuilder(func() (pipeline.Limiter, error) {
+			return pipeline.NewLimiterFromConfig(cfg, mgr.GetClient())
+		})
+		if taRegistered {
 			registration.RegisterThroughputAnalyzerQueries(sourceRegistry)
 			if err := engine.RegisterAnalyzer(throughput.AnalyzerName, throughput.NewThroughputAnalyzer()); err != nil {
 				return err

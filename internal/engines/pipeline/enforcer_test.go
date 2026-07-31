@@ -48,7 +48,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 					}
 
-					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(applied).To(BeTrue())
 					Expect(decisions[0].TargetReplicas).To(Equal(0))
@@ -72,7 +72,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 					}
 
-					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(applied).To(BeFalse())
 					Expect(decisions[0].TargetReplicas).To(Equal(3))
@@ -97,7 +97,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 					}
 
-					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					applied := enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(applied).To(BeFalse())
 					Expect(decisions[0].TargetReplicas).To(Equal(2))
@@ -124,7 +124,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(false)},
 					}
 
-					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(decisions[0].TargetReplicas).To(Equal(0)) // expensive
 					Expect(decisions[1].TargetReplicas).To(Equal(1)) // cheapest gets 1
@@ -149,7 +149,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(false)},
 					}
 
-					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(decisions[0].TargetReplicas).To(Equal(2))
 					Expect(decisions[0].Reason()).To(Equal(string(domain.DecisionReasonTest)))
@@ -170,7 +170,7 @@ var _ = Describe("Enforcer", func() {
 						"test-model": {EnableScaleToZero: boolPtr(false)},
 					}
 
-					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+					enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 					Expect(decisions[0].TargetReplicas).To(Equal(0)) // variant-z
 					Expect(decisions[1].TargetReplicas).To(Equal(1)) // variant-a (alphabetically first)
@@ -201,7 +201,7 @@ var _ = Describe("Enforcer", func() {
 					"model-1": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 				}
 
-				applied := enforcer.EnforcePolicyOnDecisions(ctx, "model-1", "ns-1", decisions, scaleToZeroConfig, "cost-aware")
+				applied := enforcer.EnforcePolicyOnDecisions(ctx, "model-1", "ns-1", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 				Expect(applied).To(BeTrue())
 				// model-1/ns-1 → scaled to zero
@@ -231,7 +231,7 @@ var _ = Describe("Enforcer", func() {
 					"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 				}
 
-				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "greedy-by-saturation")
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "greedy-by-saturation")
 
 				Expect(decisions[0].Reason()).To(ContainSubstring("greedy-by-saturation"))
 				Expect(decisions[0].Reason()).To(ContainSubstring("enforced"))
@@ -261,7 +261,7 @@ var _ = Describe("Enforcer", func() {
 					"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 				}
 
-				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 				// Verify metric was emitted
 				metricFamilies, err := registry.Gather()
@@ -299,7 +299,7 @@ var _ = Describe("Enforcer", func() {
 					"test-model": {EnableScaleToZero: boolPtr(false)},
 				}
 
-				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 				// Verify metric was emitted
 				metricFamilies, err := registry.Gather()
@@ -335,7 +335,7 @@ var _ = Describe("Enforcer", func() {
 					"test-model": {EnableScaleToZero: boolPtr(true), RetentionPeriod: "10m"},
 				}
 
-				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, "cost-aware")
+				enforcer.EnforcePolicyOnDecisions(ctx, "test-model", "test-ns", decisions, scaleToZeroConfig, nil, "cost-aware")
 
 				// Verify no metric was emitted (counter should be empty or zero)
 				metricFamilies, err := registry.Gather()

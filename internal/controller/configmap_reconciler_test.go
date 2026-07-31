@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -137,6 +138,151 @@ var _ = Describe("ConfigMapReconciler", func() {
 			Expect(model1Config.RetentionPeriod).To(Equal("10m"))
 		})
 
+	})
+
+	Context("Reconcile - Throughput Analyzer Registration Divergence", func() {
+		const satConfigBase = "kvCacheThreshold: 0.75\nqueueLengthThreshold: 5\n" +
+			"kvSpareTrigger: 0.10\nqueueSpareTrigger: 3\n"
+		const satConfigTAEnabled = satConfigBase + "analyzers:\n  - name: throughput\n"
+		const satConfigTAOmitted = satConfigBase + "analyzers:\n  - name: saturation\n"
+
+		reconcileGlobalSaturationConfigMap := func(data string) {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      config.SaturationConfigMapName(),
+					Namespace: systemNamespace,
+				},
+				Data: map[string]string{"default": data},
+			}
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, cm))).To(Succeed())
+			currentCM := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace}, currentCM)).To(Succeed())
+			currentCM.Data = cm.Data
+			Expect(k8sClient.Update(ctx, currentCM)).To(Succeed())
+
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace},
+			}
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+		}
+
+		// Divergence detection runs only once the registration decision has been
+		// frozen, which the controller does immediately after the initial
+		// ConfigMap bootstrap completes. Every runtime reconcile executes in that
+		// state, so these cases mark bootstrap complete to mirror production.
+		Context("after the initial bootstrap has completed", func() {
+			BeforeEach(func() {
+				reconciler.Config.MarkConfigMapsBootstrapComplete()
+			})
+
+			It("emits a Warning event when registered=false and the live global config enables TA", func() {
+				reconciler.ThroughputRegistered = false
+
+				reconcileGlobalSaturationConfigMap(satConfigTAEnabled)
+
+				fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+				Expect(ok).To(BeTrue())
+				var got string
+				Eventually(fakeRecorder.Events).Should(Receive(&got))
+				Expect(got).To(ContainSubstring(constants.K8SEventThroughputAnalyzerRestartRequired))
+				Expect(got).To(ContainSubstring("Warning"))
+			})
+
+			It("emits a Warning event when registered=true and the live global config omits TA", func() {
+				reconciler.ThroughputRegistered = true
+
+				reconcileGlobalSaturationConfigMap(satConfigTAOmitted)
+
+				fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+				Expect(ok).To(BeTrue())
+				var got string
+				Eventually(fakeRecorder.Events).Should(Receive(&got))
+				Expect(got).To(ContainSubstring(constants.K8SEventThroughputAnalyzerRestartRequired))
+				Expect(got).To(ContainSubstring("Warning"))
+			})
+
+			It("emits no event when registered=true and the live global config enables TA (match)", func() {
+				reconciler.ThroughputRegistered = true
+
+				reconcileGlobalSaturationConfigMap(satConfigTAEnabled)
+
+				fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+				Expect(ok).To(BeTrue())
+				Consistently(fakeRecorder.Events).ShouldNot(Receive())
+			})
+
+			It("emits no event when registered=false and the live global config omits TA (match)", func() {
+				reconciler.ThroughputRegistered = false
+
+				reconcileGlobalSaturationConfigMap(satConfigTAOmitted)
+
+				fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+				Expect(ok).To(BeTrue())
+				Consistently(fakeRecorder.Events).ShouldNot(Receive())
+			})
+
+			It("emits no event for a namespace-local saturation ConfigMap even when it diverges", func() {
+				By("Tracking the test namespace in datastore")
+				ds.NamespaceTrack("VariantAutoscaling", "test-va", testNamespace)
+
+				reconciler.ThroughputRegistered = false
+
+				cm := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      config.SaturationConfigMapName(),
+						Namespace: testNamespace,
+					},
+					Data: map[string]string{"default": satConfigTAEnabled},
+				}
+				Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, cm))).To(Succeed())
+				DeferCleanup(func() {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, cm))).To(Succeed())
+				})
+				currentCM := &corev1.ConfigMap{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace}, currentCM)).To(Succeed())
+				currentCM.Data = cm.Data
+				Expect(k8sClient.Update(ctx, currentCM)).To(Succeed())
+
+				req := ctrl.Request{
+					NamespacedName: types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace},
+				}
+				result, err := reconciler.Reconcile(ctx, req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+
+				fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+				Expect(ok).To(BeTrue())
+				Consistently(fakeRecorder.Events).ShouldNot(Receive())
+			})
+
+			It("does not panic when the Recorder is nil and the live global config diverges", func() {
+				// The Recorder is optional; warnIfThroughputRegistrationDiverged
+				// must guard it. Reconcile must complete without panicking on a
+				// divergence even when no Recorder is wired. Reaching the end of
+				// the divergent reconcile below without a panic is the assertion.
+				reconciler.Recorder = nil
+				reconciler.ThroughputRegistered = false
+
+				reconcileGlobalSaturationConfigMap(satConfigTAEnabled)
+			})
+		})
+
+		It("emits no event during the initial bootstrap pass, before the decision is frozen", func() {
+			// Bootstrap is deliberately NOT marked complete here: this reproduces
+			// the synchronous bootstrap reconcile, where ThroughputRegistered is
+			// still its zero value. Without the bootstrap gate this diverges
+			// (want=true vs registered=false) and would emit a spurious "restart
+			// required" warning on every healthy startup.
+			reconciler.ThroughputRegistered = false
+
+			reconcileGlobalSaturationConfigMap(satConfigTAEnabled)
+
+			fakeRecorder, ok := reconciler.Recorder.(*record.FakeRecorder)
+			Expect(ok).To(BeTrue())
+			Consistently(fakeRecorder.Events).ShouldNot(Receive())
+		})
 	})
 
 	Context("Reconcile - Namespace-Local ConfigMaps", func() {

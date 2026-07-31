@@ -34,13 +34,13 @@ func newObservationWindow(maxSize int, maxAge time.Duration, minSamples int, min
 	}
 }
 
-// Add appends a (k, itl) observation if k ∈ [minK, maxK] and itl > 0.
-// When the window is at capacity, the oldest observation is evicted first.
-// Returns true if the observation was dropped (out of range or invalid itl)
-// so the caller can log with a reconcile-scoped logger.
+// Add appends a (k, itl) observation if k is a non-NaN value in [minK, maxK]
+// and itl > 0. When the window is at capacity, the oldest observation is
+// evicted first. Returns true if the observation was dropped (NaN/out-of-range
+// k or invalid itl) so the caller can log with a reconcile-scoped logger.
 func (w *ObservationWindow) Add(k, itl float64, ts time.Time) bool {
-	if k < w.minK || k > w.maxK {
-		return true // dropped: out of range
+	if math.IsNaN(k) || k < w.minK || k > w.maxK {
+		return true // dropped: NaN or out of range
 	}
 	if itl <= 0 || math.IsNaN(itl) {
 		return true // dropped: invalid

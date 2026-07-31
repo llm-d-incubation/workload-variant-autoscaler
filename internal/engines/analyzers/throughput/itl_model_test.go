@@ -1,6 +1,7 @@
 package throughput
 
 import (
+	"math"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -107,5 +108,32 @@ var _ = Describe("FitITLModel", func() {
 			Expect(ok).To(BeTrue())
 			Expect(m.ITLAt(0.85)).To(BeNumerically("~", 0.073*0.85+0.006, 1e-6))
 		})
+	})
+})
+
+var _ = Describe("validITLModel", func() {
+	It("accepts a finite, positive-slope model with positive ITL at saturation", func() {
+		Expect(validITLModel(0.073, 0.006)).To(BeTrue())
+	})
+
+	It("rejects NaN A", func() {
+		Expect(validITLModel(math.NaN(), 0.006)).To(BeFalse())
+	})
+
+	It("rejects Inf A", func() {
+		Expect(validITLModel(math.Inf(1), 0.006)).To(BeFalse())
+	})
+
+	It("rejects a flat slope (A <= itlSlopeEpsilon)", func() {
+		Expect(validITLModel(0, 0.006)).To(BeFalse())
+	})
+
+	It("rejects NaN B", func() {
+		Expect(validITLModel(0.073, math.NaN())).To(BeFalse())
+	})
+
+	It("rejects a non-positive ITL at saturation", func() {
+		// A*DefaultKSat + B <= 0 with a valid positive A.
+		Expect(validITLModel(0.01, -1.0)).To(BeFalse())
 	})
 })

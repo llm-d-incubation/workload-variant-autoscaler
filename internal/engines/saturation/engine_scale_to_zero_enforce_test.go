@@ -106,6 +106,22 @@ var _ = Describe("applyScaleToZeroEnforcement", func() {
 		Expect(scaledToZero).To(BeFalse())
 		Expect(d[0].TargetReplicas).To(Equal(2))
 	})
+
+	It("does NOT zero an idle vLLM model when the inline scaleToZero override disables it", func() {
+		// The scale-to-zero ConfigMap (via engineWithIdleEnforcer) enables scale-to-zero
+		// for the model; an inline scaleToZero:{enabled:false} on the resolved saturation
+		// entry must win, proving the resolveSaturationConfig -> EnforcePolicyOnDecisions
+		// -> ResolveScaleToZeroEnabled wiring is honored end-to-end.
+		e := engineWithIdleEnforcer()
+		e.Config.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+			"default": {ScaleToZero: &config.ScaleToZeroEnvelope{Enabled: ptrTo(false)}},
+		})
+		d := decisions()
+		scaledToZero := e.applyScaleToZeroEnforcement(ctx, modelID, namespace, "v2-saturation",
+			d, map[string]scaletarget.ScaleTargetAccessor{"a": target("vllm/vllm-openai:latest")}, nil)
+		Expect(scaledToZero).To(BeFalse())
+		Expect(d[0].TargetReplicas).To(Equal(2), "inline scaleToZero:false must override the enabled ConfigMap")
+	})
 })
 
 // ptrTo returns a pointer to v. Local helper so this file stays self-contained.

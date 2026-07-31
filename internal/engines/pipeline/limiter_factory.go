@@ -10,24 +10,23 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 )
 
-// NewLimiterFromConfig constructs the GPU limiter selected by the operator
-// at startup via the --limiter-type flag (or LIMITER_TYPE env var).
+// NewLimiterFromConfig constructs the GPU limiter selected via
+// Config.EffectiveLimiterMode — the inline limiters: list on the saturation
+// "default" config, or the LimiterTypeInventory default when none is declared.
 //
-//   - LimiterTypeInventory: today's behavior — TypeInventoryWithUsage +
-//     GreedyBySaturation wrapped in a DefaultLimiter. Discovers physical
-//     GPUs via the GPU operator.
-//   - LimiterTypeQuota: parses config.QuotaEntries() into one
-//     DefaultLimiter per entry, each wrapping a QuotaInventory. Multiple
-//     entries are wrapped in a CompositeLimiter that runs them
-//     sequentially. Pure operator-declared caps — physical capacity is
-//     NOT consulted.
+//   - LimiterTypeInventory: TypeInventoryWithUsage + GreedyBySaturation wrapped
+//     in a DefaultLimiter. Discovers physical GPUs via the GPU operator.
+//   - LimiterTypeQuota: builds one DefaultLimiter per Config.EffectiveQuotaEntries
+//     entry, each wrapping a QuotaInventory. Multiple entries are wrapped in a
+//     CompositeLimiter that runs them sequentially. Pure operator-declared caps —
+//     physical capacity is NOT consulted.
 //
 // The kubeClient is only used by the inventory path (for GPU operator
-// discovery); the quota path ignores it. config.Validate is expected to
-// have run before this call, so unknown limiter types reaching the
-// default branch represent a programming error in the loader.
+// discovery); the quota path ignores it. Inline limiter entries are validated at
+// ConfigMap parse time (SaturationScalingConfig.validateLimiters), so unknown
+// limiter types reaching the default branch represent a programming error.
 func NewLimiterFromConfig(cfg *config.Config, kubeClient client.Client) (Limiter, error) {
-	switch t := cfg.LimiterMode(); t {
+	switch t := cfg.EffectiveLimiterMode(); t {
 	case config.LimiterTypeInventory:
 		return newInventoryLimiter(kubeClient), nil
 	case config.LimiterTypeQuota:
@@ -53,10 +52,10 @@ func newInventoryLimiter(kubeClient client.Client) Limiter {
 // entry is configured, the result is wrapped in a CompositeLimiter so they
 // run in declaration order against the shared decisions slice.
 func newQuotaLimiter(cfg *config.Config) (Limiter, error) {
-	entries := cfg.QuotaEntries()
+	entries := cfg.EffectiveQuotaEntries()
 	if len(entries) == 0 {
-		return nil, errors.New("limiter factory: limiter-type=quota requires at least one entry " +
-			"in the quota config file (--quota-config-file)")
+		return nil, errors.New("limiter factory: quota mode requires at least one inline " +
+			"limiters: quota entry on the saturation \"default\" config")
 	}
 	constituents := make([]Limiter, 0, len(entries))
 	for _, entry := range entries {
