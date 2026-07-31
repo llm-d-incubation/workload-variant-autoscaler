@@ -9,7 +9,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 )
@@ -50,30 +49,38 @@ var _ = Describe("Namespace inventory limiter (integration)", func() {
 		}
 	}
 
-	buildLimiter := func(yamlCfg string) pipeline.Limiter {
-		lc, err := config.ParseLimiterConfig(map[string]string{config.GlobalDefaultsKey: yamlCfg})
-		Expect(err).NotTo(HaveOccurred())
-		lim, err := buildNamespaceLimiter(lc, discovery.NewK8sWithGpuOperator(k8sClient))
+	// buildLimiter goes through the production path: the inline limiters: entry
+	// on the global saturation config selects the mode, and the limiter factory
+	// constructs it.
+	buildLimiter := func(selectors map[string]metav1.LabelSelector) pipeline.Limiter {
+		cfg := config.NewTestConfig()
+		cfg.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+			"default": {Limiters: []config.QuotaLimiterConfig{{
+				Type:      string(config.LimiterTypeNamespaceInventory),
+				Name:      "namespace-inventory",
+				Selectors: selectors,
+			}}},
+		})
+		Expect(cfg.EffectiveLimiterMode()).To(Equal(config.LimiterTypeNamespaceInventory))
+
+		lim, err := pipeline.NewLimiterFromConfig(cfg, k8sClient)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lim).NotTo(BeNil())
 		return lim
+	}
+
+	team := func(name string) metav1.LabelSelector {
+		return metav1.LabelSelector{MatchLabels: map[string]string{"team": name}}
 	}
 
 	It("isolates per-namespace pools so one tenant cannot consume another's GPUs", func() {
 		createGPUNode("itg-prod", "prod", "NVIDIA-H100-SXM5-80GB", 8)
 		createGPUNode("itg-dev", "dev", "NVIDIA-H100-SXM5-80GB", 4)
 
-		lim := buildLimiter(`limiters:
-  - name: namespace-inventory
-    type: namespace-inventory
-    selectors:
-      ns-prod:
-        matchLabels:
-          team: prod
-      ns-dev:
-        matchLabels:
-          team: dev
-`)
+		lim := buildLimiter(map[string]metav1.LabelSelector{
+			"ns-prod": team("prod"),
+			"ns-dev":  team("dev"),
+		})
 		// Both namespaces demand far more than their pool holds, in one batch.
 		prod := scaleUp("ns-prod", "H100")
 		dev := scaleUp("ns-dev", "H100")
@@ -89,14 +96,9 @@ var _ = Describe("Namespace inventory limiter (integration)", func() {
 	It("splits a shared default pool under contention without exceeding capacity", func() {
 		createGPUNode("itg-shared", "shared", "NVIDIA-A100-PCIE-80GB", 6)
 
-		lim := buildLimiter(`limiters:
-  - name: namespace-inventory
-    type: namespace-inventory
-    selectors:
-      default:
-        matchLabels:
-          team: shared
-`)
+		lim := buildLimiter(map[string]metav1.LabelSelector{
+			pipeline.DefaultSelectorKey: team("shared"),
+		})
 		a := scaleUp("ns-a", "A100")
 		b := scaleUp("ns-b", "A100")
 		Expect(lim.Limit(ctx, []*domain.VariantDecision{a, b})).To(Succeed())

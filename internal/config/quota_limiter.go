@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // QuotaLimiterReservedNamespaceKey is the reserved key in the namespace-scoped
@@ -76,9 +78,16 @@ type QuotaLimiterConfig struct {
 	NamespaceQuotas map[string]map[string]int `yaml:"namespaceQuotas,omitempty" json:"namespaceQuotas,omitempty"`
 
 	// Exclude lists namespaces that bypass this limiter entirely (no
-	// constraint applied). Only meaningful when Scope == QuotaScopeNamespace.
-	// Useful for system namespaces or privileged tenants.
+	// constraint applied). Meaningful when Scope == QuotaScopeNamespace, and
+	// for the namespace-inventory limiter.
 	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+
+	// Selectors applies when Type == LimiterTypeNamespaceInventory. Keys are
+	// namespace names (with the reserved key `default` matching any namespace
+	// not explicitly listed); values are node label selectors whose matching
+	// nodes form that namespace's GPU pool. Unlike quotas, which are declared
+	// caps, these partition physically discovered capacity.
+	Selectors map[string]metav1.LabelSelector `yaml:"selectors,omitempty" json:"selectors,omitempty"`
 }
 
 // IsExcluded reports whether the given namespace bypasses this limiter.
@@ -143,6 +152,9 @@ func (q QuotaLimiterConfig) clone() QuotaLimiterConfig {
 	}
 	if q.Exclude != nil {
 		out.Exclude = slices.Clone(q.Exclude)
+	}
+	if q.Selectors != nil {
+		out.Selectors = maps.Clone(q.Selectors)
 	}
 	return out
 }

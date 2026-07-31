@@ -25,9 +25,6 @@ type Config struct {
 	qmAnalyzer  qmAnalyzerConfig  // namespace-aware
 	scaleToZero scaleToZeroConfig // namespace-aware
 	coordinator coordinatorConfig
-	// nsInventory holds the optional namespace-scoped GPU inventory limiter
-	// configuration (wva-limiter-config ConfigMap). Read once at startup.
-	nsInventory LimiterConfig
 }
 
 // coordinatorConfig holds Coordinator loop configuration. Plugin
@@ -54,6 +51,12 @@ const (
 	// from an operator-supplied YAML file. Multiple entries are wrapped in
 	// a CompositeLimiter that applies them sequentially.
 	LimiterTypeQuota LimiterType = "quota"
+
+	// LimiterTypeNamespaceInventory builds the NamespaceInventory-backed
+	// limiter: physical GPU discovery partitioned per namespace by node label
+	// selectors. Like LimiterTypeInventory it reflects real capacity, but each
+	// namespace draws only from the nodes its selector matches.
+	LimiterTypeNamespaceInventory LimiterType = "namespace-inventory"
 )
 
 // configSyncState tracks configuration sync state used for startup/readiness checks.
@@ -549,24 +552,6 @@ func (c *Config) UpdateScaleToZeroConfig(config ScaleToZeroConfigData) {
 	c.UpdateScaleToZeroConfigForNamespace("", config)
 }
 
-// LimiterConfig returns the namespace-scoped GPU inventory limiter
-// configuration. It is populated once at startup; the engine constructs the
-// namespace limiter from it during initialization, so changes require a
-// controller restart. Thread-safe.
-func (c *Config) LimiterConfig() LimiterConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.nsInventory
-}
-
-// UpdateLimiterConfig sets the namespace-scoped GPU inventory limiter
-// configuration. Thread-safe.
-func (c *Config) UpdateLimiterConfig(config LimiterConfig) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.nsInventory = config
-}
-
 // UpdateScaleToZeroConfigForNamespace updates the scale-to-zero configuration for the given namespace.
 // If namespace is empty, updates global config.
 // Thread-safe. Takes a copy of the provided map to prevent external modifications.
@@ -855,20 +840,47 @@ func (c *Config) MarkConfigMapsBootstrapFailed(err error) {
 
 // EffectiveLimiterMode returns the GPU limiter implementation to construct. The
 // limiters: list on the global saturation "default" entry is the sole source: a
-// quota entry selects LimiterTypeQuota, otherwise a gpu-inventory/inventory entry
-// selects LimiterTypeInventory. With no limiters: declared, the default is
+// quota entry selects LimiterTypeQuota, else a namespace-inventory entry selects
+// LimiterTypeNamespaceInventory, else a gpu-inventory/inventory entry selects
+// LimiterTypeInventory. With no limiters: declared, the default is
 // LimiterTypeInventory. Because it reads the live saturation config, the value
 // changes without a restart when the ConfigMap changes.
+//
+// Quota wins over namespace-inventory because the two constrain different axes
+// (declared caps vs physical partitioning) and composing them as
+// min(physical, quota) is the limiter chain's job, tracked in issue #1003.
 // Thread-safe.
 func (c *Config) EffectiveLimiterMode() LimiterType {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, l := range c.saturation.global["default"].Limiters {
+	limiters := c.saturation.global["default"].Limiters
+	for _, l := range limiters {
 		if l.Type == string(LimiterTypeQuota) {
 			return LimiterTypeQuota
 		}
 	}
+	for _, l := range limiters {
+		if l.Type == string(LimiterTypeNamespaceInventory) {
+			return LimiterTypeNamespaceInventory
+		}
+	}
 	return LimiterTypeInventory
+}
+
+// EffectiveNamespaceInventoryEntry returns a deep copy of the first
+// namespace-inventory entry on the global saturation "default" entry, and
+// whether one is declared. Read by the limiter factory when
+// EffectiveLimiterMode is LimiterTypeNamespaceInventory.
+// Thread-safe.
+func (c *Config) EffectiveNamespaceInventoryEntry() (QuotaLimiterConfig, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, l := range c.saturation.global["default"].Limiters {
+		if l.Type == string(LimiterTypeNamespaceInventory) {
+			return l.clone(), true
+		}
+	}
+	return QuotaLimiterConfig{}, false
 }
 
 // EffectiveQuotaEntries returns the quota entries the quota limiter should

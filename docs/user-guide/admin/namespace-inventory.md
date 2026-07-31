@@ -14,9 +14,9 @@ Each namespace draws only from the GPUs on the nodes its selector matches.
 ## When to use it
 
 Use namespace inventory when tenants are mapped to node pools and you want
-scaling decisions to respect those boundaries. It is **opt-in**: without the
-`wva-limiter-config` ConfigMap the limiter behaves exactly as before
-(cluster-wide).
+scaling decisions to respect those boundaries. It is **opt-in**: without a
+`namespace-inventory` entry in the saturation ConfigMap's `limiters:` list the
+limiter behaves exactly as before (cluster-wide).
 
 ## Why node label selectors
 
@@ -35,14 +35,15 @@ repair) and node relabeling are picked up automatically.
 
 ## Configuration
 
-Create the `wva-limiter-config` ConfigMap in the controller namespace. A sample
-is in [`config/samples/limiter-configmap.yaml`](../../../config/samples/limiter-configmap.yaml).
+Declare a `namespace-inventory` entry in the `limiters:` list on the **global
+`default`** entry of the saturation ConfigMap (`wva-saturation-scaling-config`).
+That list is the single source that selects the GPU limiter.
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: wva-limiter-config
+  name: wva-saturation-scaling-config
   namespace: workload-variant-autoscaler-system
 data:
   default: |
@@ -67,8 +68,14 @@ data:
 ```
 
 `selectors` values are standard Kubernetes `LabelSelector`s (`matchLabels` and
-`matchExpressions`). The configuration is read once at controller startup;
-**changing it requires restarting the controller.**
+`matchExpressions`). The limiter is rebuilt from the live configuration, so
+**editing the ConfigMap takes effect without restarting the controller.**
+
+Limiter modes are mutually exclusive. A `quota` entry takes precedence over
+`namespace-inventory`, which in turn takes precedence over a plain
+`gpu-inventory` entry; with no `limiters:` declared, the cluster-wide inventory
+limiter is used. Composing a quota with physical capacity as
+`min(physical, quota)` is the limiter chain's job, tracked in issue #1003.
 
 ### Namespace lookup rules
 
@@ -95,13 +102,14 @@ the V2 path is tracked separately.
 
 ## Relationship to the cluster-wide limiter
 
-Namespace inventory **replaces** the cluster-wide GPU limiter on the V1 path
-when configured, rather than intersecting with it. This is deliberate: each
-node is assigned to exactly one bucket, so per-bucket capacity never exceeds
-physical capacity and a separate cluster-total cap on top would be redundant.
-One consequence is intentional — **nodes matching no selector and no `default`
-contribute to no pool**, so their GPUs are unusable until those nodes are
-labeled or a `default` selector is added.
+Namespace inventory **replaces** the cluster-wide GPU limiter when configured,
+rather than intersecting with it: selecting `namespace-inventory` selects it as
+the limiter for the pipeline. This is deliberate: each node is assigned to
+exactly one bucket, so per-bucket capacity never exceeds physical capacity and a
+separate cluster-total cap on top would be redundant. One consequence is
+intentional — **nodes matching no selector and no `default` contribute to no
+pool**, so their GPUs are unusable until those nodes are labeled or a `default`
+selector is added.
 
 Excluded namespaces are unconstrained by this limiter (they are never capped),
 but their existing usage is still charged against the pool they draw from so a

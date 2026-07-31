@@ -28,9 +28,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,7 +41,6 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
@@ -171,14 +168,11 @@ type Engine struct {
 	limiterSig     string
 	limiterMu      sync.Mutex
 
-	// nsLimiter, when non-nil, scopes GPU inventory per namespace on the V1
-	// Limit() path. Built from the wva-limiter-config ConfigMap at startup.
-	// The V2 constraint path (ComputeConstraints/GreedyByScoreOptimizer) is
-	// type-keyed and cannot enforce per-namespace partitioning, so it keeps
-	// the cluster-wide GPULimiter; nsLimiterV2Warn emits a one-time warning
-	// when namespace inventory is configured under an active V2 analyzer.
-	nsLimiter       pipeline.Limiter
-	nsLimiterV2Warn sync.Once
+	// nsInventoryV2Warn emits a one-time warning when the namespace-inventory
+	// limiter is active under a V2 analyzer: the V2 constraint path
+	// (ComputeConstraints/GreedyByScoreOptimizer) is type-keyed and cannot
+	// enforce per-namespace partitioning, so isolation applies to V1 only.
+	nsInventoryV2Warn sync.Once
 
 	// metricsRegistry is used to access metrics sources for request count queries
 	metricsRegistry *source.SourceRegistry
@@ -263,19 +257,6 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		return registration.CollectModelRequestCount(ctx, promSource, modelID, namespace, retentionPeriod)
 	}
 
-	// Optionally build the namespace-scoped GPU limiter from wva-limiter-config.
-	// This layers on the V1 saturation path and is independent of the
-	// operator-selected gpuLimiter (built via pipeline.NewLimiterFromConfig in
-	// main.go). It uses its own NodeDiscovery instance. On config error, log and
-	// disable it so a bad config never blocks scaling.
-	nsLimiter, err := buildNamespaceLimiter(cfg.LimiterConfig(), discovery.NewK8sWithGpuOperator(client))
-	if err != nil {
-		ctrl.Log.Error(err, "Invalid namespace-inventory limiter config; disabling namespace-scoped limiter")
-		nsLimiter = nil
-	} else if nsLimiter != nil {
-		ctrl.Log.Info("Namespace-scoped GPU inventory limiter enabled (applies to the V1 saturation path)")
-	}
-
 	capacityStore := saturation_v2.NewCapacityKnowledgeStore()
 	satV2 := saturation_v2.NewSaturationAnalyzer(capacityStore)
 
@@ -299,7 +280,6 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		ReplicaMetricsCollector: collector.NewReplicaMetricsCollector(promSource, client, recorder, podLocator),
 		ScaleToZeroEnforcer:     pipeline.NewEnforcer(requestCountFunc),
 		GPULimiter:              gpuLimiter,
-		nsLimiter:               nsLimiter,
 		metricsRegistry:         metricsRegistry,
 		saturationV2Analyzer:    satV2,
 		queueingModelAnalyzer:   queueingmodel.NewQueueingModelAnalyzer(),
@@ -355,28 +335,6 @@ func (e *Engine) RegisterAnalyzer(name string, a domain.Analyzer) error {
 	}
 	e.analyzers = append(e.analyzers, analyzerEntry{name: name, analyzer: a})
 	return nil
-}
-
-// buildNamespaceLimiter constructs the namespace-scoped GPU limiter from the
-// limiter config, or returns (nil, nil) when no namespace-inventory limiter is
-// configured. Node label selectors are compiled here so an invalid selector is
-// reported once at startup rather than per cycle.
-func buildNamespaceLimiter(lc config.LimiterConfig, disc discovery.NodeDiscovery) (pipeline.Limiter, error) {
-	spec, ok := lc.NamespaceInventorySpec()
-	if !ok {
-		return nil, nil
-	}
-	selectors := make(map[string]labels.Selector, len(spec.Selectors))
-	for ns := range spec.Selectors {
-		ls := spec.Selectors[ns]
-		sel, err := metav1.LabelSelectorAsSelector(&ls)
-		if err != nil {
-			return nil, fmt.Errorf("invalid node selector for namespace %q: %w", ns, err)
-		}
-		selectors[ns] = sel
-	}
-	inv := pipeline.NewNamespaceInventory("namespace-gpu-inventory", disc, sets.New[string](spec.Exclude...), selectors)
-	return pipeline.NewNamespaceLimiter(inv, pipeline.NewGreedyBySaturation()), nil
 }
 
 // StartOptimizeLoop starts the optimization loop for the saturation engine.
@@ -831,18 +789,15 @@ func (e *Engine) optimizeV1(
 		}
 	}
 	if globalSaturationConfig.EnableLimiter && len(allDecisions) > 0 {
-		// Prefer the namespace-scoped limiter on the V1 path when configured;
-		// otherwise apply the live-rebuilt cluster-wide GPU limiter. The namespace
-		// limiter deliberately replaces the cluster-wide one rather than
-		// intersecting with it: nodes are assigned one-bucket-each, so per-bucket
-		// sums never exceed physical capacity and a separate cluster-total cap is
-		// redundant. One consequence is intentional — nodes matching no selector
-		// and no default contribute to no pool, so their capacity is unusable
-		// until they are labeled or a default selector is added.
+		// The live-rebuilt limiter selected by Config.EffectiveLimiterMode. The
+		// namespace-inventory mode deliberately replaces the cluster-wide limiter
+		// rather than intersecting with it: nodes are assigned one-bucket-each, so
+		// per-bucket sums never exceed physical capacity and a separate
+		// cluster-total cap is redundant. One consequence is intentional — nodes
+		// matching no selector and no default contribute to no pool, so their
+		// capacity is unusable until they are labeled or a default selector is
+		// added.
 		limiter := e.currentGPULimiter()
-		if e.nsLimiter != nil {
-			limiter = e.nsLimiter
-		}
 		logger.Info("Applying GPU limiter to scaling decisions",
 			"limiter", limiter.Name(),
 			"decisionCount", len(allDecisions))
@@ -1127,12 +1082,12 @@ func (e *Engine) optimizeV2(
 
 	// Stage 2: Compute GPU constraints and call optimizer.
 	// Namespace-scoped inventory is not yet enforced on the V2 constraint path:
-	// selectV2Optimizer derives cluster/per-type constraints from GPULimiter, so
-	// per-namespace isolation currently applies only to the V1 saturation
-	// analyzer. Warn once so operators relying on it aren't misled. Enabling
-	// per-namespace enforcement on V2 is the tracked follow-up.
-	if e.nsLimiter != nil {
-		e.nsLimiterV2Warn.Do(func() {
+	// ResourceConstraints is type-keyed and cannot express per-namespace
+	// partitioning, so per-namespace isolation currently applies only to the V1
+	// saturation analyzer. Warn once so operators relying on it aren't misled.
+	// Enabling per-namespace enforcement on V2 is the tracked follow-up.
+	if e.Config.EffectiveLimiterMode() == config.LimiterTypeNamespaceInventory {
+		e.nsInventoryV2Warn.Do(func() {
 			logger.Info("namespace-scoped GPU inventory is configured but NOT enforced on the V2 optimizer path; per-namespace isolation applies only to the V1 saturation analyzer. GPU constraints on this path are cluster-wide.")
 		})
 	}
