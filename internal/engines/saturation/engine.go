@@ -419,12 +419,18 @@ func (e *Engine) refreshLimiter(ctx context.Context) {
 }
 
 // limiterSignature is a deterministic fingerprint of the config inputs that
-// determine the GPU limiter, used to detect when a rebuild is needed. Quota
-// entry maps are marshaled with sorted keys by encoding/json, so equal configs
-// always produce equal signatures.
+// determine the GPU limiter, used to detect when a rebuild is needed. Entry maps
+// are marshaled with sorted keys by encoding/json, so equal configs always
+// produce equal signatures.
+//
+// Every mode's inputs must appear here: a mode whose entry is missing would keep
+// serving a stale limiter after an edit, silently contradicting the documented
+// no-restart behavior.
 func limiterSignature(cfg *config.Config) string {
 	entries, _ := json.Marshal(cfg.EffectiveQuotaEntries())
-	return string(cfg.EffectiveLimiterMode()) + "|" + string(entries)
+	nsEntry, _ := cfg.EffectiveNamespaceInventoryEntry()
+	nsInventory, _ := json.Marshal(nsEntry)
+	return string(cfg.EffectiveLimiterMode()) + "|" + string(entries) + "|" + string(nsInventory)
 }
 
 // currentGPULimiter returns the active GPU limiter, read under limiterMu so it is
@@ -809,7 +815,20 @@ func (e *Engine) optimizeV1(
 
 		if err := limiter.Limit(ctx, decisionPtrs); err != nil {
 			// skip record K8S events since there's no VA
-			logger.Error(err, "GPU limiter failed, proceeding with original decisions")
+			if e.Config.EffectiveLimiterMode() == config.LimiterTypeNamespaceInventory {
+				// Namespace inventory is a tenant-isolation control, and its
+				// Refresh runs inside Limit, so a transient node-discovery failure
+				// would otherwise apply unconstrained decisions and let one tenant
+				// take another's GPUs for the cycle. Fail closed: hold the current
+				// replica counts and retry next cycle. The other modes keep the
+				// established fail-open behavior.
+				logger.Error(err, "namespace-inventory limiter failed; holding scale-up this cycle to preserve isolation")
+				for i := range allDecisions {
+					allDecisions[i].TargetReplicas = allDecisions[i].CurrentReplicas
+				}
+			} else {
+				logger.Error(err, "GPU limiter failed, proceeding with original decisions")
+			}
 		} else {
 			for _, d := range decisionPtrs {
 				if d.WasLimited {

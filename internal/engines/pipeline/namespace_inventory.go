@@ -337,7 +337,22 @@ func (a *namespaceTypeAllocator) TryAllocate(_ context.Context, decision *domain
 
 	bucket, excluded, hasPool := a.resolver.resolve(decision.Namespace)
 	if excluded {
-		// Bypass: this limiter applies no constraint to excluded namespaces.
+		// Bypass the cap, but still debit the pool. Usage accounting only charges
+		// pre-cycle CurrentReplicas, so an excluded namespace growing in the same
+		// batch as a capped tenant on the shared default pool would otherwise let
+		// both take the same GPUs (a one-cycle overcommit). Charging here keeps
+		// the pool honest within the batch; only the availability check is
+		// skipped, so the excluded namespace is never itself limited.
+		if chargeTo, ok := a.resolver.chargeBucket(decision.Namespace); ok &&
+			constants.IsAcceleratorResolved(decision.AcceleratorName) {
+			if byType := a.remainingByBucket[chargeTo]; byType != nil {
+				debit := min(gpusRequested, byType[decision.AcceleratorName])
+				if debit > 0 {
+					byType[decision.AcceleratorName] -= debit
+					a.totalRemaining -= debit
+				}
+			}
+		}
 		return gpusRequested, nil
 	}
 	if !hasPool {

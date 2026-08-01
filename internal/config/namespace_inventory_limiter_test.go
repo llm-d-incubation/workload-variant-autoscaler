@@ -3,7 +3,6 @@ package config
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("inline namespace-inventory limiter", func() {
@@ -11,7 +10,7 @@ var _ = Describe("inline namespace-inventory limiter", func() {
 		e := QuotaLimiterConfig{
 			Type: string(LimiterTypeNamespaceInventory),
 			Name: "namespace-inventory",
-			Selectors: map[string]metav1.LabelSelector{
+			Selectors: map[string]NodeSelector{
 				"ns-prod": {MatchLabels: map[string]string{"team": "prod"}},
 			},
 		}
@@ -34,8 +33,8 @@ var _ = Describe("inline namespace-inventory limiter", func() {
 
 		It("rejects an invalid selector operator, naming the namespace", func() {
 			c := nsEntry(func(e *QuotaLimiterConfig) {
-				e.Selectors = map[string]metav1.LabelSelector{
-					"ns-prod": {MatchExpressions: []metav1.LabelSelectorRequirement{{
+				e.Selectors = map[string]NodeSelector{
+					"ns-prod": {MatchExpressions: []NodeSelectorRequirement{{
 						Key: "team", Operator: "NotAnOperator", Values: []string{"prod"},
 					}}},
 				}
@@ -46,6 +45,30 @@ var _ = Describe("inline namespace-inventory limiter", func() {
 		It("rejects quota fields on a namespace-inventory entry", func() {
 			c := nsEntry(func(e *QuotaLimiterConfig) { e.ClusterQuotas = map[string]int{"H100": 8} })
 			Expect(c.validateLimiters()).To(MatchError(ContainSubstring("must not set quota fields")))
+		})
+
+		It("rejects an empty selector, which would match every node", func() {
+			// An empty LabelSelector compiles to labels.Everything() without
+			// error, so the first bucket would take the whole cluster.
+			c := nsEntry(func(e *QuotaLimiterConfig) {
+				e.Selectors = map[string]NodeSelector{"ns-prod": {}}
+			})
+			Expect(c.validateLimiters()).To(MatchError(ContainSubstring("matches every node")))
+		})
+
+		It("rejects a namespace that is both excluded and given a selector", func() {
+			c := nsEntry(func(e *QuotaLimiterConfig) { e.Exclude = []string{"ns-prod"} })
+			Expect(c.validateLimiters()).To(MatchError(ContainSubstring("both excluded and given a selector")))
+		})
+
+		It("allows excluding a namespace that only uses the default pool", func() {
+			c := nsEntry(func(e *QuotaLimiterConfig) {
+				e.Selectors = map[string]NodeSelector{
+					NamespaceInventoryDefaultKey: {MatchLabels: map[string]string{"pool": "shared"}},
+				}
+				e.Exclude = []string{"kube-system"}
+			})
+			Expect(c.validateLimiters()).To(Succeed())
 		})
 	})
 
@@ -88,6 +111,23 @@ var _ = Describe("inline namespace-inventory limiter", func() {
 
 			again, _ := cfg.EffectiveNamespaceInventoryEntry()
 			Expect(again.Selectors).To(HaveKey("ns-prod"))
+		})
+
+		It("deep-copies nested selector fields, not just the outer map", func() {
+			// A shallow map clone would share MatchLabels, so mutating it here
+			// would corrupt the stored config outside the Config mutex.
+			cfg := NewTestConfig()
+			cfg.UpdateSaturationConfig(map[string]SaturationScalingConfig{"default": nsEntry(
+				func(e *QuotaLimiterConfig) { e.Exclude = []string{"kube-system"} },
+			)})
+
+			entry, _ := cfg.EffectiveNamespaceInventoryEntry()
+			entry.Selectors["ns-prod"].MatchLabels["team"] = "hijacked"
+			entry.Exclude[0] = "hijacked"
+
+			again, _ := cfg.EffectiveNamespaceInventoryEntry()
+			Expect(again.Selectors["ns-prod"].MatchLabels).To(HaveKeyWithValue("team", "prod"))
+			Expect(again.Exclude).To(ConsistOf("kube-system"))
 		})
 	})
 })

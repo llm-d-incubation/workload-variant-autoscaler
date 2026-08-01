@@ -1,10 +1,6 @@
 package config
 
-import (
-	"fmt"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
+import "fmt"
 
 // DefaultPriority is the default model priority multiplier.
 // Higher priority → preferential GPU allocation in fair-share.
@@ -484,17 +480,14 @@ func (c *SaturationScalingConfig) validateLimiters() error {
 			quotaOnes = append(quotaOnes, l)
 		case string(LimiterTypeNamespaceInventory):
 			// Physical capacity partitioned by node selectors, so quota caps are
-			// meaningless here; exclude is shared and stays allowed.
+			// meaningless here; exclude is shared and stays allowed. The entry's
+			// own rules live on NamespaceInventoryConfig so the quota schema's
+			// rules never silently apply to it.
 			if l.Scope != "" || len(l.ClusterQuotas) > 0 || len(l.NamespaceQuotas) > 0 {
 				return fmt.Errorf("limiters[%d] (type %q): must not set quota fields (scope/quotas/namespaceQuotas)", i, l.Type)
 			}
-			if len(l.Selectors) == 0 {
-				return fmt.Errorf("limiters[%d] (type %q): requires at least one entry in selectors", i, l.Type)
-			}
-			for ns, sel := range l.Selectors {
-				if _, err := metav1.LabelSelectorAsSelector(&sel); err != nil {
-					return fmt.Errorf("limiters[%d] (type %q): invalid node selector for namespace %q: %w", i, l.Type, ns, err)
-				}
+			if err := namespaceInventoryFromEntry(l).Validate(); err != nil {
+				return fmt.Errorf("limiters[%d] (type %q): %w", i, l.Type, err)
 			}
 		default:
 			return fmt.Errorf("limiters[%d]: unknown limiter type %q (valid: %q, %q, %q, %q)",

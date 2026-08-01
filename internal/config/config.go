@@ -868,19 +868,31 @@ func (c *Config) EffectiveLimiterMode() LimiterType {
 }
 
 // EffectiveNamespaceInventoryEntry returns a deep copy of the first
-// namespace-inventory entry on the global saturation "default" entry, and
-// whether one is declared. Read by the limiter factory when
-// EffectiveLimiterMode is LimiterTypeNamespaceInventory.
+// namespace-inventory entry on the global saturation "default" entry, resolved
+// into its own NamespaceInventoryConfig type, and whether one is declared. Read
+// by the limiter factory when EffectiveLimiterMode is
+// LimiterTypeNamespaceInventory.
 // Thread-safe.
-func (c *Config) EffectiveNamespaceInventoryEntry() (QuotaLimiterConfig, bool) {
+func (c *Config) EffectiveNamespaceInventoryEntry() (NamespaceInventoryConfig, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, l := range c.saturation.global["default"].Limiters {
 		if l.Type == string(LimiterTypeNamespaceInventory) {
-			return l.clone(), true
+			return namespaceInventoryFromEntry(l), true
 		}
 	}
-	return QuotaLimiterConfig{}, false
+	return NamespaceInventoryConfig{}, false
+}
+
+// namespaceInventoryFromEntry projects the inline limiters: entry onto the
+// dedicated namespace-inventory type, deep-copying so the caller cannot reach
+// back into the stored config.
+func namespaceInventoryFromEntry(l QuotaLimiterConfig) NamespaceInventoryConfig {
+	return NamespaceInventoryConfig{
+		Name:      l.Name,
+		Exclude:   l.Exclude,
+		Selectors: l.Selectors,
+	}.DeepCopy()
 }
 
 // EffectiveQuotaEntries returns the quota entries the quota limiter should

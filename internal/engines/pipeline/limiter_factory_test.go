@@ -3,7 +3,6 @@ package pipeline
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 )
@@ -78,7 +77,7 @@ var _ = Describe("NewLimiterFromConfig", func() {
 		cfg := configWithLimiters(config.QuotaLimiterConfig{
 			Name: "namespace-inventory", Type: string(config.LimiterTypeNamespaceInventory),
 			Exclude: []string{"kube-system"},
-			Selectors: map[string]metav1.LabelSelector{
+			Selectors: map[string]config.NodeSelector{
 				"ns-prod": {MatchLabels: map[string]string{"team": "prod"}},
 			},
 		})
@@ -94,8 +93,8 @@ var _ = Describe("NewLimiterFromConfig", func() {
 		// config changed underneath a validated parse; fail loudly either way.
 		cfg := configWithLimiters(config.QuotaLimiterConfig{
 			Name: "namespace-inventory", Type: string(config.LimiterTypeNamespaceInventory),
-			Selectors: map[string]metav1.LabelSelector{
-				"ns-prod": {MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Selectors: map[string]config.NodeSelector{
+				"ns-prod": {MatchExpressions: []config.NodeSelectorRequirement{{
 					Key: "team", Operator: "NotAnOperator", Values: []string{"prod"},
 				}}},
 			},

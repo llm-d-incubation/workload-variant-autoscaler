@@ -52,7 +52,7 @@ var _ = Describe("Namespace inventory limiter (integration)", func() {
 	// buildLimiter goes through the production path: the inline limiters: entry
 	// on the global saturation config selects the mode, and the limiter factory
 	// constructs it.
-	buildLimiter := func(selectors map[string]metav1.LabelSelector) pipeline.Limiter {
+	buildLimiter := func(selectors map[string]config.NodeSelector) pipeline.Limiter {
 		cfg := config.NewTestConfig()
 		cfg.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 			"default": {Limiters: []config.QuotaLimiterConfig{{
@@ -69,15 +69,15 @@ var _ = Describe("Namespace inventory limiter (integration)", func() {
 		return lim
 	}
 
-	team := func(name string) metav1.LabelSelector {
-		return metav1.LabelSelector{MatchLabels: map[string]string{"team": name}}
+	team := func(name string) config.NodeSelector {
+		return config.NodeSelector{MatchLabels: map[string]string{"team": name}}
 	}
 
 	It("isolates per-namespace pools so one tenant cannot consume another's GPUs", func() {
 		createGPUNode("itg-prod", "prod", "NVIDIA-H100-SXM5-80GB", 8)
 		createGPUNode("itg-dev", "dev", "NVIDIA-H100-SXM5-80GB", 4)
 
-		lim := buildLimiter(map[string]metav1.LabelSelector{
+		lim := buildLimiter(map[string]config.NodeSelector{
 			"ns-prod": team("prod"),
 			"ns-dev":  team("dev"),
 		})
@@ -96,7 +96,7 @@ var _ = Describe("Namespace inventory limiter (integration)", func() {
 	It("splits a shared default pool under contention without exceeding capacity", func() {
 		createGPUNode("itg-shared", "shared", "NVIDIA-A100-PCIE-80GB", 6)
 
-		lim := buildLimiter(map[string]metav1.LabelSelector{
+		lim := buildLimiter(map[string]config.NodeSelector{
 			pipeline.DefaultSelectorKey: team("shared"),
 		})
 		a := scaleUp("ns-a", "A100")

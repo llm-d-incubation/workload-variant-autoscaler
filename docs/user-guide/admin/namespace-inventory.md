@@ -33,6 +33,20 @@ The limiter reuses those labels rather than duplicating the mapping. Selectors
 are re-evaluated on every refresh, so node additions and removals (autoscaling,
 repair) and node relabeling are picked up automatically.
 
+### Prerequisite: pods must actually be pinned
+
+**The limiter accounts for capacity as if each namespace's pods run on its
+selector's nodes, but it does not place them there.** It bounds scaling
+decisions; the scheduler still decides where pods land. If nothing pins a
+namespace's pods to its nodes, they can be scheduled onto another bucket's
+nodes and overcommit that bucket, while the pool they were charged against sits
+idle.
+
+Pair the selectors with a real placement mechanism covering the same nodes:
+node taints plus per-namespace toleration injection, `PodNodeSelector`
+admission, or per-namespace `nodeSelector`/`nodeAffinity` injection. The node
+labels used here should be the same ones that placement keys on.
+
 ## Configuration
 
 Declare a `namespace-inventory` entry in the `limiters:` list on the **global
@@ -132,3 +146,9 @@ actual pod placement. One consequence follows:
   resolution succeeds (see [Accelerator Name Resolution](configuration.md)).
 
 Disjoint, single-accelerator-type node pools per namespace avoid this case.
+
+If node discovery fails mid-cycle, this limiter **fails closed**: scale-up is
+held at the current replica counts and retried on the next cycle, rather than
+applying unconstrained decisions. Isolation is a safety control, so a transient
+discovery error must not silently lift it. The cluster-wide and quota limiters
+keep their existing fail-open behavior.

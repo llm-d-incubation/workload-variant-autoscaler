@@ -6,8 +6,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // QuotaLimiterReservedNamespaceKey is the reserved key in the namespace-scoped
@@ -87,7 +85,13 @@ type QuotaLimiterConfig struct {
 	// not explicitly listed); values are node label selectors whose matching
 	// nodes form that namespace's GPU pool. Unlike quotas, which are declared
 	// caps, these partition physically discovered capacity.
-	Selectors map[string]metav1.LabelSelector `yaml:"selectors,omitempty" json:"selectors,omitempty"`
+	//
+	// NodeSelector rather than metav1.LabelSelector because this struct is
+	// decoded with gopkg.in/yaml.v3, which ignores metav1's json-only tags and
+	// would parse every selector as empty. Consumers read the entry through
+	// Config.EffectiveNamespaceInventoryEntry, which returns the dedicated
+	// NamespaceInventoryConfig type.
+	Selectors map[string]NodeSelector `yaml:"selectors,omitempty" json:"selectors,omitempty"`
 }
 
 // IsExcluded reports whether the given namespace bypasses this limiter.
@@ -154,7 +158,13 @@ func (q QuotaLimiterConfig) clone() QuotaLimiterConfig {
 		out.Exclude = slices.Clone(q.Exclude)
 	}
 	if q.Selectors != nil {
-		out.Selectors = maps.Clone(q.Selectors)
+		// maps.Clone would share each selector's MatchLabels/MatchExpressions,
+		// so a caller mutating a nested field would corrupt the stored config
+		// outside the Config mutex.
+		out.Selectors = make(map[string]NodeSelector, len(q.Selectors))
+		for ns, sel := range q.Selectors {
+			out.Selectors[ns] = sel.DeepCopy()
+		}
 	}
 	return out
 }

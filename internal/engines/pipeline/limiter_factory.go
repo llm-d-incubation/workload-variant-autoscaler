@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -58,9 +57,8 @@ func newNamespaceInventoryLimiter(cfg *config.Config, kubeClient client.Client) 
 			"limiters: namespace-inventory entry on the saturation \"default\" config")
 	}
 	selectors := make(map[string]labels.Selector, len(entry.Selectors))
-	for ns := range entry.Selectors {
-		ls := entry.Selectors[ns]
-		sel, err := metav1.LabelSelectorAsSelector(&ls)
+	for ns, spec := range entry.Selectors {
+		sel, err := spec.Compile()
 		if err != nil {
 			return nil, fmt.Errorf("limiter factory: invalid node selector for namespace %q: %w", ns, err)
 		}

@@ -154,6 +154,29 @@ var _ = Describe("NamespaceLimiter", func() {
 		Expect(tenant.WasLimited).To(BeTrue())
 	})
 
+	It("charges an excluded namespace that grows within the same batch", func() {
+		// Usage accounting only charges pre-cycle CurrentReplicas, so an excluded
+		// namespace scaling up alongside a capped tenant on the same pool would
+		// otherwise let both take the same GPUs for one cycle.
+		disc := &fakeNodeDiscovery{nodes: map[string]discovery.NodeInfo{
+			"n1": gpuNode("n1", map[string]string{"pool": "shared"}, "NVIDIA-A100-PCIE-80GB", 10),
+		}}
+		l := newLimiter(disc, sets.New("kube-system"), map[string]labels.Selector{
+			DefaultSelectorKey: labels.SelectorFromSet(labels.Set{"pool": "shared"}),
+		})
+
+		// Excluded namespace grows 0 -> 6 in this very batch (not pre-existing).
+		excluded := scaleUpDecision("kube-system", "A100", 0, 6)
+		tenant := scaleUpDecision("ns-a", "A100", 0, 20)
+		Expect(l.Limit(ctx, []*domain.VariantDecision{excluded, tenant})).To(Succeed())
+
+		Expect(excluded.TargetReplicas).To(Equal(6), "excluded namespaces are never capped")
+		Expect(tenant.TargetReplicas).To(Equal(4),
+			"the excluded namespace's 6 new GPUs must debit the shared pool")
+		Expect(excluded.TargetReplicas+tenant.TargetReplicas).To(Equal(10),
+			"combined allocation never exceeds the pool")
+	})
+
 	It("denies scale-up for an unlisted namespace when no default exists", func() {
 		disc := &fakeNodeDiscovery{nodes: map[string]discovery.NodeInfo{
 			"n1": gpuNode("n1", map[string]string{"team": "prod"}, "NVIDIA-A100-PCIE-80GB", 8),
