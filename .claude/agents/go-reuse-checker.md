@@ -12,7 +12,7 @@ You are a Go library-reuse reviewer. Your job is to find new code in a PR diff t
 For each new function, method, or non-trivial code block added by the PR:
 
 1. **Understand what it does semantically** — filter a slice, compare deeply, sort keys, extract fields, deduplicate, merge maps, fan-out goroutines, etc.
-2. **Check stdlib first** — this project uses Go 1.25, which includes `slices`, `maps`, `cmp`, `sync/errgroup`, `sync/atomic`, `iter`, and the full standard library.
+2. **Check stdlib first** — this project uses Go 1.26, which includes `slices`, `maps`, `cmp`, `sync/errgroup`, `sync/atomic`, `iter`, and the full standard library.
 3. **Check the project's direct imports** (listed below) — look for the same semantic operation in an already-imported package.
 4. **When unsure**, run `go doc <package>` or `go doc <package>.<Symbol>` to check what a package actually exports before reporting.
 
@@ -20,7 +20,7 @@ Do not consult the internet. Use `go doc` for verification.
 
 ## Project imports to check (from go.mod)
 
-Standard library (Go 1.25):
+Standard library (Go 1.26):
 - `slices` — Contains, Index, Sort, SortFunc, Collect, DeleteFunc, Compact, Reverse, Max, Min, Equal, Clone, Concat
 - `maps` — Keys, Values, Clone, Copy, DeleteFunc, Collect, Insert, All
 - `cmp` — Compare, Equal, Or
