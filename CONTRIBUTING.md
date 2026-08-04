@@ -21,27 +21,32 @@ This document covers **WVA-specific** development setup and workflows.
 ### Setting Up Your Development Environment
 
 1. **Fork and clone the repository:**
+
    ```bash
    git clone https://github.com/<your-username>/workload-variant-autoscaler.git
    cd workload-variant-autoscaler
    ```
 
 2. **Add upstream remote:**
+
    ```bash
    git remote add upstream https://github.com/llm-d/llm-d-workload-variant-autoscaler.git
    ```
 
 3. **Install dependencies:**
+
    ```bash
    go mod download
    ```
 
 4. **Set up a local Kind cluster with emulated GPUs:**
+
    ```bash
    CREATE_CLUSTER=true make deploy-e2e-infra
    ```
 
 5. **Run tests to verify setup:**
+
    ```bash
    make test
    ```
@@ -60,7 +65,7 @@ Learn more in the [Developer Guide](docs/developer-guide/development.md).
 
 ## WVA Project Structure
 
-```
+```text
 workload-variant-autoscaler/
 ├── api/v1alpha1/         # CRD definitions and types
 ├── cmd/                  # Main application entry point
@@ -98,11 +103,13 @@ workload-variant-autoscaler/
 ### Testing Your Changes
 
 **Run unit tests:**
+
 ```bash
 make test
 ```
 
 **Run E2E tests (Kind or OpenShift):**
+
 ```bash
 # Smoke tests (Kind)
 make test-e2e-smoke
@@ -120,6 +127,7 @@ FOCUS="Basic VA lifecycle" make test-e2e-smoke
 ```
 
 **Run linter:**
+
 ```bash
 make lint
 
@@ -132,11 +140,13 @@ make lint-fix
 If you modify the `VariantAutoscaling` CRD in `api/v1alpha1/`:
 
 1. **Generate updated manifests and code:**
+
    ```bash
    make manifests generate
    ```
 
 2. **Verify CRD changes:**
+
    ```bash
    kubectl explain variantautoscaling.spec
    ```
@@ -144,26 +154,37 @@ If you modify the `VariantAutoscaling` CRD in `api/v1alpha1/`:
 ### Building and Deploying
 
 **Build the controller binary:**
+
 ```bash
 make build
 ```
 
 **Run controller locally (connects to configured cluster):**
+
 ```bash
 make run
 ```
 
 **Build Docker image:**
+
 ```bash
 make docker-build IMG=<your-registry>/wva-controller:tag
 ```
 
 **Deploy to cluster:**
+
 ```bash
-make deploy IMG=<your-registry>/wva-controller:tag
+make deploy-wva-on-k8s IMG=<your-registry>/wva-controller:tag
+```
+
+For OpenShift, use
+
+```bash
+make deploy-wva-on-openshift IMG=<your-registry>/wva-controller:tag
 ```
 
 **Deploy with llm-d for testing:**
+
 ```bash
 make deploy-e2e-infra IMG=<your-registry>/wva-controller:tag
 ```
@@ -173,6 +194,7 @@ make deploy-e2e-infra IMG=<your-registry>/wva-controller:tag
 ### Updating Documentation
 
 When making code changes, update relevant documentation in:
+
 - `docs/user-guide/` - User-facing changes (CRD changes, new features)
 - `docs/developer-guide/` - Development workflow changes
 - `docs/integrations/` - Integration guide updates
@@ -182,6 +204,7 @@ When making code changes, update relevant documentation in:
 ### Testing Documentation
 
 Verify all commands and examples work:
+
 ```bash
 # Test installation steps from docs
 # Test configuration examples
@@ -200,6 +223,7 @@ Verify all commands and examples work:
 ### Performance Modeling
 
 When modifying queue models in `internal/queueing/analyzer/`:
+
 - Ensure mathematical correctness
 - Add comprehensive unit tests
 - Validate against real workload data when possible
@@ -208,6 +232,7 @@ When modifying queue models in `internal/queueing/analyzer/`:
 ### Optimization Algorithms
 
 When modifying optimizers in `internal/engines/pipeline/`:
+
 - Consider computational complexity
 - Test edge cases (zero load, overload, etc.)
 - Ensure feasibility checking
