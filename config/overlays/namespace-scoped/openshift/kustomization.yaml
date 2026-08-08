@@ -11,3 +11,26 @@ resources:
 components:
 - ../../../components/namespace-scoped/
 - ../../../components/openshift
+
+# Localize the ServiceMonitor's TLS serverName to this overlay's namespace. The
+# openshift component sets serverName to a placeholder
+# (wva-controller-manager-metrics-service.<namespace>.svc); the service-ca serving
+# cert's SAN is scoped to the metrics Service's real namespace, so the <namespace>
+# segment must track `namespace:` above or TLS verification fails and all wva_*
+# metrics are silently dropped (issue #1514). Sourcing the namespace here — rather
+# than in the component — is required because the namespace is unset at
+# component-evaluation time.
+replacements:
+- source:
+    kind: ServiceMonitor
+    name: wva-controller-manager-metrics-monitor
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ServiceMonitor
+      name: wva-controller-manager-metrics-monitor
+    fieldPaths:
+    - spec.endpoints.0.tlsConfig.serverName
+    options:
+      delimiter: '.'
+      index: 1
