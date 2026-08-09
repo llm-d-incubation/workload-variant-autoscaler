@@ -314,14 +314,6 @@ func TestEnvironmentGetObservations(t *testing.T) {
 // CreateTunerConfigFromData
 // ---------------------------------------------------------------------------
 
-func defaultFilterData() *FilterData {
-	return &FilterData{
-		GammaFactor: DefaultGammaFactor,
-		ErrorLevel:  DefaultErrorLevel,
-		TPercentile: DefaultTPercentile,
-	}
-}
-
 func TestCreateTunerConfigFromData(t *testing.T) {
 	t.Run("nil filterData uses defaults", func(t *testing.T) {
 		env := validEnv()
@@ -655,7 +647,8 @@ func TestConfiguratorGetStateCov(t *testing.T) {
 		}
 		// Diagonal entries should be (percentChange * stateVal)^2
 		for i := 0; i < 3; i++ {
-			expectedDiag := math.Pow(cd.ModelData.PercentChange[i]*cd.ModelData.InitState[i], 2)
+			v := cd.ModelData.PercentChange[i] * cd.ModelData.InitState[i]
+			expectedDiag := v * v
 			got := cov.At(i, i)
 			if math.Abs(got-expectedDiag) > DefaultEpsilon {
 				t.Errorf("cov[%d][%d] = %v, want %v", i, i, got, expectedDiag)
