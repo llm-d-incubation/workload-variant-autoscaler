@@ -230,6 +230,30 @@ _load_into_kind() {
 load_sim_image() {
     log_info "Pre-loading simulator image '$SIM_IMAGE' into KIND cluster..."
 
+    # Digest-pinned images can be imported incorrectly by `kind load docker-image`
+    # and left behind as broken containerd import-* references. Pull them directly
+    # into each KIND node's containerd store instead.
+    if [[ "$SIM_IMAGE" == *@sha256:* ]]; then
+        log_info "Simulator image is digest-pinned; pulling directly into KIND node containerd..."
+
+        local nodes
+        if ! nodes="$(kind get nodes --name "$CLUSTER_NAME")"; then
+            log_warning "Failed to list KIND nodes for simulator image preload"
+            return
+        fi
+
+        local node
+        for node in $nodes; do
+            if ! docker exec "$node" crictl pull "$SIM_IMAGE"; then
+                log_warning "Failed to pre-pull simulator image '$SIM_IMAGE' on node '$node'"
+                return
+            fi
+        done
+
+        log_success "Simulator image '$SIM_IMAGE' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
+        return
+    fi
+
     local platform="${KIND_IMAGE_PLATFORM:-}"
     if [ -z "$platform" ]; then
         case "$(uname -m)" in
@@ -243,7 +267,8 @@ load_sim_image() {
         return
     fi
 
-    _load_into_kind "$SIM_IMAGE" || log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
+    _load_into_kind "$SIM_IMAGE" ||
+        log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
 }
 
 KUBE_LIKE_VALUES_DEV_IF_PRESENT=true
