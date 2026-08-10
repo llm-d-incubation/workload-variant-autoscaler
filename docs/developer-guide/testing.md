@@ -185,55 +185,121 @@ See the [E2E Test Suite README](../../test/e2e/README.md) for full configuration
 
 ### Direct KEDA+EPP guide contract
 
-`test-e2e-keda-epp-guide` is a narrow, controller-free contract for the
-canonical KEDA+EPP guide in the `llm-d/llm-d` repository. It observes resources
-that the caller already installed; it does not create a replacement
-`ScaledObject`, deploy the WVA controller, or provide a generic guide runner.
+`test-e2e-keda-epp-guide-with-setup` is a narrow, controller-free contract for
+the canonical KEDA+EPP guide in the `llm-d/llm-d` repository. It qualifies an
+optimized-baseline-compatible KEDA+EPP guide topology, not the full
+optimized-baseline behavior. The deploy target
+composes the existing `deploy-e2e-infra` lifecycle with `DEPLOY_WVA=false` and
+`SCALER_BACKEND=keda`; it does not deploy the WVA controller, copy the guide's
+autoscaling resources into this repository, or provide a generic guide runner.
 
-Before invoking the target, the caller must create a fresh disposable Kind
-cluster and install the following from the matching llm-d checkout:
+Run the complete fresh-cluster lifecycle with one command:
 
-- GAIE CRDs and the guide's CPU-only inference simulator overlay;
-- the low-resource kube-prometheus-stack values, HTTPS server certificate, and
-  `llm-d-monitoring/prometheus-web-tls` Secret;
-- stock KEDA and the guide's Kind-only operator-wide CA values;
-- the router chart with the canonical guide values layering;
-- the guide Kustomize output, including its own `TriggerAuthentication` and
-  `ScaledObject`.
+```bash
+# Optional: materialize the selected revision from a nearby read-only checkout.
+export LLMD_SOURCE=../llm-d
+make test-e2e-keda-epp-guide-with-setup LLMD_SOURCE="${LLMD_SOURCE:-}"
+```
 
-The target uses the canonical guide inputs directly:
+The simulator is CPU-only: its Deployment has no GPU resource request even
+though its canonical guide labels and name describe the NVIDIA GPU variant.
+`CLUSTER_GPUS=0` therefore exercises the contract without a GPU. Never point
+this flow at an existing or shared cluster. The exact current Kind context,
+absence of the guide namespaces, and absence of KEDA are checked before
+deployment; the whole fresh cluster remains the final cleanup guarantee.
+The deploy target installs this guide-owned simulator after the existing
+Prometheus, KEDA, and EPP infrastructure, waits for its single replica to be
+Ready, and only then applies the canonical `TriggerAuthentication` and
+`ScaledObject`. The test observes that pre-created Deployment and deletes it
+during its isolated cleanup.
+
+Current official llm-d `main` is the normal source. At the start of each guide
+setup, the deploy target resolves `main` from the official llm-d repository
+exactly once to a full immutable commit SHA, logs that SHA, and uses only that
+revision for canonical rendering, deployment, and the remainder of the run.
+This intentionally exposes llm-d/WVA drift when a later run selects a newer
+`main` revision.
+
+Set `LLMD_SOURCE_SHA=<full SHA>` only as an explicit pin for reproducibility,
+debugging, compatibility investigation, or temporary stabilization. The pin
+takes precedence over `main` resolution and is not the normal operating mode.
+`LLMD_SOURCE` is optional and never selects a revision: when set, it only
+materializes the already selected commit from that read-only checkout without
+reading or changing its checked-out branch, `HEAD`, local `main`, or tracking
+refs. If the selected object is absent, setup fails rather than falling back to
+another revision. When `LLMD_SOURCE` is empty, the selected immutable commit is
+downloaded into temporary storage.
+
+With either source location, the target layers exactly the current canonical
+router base, optimized-baseline topology, monitoring, and KEDA+EPP queue
+values, followed by one WVA-owned deterministic Kind override. The historical
+WVA v0.8.1 base and optimized-baseline values remain defaults for existing
+callers but do not participate in this guide path. It applies the canonical
+`TriggerAuthentication` and `ScaledObject` through a temporary Kustomize
+overlay. The temporary overlay changes the environment-specific namespace and
+Prometheus endpoint. The canonical trigger queries, thresholds, replica bounds,
+scale target, HPA behavior, and authentication wiring remain unchanged.
+
+The deployed and tested inputs are:
 
 | Input | Required value |
 |-------|----------------|
 | Environment | `kind-emulator` |
 | WVA controller | disabled with `DEPLOY_WVA=false` |
 | llm-d namespace | `llm-d-optimized-baseline` |
-| Prometheus namespace | `llm-d-monitoring` |
-| KEDA namespace | `keda` |
+| Prometheus namespace | `workload-variant-autoscaler-monitoring` |
+| KEDA namespace | `keda-system` |
 | EPP Service | `optimized-baseline-epp` |
 | Model | `Qwen/Qwen3-32B` |
 
-Run only the direct-KEDA spec with the kubeconfig for that disposable cluster:
+For this disposable Kind flow, KEDA `2.20.0` is installed with WVA-owned Kind
+values that mount the Prometheus public CA into the KEDA operator trust
+store. The Prometheus serving key remains only in the monitoring namespace;
+the KEDA operator namespace and `keda-prometheus-auth` Secret receive only the
+public CA. This is a Kind-only TLS compatibility boundary, not production
+authentication guidance and not an OpenShift configuration.
 
-```bash
-make test-e2e-keda-epp-guide KUBECONFIG=/path/to/disposable-kind.kubeconfig
-```
+The `keda-epp-guide` job in `.github/workflows/ci-pr-checks.yaml` runs this same
+fresh Kind lifecycle for WVA pull requests. The target selects only Ginkgo label
+`keda-epp-guide`; WVA smoke, scale-from-zero, and controller-dependent specs are
+excluded. This lane sets guide-specific bounds of 120 seconds for simulator
+readiness, 60 seconds for medium waits, 90 seconds for standard and metric
+waits, 180 seconds for extended waits, and 300 seconds for scale-up. Individual
+Kubernetes API calls are bounded at 10 seconds. A curl probe attempt is bounded
+at 100 seconds: 60 seconds for Pod completion plus four 10-second API/log/cleanup
+allowances.
 
-The target selects only Ginkgo label `keda-epp-guide`; WVA smoke,
-scale-from-zero, and controller-dependent specs are excluded. Its 40-minute Go
-test timeout covers the bounded guide assertions and reserves time for failure
-diagnostics and best-effort request-Pod cleanup. Infrastructure setup is
-outside that timeout and must be budgeted separately by the caller.
+Those actual waits produce two request-survival bounds. Warmup is at most 1130
+seconds (request creation and startup, ServiceMonitor/trust checks, and five
+metric probes); the deterministic one-to-two phase is at most 810 seconds
+(request startup, running-metric observation, Phase A, and scale-up, including
+the maximum API-call overrun per polling iteration). Flow Control
+`defaultRequestTTL`, the simulator response time, and curl `--max-time` are all
+1500 seconds, strictly above the larger 1130-second bound with a 370-second
+margin.
 
-Within the spec, individual Kubernetes API calls are bounded at 10 seconds and each request client is bounded at 900 seconds; the existing readiness and scale-up waits remain bounded by the shared e2e configuration.
+The complete successful-spec observation bound is 3330 seconds (55m30s),
+including reset, readiness, baseline, stage-boundary log checks, and explicit
+and deferred stimulus cleanup. Ginkgo is bounded at 65 minutes and Go at 70
+minutes, leaving room for suite preflight and diagnostics. The CI job is bounded
+at 120 minutes; this contains the setup's 34 minutes of declared Kind,
+Prometheus, KEDA, EPP, and simulator readiness waits, the 70-minute Go boundary,
+and a final diagnostics/cluster-cleanup reserve. Normal success is expected to
+finish far below these failure-path ceilings.
 
-The fresh uniquely named Kind cluster is the final cleanup boundary. The
-caller must always delete only that cluster on success, failure, or interruption
-and must never target a pre-existing cluster.
+The repository-default Kind image currently uses Kubernetes v1.32. KEDA 2.20 does
+not list Kubernetes v1.32 in its tested compatibility matrix,
+even though KEDA's deployment prerequisites allow Kubernetes 1.30 and newer.
+Treat that pairing as a CI compatibility risk, not as evidence
+of official KEDA support; this lane intentionally does not
+carry an unvalidated Kubernetes v1.33 override.
 
-This contract deliberately excludes nightly or stable-promotion qualification,
-sustained or performance load, scale-down, post-scale inference, real models,
-GPUs, and OpenShift behavior.
+This contract proves the request → EPP Flow Control → queue/running metrics →
+Prometheus → secure KEDA external metrics → KEDA-owned HPA → Deployment chain
+and one bounded `1 -> 2` transition. It deliberately excludes nightly or
+stable-promotion qualification, sustained or performance load, scale-down,
+post-scale inference, real models, GPUs, KV-event routing, and OpenShift/Thanos
+behavior.
 
 ### Quick Start
 

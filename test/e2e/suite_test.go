@@ -181,7 +181,7 @@ var _ = ReportAfterEach(func(report SpecReport) {
 	if cfg.DeployWVA {
 		utils.DumpControllerLogs(context.Background(), k8sClient, cfg.WVANamespace, GinkgoWriter)
 	} else {
-		dumpKEDAEPPGuideOperatorLogs()
+		dumpKEDAEPPGuideDiagnostics()
 	}
 	utils.DumpManagedScalers(context.Background(), k8sClient, GinkgoWriter)
 })

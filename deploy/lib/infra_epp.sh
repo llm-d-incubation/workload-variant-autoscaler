@@ -6,7 +6,10 @@
 # Required vars: LLM_D_ROUTER_VERSION, GAIE_VERSION, LLMD_NS
 #   LLM_D_ROUTER_VERSION  — chart + EPP image tag from llm-d/llm-d-router (e.g. v0.9.0)
 #   GAIE_VERSION          — kubernetes-sigs GAIE CRDs ref (e.g. v1.5.0)
-# Required funcs: log_info, log_success, log_warning
+# Optional vars:
+#   EPP_HELM_VALUES_LIST  — newline-delimited complete ordered values chain.
+# When unset, the existing WVA base + optimized-baseline defaults are unchanged.
+# Required funcs: log_info, log_success, log_warning, log_error
 #
 
 GATEWAY_API_VERSION=${GATEWAY_API_VERSION:-"v1.2.0"}
@@ -65,27 +68,50 @@ deploy_epp() {
     # to fit a kind cluster.
     log_info "Installing llm-d-router-standalone chart (release=optimized-baseline, version=${LLM_D_ROUTER_VERSION})..."
 
+    # A caller-provided list is a complete chain. This lets the guide path use
+    # its immutable current llm-d inputs without prepending the repository's
+    # historical v0.8.1 defaults. Callers that do not provide the list retain
+    # the existing WVA behavior exactly.
+    local epp_helm_args=()
+    local epp_resource_args=()
+    if [ -n "${EPP_HELM_VALUES_LIST:-}" ]; then
+        local helm_values_file
+        while IFS= read -r helm_values_file; do
+            [ -n "$helm_values_file" ] || continue
+            if [ ! -r "$helm_values_file" ]; then
+                log_error "EPP_HELM_VALUES_LIST contains an unreadable file: $helm_values_file"
+            fi
+            log_info "Layering caller-provided EPP Helm values: $helm_values_file"
+            epp_helm_args+=(-f "$helm_values_file")
+        done <<< "$EPP_HELM_VALUES_LIST"
+    else
+        epp_helm_args=(
+            -f "$_lib_dir/epp-base.values.yaml"
+            -f "$_lib_dir/epp-optimized-baseline.values.yaml"
+        )
+        epp_resource_args=(
+            --set router.epp.resources.requests.cpu=100m
+            --set router.epp.resources.requests.memory=256Mi
+            --set router.epp.resources.limits.cpu=500m
+            --set router.epp.resources.limits.memory=512Mi
+            --set router.proxy.resources.requests.cpu=100m
+            --set router.proxy.resources.requests.memory=128Mi
+            --set router.proxy.resources.limits.cpu=500m
+            --set router.proxy.resources.limits.memory=256Mi
+        )
+    fi
+
     # When scale-to-zero is enabled, add flowControl feature gate to EPP config so the
     # scale-from-zero engine can read inference_extension_flow_control_queue_size metrics.
-    local extra_helm_args=()
     if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
         log_info "ENABLE_SCALE_TO_ZERO=true: enabling EPP flowControl feature gate..."
-        extra_helm_args=(-f "$_lib_dir/epp-flow-control.values.yaml")
+        epp_helm_args+=(-f "$_lib_dir/epp-flow-control.values.yaml")
     fi
 
     helm upgrade --install optimized-baseline \
         oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
-        -f "$_lib_dir/epp-base.values.yaml" \
-        -f "$_lib_dir/epp-optimized-baseline.values.yaml" \
-        "${extra_helm_args[@]}" \
-        --set router.epp.resources.requests.cpu=100m \
-        --set router.epp.resources.requests.memory=256Mi \
-        --set router.epp.resources.limits.cpu=500m \
-        --set router.epp.resources.limits.memory=512Mi \
-        --set router.proxy.resources.requests.cpu=100m \
-        --set router.proxy.resources.requests.memory=128Mi \
-        --set router.proxy.resources.limits.cpu=500m \
-        --set router.proxy.resources.limits.memory=256Mi \
+        "${epp_helm_args[@]}" \
+        "${epp_resource_args[@]}" \
         -n "$LLMD_NS" --version "$LLM_D_ROUTER_VERSION" --create-namespace
 
     # Grant EPP SA permission to create tokenreviews/subjectaccessreviews so its

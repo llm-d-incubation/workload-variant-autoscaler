@@ -3,6 +3,7 @@ IMAGE_TAG_BASE ?= ghcr.io/llm-d
 IMG_TAG ?= latest
 IMG ?= $(IMAGE_TAG_BASE)/llm-d-workload-variant-autoscaler:$(IMG_TAG)
 KIND_ARGS ?= -t mix -n 3 -g 2   # Default: 3 nodes, 2 GPUs per node, mixed vendors
+CLUSTER_NAME ?= kind-wva-gpu-cluster
 CLUSTER_GPU_TYPE ?= nvidia-mix
 CLUSTER_NODES ?= 3
 CLUSTER_GPUS ?= 4
@@ -33,6 +34,8 @@ E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
 E2E_KEDA_NAMESPACE          ?= keda-system
 E2E_WVA_SECONDARY_OVERLAY_PATH ?= $(CURDIR)/test/e2e/testdata/secondary-controller
+LLMD_SOURCE                 ?=
+LLMD_SOURCE_SHA             ?=
 # llm-d-benchmark CLI configuration
 # Ensure brew-installed tools (helm >=3.19) take precedence over Rancher Desktop
 export PATH := /opt/homebrew/bin:$(PATH)
@@ -132,12 +135,12 @@ test: manifests generate fmt vet setup-envtest helm ## Run tests.
 .PHONY: create-kind-cluster
 create-kind-cluster:
 	export KIND=$(KIND) KUBECTL=$(KUBECTL) && \
-		deploy/kind-emulator/setup.sh -t $(CLUSTER_GPU_TYPE) -n $(CLUSTER_NODES) -g $(CLUSTER_GPUS)
+		deploy/kind-emulator/setup.sh -c $(CLUSTER_NAME) -t $(CLUSTER_GPU_TYPE) -n $(CLUSTER_NODES) -g $(CLUSTER_GPUS)
 
 # Destroys the Kind cluster created by `create-kind-cluster`
 .PHONY: destroy-kind-cluster
 destroy-kind-cluster:
-	export KIND=$(KIND) KUBECTL=$(KUBECTL) && \
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) KIND_NAME=$(CLUSTER_NAME) && \
         deploy/kind-emulator/teardown.sh
 
 
@@ -238,6 +241,53 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server 
 	fi
 
 
+# Deploys the canonical llm-d KEDA+EPP guide contract through the existing
+# controller-free e2e infrastructure lifecycle. This target requires a fresh,
+# uniquely named Kind cluster created separately with create-kind-cluster.
+.PHONY: deploy-e2e-keda-epp-guide
+deploy-e2e-keda-epp-guide: ## Deploy the llm-d KEDA+EPP guide contract on disposable Kind
+	@echo "Deploying direct KEDA+EPP guide contract..."
+	@KUBECONFIG=$(KUBECONFIG) \
+		CLUSTER_NAME=$(CLUSTER_NAME) \
+		LLMD_SOURCE="$(LLMD_SOURCE)" \
+		LLMD_SOURCE_SHA="$(LLMD_SOURCE_SHA)" \
+		LLMD_NS=llm-d-optimized-baseline \
+		MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+		KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
+		WVA_PROJECT=$(CURDIR) \
+		MAKE="$(MAKE)" \
+		./deploy/lib/deploy_keda_epp_guide.sh
+
+# Owns the complete disposable lifecycle. The default cluster name is replaced
+# with a unique guide-specific name; an explicitly supplied name must not exist.
+.PHONY: test-e2e-keda-epp-guide-with-setup
+test-e2e-keda-epp-guide-with-setup: ## Create fresh Kind, deploy, test, diagnose, and tear down the guide contract
+	@set -Eeuo pipefail; \
+	cluster_name="$(CLUSTER_NAME)"; \
+	if [ "$$cluster_name" = "kind-wva-gpu-cluster" ]; then \
+		cluster_name="wva-keda-epp-guide-$$(date +%s)-$$$$"; \
+	fi; \
+	if $(KIND) get clusters 2>/dev/null | grep -Fxq "$$cluster_name"; then \
+		echo "ERROR: Kind cluster '$$cluster_name' already exists; choose a fresh unique name" >&2; \
+		exit 1; \
+	fi; \
+	cleanup() { \
+		$(MAKE) destroy-kind-cluster CLUSTER_NAME="$$cluster_name"; \
+	}; \
+	trap cleanup EXIT; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	$(MAKE) create-kind-cluster \
+		CLUSTER_NAME="$$cluster_name" \
+		CLUSTER_NODES=1 \
+		CLUSTER_GPUS=0 \
+		CLUSTER_GPU_TYPE=nvidia; \
+	$(MAKE) deploy-e2e-keda-epp-guide \
+		CLUSTER_NAME="$$cluster_name" \
+		LLMD_SOURCE="$(LLMD_SOURCE)" \
+		LLMD_SOURCE_SHA="$(LLMD_SOURCE_SHA)"; \
+	$(MAKE) test-e2e-keda-epp-guide CLUSTER_NAME="$$cluster_name"
+
 # Runs the smoke subset of the e2e suite. KEDA is the only scaler backend.
 .PHONY: test-e2e-smoke
 test-e2e-smoke: ## Run smoke e2e tests
@@ -266,7 +316,8 @@ test-e2e-smoke: ## Run smoke e2e tests
 
 # Runs only the direct KEDA+EPP guide contract against resources already applied
 # from the llm-d repository. The WVA controller is intentionally not required.
-# The guide's bounded inner waits total less than 30m; 40m reserves time for diagnostics and cleanup.
+# Its successful-spec observation bound is 55m30s; Ginkgo gets 65m and Go gets
+# 70m so suite preflight, diagnostics, and cleanup remain outside that bound.
 .PHONY: test-e2e-keda-epp-guide
 test-e2e-keda-epp-guide: ## Run the llm-d KEDA+EPP guide contract
 	@echo "Running direct KEDA+EPP guide contract..."
@@ -275,14 +326,21 @@ test-e2e-keda-epp-guide: ## Run the llm-d KEDA+EPP guide contract
 	DEPLOY_WVA=false \
 	WVA_NAMESPACE=workload-variant-autoscaler-system \
 	LLMD_NAMESPACE=llm-d-optimized-baseline \
-	MONITORING_NAMESPACE=llm-d-monitoring \
-	KEDA_NAMESPACE=keda \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
 	EPP_SERVICE_NAME=optimized-baseline-epp \
 	USE_SIMULATOR=true \
 	SCALE_TO_ZERO_ENABLED=false \
 	SCALER_BACKEND=keda \
 	MODEL_ID=Qwen/Qwen3-32B \
-	go test ./test/e2e/ -timeout 40m -v -ginkgo.v \
+	POD_READY_TIMEOUT=120 \
+	SCALE_UP_TIMEOUT=300 \
+	E2E_EVENTUALLY_SHORT=30 \
+	E2E_EVENTUALLY_MEDIUM=60 \
+	E2E_EVENTUALLY_STANDARD=90 \
+	E2E_EVENTUALLY_LONG=90 \
+	E2E_EVENTUALLY_EXTENDED=180 \
+	go test ./test/e2e/ -timeout 70m -v -ginkgo.v -ginkgo.timeout=65m \
 		-ginkgo.label-filter="keda-epp-guide"
 
 # Runs the complete e2e test suite (KEDA backend, excluding smoke and flaky tests).

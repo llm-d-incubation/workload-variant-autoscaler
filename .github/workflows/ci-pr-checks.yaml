@@ -168,6 +168,45 @@ jobs:
         run: |
           make test-e2e-smoke-with-setup
 
+  # Canonical queue-guide qualification: CPU-only, direct KEDA, and a fresh
+  # disposable Kind cluster. This label is not selected by smoke/full jobs.
+  keda-epp-guide:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-code-changes]
+    if: needs.check-code-changes.outputs.has_code_changes == 'true'
+    # 34m of bounded setup waits + 70m Go timeout, with final diagnostics and
+    # fresh-cluster cleanup still inside the job-level boundary.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      CLUSTER_NAME: wva-keda-epp-guide-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Extract Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> "$GITHUB_ENV"
+
+      - name: Set up Go with cache
+        uses: actions/setup-go@v6
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install Kind
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Run KEDA+EPP guide contract
+        shell: bash
+        run: |
+          make test-e2e-keda-epp-guide-with-setup \
+            CLUSTER_NAME="$CLUSTER_NAME" \
+            LLMD_SOURCE=""
+
   # Full Kind E2E - runs automatically on every PR with code changes.
   # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
   # and must run and pass before merge.
