@@ -48,7 +48,7 @@ const (
 )
 
 var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, func() {
-	var requestPods []string
+	requestPods := make([]string, 0, 3)
 
 	deleteRequests := func() {
 		deleteKEDAEPPGuidePods(requestPods)
@@ -165,7 +165,7 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 		By("ending warmup and proving it cannot contaminate the deterministic phases")
 		deleteKEDAEPPGuidePods(requestPods)
 		waitForKEDAEPPGuidePodsDeleted(requestPods)
-		requestPods = nil
+		requestPods = requestPods[:0]
 		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideRunQuery, 0)
 		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideQueueQuery, 0)
 
