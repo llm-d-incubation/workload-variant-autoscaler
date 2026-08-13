@@ -1,0 +1,695 @@
+# Bounded CPU-only LeaderWorkerSet scale-mechanics scenario for WVA #1525.
+# It intentionally proves group mechanics only: one leader plus one worker per
+# group, a paused KEDA ScaledObject, and deterministic simulator metrics.
+
+# Reproducible Option 2 lifecycle for the pinned llm-d-benchmark renderer.
+#
+# Run this after standup. The ScaledObject remains paused until the exact
+# namespace-local WVA metric reaches 2. Every polling phase is bounded and
+# emits diagnostics before returning nonzero.
+#
+# ```bash
+# set -euo pipefail
+#
+# : "${NAMESPACE:=llmd-1525}"
+# : "${WVA_NAMESPACE:=workload-variant-autoscaler-system}"
+# : "${MONITORING_NAMESPACE:=workload-variant-autoscaler-monitoring}"
+# : "${PROMETHEUS_PORT:=19090}"
+# : "${POLL_INTERVAL_SECONDS:=5}"
+#
+# for required_command in kubectl curl jq grep date; do
+#   if ! command -v "${required_command}" >/dev/null 2>&1; then
+#     echo "ERROR: required command not found: ${required_command}" >&2
+#     exit 1
+#   fi
+# done
+#
+# wait_for() {
+#   local description="$1"
+#   local timeout_seconds="$2"
+#   local check_function="$3"
+#   local diagnostic_function="$4"
+#   local start_epoch
+#   local now_epoch
+#
+#   start_epoch="$(date +%s)"
+#   while ! "${check_function}"; do
+#     now_epoch="$(date +%s)"
+#     if [ "$((now_epoch - start_epoch))" -ge "${timeout_seconds}" ]; then
+#       echo "ERROR: timed out after ${timeout_seconds}s waiting for ${description}" >&2
+#       "${diagnostic_function}" >&2 || true
+#       return 1
+#     fi
+#     sleep "${POLL_INTERVAL_SECONDS}"
+#   done
+#   echo "PASS: ${description}"
+# }
+#
+# PROMETHEUS_URL="https://127.0.0.1:${PROMETHEUS_PORT}"
+# PROMETHEUS_FORWARD_LOG="/private/tmp/wva-1525-prometheus-port-forward.log"
+# PROMETHEUS_FORWARD_PID=""
+# WVA_SCALEDOBJECT_RECONCILE_QUERY="controller_runtime_reconcile_total{controller=\"scaledobject\",result=\"success\",job=\"wva-controller-manager-metrics-service\",namespace=\"${WVA_NAMESPACE}\"}"
+#
+# cleanup() {
+#   if [ -n "${PROMETHEUS_FORWARD_PID}" ]; then
+#     kill "${PROMETHEUS_FORWARD_PID}" >/dev/null 2>&1 || true
+#     wait "${PROMETHEUS_FORWARD_PID}" >/dev/null 2>&1 || true
+#   fi
+# }
+# trap cleanup EXIT INT TERM
+#
+# prom_query() {
+#   curl -ksS -G "${PROMETHEUS_URL}/api/v1/query" \
+#     --data-urlencode "query=$1"
+# }
+#
+# check_prometheus_ready() {
+#   prom_query up | jq -e \
+#     '.status == "success" and (.data.result | length) > 0' >/dev/null
+# }
+#
+# diagnose_prometheus_ready() {
+#   tail -n 80 "${PROMETHEUS_FORWARD_LOG}" 2>/dev/null || true
+#   prom_query up || true
+# }
+#
+# check_one_managed_scaledobject() {
+#   kubectl get scaledobjects.keda.sh --all-namespaces -o json | jq -e \
+#     --arg namespace "${NAMESPACE}" '
+#       [.items[] |
+#        select(.metadata.annotations["llm-d.ai/managed"] == "true")] as $managed |
+#       ($managed | length) == 1 and
+#       $managed[0].metadata.namespace == $namespace
+#     ' >/dev/null
+# }
+#
+# diagnose_managed_scaledobject() {
+#   kubectl get scaledobjects.keda.sh --all-namespaces -o yaml || true
+# }
+#
+# check_wva_scaledobject_reconcile() {
+#   prom_query "${WVA_SCALEDOBJECT_RECONCILE_QUERY}" |
+#     jq -e '
+#       .status == "success" and
+#       (.data.result | length) == 1 and
+#       ((.data.result[0].value[1] | tonumber) > 0)
+#     ' >/dev/null
+# }
+#
+# diagnose_wva_scaledobject_reconcile() {
+#   prom_query "${WVA_SCALEDOBJECT_RECONCILE_QUERY}" || true
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager --tail=120 || true
+# }
+#
+# check_processing_model_v2() {
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager --since=20m |
+#     grep -F 'Processing model (V2)' |
+#     grep -F "\"modelID\": \"${MODEL_ID}\"" |
+#     grep -F "\"namespace\": \"${NAMESPACE}\"" >/dev/null
+# }
+#
+# diagnose_processing_model_v2() {
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager --since=20m --tail=160 || true
+# }
+#
+# check_lws_ready_groups() {
+#   local lws_json
+#   local pods_json
+#   local expected_pods
+#
+#   lws_json="$(kubectl -n "${NAMESPACE}" get \
+#     leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" -o json)" ||
+#     return 1
+#   pods_json="$(kubectl -n "${NAMESPACE}" get pods \
+#     -l "leaderworkerset.sigs.k8s.io/name=${LWS_NAME}" -o json)" ||
+#     return 1
+#   expected_pods="$((EXPECTED_GROUPS * GROUP_SIZE))"
+#
+#   printf '%s' "${lws_json}" | jq -e \
+#     --argjson expected "${EXPECTED_GROUPS}" '
+#       .spec.replicas == $expected and
+#       .status.replicas == $expected and
+#       .status.readyReplicas == $expected
+#     ' >/dev/null || return 1
+#
+#   printf '%s' "${pods_json}" | jq -e \
+#     --argjson expected_groups "${EXPECTED_GROUPS}" \
+#     --argjson group_size "${GROUP_SIZE}" \
+#     --argjson expected_pods "${expected_pods}" '
+#       (.items | length) == $expected_pods and
+#       all(.items[];
+#         any(.status.conditions[]?;
+#           .type == "Ready" and .status == "True")) and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | all(. != null)) and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | unique | length) == $expected_groups and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | sort | group_by(.) | all(length == $group_size))
+#     ' >/dev/null
+# }
+#
+# diagnose_lws_ready_groups() {
+#   kubectl -n "${NAMESPACE}" get \
+#     leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" get pods \
+#     -l "leaderworkerset.sigs.k8s.io/name=${LWS_NAME}" \
+#     -o wide --show-labels || true
+#   kubectl -n "${NAMESPACE}" get events \
+#     --sort-by=.lastTimestamp | tail -n 80 || true
+# }
+#
+# check_namespace_config_loaded() {
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager --since-time="${RELOAD_AT}" |
+#     grep -F \
+#       'Updated namespace-local saturation config from ConfigMap' |
+#     grep -F \
+#       "\"ConfigMap\": {\"name\":\"wva-saturation-scaling-config\",\"namespace\":\"${NAMESPACE}\"}" |
+#     grep -F "\"namespace\": \"${NAMESPACE}\"" >/dev/null
+# }
+#
+# diagnose_namespace_config_loaded() {
+#   kubectl -n "${NAMESPACE}" get configmap \
+#     wva-saturation-scaling-config -o yaml || true
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager \
+#     --since-time="${RELOAD_AT}" --tail=160 || true
+# }
+#
+# check_exact_desired_two() {
+#   prom_query "${QUERY}" | jq -e '
+#     .status == "success" and
+#     (.data.result | length) == 1 and
+#     .data.result[0].value[1] == "2"
+#   ' >/dev/null
+# }
+#
+# diagnose_exact_desired_two() {
+#   echo "Expected exact query: ${EXPECTED_QUERY}"
+#   prom_query "${QUERY}" || true
+#   kubectl -n "${WVA_NAMESPACE}" logs \
+#     deployment/wva-controller-manager \
+#     --since-time="${RELOAD_AT}" --tail=160 || true
+# }
+#
+# check_scaledobject_ready() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o json |
+#     jq -e '
+#       (.metadata.annotations["autoscaling.keda.sh/paused"] == null) and
+#       any(.status.conditions[]?;
+#         .type == "Ready" and .status == "True") and
+#       any(.status.conditions[]?;
+#         .type == "Paused" and .status == "False")
+#     ' >/dev/null
+# }
+#
+# diagnose_scaledobject_ready() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o yaml || true
+#   kubectl -n keda-system logs deployment/keda-operator \
+#     --tail=160 || true
+# }
+#
+# check_hpa_created() {
+#   HPA_NAME="$(kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" \
+#     -o jsonpath='{.status.hpaName}' 2>/dev/null || true)"
+#   [ -n "${HPA_NAME}" ] &&
+#     kubectl -n "${NAMESPACE}" get \
+#       horizontalpodautoscaler.autoscaling "${HPA_NAME}" \
+#       >/dev/null 2>&1
+# }
+#
+# diagnose_hpa_created() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscalers.autoscaling -o yaml || true
+# }
+#
+# check_external_metric_visible() {
+#   kubectl get --raw \
+#     "/apis/external.metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/${EXTERNAL_METRIC_NAME}?labelSelector=${EXTERNAL_METRIC_SELECTOR_URI}" |
+#     jq -e '.items | length > 0' >/dev/null
+# }
+#
+# diagnose_external_metric_visible() {
+#   kubectl get --raw \
+#     "/apis/external.metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/${EXTERNAL_METRIC_NAME}?labelSelector=${EXTERNAL_METRIC_SELECTOR_URI}" ||
+#     true
+#   kubectl -n keda-system logs deployment/keda-operator \
+#     --tail=160 || true
+#   kubectl -n keda-system logs \
+#     deployment/keda-operator-metrics-apiserver --tail=160 || true
+# }
+#
+# check_hpa_desired_two() {
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o json |
+#     jq -e '.status.desiredReplicas == 2' >/dev/null
+# }
+#
+# diagnose_hpa_desired_two() {
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" describe \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" || true
+# }
+#
+# # The pinned renderer does not propagate arbitrary scenario namespace
+# # labels. Apply the actual opt-in label and preserve the installed
+# # Namespace YAML as evidence.
+# kubectl label namespace "${NAMESPACE}" \
+#   wva.llmd.ai/config-enabled=true --overwrite
+# kubectl get namespace "${NAMESPACE}" -o yaml |
+#   tee /private/tmp/wva-1525-installed-namespace.yaml
+#
+# if [ "$(kubectl get namespace "${NAMESPACE}" \
+#   -o jsonpath='{.metadata.labels.wva\.llmd\.ai/config-enabled}')" != \
+#   "true" ]; then
+#   echo \
+#     "ERROR: installed Namespace is missing wva.llmd.ai/config-enabled=true" \
+#     >&2
+#   exit 1
+# fi
+#
+# # The clean replay must contain exactly one managed ScaledObject
+# # cluster-wide. WVA's ScaledObject predicate handles only managed objects,
+# # so its successful-reconcile metric below is qualified by this invariant.
+# wait_for "exactly one managed ScaledObject in ${NAMESPACE}" 120 \
+#   check_one_managed_scaledobject diagnose_managed_scaledobject
+#
+# MANAGED_SCALEDOBJECT_JSON="$(kubectl get scaledobjects.keda.sh \
+#   --all-namespaces -o json |
+#   jq -c \
+#     '[.items[] |
+#       select(.metadata.annotations["llm-d.ai/managed"] == "true")][0]')"
+# SCALEDOBJECT_NAME="$(printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" |
+#   jq -r '.metadata.name')"
+# MODEL_ID="$(printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" |
+#   jq -r '.metadata.annotations["llm-d.ai/model-id"] // empty')"
+# LWS_NAME="$(printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" |
+#   jq -r '.spec.scaleTargetRef.name // empty')"
+#
+# if [ -z "${SCALEDOBJECT_NAME}" ] ||
+#   [ -z "${MODEL_ID}" ] ||
+#   [ -z "${LWS_NAME}" ]; then
+#   echo \
+#     "ERROR: managed ScaledObject is missing name, model-id, or scaleTargetRef.name" \
+#     >&2
+#   printf '%s\n' "${MANAGED_SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# if ! printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" | jq -e '
+#   .metadata.annotations["autoscaling.keda.sh/paused"] == "true" and
+#   .spec.scaleTargetRef.apiVersion == "leaderworkerset.x-k8s.io/v1" and
+#   .spec.scaleTargetRef.kind == "LeaderWorkerSet" and
+#   .spec.minReplicaCount == 1 and
+#   .spec.maxReplicaCount == 2
+# ' >/dev/null; then
+#   echo \
+#     "ERROR: managed ScaledObject does not match the approved paused LWS contract" \
+#     >&2
+#   printf '%s\n' "${MANAGED_SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# # Inspect the installed resource rather than relying on trigger.name.
+# PROMETHEUS_TRIGGER_COUNT="$(
+#   printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" |
+#     jq \
+#       '[.spec.triggers[]? |
+#         select(.type == "prometheus")] | length'
+# )"
+# if [ "${PROMETHEUS_TRIGGER_COUNT}" -ne 1 ]; then
+#   echo \
+#     "ERROR: expected exactly one Prometheus trigger, found ${PROMETHEUS_TRIGGER_COUNT}" \
+#     >&2
+#   printf '%s\n' "${MANAGED_SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# QUERY="$(
+#   printf '%s' "${MANAGED_SCALEDOBJECT_JSON}" |
+#     jq -r \
+#       '[.spec.triggers[] |
+#         select(.type == "prometheus")][0].metadata.query // empty'
+# )"
+# EXPECTED_QUERY="wva_desired_replicas{variant_name=\"${LWS_NAME}\",exported_namespace=\"${NAMESPACE}\"}"
+#
+# if [ -z "${QUERY}" ]; then
+#   echo \
+#     "ERROR: the sole Prometheus trigger has an empty metadata.query" >&2
+#   exit 1
+# fi
+#
+# if [ "${QUERY}" != "${EXPECTED_QUERY}" ]; then
+#   echo \
+#     "ERROR: installed Prometheus query does not match the exact WVA contract" \
+#     >&2
+#   echo "expected: ${EXPECTED_QUERY}" >&2
+#   echo "actual:   ${QUERY}" >&2
+#   exit 1
+# fi
+#
+# GROUP_SIZE="$(kubectl -n "${NAMESPACE}" get \
+#   leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" \
+#   -o jsonpath='{.spec.leaderWorkerTemplate.size}')"
+# if [ "${GROUP_SIZE}" -ne 2 ]; then
+#   echo "ERROR: expected LWS group size 2, found ${GROUP_SIZE}" >&2
+#   exit 1
+# fi
+#
+# kubectl -n "${MONITORING_NAMESPACE}" port-forward \
+#   service/kube-prometheus-stack-prometheus \
+#   "${PROMETHEUS_PORT}:9090" \
+#   >"${PROMETHEUS_FORWARD_LOG}" 2>&1 &
+# PROMETHEUS_FORWARD_PID="$!"
+#
+# wait_for "Prometheus API readiness" 120 \
+#   check_prometheus_ready diagnose_prometheus_ready
+#
+# # Current WVA exposes no direct per-namespace tracked-set log or status.
+# # On this fresh cluster, use only the narrow conjunction needed for the
+# # subsequent ConfigMap update: the sole managed ScaledObject, a successful
+# # reconciliation from WVA's own metrics service whose success path calls
+# # NamespaceTrack, and the exact Processing model (V2) observation below.
+# # A baseline wva_desired_replicas series is not used as tracking proof.
+# wait_for \
+#   "successful WVA ScaledObject reconcile for the sole managed object" 180 \
+#   check_wva_scaledobject_reconcile diagnose_wva_scaledobject_reconcile
+# wait_for \
+#   "exact WVA Processing model (V2) observation for ${MODEL_ID}/${NAMESPACE}" \
+#   180 check_processing_model_v2 diagnose_processing_model_v2
+#
+# # KEDA remains paused while the whole-group 1 -> 2 -> 1 path is proven.
+# EXPECTED_GROUPS=1
+# wait_for "initial one complete Ready LWS group" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# kubectl -n "${NAMESPACE}" scale \
+#   leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" --replicas=2
+# EXPECTED_GROUPS=2
+# wait_for "manual scale-up to two complete Ready LWS groups" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# kubectl -n "${NAMESPACE}" scale \
+#   leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" --replicas=1
+# EXPECTED_GROUPS=1
+# wait_for "manual scale-down to one complete Ready LWS group" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# # Re-annotate only after qualified tracking evidence, then wait for the
+# # exact namespace-local config-loaded log. The inner ConfigMap JSON has no
+# # spaces after its colons; the outer namespace field does.
+# RELOAD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# kubectl -n "${NAMESPACE}" annotate configmap \
+#   wva-saturation-scaling-config \
+#   "wva.llmd.ai/runtime-reload=${RELOAD_AT}" --overwrite
+#
+# wait_for "WVA namespace-local saturation ConfigMap load" 180 \
+#   check_namespace_config_loaded diagnose_namespace_config_loaded
+#
+# # Exact equality excludes every scalar fallback, including vector(2).
+# wait_for "exact Prometheus wva_desired_replicas query value 2" 300 \
+#   check_exact_desired_two diagnose_exact_desired_two
+#
+# # Only now may KEDA be fully activated.
+# kubectl -n "${NAMESPACE}" annotate scaledobject.keda.sh \
+#   "${SCALEDOBJECT_NAME}" autoscaling.keda.sh/paused-
+#
+# wait_for "ScaledObject unpaused and Ready=True" 180 \
+#   check_scaledobject_ready diagnose_scaledobject_ready
+# wait_for "KEDA-generated HPA creation" 180 \
+#   check_hpa_created diagnose_hpa_created
+#
+# HPA_JSON="$(kubectl -n "${NAMESPACE}" get \
+#   horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o json)"
+#
+# if ! printf '%s' "${HPA_JSON}" | jq -e \
+#   --arg name "${LWS_NAME}" '
+#     .spec.scaleTargetRef.apiVersion ==
+#       "leaderworkerset.x-k8s.io/v1" and
+#     .spec.scaleTargetRef.kind == "LeaderWorkerSet" and
+#     .spec.scaleTargetRef.name == $name
+#   ' >/dev/null; then
+#   echo "ERROR: generated HPA does not target the exact approved LWS" >&2
+#   printf '%s\n' "${HPA_JSON}" >&2
+#   exit 1
+# fi
+#
+# EXTERNAL_METRIC_COUNT="$(
+#   printf '%s' "${HPA_JSON}" |
+#     jq \
+#       '[.spec.metrics[]? |
+#         select(.type == "External")] | length'
+# )"
+# if [ "${EXTERNAL_METRIC_COUNT}" -ne 1 ]; then
+#   echo \
+#     "ERROR: expected exactly one HPA External metric, found ${EXTERNAL_METRIC_COUNT}" \
+#     >&2
+#   printf '%s\n' "${HPA_JSON}" >&2
+#   exit 1
+# fi
+#
+# EXTERNAL_METRIC_NAME="$(
+#   printf '%s' "${HPA_JSON}" |
+#     jq -r \
+#       '[.spec.metrics[] |
+#         select(.type == "External")][0].external.metric.name // empty'
+# )"
+# if [ -z "${EXTERNAL_METRIC_NAME}" ]; then
+#   echo "ERROR: generated HPA External metric name is empty" >&2
+#   exit 1
+# fi
+# EXTERNAL_METRIC_SELECTOR_URI="$(
+#   printf '%s' "scaledobject.keda.sh/name=${SCALEDOBJECT_NAME}" |
+#     jq -sRr @uri
+# )"
+#
+# wait_for \
+#   "KEDA external metric ${EXTERNAL_METRIC_NAME} visibility" 180 \
+#   check_external_metric_visible diagnose_external_metric_visible
+# wait_for "generated HPA desiredReplicas=2" 300 \
+#   check_hpa_desired_two diagnose_hpa_desired_two
+#
+# EXPECTED_GROUPS=2
+# wait_for "KEDA/HPA scale-up to two complete Ready LWS groups" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# kubectl get --raw \
+#   "/apis/leaderworkerset.x-k8s.io/v1/namespaces/${NAMESPACE}/leaderworkersets/${LWS_NAME}/scale" |
+#   jq -e \
+#     '.spec.replicas == 2 and .status.replicas == 2' >/dev/null || {
+#       echo \
+#         "ERROR: final raw LWS /scale did not report spec/status replicas 2" \
+#         >&2
+#       exit 1
+#     }
+#
+# echo \
+#   "PASS: Option 2 reproducibility lifecycle completed without a scalar fallback"
+# ```
+
+scenario:
+  - name: wide-ep-lws-scale-mechanics
+
+    model:
+      name: test-model
+      shortName: test-model
+      path: models/test-model
+      huggingfaceId: test-model
+      size: 1Gi
+      maxModelLen: 512
+      blockSize: 8
+      gpuMemoryUtilization: 0
+
+    accelerator:
+      count: 0
+      memory: 24
+
+    affinity:
+      enabled: true
+      nodeSelector:
+        kubernetes.io/os: linux
+
+    images:
+      vllm:
+        repository: ghcr.io/llm-d/llm-d-inference-sim
+        tag: v0.9.0
+        pullPolicy: IfNotPresent
+
+    multinode:
+      enabled: true
+
+    modelArtifacts:
+      extraLabels:
+        llm-d.ai/accelerator-variant: cpu
+        llm-d.ai/variant: "${model.idLabel}-decode"
+
+    modelservice:
+      enabled: true
+      uriProtocol: hf
+
+      gateway:
+        className: none
+
+      routing:
+        proxy:
+          enabled: false
+
+    decode:
+      enabled: true
+      replicas: 1
+
+      accelerator:
+        count: 0
+
+      parallelism:
+        tensor: 0
+        data: 1
+        dataLocal: 1
+        workers: 2
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
+      extraContainerConfig:
+        ports:
+          - name: metrics
+            containerPort: 8000
+            protocol: TCP
+
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+          labels:
+            release: kube-prometheus-stack
+          relabelings:
+            - sourceLabels:
+                - __meta_kubernetes_pod_label_llm_d_ai_variant
+              targetLabel: llm_d_ai_variant
+              action: replace
+
+      vllm:
+        modelCommand: imageDefault
+        additionalFlags:
+          - --time-to-first-token=2000ms
+          - --inter-token-latency=100ms
+          - --mode=random
+          - --enable-kvcache
+          - --kv-cache-size=1
+          - --block-size=8
+          - --max-num-seqs
+          - "5"
+          - --max-model-len
+          - "512"
+          - --fake-metrics
+          - '{"kv-cache-usage":0.3,"running-requests":1,"waiting-requests":0}'
+
+    prefill:
+      enabled: false
+      replicas: 0
+
+    standalone:
+      enabled: false
+
+    extraObjects:
+      # Namespace-local V2 calibration copied from WVA's current saturation
+      # smoke path. It deterministically requests desired replicas = 2 from one
+      # Ready group without changing the cluster-global saturation policy.
+      - apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: wva-saturation-scaling-config
+          namespace: "${namespace.name}"
+          labels:
+            app.kubernetes.io/name: workload-variant-autoscaler
+        data:
+          default: |
+            analyzers:
+              - name: saturation
+                score: 1.0
+            scaleUpThreshold: 0.30
+            scaleDownBoundary: 0.20
+            kvCacheThreshold: 0.80
+            queueLengthThreshold: 50
+            kvSpareTrigger: 0.10
+            queueSpareTrigger: 5
+            enableLimiter: false
+
+      # Target/scaler structure is intentionally derived from WVA PR #1517.
+      # It starts paused so manual LWS 1 -> 2 -> 1 group scaling can run first.
+      - apiVersion: keda.sh/v1alpha1
+        kind: ScaledObject
+        metadata:
+          name: "${model.idLabel}-decode"
+          namespace: "${namespace.name}"
+          annotations:
+            autoscaling.keda.sh/paused: "true"
+            llm-d.ai/managed: "true"
+            llm-d.ai/model-id: test-model
+            llm-d.ai/variant-cost: "30.0"
+        spec:
+          scaleTargetRef:
+            apiVersion: leaderworkerset.x-k8s.io/v1
+            kind: LeaderWorkerSet
+            name: "${model.idLabel}-decode"
+          minReplicaCount: 1
+          maxReplicaCount: 2
+          pollingInterval: 5
+          cooldownPeriod: 30
+          triggers:
+            - type: prometheus
+              name: wva-desired-replicas
+              metricType: AverageValue
+              metadata:
+                serverAddress: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
+                query: 'wva_desired_replicas{variant_name="${model.idLabel}-decode",exported_namespace="${namespace.name}"}'
+                threshold: "1"
+                activationThreshold: "0"
+                unsafeSsl: "true"
+
+    storage:
+      modelPvc:
+        size: 1Gi
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+      workloadPvc:
+        size: 1Gi
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+
+    vllmCommon:
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    control:
+      waitTimeout: 900
+      waitPeriod: 5
