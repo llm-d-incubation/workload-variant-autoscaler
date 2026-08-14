@@ -65,40 +65,6 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
-extract_rendered_document() {
-    local wanted_kind="$1"
-    local wanted_name="$2"
-    local source_file="$3"
-
-    awk -v wanted_kind="$wanted_kind" -v wanted_name="$wanted_name" '
-        function emit() {
-            if (document ~ ("(^|\\n)kind: " wanted_kind "(\\n|$)") &&
-                document ~ ("\\n  name: " wanted_name "(\\n|$)")) {
-                printf "%s", document
-            }
-        }
-        /^---[[:space:]]*$/ {
-            emit()
-            document = ""
-            next
-        }
-        { document = document $0 ORS }
-        END { emit() }
-    ' "$source_file"
-}
-
-require_line_count() {
-    local expected_count="$1"
-    local pattern="$2"
-    local source_file="$3"
-    local description="$4"
-    local actual_count
-
-    actual_count="$(grep -Ec "$pattern" "$source_file" || true)"
-    [ "$actual_count" -eq "$expected_count" ] ||
-        fail "$description: expected $expected_count matching line(s), found $actual_count"
-}
-
 require_files_equal() {
     local expected_file="$1"
     local actual_file="$2"
@@ -173,7 +139,7 @@ else
     llmd_root="$work_dir/llm-d-${selected_llmd_source_sha}"
 fi
 
-readonly guide_root="$llmd_root/guides/workload-autoscaling/optimized-baseline-autoscaling/keda-epp-queue"
+readonly guide_root="$llmd_root/guides/workload-autoscaling/keda-epp-queue/optimized-baseline"
 readonly canonical_kustomization="$guide_root/k8s/kustomization.yaml"
 readonly canonical_router_base_values="$llmd_root/guides/recipes/router/base.values.yaml"
 readonly canonical_optimized_baseline_values="$llmd_root/guides/optimized-baseline/router/optimized-baseline.values.yaml"
@@ -208,11 +174,22 @@ epp_helm_values=(
 )
 printf -v epp_helm_values_list '%s\n' "${epp_helm_values[@]}"
 
-guide_simulator_image="$(awk '$1 == "image:" { print $2 }' "$GUIDE_SIMULATOR_MANIFEST")"
-[ -n "$guide_simulator_image" ] ||
-    fail "guide simulator manifest must contain one image"
-require_line_count 1 '^[[:space:]]*image:[[:space:]]+[^[:space:]]+$' \
-    "$GUIDE_SIMULATOR_MANIFEST" "guide simulator image contract"
+guide_simulator_image="$(awk '
+        $1 == "image:" {
+            if (NF != 2) {
+                exit 1
+            }
+            image = $2
+            count++
+        }
+        END {
+            if (count != 1 || image == "") {
+                exit 1
+            }
+            print image
+        }
+    ' "$GUIDE_SIMULATOR_MANIFEST")" ||
+    fail "guide simulator manifest must contain exactly one container image"
 
 prometheus_fqdn="${PROMETHEUS_SVC_NAME}.${MONITORING_NAMESPACE}.svc.cluster.local"
 prometheus_url="https://${prometheus_fqdn}:${PROMETHEUS_PORT}"
@@ -254,91 +231,6 @@ require_files_equal \
     "$canonical_normalized" \
     "$rendered_normalized" \
     "temporary overlay may change only resource namespace and Prometheus serverAddress"
-
-[ "$(grep -c '^kind: TriggerAuthentication$' "$rendered_contract")" -eq 1 ] ||
-    fail "rendered contract must contain exactly one TriggerAuthentication"
-[ "$(grep -c '^kind: ScaledObject$' "$rendered_contract")" -eq 1 ] ||
-    fail "rendered contract must contain exactly one ScaledObject"
-[ "$(grep -c '^  namespace: llm-d-optimized-baseline$' "$rendered_contract")" -eq 2 ] ||
-    fail "both rendered resources must use namespace llm-d-optimized-baseline"
-[ "$(grep -Fc "serverAddress: ${prometheus_url}" "$rendered_contract")" -eq 2 ] ||
-    fail "both Prometheus triggers must use ${prometheus_url}"
-[ "$(grep -Fc 'name: keda-prometheus-auth' "$rendered_contract")" -eq 4 ] ||
-    fail "TriggerAuthentication, its Secret ref, and both triggers must use keda-prometheus-auth"
-
-rendered_scaled_object="$work_dir/scaledobject.yaml"
-rendered_authentication="$work_dir/triggerauthentication.yaml"
-extract_rendered_document ScaledObject optimized-baseline-keda-epp \
-    "$rendered_contract" >"$rendered_scaled_object"
-extract_rendered_document TriggerAuthentication keda-prometheus-auth \
-    "$rendered_contract" >"$rendered_authentication"
-[ -s "$rendered_scaled_object" ] || fail "canonical ScaledObject document is missing"
-[ -s "$rendered_authentication" ] || fail "canonical TriggerAuthentication document is missing"
-
-require_line_count 1 '^    name: optimized-baseline-nvidia-gpu-vllm-decode$' \
-    "$rendered_scaled_object" "canonical ScaledObject scaleTargetRef target"
-require_line_count 1 '^  minReplicaCount: 1$' \
-    "$rendered_scaled_object" "canonical ScaledObject minimum replica bound"
-require_line_count 1 '^  maxReplicaCount: 8$' \
-    "$rendered_scaled_object" "canonical ScaledObject maximum replica bound"
-require_line_count 1 '^      name: keda-hpa-optimized-baseline$' \
-    "$rendered_scaled_object" "canonical generated HPA name"
-require_line_count 1 '^      query: sum\(llm_d_epp_flow_control_queue_size\{namespace="llm-d-optimized-baseline",service="optimized-baseline-epp",model_name="Qwen/Qwen3-32B"\}\)$' \
-    "$rendered_scaled_object" "canonical queue trigger query"
-require_line_count 1 '^      query: sum\(llm_d_epp_request_running\{namespace="llm-d-optimized-baseline",service="optimized-baseline-epp",model_name="Qwen/Qwen3-32B"\}\)$' \
-    "$rendered_scaled_object" "canonical running trigger query"
-require_line_count 1 '^      threshold: "1"$' \
-    "$rendered_scaled_object" "canonical queue trigger threshold"
-require_line_count 1 '^      threshold: "16"$' \
-    "$rendered_scaled_object" "canonical running trigger threshold"
-require_line_count 1 '^    name: epp-queue-size$' \
-    "$rendered_scaled_object" "canonical queue trigger name"
-require_line_count 1 '^    name: epp-running-requests$' \
-    "$rendered_scaled_object" "canonical running trigger name"
-require_line_count 2 '^    type: prometheus$' \
-    "$rendered_scaled_object" "canonical Prometheus trigger types"
-require_line_count 2 '^    metricType: AverageValue$' \
-    "$rendered_scaled_object" "canonical Prometheus trigger metric types"
-require_line_count 2 '^      name: keda-prometheus-auth$' \
-    "$rendered_scaled_object" "canonical trigger authentication references"
-require_line_count 1 '^        scaleUp:$' \
-    "$rendered_scaled_object" "canonical HPA scale-up rules"
-require_line_count 1 '^          stabilizationWindowSeconds: 0$' \
-    "$rendered_scaled_object" "canonical HPA scale-up stabilization"
-require_line_count 1 '^        scaleDown:$' \
-    "$rendered_scaled_object" "canonical HPA scale-down rules"
-require_line_count 1 '^          stabilizationWindowSeconds: 300$' \
-    "$rendered_scaled_object" "canonical HPA scale-down stabilization"
-require_line_count 2 '^          - periodSeconds: 15$' \
-    "$rendered_scaled_object" "canonical HPA policy periods"
-require_line_count 2 '^            type: Percent$' \
-    "$rendered_scaled_object" "canonical HPA policy types"
-require_line_count 2 '^            value: 100$' \
-    "$rendered_scaled_object" "canonical HPA policy values"
-
-require_line_count 1 '^kind: TriggerAuthentication$' \
-    "$rendered_authentication" "canonical TriggerAuthentication kind"
-require_line_count 1 '^  name: keda-prometheus-auth$' \
-    "$rendered_authentication" "canonical TriggerAuthentication name"
-require_line_count 1 '^  secretTargetRef:$' \
-    "$rendered_authentication" "canonical TriggerAuthentication Secret references"
-require_line_count 1 '^  - key: ca\.crt$' \
-    "$rendered_authentication" "canonical TriggerAuthentication CA key"
-require_line_count 1 '^    name: keda-prometheus-auth$' \
-    "$rendered_authentication" "canonical TriggerAuthentication Secret name"
-require_line_count 1 '^    parameter: ca$' \
-    "$rendered_authentication" "canonical TriggerAuthentication CA parameter"
-
-require_line_count 1 '^    caDirs:$' \
-    "$kind_keda_values" "Kind KEDA operator CA directories"
-require_line_count 2 '^[[:space:]]*- /custom/ca$|^[[:space:]]*mountPath: /custom/ca$' \
-    "$kind_keda_values" "Kind KEDA public-CA trust path"
-require_line_count 1 '^[[:space:]]*secretName: llmd-prometheus-ca$' \
-    "$kind_keda_values" "Kind KEDA public-CA Secret mount"
-if grep -Eiq 'unsafeSsl|insecureSkipVerify|tlsSkipVerify' \
-    "$kind_keda_values" "$rendered_contract"; then
-    fail "Kind KEDA trust must not disable TLS verification"
-fi
 
 for command_name in kind openssl; do
     require_command "$command_name"

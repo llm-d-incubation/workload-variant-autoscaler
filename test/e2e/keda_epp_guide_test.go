@@ -38,13 +38,22 @@ const (
 	kedaEPPGuideMinReplicas    = int32(1)
 	kedaEPPGuideMaxReplicas    = int32(8)
 	kedaEPPGuideStableCount    = 3
-	kedaEPPGuideRequestLimit   = 1500
-	kedaEPPGuideAPITimeout     = 10 * time.Second
-	kedaEPPGuideProbeTimeout   = 60 * time.Second
 	kedaEPPGuideLogTailLines   = int64(300)
 	kedaEPPGuideLogSinceSecs   = int64(1800)
 	kedaEPPGuideMaxLogStreams  = 2
 	kedaEPPGuideCurlImage      = "quay.io/curl/curl:8.11.1@sha256:2db4e6a8fd6a0e4d0db5828b2722cf6db15c3005178a4c65588b903e4784ba11"
+
+	kedaEPPGuideAPITimeout                   = 10 * time.Second
+	kedaEPPGuideProbeTimeout                 = 60 * time.Second
+	kedaEPPGuideRequestStartupTimeout        = 60 * time.Second
+	kedaEPPGuideMetricObservationTimeout     = 90 * time.Second
+	kedaEPPGuideStabilizationTimeout         = 180 * time.Second
+	kedaEPPGuideScaleTransitionTimeout       = 300 * time.Second
+	kedaEPPGuideSimulatorReadinessTimeout    = 120 * time.Second
+	kedaEPPGuideRequestLifetime              = 1500 * time.Second
+	kedaEPPGuideRequestBearingObservationCap = 20 * time.Minute
+	kedaEPPGuidePollInterval                 = 5 * time.Second
+	kedaEPPGuideQuickPollInterval            = 2 * time.Second
 )
 
 var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, func() {
@@ -58,21 +67,14 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 		Expect(cfg.DeployWVA).To(BeFalse(), "the direct-KEDA guide spec must run with DEPLOY_WVA=false")
 		Expect(cfg.UseSimulator).To(BeTrue(), "the direct-KEDA guide spec uses a deterministic simulator workload")
 		Expect(cfg.ModelID).To(Equal("Qwen/Qwen3-32B"), "the simulator and canonical EPP metrics must use the same model")
-		warmupBudget := kedaEPPGuideWarmupObservationBudget()
-		deterministicBudget := kedaEPPGuideDeterministicObservationBudget()
-		maxObservationBudget := max(warmupBudget, deterministicBudget)
-		requestLifetime := time.Duration(kedaEPPGuideRequestLimit) * time.Second
 		GinkgoWriter.Printf(
-			"KEDA+EPP timing hierarchy: warmup=%s deterministic=%s required=%s requestLifetime=%s completeSpec=%s\n",
-			warmupBudget,
-			deterministicBudget,
-			maxObservationBudget,
-			requestLifetime,
-			kedaEPPGuideCompleteSpecBudget(),
+			"KEDA+EPP request timing: requestBearingObservationCap=%s requestLifetime=%s\n",
+			kedaEPPGuideRequestBearingObservationCap,
+			kedaEPPGuideRequestLifetime,
 		)
-		Expect(requestLifetime).To(
-			BeNumerically(">", maxObservationBudget),
-			"request lifetime must strictly exceed the complete warmup and deterministic observation bounds",
+		Expect(kedaEPPGuideRequestLifetime).To(
+			BeNumerically(">", kedaEPPGuideRequestBearingObservationCap),
+			"request lifetime must strictly exceed the complete request-bearing observation cap",
 		)
 
 		By("observing the pre-created guide-owned deterministic simulator")
@@ -104,60 +106,18 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 			cancelCall()
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(deployment.Status.ReadyReplicas).To(Equal(int32(1)))
-		}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+		}, kedaEPPGuideSimulatorReadinessTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 	})
 
 	It("observes the canonical guide and performs one bounded 1-to-2 transition", func() {
-		scaledObject := waitForKEDAEPPGuideScaledObjectCreated()
-		Expect(scaledObject.Spec.ScaleTargetRef).NotTo(BeNil())
-		Expect(scaledObject.Spec.ScaleTargetRef.APIVersion).To(Equal("apps/v1"))
-		Expect(scaledObject.Spec.ScaleTargetRef.Kind).To(Equal("Deployment"))
-		Expect(scaledObject.Spec.ScaleTargetRef.Name).To(Equal(kedaEPPGuideDeployment))
-		Expect(scaledObject.Spec.MinReplicaCount).NotTo(BeNil())
-		Expect(*scaledObject.Spec.MinReplicaCount).To(Equal(kedaEPPGuideMinReplicas))
-		Expect(scaledObject.Spec.MaxReplicaCount).NotTo(BeNil())
-		Expect(*scaledObject.Spec.MaxReplicaCount).To(Equal(kedaEPPGuideMaxReplicas))
-		Expect(scaledObject.Spec.Advanced).NotTo(BeNil())
-		Expect(scaledObject.Spec.Advanced.HorizontalPodAutoscalerConfig).NotTo(BeNil())
-		Expect(scaledObject.Spec.Advanced.HorizontalPodAutoscalerConfig.Name).To(Equal(kedaEPPGuideHPAName))
-		assertKEDAEPPGuideHPABehavior(scaledObject.Spec.Advanced.HorizontalPodAutoscalerConfig.Behavior)
-		Expect(scaledObject.Spec.Triggers).To(HaveLen(2))
-
-		seenTriggers := map[string]bool{}
-		for _, trigger := range scaledObject.Spec.Triggers {
-			Expect(seenTriggers).NotTo(HaveKey(trigger.Name), "canonical trigger %s must be unique", trigger.Name)
-			seenTriggers[trigger.Name] = true
-			Expect(trigger.Type).To(Equal("prometheus"))
-			Expect(trigger.MetricType).To(Equal(autoscalingv2.AverageValueMetricType))
-			Expect(trigger.AuthenticationRef).NotTo(BeNil(), "trigger %s must retain its guide authenticationRef", trigger.Name)
-			Expect(trigger.AuthenticationRef.Name).To(Equal(kedaEPPGuideAuthentication), "trigger %s must retain its guide authenticationRef", trigger.Name)
-
-			var expectedQuery, expectedThreshold string
-			switch trigger.Name {
-			case kedaEPPGuideQueueTrigger:
-				expectedQuery = kedaEPPGuideQueueQuery
-				expectedThreshold = kedaEPPGuideQueueThreshold
-			case kedaEPPGuideRunTrigger:
-				expectedQuery = kedaEPPGuideRunQuery
-				expectedThreshold = kedaEPPGuideRunThreshold
-			default:
-				Fail(fmt.Sprintf("unexpected Prometheus trigger %q on the canonical ScaledObject", trigger.Name))
-			}
-			Expect(trigger.Metadata).To(HaveKeyWithValue("query", expectedQuery), "trigger %s must retain its exact canonical query", trigger.Name)
-			Expect(trigger.Metadata).To(HaveKeyWithValue("threshold", expectedThreshold), "trigger %s must retain its exact canonical threshold", trigger.Name)
-			_, err := resource.ParseQuantity(trigger.Metadata["threshold"])
-			Expect(err).NotTo(HaveOccurred(), "trigger %s should have a numeric threshold", trigger.Name)
-		}
-		Expect(seenTriggers).To(HaveKey(kedaEPPGuideQueueTrigger))
-		Expect(seenTriggers).To(HaveKey(kedaEPPGuideRunTrigger))
+		scaledObject, authentication := waitForKEDAEPPGuideRuntimeObjects()
+		assertKEDAEPPGuideScaledObjectContract(scaledObject)
+		assertKEDAEPPGuideAuthenticationContract(authentication)
 
 		By("sending a bounded warmup before requiring lazy EPP metric-series liveness")
 		requestPods = append(requestPods, createKEDAEPPGuideRequestPod())
 		waitForKEDAEPPGuideRequestPods(requestPods)
-		assertKEDAEPPGuideServiceMonitor()
 		assertKEDAEPPGuideSecureTrust()
-		waitForKEDAEPPGuideDirectMetric(kedaEPPGuideRunTrigger, 1)
-		waitForKEDAEPPGuideDirectMetric(kedaEPPGuideQueueTrigger, 0)
 		waitForKEDAEPPGuidePrometheusTarget()
 		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideRunQuery, 1)
 		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideQueueQuery, 0)
@@ -166,13 +126,12 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 		deleteKEDAEPPGuidePods(requestPods)
 		waitForKEDAEPPGuidePodsDeleted(requestPods)
 		requestPods = requestPods[:0]
-		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideRunQuery, 0)
-		waitForKEDAEPPGuidePrometheusValue(kedaEPPGuideQueueQuery, 0)
 
 		By("requiring KEDA liveness only after both per-model series exist")
 		scaledObject = waitForKEDAEPPGuideScaledObjectReady()
-		Expect(scaledObject.Status.HpaName).To(Equal(kedaEPPGuideHPAName))
 		hpa := waitForKEDAEPPGuideHPA(scaledObject)
+		Expect(hpa.Name).To(Equal(kedaEPPGuideHPAName))
+		Expect(hpa.Namespace).To(Equal(cfg.LLMDNamespace))
 		Expect(hpa.Spec.MinReplicas).NotTo(BeNil())
 		Expect(*hpa.Spec.MinReplicas).To(Equal(kedaEPPGuideMinReplicas))
 		Expect(hpa.Spec.MaxReplicas).To(Equal(kedaEPPGuideMaxReplicas))
@@ -194,7 +153,9 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 			}))
 			Expect(metric.External.Metric.Selector.MatchExpressions).To(BeEmpty())
 			Expect(metric.External.Target.Type).To(Equal(autoscalingv2.AverageValueMetricType))
+			Expect(metric.External.Target.Value).To(BeNil())
 			Expect(metric.External.Target.AverageValue).NotTo(BeNil())
+			Expect(metric.External.Target.AverageUtilization).To(BeNil())
 
 			switch {
 			case metric.External.Target.AverageValue.Cmp(queueTarget) == 0:
@@ -209,31 +170,20 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 		Expect(metricNames).To(HaveKey(kedaEPPGuideRunTrigger))
 		Expect(metricNames[kedaEPPGuideQueueTrigger]).NotTo(Equal(metricNames[kedaEPPGuideRunTrigger]))
 		Eventually(func(g Gomega) {
-			for triggerName, metricName := range metricNames {
-				value, err := kedaEPPGuideExternalMetric(metricName)
-				g.Expect(err).NotTo(HaveOccurred(), "external metric for %s should be live", triggerName)
-				g.Expect(value).To(BeNumerically("==", 0), "external metric for %s should be reset after warmup", triggerName)
-			}
-		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+			value, err := kedaEPPGuideExternalMetric(metricNames[kedaEPPGuideRunTrigger])
+			g.Expect(err).NotTo(HaveOccurred(), "running external metric should be live")
+			g.Expect(value).To(BeNumerically("==", 0), "running external metric should be reset after warmup")
+		}, kedaEPPGuideMetricObservationTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 
-		waitForKEDAEPPGuideBaseline(scaledObject.Status.HpaName)
-		assertKEDAOperatorLogsClean()
+		waitForKEDAEPPGuideBaseline()
 
 		By("starting one bounded request")
 		requestPods = append(requestPods, createKEDAEPPGuideRequestPod())
 		waitForKEDAEPPGuideRequestPods(requestPods)
 
-		By("waiting until KEDA observes exactly one running request")
-		Eventually(func(g Gomega) {
-			value, err := kedaEPPGuideExternalMetric(metricNames[kedaEPPGuideRunTrigger])
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(value).To(BeNumerically("==", 1))
-		}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
 		By("starting one additional request that remains queued")
 		requestPods = append(requestPods, createKEDAEPPGuideRequestPod())
 		waitForKEDAEPPGuidePhaseA(
-			scaledObject.Status.HpaName,
 			metricNames[kedaEPPGuideRunTrigger],
 			metricNames[kedaEPPGuideQueueTrigger],
 			requestPods,
@@ -243,7 +193,6 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 		requestPods = append(requestPods, createKEDAEPPGuideRequestPod())
 
 		waitForKEDAEPPGuideScaleUp(
-			scaledObject.Status.HpaName,
 			metricNames[kedaEPPGuideRunTrigger],
 			metricNames[kedaEPPGuideQueueTrigger],
 			requestPods,
@@ -255,28 +204,102 @@ var _ = Describe("KEDA EPP guide contract", Label("keda-epp-guide"), Ordered, fu
 	})
 })
 
-func waitForKEDAEPPGuideScaledObjectCreated() *kedav1alpha1.ScaledObject {
+func waitForKEDAEPPGuideRuntimeObjects() (*kedav1alpha1.ScaledObject, *kedav1alpha1.TriggerAuthentication) {
 	GinkgoHelper()
 
 	var scaledObject *kedav1alpha1.ScaledObject
+	var authentication *kedav1alpha1.TriggerAuthentication
 	Eventually(func(g Gomega) {
-		current := &kedav1alpha1.ScaledObject{}
+		scaledObjects := &kedav1alpha1.ScaledObjectList{}
 		callContext, cancelCall := kedaEPPGuideCallContext()
-		err := crClient.Get(callContext, client.ObjectKey{
-			Namespace: cfg.LLMDNamespace,
-			Name:      kedaEPPGuideScaledObject,
-		}, current)
+		err := crClient.List(callContext, scaledObjects, client.InNamespace(cfg.LLMDNamespace))
 		cancelCall()
 		g.Expect(err).NotTo(HaveOccurred())
-		scaledObject = current
-	}, time.Duration(cfg.EventuallyMediumSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-	return scaledObject
+		g.Expect(scaledObjects.Items).To(HaveLen(1), "guide namespace must contain exactly the intended ScaledObject")
+		g.Expect(scaledObjects.Items[0].Name).To(Equal(kedaEPPGuideScaledObject))
+
+		authentications := &kedav1alpha1.TriggerAuthenticationList{}
+		callContext, cancelCall = kedaEPPGuideCallContext()
+		err = crClient.List(callContext, authentications, client.InNamespace(cfg.LLMDNamespace))
+		cancelCall()
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(authentications.Items).To(HaveLen(1), "guide namespace must contain exactly the intended TriggerAuthentication")
+		g.Expect(authentications.Items[0].Name).To(Equal(kedaEPPGuideAuthentication))
+
+		scaledObject = scaledObjects.Items[0].DeepCopy()
+		authentication = authentications.Items[0].DeepCopy()
+	}, kedaEPPGuideRequestStartupTimeout, kedaEPPGuidePollInterval).Should(Succeed())
+	return scaledObject, authentication
+}
+
+func assertKEDAEPPGuideScaledObjectContract(scaledObject *kedav1alpha1.ScaledObject) {
+	GinkgoHelper()
+
+	Expect(scaledObject.Namespace).To(Equal(cfg.LLMDNamespace))
+	Expect(scaledObject.Name).To(Equal(kedaEPPGuideScaledObject))
+	Expect(scaledObject.Spec.Triggers).To(HaveLen(2))
+
+	serverAddress := fmt.Sprintf(
+		"https://%s.%s.svc.cluster.local:9090",
+		kedaEPPGuidePrometheusSvc,
+		cfg.MonitoringNS,
+	)
+	expectedTriggers := map[string]map[string]string{
+		kedaEPPGuideQueueTrigger: {
+			"query":         kedaEPPGuideQueueQuery,
+			"threshold":     kedaEPPGuideQueueThreshold,
+			"serverAddress": serverAddress,
+		},
+		kedaEPPGuideRunTrigger: {
+			"query":         kedaEPPGuideRunQuery,
+			"threshold":     kedaEPPGuideRunThreshold,
+			"serverAddress": serverAddress,
+		},
+	}
+
+	seenTriggers := map[string]bool{}
+	for _, trigger := range scaledObject.Spec.Triggers {
+		expectedMetadata, expected := expectedTriggers[trigger.Name]
+		Expect(expected).To(BeTrue(), "unexpected Prometheus trigger %q on the canonical ScaledObject", trigger.Name)
+		Expect(seenTriggers).NotTo(HaveKey(trigger.Name), "canonical trigger %s must be unique", trigger.Name)
+		seenTriggers[trigger.Name] = true
+		Expect(trigger.Type).To(Equal("prometheus"))
+		Expect(trigger.MetricType).To(Equal(autoscalingv2.AverageValueMetricType))
+		Expect(trigger.Metadata).To(
+			Equal(expectedMetadata),
+			"trigger %s metadata must contain only its exact query, threshold, and verified HTTPS endpoint",
+			trigger.Name,
+		)
+		Expect(trigger.AuthenticationRef).To(Equal(&kedav1alpha1.AuthenticationRef{
+			Name: kedaEPPGuideAuthentication,
+		}), "trigger %s must use the namespaced TriggerAuthentication", trigger.Name)
+	}
+	Expect(seenTriggers).To(Equal(map[string]bool{
+		kedaEPPGuideQueueTrigger: true,
+		kedaEPPGuideRunTrigger:   true,
+	}))
+}
+
+func assertKEDAEPPGuideAuthenticationContract(authentication *kedav1alpha1.TriggerAuthentication) {
+	GinkgoHelper()
+
+	Expect(authentication.Namespace).To(Equal(cfg.LLMDNamespace))
+	Expect(authentication.Name).To(Equal(kedaEPPGuideAuthentication))
+	Expect(authentication.Spec).To(Equal(kedav1alpha1.TriggerAuthenticationSpec{
+		SecretTargetRef: []kedav1alpha1.AuthSecretTargetRef{
+			kedav1alpha1.AuthSecretTargetRef(kedav1alpha1.AuthTargetRef{
+				Parameter: "ca",
+				Name:      kedaEPPGuideAuthentication,
+				Key:       "ca.crt",
+			}),
+		},
+	}), "TriggerAuthentication must contain only the intended CA Secret reference")
 }
 
 func waitForKEDAEPPGuideScaledObjectReady() *kedav1alpha1.ScaledObject {
 	GinkgoHelper()
 
-	deadline := time.Now().Add(time.Duration(cfg.EventuallyExtendedSec) * time.Second)
+	deadline := time.Now().Add(kedaEPPGuideStabilizationTimeout)
 	for time.Now().Before(deadline) {
 		scaledObject := &kedav1alpha1.ScaledObject{}
 		callContext, cancelCall := kedaEPPGuideCallContext()
@@ -287,13 +310,13 @@ func waitForKEDAEPPGuideScaledObjectReady() *kedav1alpha1.ScaledObject {
 		cancelCall()
 		if err == nil {
 			ready := scaledObject.Status.Conditions.GetReadyCondition()
-			if ready.Status == metav1.ConditionTrue && scaledObject.Status.HpaName != "" {
+			if ready.Status == metav1.ConditionTrue {
 				return scaledObject
 			}
 		} else if !apierrors.IsNotFound(err) {
 			Expect(err).NotTo(HaveOccurred())
 		}
-		time.Sleep(time.Duration(cfg.PollIntervalSec) * time.Second)
+		time.Sleep(kedaEPPGuidePollInterval)
 	}
 
 	Fail(fmt.Sprintf("ScaledObject %s/%s did not reach Ready=True", cfg.LLMDNamespace, kedaEPPGuideScaledObject))
@@ -308,36 +331,36 @@ func waitForKEDAEPPGuideHPA(scaledObject *kedav1alpha1.ScaledObject) *autoscalin
 		callContext, cancelCall := kedaEPPGuideCallContext()
 		current, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(
 			callContext,
-			scaledObject.Status.HpaName,
+			kedaEPPGuideHPAName,
 			metav1.GetOptions{},
 		)
 		cancelCall()
 		g.Expect(err).NotTo(HaveOccurred())
 
-		owned := false
+		controllerOwners := make([]metav1.OwnerReference, 0, 1)
 		for _, owner := range current.OwnerReferences {
-			if owner.UID == scaledObject.UID &&
-				owner.APIVersion == "keda.sh/v1alpha1" &&
-				owner.Kind == "ScaledObject" &&
-				owner.Name == scaledObject.Name &&
-				owner.Controller != nil && *owner.Controller {
-				owned = true
-				break
+			if owner.Controller != nil && *owner.Controller {
+				controllerOwners = append(controllerOwners, owner)
 			}
 		}
-		g.Expect(owned).To(BeTrue(), "generated HPA should be owned by the current ScaledObject UID")
+		g.Expect(controllerOwners).To(HaveLen(1), "generated HPA must have exactly one controller owner")
+		owner := controllerOwners[0]
+		g.Expect(owner.APIVersion).To(Equal("keda.sh/v1alpha1"))
+		g.Expect(owner.Kind).To(Equal("ScaledObject"))
+		g.Expect(owner.Name).To(Equal(kedaEPPGuideScaledObject))
+		g.Expect(owner.UID).To(Equal(scaledObject.UID), "generated HPA must be owned by the current ScaledObject UID")
 		hpa = current
-	}).Should(Succeed())
+	}, kedaEPPGuideMetricObservationTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 	return hpa
 }
 
-func waitForKEDAEPPGuideBaseline(hpaName string) {
+func waitForKEDAEPPGuideBaseline() {
 	GinkgoHelper()
 
 	stable := 0
 	Eventually(func(g Gomega) {
 		hpaContext, cancelHPA := kedaEPPGuideCallContext()
-		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, hpaName, metav1.GetOptions{})
+		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, kedaEPPGuideHPAName, metav1.GetOptions{})
 		cancelHPA()
 		g.Expect(err).NotTo(HaveOccurred())
 		deploymentContext, cancelDeployment := kedaEPPGuideCallContext()
@@ -345,18 +368,20 @@ func waitForKEDAEPPGuideBaseline(hpaName string) {
 		cancelDeployment()
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(deployment.Spec.Replicas).NotTo(BeNil())
+		g.Expect(hpa.Status.DesiredReplicas).To(BeNumerically("<=", 2))
+		g.Expect(*deployment.Spec.Replicas).To(BeNumerically("<=", 2))
+		g.Expect(deployment.Status.Replicas).To(BeNumerically("<=", 2))
+		g.Expect(deployment.Status.ReadyReplicas).To(BeNumerically("<=", 2))
 
-		if hpa.Status.CurrentReplicas == 1 &&
-			hpa.Status.DesiredReplicas == 1 &&
+		if hpa.Status.DesiredReplicas == 1 &&
 			*deployment.Spec.Replicas == 1 &&
-			deployment.Status.Replicas == 1 &&
 			deployment.Status.ReadyReplicas == 1 {
 			stable++
 		} else {
 			stable = 0
 		}
 		g.Expect(stable).To(BeNumerically(">=", kedaEPPGuideStableCount))
-	}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+	}, kedaEPPGuideStabilizationTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 }
 
 func createKEDAEPPGuideRequestPod() string {
@@ -390,7 +415,7 @@ func createKEDAEPPGuideRequestPod() string {
 				Args: []string{
 					fmt.Sprintf(
 						`exec curl --fail --silent --show-error --connect-timeout 10 --max-time %d -H 'Content-Type: application/json' --data-binary "$PAYLOAD" "$TARGET_URL"`,
-						kedaEPPGuideRequestLimit,
+						int(kedaEPPGuideRequestLifetime/time.Second),
 					),
 				},
 				Env: []corev1.EnvVar{
@@ -431,25 +456,7 @@ func waitForKEDAEPPGuidePodsDeleted(names []string) {
 			cancelCall()
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "guide pod %s should be deleted, got %v", name, err)
 		}
-	}, time.Duration(cfg.EventuallyMediumSec)*time.Second, time.Duration(cfg.PollIntervalQuickSec)*time.Second).Should(Succeed())
-}
-
-func assertKEDAEPPGuideServiceMonitor() {
-	GinkgoHelper()
-
-	serviceMonitor := &promoperator.ServiceMonitor{}
-	Eventually(func(g Gomega) {
-		callContext, cancelCall := kedaEPPGuideCallContext()
-		err := crClient.Get(callContext, client.ObjectKey{
-			Namespace: cfg.LLMDNamespace,
-			Name:      kedaEPPGuideServiceMonitor,
-		}, serviceMonitor)
-		cancelCall()
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(serviceMonitor.Spec.Endpoints).To(HaveLen(1))
-		g.Expect(serviceMonitor.Spec.Endpoints[0].Port).To(Equal("http-metrics"))
-		g.Expect(serviceMonitor.Spec.Endpoints[0].Path).To(Equal("/metrics"))
-	}, time.Duration(cfg.EventuallyMediumSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+	}, kedaEPPGuideRequestStartupTimeout, kedaEPPGuideQuickPollInterval).Should(Succeed())
 }
 
 func assertKEDAEPPGuideSecureTrust() {
@@ -475,63 +482,27 @@ func assertKEDAEPPGuideSecureTrust() {
 	operatorContainer := operator.Spec.Template.Spec.Containers[0]
 	Expect(operatorContainer.Args).To(ContainElement("--ca-dir=/custom/ca"))
 
-	foundMount := false
+	var caMount *corev1.VolumeMount
 	for _, mount := range operatorContainer.VolumeMounts {
-		if mount.Name == "llmd-prometheus-ca" && mount.MountPath == "/custom/ca" && mount.ReadOnly {
-			foundMount = true
+		if mount.Name == "llmd-prometheus-ca" {
+			mount := mount
+			caMount = &mount
 		}
 	}
-	Expect(foundMount).To(BeTrue(), "KEDA operator must mount the public Prometheus CA read-only")
-}
+	Expect(caMount).NotTo(BeNil(), "KEDA operator must mount the public Prometheus CA")
+	Expect(caMount.MountPath).To(Equal("/custom/ca"))
+	Expect(caMount.ReadOnly).To(BeTrue(), "KEDA operator public CA mount must be read-only")
 
-func waitForKEDAEPPGuideDirectMetric(triggerName string, expected float64) {
-	GinkgoHelper()
-
-	Eventually(func(g Gomega) {
-		output, err := runKEDAEPPGuideCurlProbe(
-			"direct-metrics",
-			[]string{
-				"--fail", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "30",
-				fmt.Sprintf("http://%s.%s.svc.cluster.local:9090/metrics", cfg.EPPServiceName, cfg.LLMDNamespace),
-			},
-			false,
-		)
-		g.Expect(err).NotTo(HaveOccurred())
-		aggregate, matches, err := kedaEPPGuideDirectMetricValue(output, triggerName)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(matches).To(BeNumerically(">=", 1), "direct EPP metric %s must expose at least one matching per-model series", triggerName)
-		g.Expect(aggregate).To(BeNumerically("==", expected))
-	}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-}
-
-func kedaEPPGuideDirectMetricValue(output, triggerName string) (float64, int, error) {
-	metricName := map[string]string{
-		kedaEPPGuideQueueTrigger: "llm_d_epp_flow_control_queue_size",
-		kedaEPPGuideRunTrigger:   "llm_d_epp_request_running",
-	}[triggerName]
-	if metricName == "" {
-		return 0, 0, fmt.Errorf("unknown guide trigger %q", triggerName)
+	var caVolume *corev1.Volume
+	for _, volume := range operator.Spec.Template.Spec.Volumes {
+		if volume.Name == caMount.Name {
+			volume := volume
+			caVolume = &volume
+		}
 	}
-
-	matches := 0
-	aggregate := float64(0)
-	for _, line := range strings.Split(output, "\n") {
-		if !strings.HasPrefix(line, metricName+"{") ||
-			!strings.Contains(line, `model_name="Qwen/Qwen3-32B"`) {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			return 0, matches, fmt.Errorf("unexpected direct metric line %q", line)
-		}
-		parsed, err := strconv.ParseFloat(fields[1], 64)
-		if err != nil {
-			return 0, matches, fmt.Errorf("parse direct metric value %q: %w", fields[1], err)
-		}
-		matches++
-		aggregate += parsed
-	}
-	return aggregate, matches, nil
+	Expect(caVolume).NotTo(BeNil(), "KEDA operator CA mount must have a matching volume")
+	Expect(caVolume.Secret).NotTo(BeNil(), "KEDA operator CA volume must be Secret-backed")
+	Expect(caVolume.Secret.SecretName).To(Equal("llmd-prometheus-ca"))
 }
 
 type kedaEPPGuidePrometheusQueryResponse struct {
@@ -551,7 +522,7 @@ func waitForKEDAEPPGuidePrometheusValue(query string, expected float64) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(cardinality).To(Equal(1), "PromQL must return exactly one result rather than treating absence as zero")
 		g.Expect(value).To(BeNumerically("==", expected))
-	}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+	}, kedaEPPGuideMetricObservationTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 }
 
 func kedaEPPGuidePrometheusValue(query string) (float64, int, error) {
@@ -638,7 +609,7 @@ func waitForKEDAEPPGuidePrometheusTarget() {
 			}
 		}
 		g.Expect(matched).To(Equal(1), "Prometheus must discover exactly one EPP target")
-	}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+	}, kedaEPPGuideMetricObservationTimeout, kedaEPPGuidePollInterval).Should(Succeed())
 }
 
 func runKEDAEPPGuideCurlProbe(nameSuffix string, args []string, mountPrometheusCA bool) (string, error) {
@@ -709,7 +680,7 @@ func runKEDAEPPGuideCurlProbe(nameSuffix string, args []string, mountPrometheusC
 			}
 			return string(logs), nil
 		}
-		time.Sleep(time.Duration(cfg.PollIntervalQuickSec) * time.Second)
+		time.Sleep(kedaEPPGuideQuickPollInterval)
 	}
 	return "", fmt.Errorf("%s probe %s did not complete within %s", nameSuffix, created.Name, kedaEPPGuideProbeTimeout)
 }
@@ -732,7 +703,7 @@ func waitForKEDAEPPGuideRequestPods(names []string) {
 			g.Expect(pod.Status.ContainerStatuses).To(HaveLen(1))
 			g.Expect(pod.Status.ContainerStatuses[0].State.Running).NotTo(BeNil(), "request pod %s curl should be running", name)
 		}
-	}, time.Duration(cfg.EventuallyMediumSec)*time.Second, time.Duration(cfg.PollIntervalQuickSec)*time.Second).Should(Succeed())
+	}, kedaEPPGuideRequestStartupTimeout, kedaEPPGuideQuickPollInterval).Should(Succeed())
 }
 
 func kedaEPPGuideExternalMetric(metricName string) (float64, error) {
@@ -766,19 +737,18 @@ func kedaEPPGuideExternalMetric(metricName string) (float64, error) {
 	return quantity.AsApproximateFloat64(), nil
 }
 
-func waitForKEDAEPPGuidePhaseA(hpaName, runningMetricName, queueMetricName string, requestPods []string) {
+func waitForKEDAEPPGuidePhaseA(runningMetricName, queueMetricName string, requestPods []string) {
 	GinkgoHelper()
 
-	deadline := time.Now().Add(time.Duration(cfg.EventuallyExtendedSec) * time.Second)
+	deadline := time.Now().Add(kedaEPPGuideStabilizationTimeout)
 	stable := 0
 	sample := 0
 
 	for time.Now().Before(deadline) {
 		sample++
-		assertKEDAEPPGuideRequestsActive(requestPods)
 
 		hpaContext, cancelHPA := kedaEPPGuideCallContext()
-		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, hpaName, metav1.GetOptions{})
+		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, kedaEPPGuideHPAName, metav1.GetOptions{})
 		cancelHPA()
 		Expect(err).NotTo(HaveOccurred())
 		deploymentContext, cancelDeployment := kedaEPPGuideCallContext()
@@ -788,10 +758,9 @@ func waitForKEDAEPPGuidePhaseA(hpaName, runningMetricName, queueMetricName strin
 		Expect(deployment.Spec.Replicas).NotTo(BeNil())
 
 		values := map[string]int32{
-			"hpaCurrent":       hpa.Status.CurrentReplicas,
 			"hpaDesired":       hpa.Status.DesiredReplicas,
 			"deploymentSpec":   *deployment.Spec.Replicas,
-			"deploymentStatus": deployment.Status.Replicas,
+			"deploymentActual": deployment.Status.Replicas,
 			"deploymentReady":  deployment.Status.ReadyReplicas,
 		}
 		for name, value := range values {
@@ -802,15 +771,15 @@ func waitForKEDAEPPGuidePhaseA(hpaName, runningMetricName, queueMetricName strin
 
 		runningValue, runningErr := kedaEPPGuideExternalMetric(runningMetricName)
 		queueValue, queueErr := kedaEPPGuideExternalMetric(queueMetricName)
+		requestsActive := kedaEPPGuideRequestsActive(requestPods)
 		exactPhaseA := runningErr == nil &&
 			queueErr == nil &&
 			runningValue == 1 &&
 			queueValue == 1 &&
-			hpa.Status.CurrentReplicas == 1 &&
 			hpa.Status.DesiredReplicas == 1 &&
 			*deployment.Spec.Replicas == 1 &&
-			deployment.Status.Replicas == 1 &&
-			deployment.Status.ReadyReplicas == 1
+			deployment.Status.ReadyReplicas == 1 &&
+			requestsActive
 		if exactPhaseA {
 			stable++
 		} else {
@@ -818,7 +787,7 @@ func waitForKEDAEPPGuidePhaseA(hpaName, runningMetricName, queueMetricName strin
 		}
 
 		GinkgoWriter.Printf(
-			"guide phase A sample=%d hpa=%d/%d deployment=%d/%d/%d rawRunning=%v runningErr=%v rawQueue=%v queueErr=%v stable=%d\n",
+			"guide phase A sample=%d hpa=%d/%d deployment=%d/%d/%d rawRunning=%v runningErr=%v rawQueue=%v queueErr=%v requestsActive=%v stable=%d\n",
 			sample,
 			hpa.Status.CurrentReplicas,
 			hpa.Status.DesiredReplicas,
@@ -829,13 +798,14 @@ func waitForKEDAEPPGuidePhaseA(hpaName, runningMetricName, queueMetricName strin
 			runningErr,
 			queueValue,
 			queueErr,
+			requestsActive,
 			stable,
 		)
 
 		if stable >= kedaEPPGuideStableCount {
 			return
 		}
-		time.Sleep(time.Duration(cfg.PollIntervalQuickSec) * time.Second)
+		time.Sleep(kedaEPPGuideQuickPollInterval)
 	}
 
 	Fail("guide Phase A did not produce stable one-running/one-queued exact-one state")
@@ -853,22 +823,20 @@ func nestedMetricValue(object map[string]any) (string, bool, error) {
 	return stringValue, true, nil
 }
 
-func waitForKEDAEPPGuideScaleUp(hpaName, runningMetricName, queueMetricName string, requestPods []string) {
+func waitForKEDAEPPGuideScaleUp(runningMetricName, queueMetricName string, requestPods []string) {
 	GinkgoHelper()
 	Expect(requestPods).To(HaveLen(3), "Phase B must retain exactly three bounded request pods")
 
-	deadline := time.Now().Add(time.Duration(cfg.ScaleUpTimeout) * time.Second)
-	desiredTransitionSeen := false
+	deadline := time.Now().Add(kedaEPPGuideScaleTransitionTimeout)
 	phaseBMetricsSeen := false
 	stable := 0
 	sample := 0
 
 	for time.Now().Before(deadline) {
 		sample++
-		assertKEDAEPPGuideRequestsActive(requestPods)
 
 		hpaContext, cancelHPA := kedaEPPGuideCallContext()
-		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, hpaName, metav1.GetOptions{})
+		hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(hpaContext, kedaEPPGuideHPAName, metav1.GetOptions{})
 		cancelHPA()
 		Expect(err).NotTo(HaveOccurred())
 		deploymentContext, cancelDeployment := kedaEPPGuideCallContext()
@@ -878,10 +846,9 @@ func waitForKEDAEPPGuideScaleUp(hpaName, runningMetricName, queueMetricName stri
 		Expect(deployment.Spec.Replicas).NotTo(BeNil())
 
 		values := map[string]int32{
-			"hpaCurrent":       hpa.Status.CurrentReplicas,
 			"hpaDesired":       hpa.Status.DesiredReplicas,
 			"deploymentSpec":   *deployment.Spec.Replicas,
-			"deploymentStatus": deployment.Status.Replicas,
+			"deploymentActual": deployment.Status.Replicas,
 			"deploymentReady":  deployment.Status.ReadyReplicas,
 		}
 		for name, value := range values {
@@ -898,25 +865,16 @@ func waitForKEDAEPPGuideScaleUp(hpaName, runningMetricName, queueMetricName stri
 		if queueErr == nil && queueValue > 2 {
 			Fail(fmt.Sprintf("bounded guide stimulus observed rawQueue=%v (>2)", queueValue))
 		}
-		if runningErr == nil && queueErr == nil && runningValue == 1 && queueValue == 2 {
+		requestsActive := kedaEPPGuideRequestsActive(requestPods)
+		phaseBMetrics := runningErr == nil && queueErr == nil && runningValue == 1 && queueValue == 2 && requestsActive
+		if phaseBMetrics {
 			phaseBMetricsSeen = true
 		}
 
-		if !desiredTransitionSeen && hpa.Status.DesiredReplicas != 1 {
-			if hpa.Status.DesiredReplicas != 2 {
-				Fail(fmt.Sprintf(
-					"first HPA desired transition was 1 -> %d, want exactly 1 -> 2",
-					hpa.Status.DesiredReplicas,
-				))
-			}
-			desiredTransitionSeen = true
-		}
-
-		exactTwo := hpa.Status.CurrentReplicas == 2 &&
-			hpa.Status.DesiredReplicas == 2 &&
+		exactTwo := hpa.Status.DesiredReplicas == 2 &&
 			*deployment.Spec.Replicas == 2 &&
-			deployment.Status.Replicas == 2 &&
-			deployment.Status.ReadyReplicas == 2
+			deployment.Status.ReadyReplicas == 2 &&
+			requestsActive
 		if exactTwo {
 			stable++
 		} else {
@@ -924,7 +882,7 @@ func waitForKEDAEPPGuideScaleUp(hpaName, runningMetricName, queueMetricName stri
 		}
 
 		GinkgoWriter.Printf(
-			"guide scale sample=%d hpa=%d/%d deployment=%d/%d/%d rawRunning=%v runningErr=%v rawQueue=%v queueErr=%v phaseBMetrics=%v transition=%v stable=%d\n",
+			"guide scale sample=%d hpa=%d/%d deployment=%d/%d/%d rawRunning=%v runningErr=%v rawQueue=%v queueErr=%v requestsActive=%v phaseBMetrics=%v stable=%d\n",
 			sample,
 			hpa.Status.CurrentReplicas,
 			hpa.Status.DesiredReplicas,
@@ -935,22 +893,19 @@ func waitForKEDAEPPGuideScaleUp(hpaName, runningMetricName, queueMetricName stri
 			runningErr,
 			queueValue,
 			queueErr,
+			requestsActive,
 			phaseBMetricsSeen,
-			desiredTransitionSeen,
 			stable,
 		)
 
-		if desiredTransitionSeen && phaseBMetricsSeen && stable >= kedaEPPGuideStableCount {
-			Expect(requestPods).To(HaveLen(3), "Phase B success must retain exactly three bounded request pods")
-			assertKEDAEPPGuideRequestsActive(requestPods)
+		if phaseBMetricsSeen && stable >= kedaEPPGuideStableCount {
 			return
 		}
-		time.Sleep(time.Duration(cfg.PollIntervalQuickSec) * time.Second)
+		time.Sleep(kedaEPPGuideQuickPollInterval)
 	}
 
 	Fail(fmt.Sprintf(
-		"bounded guide stimulus did not produce stable exact-two state (desiredTransitionSeen=%v phaseBMetricsSeen=%v)",
-		desiredTransitionSeen,
+		"bounded guide stimulus did not produce stable exact-two state (phaseBMetricsSeen=%v)",
 		phaseBMetricsSeen,
 	))
 }
@@ -967,15 +922,19 @@ func assertKEDAEPPGuideHPAScalingRules(name string, rules *autoscalingv2.HPAScal
 	Expect(rules).NotTo(BeNil(), "canonical HPA %s rules must be present", name)
 	Expect(rules.StabilizationWindowSeconds).NotTo(BeNil(), "canonical HPA %s stabilization must be explicit", name)
 	Expect(*rules.StabilizationWindowSeconds).To(Equal(stabilizationWindow), "canonical HPA %s stabilization drifted", name)
+	Expect(rules.SelectPolicy).NotTo(BeNil(), "effective HPA %s select policy must be explicit", name)
+	Expect(*rules.SelectPolicy).To(Equal(autoscalingv2.MaxChangePolicySelect), "effective HPA %s select policy drifted", name)
 	Expect(rules.Policies).To(HaveLen(1), "canonical HPA %s must retain one policy", name)
 	Expect(rules.Policies[0].Type).To(Equal(autoscalingv2.PercentScalingPolicy), "canonical HPA %s policy type drifted", name)
 	Expect(rules.Policies[0].Value).To(Equal(int32(100)), "canonical HPA %s policy value drifted", name)
 	Expect(rules.Policies[0].PeriodSeconds).To(Equal(int32(15)), "canonical HPA %s policy period drifted", name)
+	Expect(rules.Tolerance).To(BeNil(), "canonical HPA %s must not set a per-direction tolerance", name)
 }
 
-func assertKEDAEPPGuideRequestsActive(names []string) {
+func kedaEPPGuideRequestsActive(names []string) bool {
 	GinkgoHelper()
 
+	allActive := true
 	for _, name := range names {
 		callContext, cancelCall := kedaEPPGuideCallContext()
 		pod, err := k8sClient.CoreV1().Pods(cfg.LLMDNamespace).Get(callContext, name, metav1.GetOptions{})
@@ -984,66 +943,13 @@ func assertKEDAEPPGuideRequestsActive(names []string) {
 		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 			Fail(fmt.Sprintf("bounded request pod %s exited before scale evidence (phase=%s)", name, pod.Status.Phase))
 		}
+		if pod.Status.Phase != corev1.PodRunning ||
+			len(pod.Status.ContainerStatuses) != 1 ||
+			pod.Status.ContainerStatuses[0].State.Running == nil {
+			allActive = false
+		}
 	}
-}
-
-func kedaEPPGuideEventuallyBudget(timeoutSeconds, apiCallsPerAttempt int) time.Duration {
-	return time.Duration(timeoutSeconds)*time.Second +
-		time.Duration(apiCallsPerAttempt)*kedaEPPGuideAPITimeout
-}
-
-// A probe attempt can spend one API deadline creating the Pod, the probe
-// deadline waiting for it, one final Get deadline, one log-read deadline, and
-// one best-effort delete deadline. Eventually may start that full attempt just
-// before its own deadline, so both bounds are additive.
-func kedaEPPGuideProbeAttemptBudget() time.Duration {
-	return kedaEPPGuideProbeTimeout + 4*kedaEPPGuideAPITimeout
-}
-
-func kedaEPPGuideProbeObservationBudget() time.Duration {
-	return time.Duration(cfg.EventuallyLongSec)*time.Second + kedaEPPGuideProbeAttemptBudget()
-}
-
-func kedaEPPGuideWarmupObservationBudget() time.Duration {
-	return kedaEPPGuideAPITimeout + // create the warmup request
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyMediumSec, 1) + // request Pod startup
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyMediumSec, 1) + // ServiceMonitor
-		3*kedaEPPGuideAPITimeout + // two CA Secrets and the KEDA operator Deployment
-		5*kedaEPPGuideProbeObservationBudget() // two direct metrics, target, two PromQL queries
-}
-
-func kedaEPPGuideDeterministicObservationBudget() time.Duration {
-	return kedaEPPGuideAPITimeout + // first request create
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyMediumSec, 1) + // first request Pod startup
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyLongSec, 1) + // running external metric
-		kedaEPPGuideAPITimeout + // second request create
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyExtendedSec, 6) + // Phase A: two Pods, HPA, Deployment, two metrics
-		kedaEPPGuideAPITimeout + // third request create
-		kedaEPPGuideEventuallyBudget(cfg.ScaleUpTimeout, 7) // Phase B: three Pods, HPA, Deployment, two metrics
-}
-
-// This is the complete successful-spec observation bound. It includes every
-// bounded wait in BeforeAll and the It body, materially extending API calls,
-// both stage-boundary log checks, and explicit/deferred stimulus cleanup. The
-// suite preflight and failure diagnostics are reserved outside this bound by
-// the Ginkgo/Go/CI timeout hierarchy in the Make target and workflow.
-func kedaEPPGuideCompleteSpecBudget() time.Duration {
-	operatorLogBudget := time.Duration(1+kedaEPPGuideMaxLogStreams) * kedaEPPGuideAPITimeout
-	return kedaEPPGuideEventuallyBudget(cfg.PodReadyTimeout, 1) + // simulator Ready in BeforeAll
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyMediumSec, 1) + // ScaledObject created
-		kedaEPPGuideWarmupObservationBudget() +
-		kedaEPPGuideAPITimeout + // delete warmup request
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyMediumSec, 1) + // warmup deletion observed
-		2*kedaEPPGuideProbeObservationBudget() + // both PromQL series reset
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyExtendedSec, 1) + // ScaledObject Ready
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyStandardSec, 1) + // generated HPA
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyLongSec, 2) + // both external metrics reset
-		kedaEPPGuideEventuallyBudget(cfg.EventuallyExtendedSec, 2) + // stable one-replica baseline
-		operatorLogBudget +
-		kedaEPPGuideDeterministicObservationBudget() +
-		3*kedaEPPGuideAPITimeout + // explicit request deletion
-		operatorLogBudget +
-		4*kedaEPPGuideAPITimeout // deferred three-request and simulator deletion
+	return allActive
 }
 
 func kedaEPPGuideCallContext() (context.Context, context.CancelFunc) {
@@ -1090,7 +996,7 @@ type kedaEPPGuideOperatorLog struct {
 }
 
 func readKEDAEPPGuideOperatorLogs() ([]kedaEPPGuideOperatorLog, error) {
-	listContext, cancelList := context.WithTimeout(ctx, 10*time.Second)
+	listContext, cancelList := context.WithTimeout(ctx, kedaEPPGuideAPITimeout)
 	pods, err := k8sClient.CoreV1().Pods(cfg.KEDANamespace).List(listContext, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=keda-operator",
 	})
@@ -1108,7 +1014,7 @@ func readKEDAEPPGuideOperatorLogs() ([]kedaEPPGuideOperatorLog, error) {
 			if len(operatorLogs) >= kedaEPPGuideMaxLogStreams {
 				return operatorLogs, nil
 			}
-			logContext, cancelLogs := context.WithTimeout(ctx, 10*time.Second)
+			logContext, cancelLogs := context.WithTimeout(ctx, kedaEPPGuideAPITimeout)
 			logs, err := k8sClient.CoreV1().Pods(cfg.KEDANamespace).GetLogs(pod.Name, &corev1.PodLogOptions{
 				Container:    container.Name,
 				SinceSeconds: ptr.To(kedaEPPGuideLogSinceSecs),

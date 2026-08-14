@@ -262,30 +262,19 @@ authentication guidance and not an OpenShift configuration.
 The `keda-epp-guide` job in `.github/workflows/ci-pr-checks.yaml` runs this same
 fresh Kind lifecycle for WVA pull requests. The target selects only Ginkgo label
 `keda-epp-guide`; WVA smoke, scale-from-zero, and controller-dependent specs are
-excluded. This lane sets guide-specific bounds of 120 seconds for simulator
-readiness, 60 seconds for medium waits, 90 seconds for standard and metric
-waits, 180 seconds for extended waits, and 300 seconds for scale-up. Individual
-Kubernetes API calls are bounded at 10 seconds. A curl probe attempt is bounded
-at 100 seconds: 60 seconds for Pod completion plus four 10-second API/log/cleanup
-allowances.
+excluded. The guide spec uses semantically named bounds: 120 seconds for
+simulator readiness, 60 seconds for request startup and probe completion, 90
+seconds for metric observation, 180 seconds for stabilization, and 300 seconds
+for the scale transition. Individual Kubernetes API and bounded log calls use a
+10-second timeout; normal and quick polling use five and two seconds.
 
-Those actual waits produce two request-survival bounds. Warmup is at most 1130
-seconds (request creation and startup, ServiceMonitor/trust checks, and five
-metric probes); the deterministic one-to-two phase is at most 810 seconds
-(request startup, running-metric observation, Phase A, and scale-up, including
-the maximum API-call overrun per polling iteration). Flow Control
-`defaultRequestTTL`, the simulator response time, and curl `--max-time` are all
-1500 seconds, strictly above the larger 1130-second bound with a 370-second
-margin.
-
-The complete successful-spec observation bound is 3330 seconds (55m30s),
-including reset, readiness, baseline, stage-boundary log checks, and explicit
-and deferred stimulus cleanup. Ginkgo is bounded at 65 minutes and Go at 70
-minutes, leaving room for suite preflight and diagnostics. The CI job is bounded
-at 120 minutes; this contains the setup's 34 minutes of declared Kind,
-Prometheus, KEDA, EPP, and simulator readiness waits, the 70-minute Go boundary,
-and a final diagnostics/cluster-cleanup reserve. Normal success is expected to
-finish far below these failure-path ceilings.
+The complete request-bearing observation budget has a conservative 20-minute
+cap. Flow Control `defaultRequestTTL`, the simulator response time, and curl
+`--max-time` remain aligned at 1500 seconds (25 minutes), so the stimulus lives
+strictly longer than that cap. Ginkgo is bounded at 65 minutes and Go at 70
+minutes, leaving room for suite preflight and diagnostics. The CI job remains
+bounded at 120 minutes, containing setup, the Go boundary, final diagnostics,
+and fresh-cluster cleanup.
 
 The repository-default Kind image currently uses Kubernetes v1.32. KEDA 2.20 does
 not list Kubernetes v1.32 in its tested compatibility matrix,

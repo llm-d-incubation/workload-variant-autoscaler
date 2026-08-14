@@ -316,8 +316,8 @@ test-e2e-smoke: ## Run smoke e2e tests
 
 # Runs only the direct KEDA+EPP guide contract against resources already applied
 # from the llm-d repository. The WVA controller is intentionally not required.
-# Its successful-spec observation bound is 55m30s; Ginkgo gets 65m and Go gets
-# 70m so suite preflight, diagnostics, and cleanup remain outside that bound.
+# Ginkgo gets 65m and Go gets 70m so suite preflight, diagnostics, and cleanup
+# remain inside the outer test-process boundary.
 .PHONY: test-e2e-keda-epp-guide
 test-e2e-keda-epp-guide: ## Run the llm-d KEDA+EPP guide contract
 	@echo "Running direct KEDA+EPP guide contract..."
