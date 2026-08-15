@@ -14,6 +14,13 @@ type E2EConfig struct {
 	// ("scale-to-zero" via HPAScaleToZero). Distinct from scale-from-zero (scale up from zero replicas).
 	ScaleToZeroEnabled bool
 
+	// CoordinatorEnabled: env COORDINATOR_ENABLED — the deploy set
+	// EXPERIMENTAL_COORDINATOR_ENABLED=true in wva-manager-config before the manager
+	// became Ready (see deploy/lib/infra_wva.sh). The manager reads that flag once at
+	// startup, so it cannot be toggled per-spec; specs that need the Coordinator
+	// running must Skip when this is false.
+	CoordinatorEnabled bool
+
 	// Timeouts (seconds unless noted)
 	PodReadyTimeout int // Wait for deployment/model pods ready
 	ScaleUpTimeout  int // Long reconcile / scale-from-zero / job completion
@@ -37,6 +44,7 @@ func LoadConfigFromEnv() E2EConfig {
 		SharedConfig: testconfig.LoadSharedConfig(),
 
 		ScaleToZeroEnabled: testconfig.GetEnvBool("SCALE_TO_ZERO_ENABLED", false),
+		CoordinatorEnabled: testconfig.GetEnvBool("COORDINATOR_ENABLED", false),
 
 		PodReadyTimeout: testconfig.GetEnvInt("POD_READY_TIMEOUT", 300), // 5 minutes
 		ScaleUpTimeout:  testconfig.GetEnvInt("SCALE_UP_TIMEOUT", 600),  // 10 minutes
