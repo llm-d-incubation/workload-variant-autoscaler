@@ -25,21 +25,34 @@ import (
 )
 
 // stubPromAPI implements promv1.API with only Query stubbed.
-// Pool→queue values are matched by searching the query string for the pool name.
+// Pool→queue values are matched by searching the query string for the pool name
+// or "namespace:pool" key.
 type stubPromAPI struct {
 	promv1.API
-	queues map[string]float64
-	errs   map[string]error
+	queues    map[string]float64
+	errs      map[string]error
+	lastQuery string
 }
 
 func (s *stubPromAPI) Query(_ context.Context, query string, _ time.Time, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
-	for pool, err := range s.errs {
-		if strings.Contains(query, pool) {
+	s.lastQuery = query
+	for key, err := range s.errs {
+		if strings.Contains(key, ":") {
+			parts := strings.SplitN(key, ":", 2)
+			if strings.Contains(query, `namespace="`+parts[0]+`"`) && strings.Contains(query, `inference_pool="`+parts[1]+`"`) {
+				return nil, nil, err
+			}
+		} else if strings.Contains(query, key) {
 			return nil, nil, err
 		}
 	}
-	for pool, q := range s.queues {
-		if strings.Contains(query, pool) {
+	for key, q := range s.queues {
+		if strings.Contains(key, ":") {
+			parts := strings.SplitN(key, ":", 2)
+			if strings.Contains(query, `namespace="`+parts[0]+`"`) && strings.Contains(query, `inference_pool="`+parts[1]+`"`) {
+				return model.Vector{{Value: model.SampleValue(q)}}, nil, nil
+			}
+		} else if strings.Contains(query, key) {
 			return model.Vector{{Value: model.SampleValue(q)}}, nil, nil
 		}
 	}
@@ -714,5 +727,68 @@ func TestSetMaxReplicas_GivesUpAfterMaxRetries(t *testing.T) {
 	}
 	if got := getMaxReplicas(t, c, hpa); got != 5 {
 		t.Errorf("maxReplicas = %d, want 5 (unchanged)", got)
+	}
+}
+
+// TestRebalance_NamespaceIsolation verifies that pools with the same name
+// in different namespaces do not interfere with each other's queue readings.
+func TestRebalance_NamespaceIsolation(t *testing.T) {
+	// ns1: pool "model-a" queue=50, pool "model-b" queue=50, quota=10 → model-a=5, model-b=5
+	// ns2: pool "model-a" queue=200, pool "model-c" queue=0, quota=10 → model-a=9, model-c=1
+	hpaA1 := makeHPA("model-a", "ns1", "model-a", 1)
+	hpaB1 := makeHPA("model-b", "ns1", "model-b", 1)
+	hpaA2 := makeHPA("model-a", "ns2", "model-a", 1)
+	hpaC2 := makeHPA("model-c", "ns2", "model-c", 1)
+
+	p, c := newPlugin(t,
+		map[string]float64{
+			"ns1:model-a": 50,
+			"ns1:model-b": 50,
+			"ns2:model-a": 200,
+			"ns2:model-c": 0,
+		},
+		nil,
+		hpaA1, hpaB1, hpaA2, hpaC2,
+		makeGPUQuota("q-ns1", "ns1", 10),
+		makeGPUQuota("q-ns2", "ns2", 10),
+	)
+
+	if err := p.Tick(context.Background(), []client.Object{hpaA1, hpaB1, hpaA2, hpaC2}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := getMaxReplicas(t, c, hpaA1); got != 5 {
+		t.Errorf("ns1/model-a maxReplicas = %d, want 5", got)
+	}
+	if got := getMaxReplicas(t, c, hpaB1); got != 5 {
+		t.Errorf("ns1/model-b maxReplicas = %d, want 5", got)
+	}
+	if got := getMaxReplicas(t, c, hpaA2); got != 9 {
+		t.Errorf("ns2/model-a maxReplicas = %d, want 9", got)
+	}
+	if got := getMaxReplicas(t, c, hpaC2); got != 1 {
+		t.Errorf("ns2/model-c maxReplicas = %d, want 1", got)
+	}
+}
+
+// TestQueryQueue_IncludesNamespace verifies that queryQueue includes both
+// inference_pool and namespace matchers in the Prometheus PromQL expression.
+func TestQueryQueue_IncludesNamespace(t *testing.T) {
+	stub := &stubPromAPI{
+		queues: map[string]float64{
+			"prod:llm-service": 42.0,
+		},
+	}
+	p := New(nil, stub)
+	val, err := p.queryQueue(context.Background(), "prod", "llm-service")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != 42.0 {
+		t.Errorf("got %v, want 42.0", val)
+	}
+	expected := `sum(inference_extension_flow_control_queue_size{inference_pool="llm-service", namespace="prod"})`
+	if stub.lastQuery != expected {
+		t.Errorf("query = %q, want %q", stub.lastQuery, expected)
 	}
 }

@@ -22,7 +22,7 @@ import (
 const (
 	AnnotationInferencePool = "llm-d.ai/epp-inference-pool"
 	gpuQuotaResource        = "requests.nvidia.com/gpu"
-	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q})`
+	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q, namespace=%q})`
 	displayKindHPA          = "HorizontalPodAutoscaler"
 	displayKindScaledObject = "ScaledObject"
 )
@@ -145,7 +145,7 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 	// Query EPP queue depth per pool (best-effort; default to 0 on error).
 	queues := make([]float64, len(entries))
 	for i, e := range entries {
-		q, err := p.queryQueue(ctx, e.pool)
+		q, err := p.queryQueue(ctx, ns, e.pool)
 		if err != nil {
 			log.V(1).Info("Queue query failed, using 0", "pool", e.pool, "err", err)
 		} else {
@@ -246,14 +246,10 @@ func (p *Plugin) namespaceGPUQuota(ctx context.Context, ns string) (int64, error
 	return 0, nil
 }
 
-func (p *Plugin) queryQueue(ctx context.Context, inferencePool string) (float64, error) {
-	// TODO: the query filters only by inference_pool name with no namespace label.
-	// If two namespaces each have a pool with the same name (e.g. "model-a"), the
-	// sum includes both, inflating the queue reading for each namespace's allocation
-	// decision. Fix: include a namespace label in the query if the EPP emits one,
-	// or scope the metric series by passing the namespace as an additional matcher.
-
-	query := fmt.Sprintf(eppQueueMetric, inferencePool)
+// queryQueue returns the instantaneous queue depth for an inference pool in the
+// given namespace from Prometheus, or 0 if no metric vector was returned.
+func (p *Plugin) queryQueue(ctx context.Context, namespace, inferencePool string) (float64, error) {
+	query := fmt.Sprintf(eppQueueMetric, inferencePool, namespace)
 	result, _, err := p.promAPI.Query(ctx, query, time.Now())
 	if err != nil {
 		return 0, err
