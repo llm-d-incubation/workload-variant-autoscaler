@@ -155,6 +155,14 @@ var _ = Describe("Coordinator - gpu-rebalance", Label("coordinator"), Ordered, f
 		// direction: minimums (1 each) are still reserved, leaving 2 to split evenly,
 		// so both ceilings land on 2. This is the case that catches a plugin that only
 		// ever ratchets ceilings upward.
+		//
+		// Unlike the even-split case above, this one lands a *downgrade*, so it does
+		// not appear within a single Coordinator tick once the damping in #1427 is in
+		// place: a lower ceiling must persist for several consecutive ticks before it
+		// is written. At the deploy-time COORDINATOR_INTERVAL of 5s that is well
+		// inside EventuallyStandardSec, so the assertion holds either way — but do not
+		// tighten this timeout to a single interval on the assumption that a ceiling
+		// change is always immediate. Increases are; decreases deliberately are not.
 		const shrunkQuota = int64(4)
 		const shrunkCeiling = int32(2)
 
