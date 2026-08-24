@@ -45,7 +45,7 @@ func (o *GreedyByScoreOptimizer) Name() string {
 type modelWork struct {
 	req       ModelScalingRequest
 	s         []NamedAnalyzerResult  // working slice; Remaining/Spare decremented in place
-	satEntry  *domain.AnalyzerResult // variant metadata keeper (Cost, AcceleratorName, Role)
+	anchor    *domain.AnalyzerResult // merged per-model anchor (topology + sizing); see bindingAnchor
 	ps        RolePairedState        // picker-local per-role demand (from initRoleState)
 	roles     []string               // active roles for this model
 	remaining float64                // fair-share priority metric (negative = fully satisfied)
@@ -134,16 +134,17 @@ func (o *GreedyByScoreOptimizer) Optimize(
 		if handled[modelKey(req)] {
 			continue
 		}
-		satEntry := saturationEntry(req.AnalyzerResults)
-		if satEntry == nil {
+		anchor := bindingAnchor(req.AnalyzerResults)
+		if anchor == nil {
 			continue
 		}
 
-		s := req.AnalyzerResults
+		// Combine (RC/SC) math consumes only the voting subset of the ballot.
+		s := votingResults(req.AnalyzerResults)
 		roles, ps := initRoleState(s)
 		fsv := fairShareValue(req.Priority, s, ps, roles)
 		if anyRoleNeedsScaleUp(ps, roles) || fsv > 0 {
-			w := o.buildScaleUpWork(req, satEntry, s, ps, roles, fsv)
+			w := o.buildScaleUpWork(req, anchor, s, ps, roles, fsv)
 			if w != nil {
 				scaleUpWork = append(scaleUpWork, w)
 			}
@@ -158,7 +159,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)
-		vcMap := buildCapacityMap(w.satEntry.VariantCapacities)
+		vcMap := buildCapacityMap(w.anchor.VariantCapacities)
 		decisions := buildDecisionsWithOptimizer(w.req, stateMap, vcMap, w.targets, "greedy-by-score")
 		logger.V(logging.DEBUG).Info("Greedy-by-score optimizer decisions (scale-up)",
 			"modelID", w.req.ModelID,
@@ -167,19 +168,20 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	}
 
 	for _, req := range otherRequests {
-		satEntry := saturationEntry(req.AnalyzerResults)
-		if satEntry == nil {
+		anchor := bindingAnchor(req.AnalyzerResults)
+		if anchor == nil {
 			continue
 		}
 
 		stateMap := buildStateMap(req.VariantStates)
-		vcMap := buildCapacityMap(satEntry.VariantCapacities)
+		vcMap := buildCapacityMap(anchor.VariantCapacities)
 		targets := initTargets(req.VariantStates)
 
 		// Unified scale-down path via scaleDownRoleIterated.
-		s := req.AnalyzerResults
+		// Combine (RC/SC) math consumes only the voting subset of the ballot.
+		s := votingResults(req.AnalyzerResults)
 		_, _ = initRoleState(s) // populates RoleSpare for all roles
-		scaleDownRoleIterated(ctx, s, satEntry.VariantCapacities, targets, stateMap)
+		scaleDownRoleIterated(ctx, s, anchor.VariantCapacities, targets, stateMap)
 
 		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "greedy-by-score")
 		logger.V(logging.DEBUG).Info("Greedy-by-score optimizer decisions (other)",
@@ -193,14 +195,14 @@ func (o *GreedyByScoreOptimizer) Optimize(
 }
 
 // buildScaleUpWork creates a single work unit for a scale-up request.
-func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, satEntry *domain.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
+func (o *GreedyByScoreOptimizer) buildScaleUpWork(req ModelScalingRequest, anchor *domain.AnalyzerResult, s []NamedAnalyzerResult, ps RolePairedState, roles []string, fsv float64) *modelWork {
 	if fsv <= 0 {
 		return nil
 	}
 	return &modelWork{
 		req:       req,
 		s:         s,
-		satEntry:  satEntry,
+		anchor:    anchor,
 		ps:        ps,
 		roles:     roles,
 		remaining: fsv,
@@ -318,7 +320,7 @@ func (o *GreedyByScoreOptimizer) allocateForModel(
 	// Unified path: fairShareRolePick behind the RolePickFn interface.
 	// α logic removed in commit 3.
 	pick := fairShareRolePick(target, w.s, w.roles)
-	allocateForModelPaired(ctx, w.s, w.satEntry.VariantCapacities, stateMap, effAvail,
+	allocateForModelPaired(ctx, w.s, w.anchor.VariantCapacities, stateMap, effAvail,
 		w.targets, pick, ps, w.roles)
 
 	// Reconcile: apply what was consumed (before − after) to the cluster-wide

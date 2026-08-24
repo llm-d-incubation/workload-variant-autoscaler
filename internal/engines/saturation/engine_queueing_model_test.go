@@ -12,8 +12,8 @@ import (
 
 // withQMEntry builds a ModelScalingRequest whose single AnalyzerResults entry
 // mirrors the shape optimizeQueueingModel constructs in engine_queueing_model.go
-// (Name: SaturationAnalyzerName, Live: true statically), without going through
-// the full prepareModelData collection pipeline.
+// (Name: SaturationAnalyzerName, Enabled: true and Live: true statically), without
+// going through the full prepareModelData collection pipeline.
 func withQMEntry(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) pipeline.ModelScalingRequest {
 	req.AnalyzerResults = []pipeline.NamedAnalyzerResult{{
 		Name:      domain.SaturationAnalyzerName,
@@ -21,6 +21,7 @@ func withQMEntry(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) pip
 		Score:     1.0,
 		Remaining: r.RequiredCapacity,
 		Spare:     r.SpareCapacity,
+		Enabled:   true,
 		Live:      true,
 	}}
 	return req
@@ -58,7 +59,8 @@ var _ = Describe("Queueing model path stays live under the liveness gate", func(
 		dm := decisionsByVariant(decisions)
 
 		// Spare=25000, PRC=10000 → floor(25000/10000)=2 removable; would be 0
-		// (no scale-down at all) if the QM entry were left at the Live zero-value.
+		// (no scale-down at all) if the QM entry were left at the Enabled/Live
+		// zero-values, since the anchor would then fail to bind.
 		Expect(dm["v1"].TargetReplicas).To(Equal(1))
 	})
 })

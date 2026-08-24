@@ -16,6 +16,8 @@ import (
 
 // withSatEntryV2 adds a single-saturation AnalyzerResults to req from r.
 // Mirrors the helper in cost_aware_optimizer_test.go for use in the saturation package.
+// Enabled marks it as a voting ballot member; Live lets it bind as the anchor
+// (the engine populates both in production).
 func withSatEntryV2(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) pipeline.ModelScalingRequest {
 	if r != nil {
 		req.AnalyzerResults = []pipeline.NamedAnalyzerResult{{
@@ -23,6 +25,7 @@ func withSatEntryV2(r *domain.AnalyzerResult, req pipeline.ModelScalingRequest) 
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
+			Enabled:   true,
 			Live:      true,
 		}}
 	}

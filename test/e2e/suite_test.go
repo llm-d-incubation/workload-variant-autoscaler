@@ -72,6 +72,7 @@ var _ = BeforeSuite(func() {
 	GinkgoWriter.Printf("=== E2E Test Configuration ===\n")
 	GinkgoWriter.Printf("Environment: %s\n", cfg.Environment)
 	GinkgoWriter.Printf("WVA Namespace: %s\n", cfg.WVANamespace)
+	GinkgoWriter.Printf("Deploy WVA: %v\n", cfg.DeployWVA)
 	GinkgoWriter.Printf("LLMD Namespace: %s\n", cfg.LLMDNamespace)
 	GinkgoWriter.Printf("Use Simulator: %v\n", cfg.UseSimulator)
 	GinkgoWriter.Printf("Scale-to-Zero Enabled: %v\n", cfg.ScaleToZeroEnabled)
@@ -118,23 +119,27 @@ var _ = BeforeSuite(func() {
 
 	ctx, cancel = context.WithCancel(context.Background()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
 
-	By("Verifying WVA controller is running")
-	Eventually(func(g Gomega) {
-		pods, err := k8sClient.CoreV1().Pods(cfg.WVANamespace).List(ctx, metav1.ListOptions{
-			LabelSelector: "control-plane=controller-manager",
-		})
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(pods.Items).NotTo(BeEmpty(), "WVA controller pod not found")
+	if cfg.DeployWVA {
+		By("Verifying WVA controller is running")
+		Eventually(func(g Gomega) {
+			pods, err := k8sClient.CoreV1().Pods(cfg.WVANamespace).List(ctx, metav1.ListOptions{
+				LabelSelector: "control-plane=controller-manager",
+			})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(pods.Items).NotTo(BeEmpty(), "WVA controller pod not found")
 
-		// Check at least one pod is running
-		runningPods := 0
-		for _, pod := range pods.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				runningPods++
+			// Check at least one pod is running
+			runningPods := 0
+			for _, pod := range pods.Items {
+				if pod.Status.Phase == corev1.PodRunning {
+					runningPods++
+				}
 			}
-		}
-		g.Expect(runningPods).To(BeNumerically(">", 0), "No running WVA controller pods")
-	}).Should(Succeed(), "WVA controller should be running")
+			g.Expect(runningPods).To(BeNumerically(">", 0), "No running WVA controller pods")
+		}).Should(Succeed(), "WVA controller should be running")
+	} else {
+		GinkgoWriter.Println("Skipping WVA controller readiness (DEPLOY_WVA=false)")
+	}
 
 	By("Verifying llm-d infrastructure")
 	// Verify Gateway CRDs exist
@@ -173,7 +178,11 @@ var _ = ReportAfterEach(func(report SpecReport) {
 	}
 
 	GinkgoWriter.Printf("\n=== Failure diagnostics: %s ===\n", report.FullText())
-	utils.DumpControllerLogs(context.Background(), k8sClient, cfg.WVANamespace, GinkgoWriter)
+	if cfg.DeployWVA {
+		utils.DumpControllerLogs(context.Background(), k8sClient, cfg.WVANamespace, GinkgoWriter)
+	} else {
+		dumpKEDAEPPGuideDiagnostics()
+	}
 	utils.DumpManagedScalers(context.Background(), k8sClient, GinkgoWriter)
 })
 

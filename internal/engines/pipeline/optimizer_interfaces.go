@@ -34,6 +34,14 @@ type NamedAnalyzerResult struct {
 	// error state, never analyzed) cannot block scale-down. Recovery is automatic: a
 	// fresh informative result makes it live again on the next cycle.
 	Live bool
+
+	// Enabled indicates the analyzer votes in the combine (RC/SC) math for this cycle.
+	// Saturation is present as the identity/(a) carrier even when it does not vote
+	// (e.g. a throughput-only config), so "present in the ballot" != "votes".
+	// Set by the engine each cycle. votingResults prunes the ballot to Enabled
+	// entries before combine math; the anchor build (bindingAnchor) reads the full
+	// ballot so a non-voting saturation entry can still supply (a)/fallback (b).
+	Enabled bool
 }
 
 // ModelScalingRequest bundles the analyzer result with variant state for one model.
@@ -41,7 +49,7 @@ type NamedAnalyzerResult struct {
 type ModelScalingRequest struct {
 	ModelID         string
 	Namespace       string
-	AnalyzerResults []NamedAnalyzerResult // per-analyzer slice; saturation entry is always first
+	AnalyzerResults []NamedAnalyzerResult // per-analyzer slice; order is not significant (see bindingAnchor / votingResults)
 	VariantStates   []domain.VariantReplicaState
 	Priority        float64 // Model priority (default 1.0)
 	Disaggregated   bool    // true when model has prefill+decode variants

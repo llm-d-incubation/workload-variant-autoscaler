@@ -21,12 +21,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/common/model"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
@@ -38,6 +43,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -359,6 +365,76 @@ var _ = Describe("Saturation Engine", func() {
 
 			Expect(exporter.GetSpans()).To(BeEmpty(),
 				"no spans may be exported when sampling is off")
+		})
+
+		It("refuses the queueing-model path loudly and holds, rather than silently running V2/V1", func() {
+			By("Using a mock Prometheus API that records every query")
+			mockPromAPI := &testutils.MockPromAPI{
+				QueryResults: map[string]model.Value{},
+				QueryErrors:  map[string]error{},
+			}
+
+			sourceRegistry := source.NewSourceRegistry()
+			promSource := prometheus.NewPrometheusSource(ctx, mockPromAPI, prometheus.DefaultPrometheusSourceConfig())
+			sourceRegistry.Register("prometheus", promSource) // nolint:errcheck
+
+			// Saturation config present (as in the V2 test above) plus a
+			// queueing-model ConfigMap. Presence of the QM "default" entry routes the
+			// dispatch to the refusal path regardless of the saturation analyzerName.
+			testConfig := config.NewTestConfig()
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
+				"default": {},
+			})
+			testConfig.UpdateQMAnalyzerConfig(map[string]domain.QueueingModelScalingConfig{
+				"default": {},
+			})
+			fakeRecorder := record.NewFakeRecorder(100)
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+
+			By("Running the optimization loop with an observed logger")
+			// A Ginkgo It cannot call zapObserverCtx (it needs *testing.T), so build
+			// the observed-logger context inline.
+			core, recorded := observer.New(zapcore.InfoLevel)
+			observedCtx := logr.NewContext(ctx, zapr.NewLogger(zap.New(core)))
+			err := engine.optimize(observedCtx)
+
+			By("Verifying the loop completed without error (models are held, not dropped)")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the queueing-model path was refused, not silently dispatched")
+			var refused bool
+			for _, e := range recorded.All() {
+				if strings.Contains(e.Message, "refusing to dispatch the queueing-model path") {
+					refused = true
+					break
+				}
+			}
+			Expect(refused).To(BeTrue(), "the engine must log the explicit queueing-model refusal")
+
+			By("Verifying no fall-through to the saturation (V2) or V1 path")
+			// The refusal path never calls prepareModelData, so it issues no
+			// Prometheus queries. A non-empty QueryCallCounts would mean the engine
+			// silently ran V2/V1 instead of refusing.
+			Expect(mockPromAPI.QueryCallCounts).To(BeEmpty(),
+				"a refused queueing-model cycle must not query Prometheus (no V2/V1 fall-through)")
+
+			By("Verifying the hold is surfaced to operators as a Warning event")
+			// The held variants are synthesized in-memory, so their
+			// TypeOptimizationReady=False/OptimizationRefused condition is set on a
+			// copy with no API object to read back. The event is the observable
+			// half of the same signal, and the one that must not regress to
+			// silence: without it, a cluster whose autoscaling has stopped
+			// entirely looks identical to a healthy idle one.
+			var refusedEvent string
+			for len(fakeRecorder.Events) > 0 {
+				e := <-fakeRecorder.Events
+				if strings.Contains(e, constants.K8SEventOptimizationRefused) {
+					refusedEvent = e
+					break
+				}
+			}
+			Expect(refusedEvent).To(ContainSubstring(v1.EventTypeWarning),
+				"the refusal must raise a Warning event on the held variants")
 		})
 	})
 

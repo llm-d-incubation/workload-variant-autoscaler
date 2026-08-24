@@ -25,8 +25,8 @@ WVA_PROJECT=${WVA_PROJECT:-$PWD}
 NAMESPACE_SUFFIX="sim"
 
 # Namespaces
-LLMD_NS="llm-d-$NAMESPACE_SUFFIX"
-MONITORING_NAMESPACE="workload-variant-autoscaler-monitoring"
+LLMD_NS=${LLMD_NS:-"llm-d-$NAMESPACE_SUFFIX"}
+MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"workload-variant-autoscaler-monitoring"}
 WVA_NS=${WVA_NS:-"workload-variant-autoscaler-system"}
 
 # Simulator image — must match defaultModelServiceSimulatorImage in test/e2e/fixtures/model_service_conventions.go
@@ -37,7 +37,7 @@ WVA_RECONCILE_INTERVAL=${WVA_RECONCILE_INTERVAL:-"60s"} # WVA controller reconci
 SKIP_TLS_VERIFY=true  # Skip TLS verification in emulated environments
 WVA_LOG_LEVEL="debug" # WVA log level set to debug for emulated environments
 # Prometheus Configuration
-PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
+PROMETHEUS_SVC_NAME=${PROMETHEUS_SVC_NAME:-"kube-prometheus-stack-prometheus"}
 PROMETHEUS_BASE_URL="https://$PROMETHEUS_SVC_NAME.$MONITORING_NAMESPACE.svc.cluster.local"
 PROMETHEUS_PORT="9090"
 PROMETHEUS_URL="$PROMETHEUS_BASE_URL:$PROMETHEUS_PORT"
@@ -104,8 +104,12 @@ check_specific_prerequisites() {
     fi
     log_success "Using KIND cluster '${CLUSTER_NAME}'"
 
-    # Load WVA image into KIND cluster
-    load_image
+    # Load the WVA image only when the controller is part of this deployment.
+    if [ "${DEPLOY_WVA:-true}" = "true" ]; then
+        load_image
+    else
+        log_info "Skipping WVA image load (DEPLOY_WVA=false)"
+    fi
 
     # Pre-load the simulator image so tests don't pull it cold (avoids PodReadyTimeout).
     load_sim_image
@@ -226,6 +230,30 @@ _load_into_kind() {
 load_sim_image() {
     log_info "Pre-loading simulator image '$SIM_IMAGE' into KIND cluster..."
 
+    # Digest-pinned images can be imported incorrectly by `kind load docker-image`
+    # and left behind as broken containerd import-* references. Pull them directly
+    # into each KIND node's containerd store instead.
+    if [[ "$SIM_IMAGE" == *@sha256:* ]]; then
+        log_info "Simulator image is digest-pinned; pulling directly into KIND node containerd..."
+
+        local nodes
+        if ! nodes="$(kind get nodes --name "$CLUSTER_NAME")"; then
+            log_warning "Failed to list KIND nodes for simulator image preload"
+            return
+        fi
+
+        local node
+        for node in $nodes; do
+            if ! docker exec "$node" crictl pull "$SIM_IMAGE"; then
+                log_warning "Failed to pre-pull simulator image '$SIM_IMAGE' on node '$node'"
+                return
+            fi
+        done
+
+        log_success "Simulator image '$SIM_IMAGE' pulled directly into KIND cluster '$CLUSTER_NAME' nodes"
+        return
+    fi
+
     local platform="${KIND_IMAGE_PLATFORM:-}"
     if [ -z "$platform" ]; then
         case "$(uname -m)" in
@@ -239,7 +267,8 @@ load_sim_image() {
         return
     fi
 
-    _load_into_kind "$SIM_IMAGE" || log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
+    _load_into_kind "$SIM_IMAGE" ||
+        log_warning "Failed to load simulator image into KIND cluster — tests may be slow on first run"
 }
 
 KUBE_LIKE_VALUES_DEV_IF_PRESENT=true

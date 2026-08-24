@@ -2,6 +2,7 @@ package saturation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -14,6 +15,47 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
+
+// refuseQueueingModel is the dispatch target selected when a queueing-model
+// ConfigMap is present. The queueing-model optimize path (optimizeQueueingModel,
+// below) is deferred — it is not yet a first-class voting analyzer in the
+// multi-analyzer engine — so the engine refuses to dispatch it rather than
+// silently running the parked path or silently falling through to the
+// saturation-only / V1 path (either would mask a misconfiguration). It logs an
+// error and produces no decisions; the dispatch case leaves the decision set
+// empty, so the caller's unconditional applySaturationDecisions re-affirms each
+// model's last-good replica count and still emits the HPA/KEDA scaling metric
+// this cycle — affected models are held in place rather than dropped. To
+// re-enable the path later, restore the dispatch to optimizeQueueingModel.
+//
+// The hold is reported as well as logged: a Warning event is raised on every
+// held variant here, and the caller's refused flag drives
+// TypeOptimizationReady=False/OptimizationRefused on each one (vestigial today
+// — nothing reads that condition back, see applySaturationDecisions). Without
+// the event, a cluster that has stopped autoscaling entirely is
+// indistinguishable from a healthy idle one, with a repeating controller log
+// line as the only evidence.
+func (e *Engine) refuseQueueingModel(
+	ctx context.Context,
+	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+) {
+	logger := ctrl.LoggerFrom(ctx)
+	logger.Error(
+		errors.New("queueing-model optimization path is disabled"),
+		"refusing to dispatch the queueing-model path; enable the saturation and/or throughput analyzers instead",
+		"modelGroups", len(modelGroups),
+	)
+	e.recordOptimizationRefusedEvent(modelGroups)
+}
+
+// optimizeQueueingModel and the two helpers below (runQueueingModelAnalysis,
+// buildQMConfig) are no longer dispatched — refuseQueueingModel replaced them at
+// the engine's dispatch switch. They are retained in-tree as a deferred design
+// direction (a queueing-model-driven analyzer), parked until the multi-analyzer
+// engine can host it as a first-class voting analyzer. The blank reference below
+// keeps this parked call-subtree reachable so the unused linter does not flag it;
+// drop the reference when the path is re-dispatched.
+var _ = (*Engine).optimizeQueueingModel
 
 // optimizeQueueingModel runs the queueing model-based analysis path.
 // Follows the same three-stage pattern as optimizeV2:
@@ -83,6 +125,10 @@ func (e *Engine) optimizeQueueingModel(
 				Score:     1.0, // QM path: single analyzer, no per-entry score config
 				Remaining: result.RequiredCapacity,
 				Spare:     result.SpareCapacity,
+				// Enabled is statically true: the queueing-model path runs a single
+				// analyzer, so it is always the voting member and the anchor's
+				// binding/(a) carrier for this model.
+				Enabled: true,
 				// Live is statically true: the queueing-model path is not yet a
 				// per-analyzer-liveness participant (it doesn't run through
 				// updateLivenessAndSetLive), so it must not be caught by the

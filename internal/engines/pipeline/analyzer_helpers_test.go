@@ -31,6 +31,7 @@ func makeNamed(name string, rc, sc float64, vcs ...any) NamedAnalyzerResult {
 		Remaining: rc,
 		Spare:     sc,
 		Live:      true,
+		Enabled:   true,
 	}
 }
 
@@ -63,19 +64,330 @@ var _ = Describe("analyzer helpers", func() {
 		})
 	})
 
-	Describe("saturationEntry", func() {
-		It("returns the saturation result from the slice", func() {
-			satResult := &domain.AnalyzerResult{RequiredCapacity: 42}
-			s := []NamedAnalyzerResult{
-				{Name: domain.SaturationAnalyzerName, Result: satResult},
-				makeNamed("ta", 10, 0),
+	Describe("bindingAnchor", func() {
+		// Test 1 — merged-anchor construction (non-vacuous).
+		// A two-entry ballot where saturation is the (a)/identity carrier and a
+		// live throughput analyzer is the (b)/sizing binder. The merged anchor must
+		// take identity (accelerator, cost, replica count, model ID) from
+		// saturation and sizing (PRC, reason, model-level RC) from throughput, and
+		// recompute TotalCapacity. The fixtures make the anchor differ from
+		// ballot[0] (saturation) in both analyzer name and PRC, so an implementation
+		// that merely returned the saturation entry would fail — proving the merge.
+		It("merges (a) identity from saturation with (b) sizing from the binding analyzer", func() {
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: false, // present as the (a) carrier, not voting
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName:     domain.SaturationAnalyzerName,
+					ModelID:          "m1",
+					Namespace:        "ns1",
+					RequiredCapacity: 999, // must NOT surface (sizing comes from binding)
+					VariantCapacities: []domain.VariantCapacity{{
+						VariantName:        "v1",
+						AcceleratorName:    "A100",
+						Cost:               10.0,
+						Role:               domain.RoleBoth,
+						ReplicaCount:       2,
+						PerReplicaCapacity: 100.0, // sat's own (b) — must NOT surface for v1
+						Reason:             "P1-obs",
+						TotalDemand:        150.0,
+					}},
+				},
 			}
-			Expect(saturationEntry(s)).To(BeIdenticalTo(satResult))
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName:     "throughput",
+					ModelID:          "ignored", // identity comes from the (a) carrier
+					RequiredCapacity: 50,
+					VariantCapacities: []domain.VariantCapacity{{
+						VariantName:        "v1",
+						PerReplicaCapacity: 200.0, // binding (b) — this is what surfaces
+						Reason:             "T1-ols",
+						TotalDemand:        300.0,
+					}},
+				},
+			}
+			s := []NamedAnalyzerResult{sat, ta}
+
+			anchor := bindingAnchor(s)
+			Expect(anchor).NotTo(BeNil())
+			// Non-vacuous: the anchor is a fresh merge, not either source Result.
+			Expect(anchor).NotTo(BeIdenticalTo(s[0].Result))
+			Expect(anchor).NotTo(BeIdenticalTo(s[1].Result))
+
+			// Model-level: identity from saturation, sizing from binding.
+			Expect(anchor.AnalyzerName).To(Equal("throughput"))
+			Expect(anchor.ModelID).To(Equal("m1"))
+			Expect(anchor.Namespace).To(Equal("ns1"))
+			Expect(anchor.RequiredCapacity).To(Equal(50.0))
+
+			Expect(anchor.VariantCapacities).To(HaveLen(1))
+			vc := anchor.VariantCapacities[0]
+			Expect(vc.VariantName).To(Equal("v1"))
+			// (a) from saturation
+			Expect(vc.AcceleratorName).To(Equal("A100"))
+			Expect(vc.Cost).To(Equal(10.0))
+			Expect(vc.ReplicaCount).To(Equal(2))
+			// (b) from binding (throughput)
+			Expect(vc.PerReplicaCapacity).To(Equal(200.0))
+			Expect(vc.Reason).To(Equal("T1-ols"))
+			// TotalCapacity recomputed = ReplicaCount(a) × PerReplicaCapacity(b)
+			Expect(vc.TotalCapacity).To(Equal(400.0))
 		})
 
-		It("returns nil when saturation is absent", func() {
-			s := []NamedAnalyzerResult{makeNamed("ta", 10, 0)}
-			Expect(saturationEntry(s)).To(BeNil())
+		// Test 2 — per-variant (b)-fallback + ordering.
+		// The (a) carrier (saturation) lists v1+v2; the binding analyzer lists only
+		// v1. Variant ordering follows the (a) carrier. For v2 (omitted by the
+		// binder) the fallback depends on whether saturation votes:
+		//   - saturation enabled (but non-binding here because non-live): its own
+		//     (b) is a consistent (demand, PRC) source, so v2 resolves from it;
+		//   - saturation not enabled (throughput-only): no consistent fallback, so
+		//     v2's PRC stays 0 and it is not proactively selectable.
+		It("falls back to saturation's own (b) for an omitted variant when saturation votes", func() {
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: true,  // votes → fallback source is consistent
+				Live:    false, // non-live → does not bind; throughput binds
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: domain.SaturationAnalyzerName,
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", ReplicaCount: 1, PerReplicaCapacity: 100.0, Reason: "P1-obs"},
+						{VariantName: "v2", ReplicaCount: 1, PerReplicaCapacity: 110.0, Reason: "P1-obs"},
+					},
+				},
+			}
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", PerReplicaCapacity: 200.0, Reason: "T1-ols"},
+					},
+				},
+			}
+			anchor := bindingAnchor([]NamedAnalyzerResult{sat, ta})
+			Expect(anchor).NotTo(BeNil())
+			Expect(anchor.VariantCapacities).To(HaveLen(2))
+			// Ordering follows the (a) carrier (saturation): v1 then v2.
+			Expect(anchor.VariantCapacities[0].VariantName).To(Equal("v1"))
+			Expect(anchor.VariantCapacities[1].VariantName).To(Equal("v2"))
+			// v1 sized by the binding analyzer.
+			Expect(anchor.VariantCapacities[0].PerReplicaCapacity).To(Equal(200.0))
+			Expect(anchor.VariantCapacities[0].Reason).To(Equal("T1-ols"))
+			// v2 omitted by the binder → falls back to saturation's own (b).
+			Expect(anchor.VariantCapacities[1].PerReplicaCapacity).To(Equal(110.0))
+			Expect(anchor.VariantCapacities[1].Reason).To(Equal("P1-obs"))
+		})
+
+		It("leaves an omitted variant at PRC=0 under a throughput-only (non-voting saturation) config", func() {
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: false, // throughput-only: saturation carries (a) but does not vote
+				Live:    false,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: domain.SaturationAnalyzerName,
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", ReplicaCount: 1, PerReplicaCapacity: 100.0, Reason: "P1-obs"},
+						{VariantName: "v2", ReplicaCount: 1, PerReplicaCapacity: 110.0, Reason: "P1-obs"},
+					},
+				},
+			}
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", PerReplicaCapacity: 200.0, Reason: "T1-ols"},
+					},
+				},
+			}
+			anchor := bindingAnchor([]NamedAnalyzerResult{sat, ta})
+			Expect(anchor).NotTo(BeNil())
+			Expect(anchor.VariantCapacities).To(HaveLen(2))
+			// v2 has no consistent fallback source → PRC stays 0 (reactive
+			// scale-from-zero owns cold-start).
+			Expect(anchor.VariantCapacities[1].VariantName).To(Equal("v2"))
+			Expect(anchor.VariantCapacities[1].PerReplicaCapacity).To(Equal(0.0))
+			Expect(anchor.VariantCapacities[1].TotalCapacity).To(Equal(0.0))
+		})
+
+		// Test 3 — no source mutation (aliasing guard).
+		// bindingAnchor must build fresh VariantCapacity literals; mutating the
+		// returned anchor must not write through to either source Result.
+		It("does not mutate the source Results' VariantCapacities", func() {
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: false,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: domain.SaturationAnalyzerName,
+					ModelID:      "m1",
+					VariantCapacities: []domain.VariantCapacity{{
+						VariantName:        "v1",
+						AcceleratorName:    "A100",
+						Cost:               10.0,
+						ReplicaCount:       2,
+						PerReplicaCapacity: 100.0,
+						TotalCapacity:      200.0,
+					}},
+				},
+			}
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{{
+						VariantName:        "v1",
+						PerReplicaCapacity: 200.0,
+						Reason:             "T1-ols",
+						TotalCapacity:      400.0,
+					}},
+				},
+			}
+			s := []NamedAnalyzerResult{sat, ta}
+
+			anchor := bindingAnchor(s)
+			Expect(anchor).NotTo(BeNil())
+			Expect(anchor.VariantCapacities).To(HaveLen(1))
+
+			// Mutate the merged output; the sources must be unaffected.
+			anchor.VariantCapacities[0].PerReplicaCapacity = 9999.0
+			anchor.VariantCapacities[0].AcceleratorName = "MUTATED"
+
+			Expect(sat.Result.VariantCapacities[0].AcceleratorName).To(Equal("A100"))
+			Expect(sat.Result.VariantCapacities[0].PerReplicaCapacity).To(Equal(100.0))
+			Expect(sat.Result.VariantCapacities[0].TotalCapacity).To(Equal(200.0))
+			Expect(ta.Result.VariantCapacities[0].PerReplicaCapacity).To(Equal(200.0))
+			Expect(ta.Result.VariantCapacities[0].TotalCapacity).To(Equal(400.0))
+		})
+
+		// Rescale read-source characterization. The rescale path resolves the
+		// model's accelerator type via singleAccType(bindingAnchor(...).VariantCapacities).
+		// Under a throughput-only config the throughput analyzer binds (it is the
+		// sole voting+live member) but leaves AcceleratorName empty; the accelerator
+		// identity comes from saturation's (a) contribution through the merge. This
+		// pins the wiring so a later change that repoints the read at the raw binding
+		// result (which has no AcceleratorName) can't silently drop the model from
+		// rescale. Throughput-only rescale *correctness* is a later change; this only
+		// freezes the read-source.
+		It("resolves the accelerator type via the merged anchor when the binding analyzer omits it", func() {
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: false, // throughput-only: saturation carries (a) but does not vote
+				Live:    false,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: domain.SaturationAnalyzerName,
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", AcceleratorName: "A100", ReplicaCount: 1, PerReplicaCapacity: 100.0, Reason: "P1-obs"},
+					},
+				},
+			}
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{
+						// AcceleratorName deliberately empty — throughput does not set it.
+						{VariantName: "v1", PerReplicaCapacity: 200.0, Reason: "T1-ols"},
+					},
+				},
+			}
+			s := []NamedAnalyzerResult{sat, ta}
+
+			anchor := bindingAnchor(s)
+			Expect(anchor).NotTo(BeNil())
+			Expect(anchor.VariantCapacities).To(HaveLen(1))
+			// Throughput binds the sizing (PRC=200), confirming it is the binder.
+			Expect(anchor.VariantCapacities[0].PerReplicaCapacity).To(Equal(200.0))
+			// Accelerator identity survives via saturation's (a), even though the
+			// binding analyzer's own result left it empty.
+			Expect(anchor.VariantCapacities[0].AcceleratorName).To(Equal("A100"))
+
+			// The exact expression the rescale path uses to key its GPU budgets.
+			accType, ok := singleAccType(anchor.VariantCapacities)
+			Expect(ok).To(BeTrue(), "rescale must resolve a single accelerator type from the merged anchor")
+			Expect(accType).To(Equal("A100"))
+		})
+
+		// Test 4 — degenerate ballots produce no anchor (the per-model hold).
+		// bindingAnchor returns nil whenever nothing can bind; each optimizer's
+		// nil-anchor guard then holds the model (no decision this cycle) rather
+		// than indexing into an empty or unbindable ballot. These pin the three
+		// nil paths that back the "empty / no-live-analyzer ballot is graceful"
+		// behaviour: no index panic on an empty ballot, and a deliberate hold
+		// when no single analyzer can bind.
+		It("returns nil for an empty ballot", func() {
+			Expect(bindingAnchor(nil)).To(BeNil())
+			Expect(bindingAnchor([]NamedAnalyzerResult{})).To(BeNil())
+		})
+
+		It("returns nil when no enabled+live+informative analyzer is present", func() {
+			// Saturation and throughput are both present, enabled, and informative,
+			// but neither is live this cycle → no binder → hold the model.
+			sat := NamedAnalyzerResult{
+				Name:    domain.SaturationAnalyzerName,
+				Enabled: true,
+				Live:    false,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: domain.SaturationAnalyzerName,
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", ReplicaCount: 1, PerReplicaCapacity: 100.0, Reason: "P1-obs"},
+					},
+				},
+			}
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    false,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", PerReplicaCapacity: 200.0, Reason: "T1-ols"},
+					},
+				},
+			}
+			Expect(bindingAnchor([]NamedAnalyzerResult{sat, ta})).To(BeNil())
+		})
+
+		It("returns nil for an ambiguous multi-binder (two non-saturation live analyzers)", func() {
+			// No saturation entry; two distinct non-saturation analyzers are each
+			// enabled+live+informative. This PR does not define which one binds, so
+			// bindingAnchor refuses to guess and holds the model.
+			ta := NamedAnalyzerResult{
+				Name:    "throughput",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "throughput",
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", PerReplicaCapacity: 200.0, Reason: "T1-ols"},
+					},
+				},
+			}
+			lat := NamedAnalyzerResult{
+				Name:    "latency",
+				Enabled: true,
+				Live:    true,
+				Result: &domain.AnalyzerResult{
+					AnalyzerName: "latency",
+					VariantCapacities: []domain.VariantCapacity{
+						{VariantName: "v1", PerReplicaCapacity: 150.0, Reason: "L1-obs"},
+					},
+				},
+			}
+			Expect(bindingAnchor([]NamedAnalyzerResult{ta, lat})).To(BeNil())
 		})
 	})
 
@@ -130,6 +442,7 @@ func makeNamedPD(name string, pRC, dRC, pSC, dSC float64, pDemand, dDemand float
 		Remaining: pRC, // P-scope after initDisaggregatedRemaining
 		RoleSpare: map[string]float64{"prefill": pSC, "decode": dSC},
 		Live:      true,
+		Enabled:   true,
 	}
 }
 

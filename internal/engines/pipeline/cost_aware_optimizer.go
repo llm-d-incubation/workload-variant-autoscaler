@@ -58,24 +58,25 @@ func (o *CostAwareOptimizer) Optimize(
 	}()
 
 	for _, req := range requests {
-		satEntry := saturationEntry(req.AnalyzerResults)
-		if satEntry == nil {
+		anchor := bindingAnchor(req.AnalyzerResults)
+		if anchor == nil {
 			continue
 		}
 
 		stateMap := buildStateMap(req.VariantStates)
-		vcMap := buildCapacityMap(satEntry.VariantCapacities)
+		vcMap := buildCapacityMap(anchor.VariantCapacities)
 		targets := initTargets(req.VariantStates)
 
 		// Unified dispatch: one path for all models via (model, role) math.
 		// Non-disaggregated uses synthetic "both" role; disaggregated uses actual roles.
-		s := req.AnalyzerResults
+		// Combine (RC/SC) math consumes only the voting subset of the ballot.
+		s := votingResults(req.AnalyzerResults)
 		roles, ps := initRoleState(s)
 		if anyRoleNeedsScaleUp(ps, roles) {
-			allocateForModelPaired(ctx, s, satEntry.VariantCapacities, stateMap, nil, targets,
+			allocateForModelPaired(ctx, s, anchor.VariantCapacities, stateMap, nil, targets,
 				costGreedyRolePick, ps, roles)
 		} else {
-			scaleDownRoleIterated(ctx, s, satEntry.VariantCapacities, targets, stateMap)
+			scaleDownRoleIterated(ctx, s, anchor.VariantCapacities, targets, stateMap)
 		}
 
 		decisions := buildDecisionsWithOptimizer(req, stateMap, vcMap, targets, "cost-aware")
@@ -261,12 +262,12 @@ func buildDecisionsWithOptimizer(
 	optimizerName string,
 ) []domain.VariantDecision {
 	decisions := make([]domain.VariantDecision, 0, len(targets))
-	// satEntry carries the model-level RequiredCapacity/SpareCapacity computed by
+	// anchor carries the model-level RequiredCapacity/SpareCapacity computed by
 	// applyUniversalThreshold; per-variant Utilization is on each VariantCapacity.
 	// These feed the saturation gauges (utilization/required/spare). SpareCapacity is
 	// additionally an input to the GPU limiter's GreedyBySaturation ordering, so setting
 	// it here also makes that ordering reflect real spare tokens on V2 (it was 0 before).
-	satEntry := saturationEntry(req.AnalyzerResults)
+	anchor := bindingAnchor(req.AnalyzerResults)
 	for name, target := range targets {
 		state := stateMap[name]
 		vc := vcMap[name]
@@ -313,13 +314,13 @@ func buildDecisionsWithOptimizer(
 		// For P/D-disaggregated models use the variant's per-role capacity; otherwise
 		// fall back to the model-level totals.
 		decision.Utilization = vc.Utilization
-		if satEntry != nil {
-			reqCap, spareCap := satEntry.RequiredCapacity, satEntry.SpareCapacity
+		if anchor != nil {
+			reqCap, spareCap := anchor.RequiredCapacity, anchor.SpareCapacity
 			role := state.Role
 			if role == "" {
 				role = domain.RoleBoth
 			}
-			if rc, ok := satEntry.RoleCapacities[role]; ok {
+			if rc, ok := anchor.RoleCapacities[role]; ok {
 				reqCap, spareCap = rc.RequiredCapacity, rc.SpareCapacity
 			}
 			decision.RequiredCapacity = reqCap

@@ -84,17 +84,158 @@ func applyAllocation(s []NamedAnalyzerResult, v string, n int) {
 	}
 }
 
-// saturationEntry returns the saturation analyzer's result from s, or nil if not present.
-// The saturation entry is the keeper of per-variant metadata (Cost, AcceleratorName, Role,
-// replica counts) that the optimizer uses for variant selection and GPU accounting.
-// TODO: remove the sat_v2 special role once all analyzers populate variant metadata.
-func saturationEntry(s []NamedAnalyzerResult) *domain.AnalyzerResult {
-	for _, e := range s {
-		if e.Name == domain.SaturationAnalyzerName {
-			return e.Result
+// bindingAnchor derives the per-model anchor on demand from the ballot s. The
+// anchor is the topology carrier the optimizer selects variants and accounts
+// GPUs against. It merges identity/(a) fields from the saturation entry —
+// per variant: AcceleratorName, Cost, Role, ReplicaCount, PendingReplicas; at
+// the model level: ModelID, Namespace, AnalyzedAt — with sizing/(b) fields from
+// the binding analyzer — per variant: PerReplicaCapacity, Reason, TotalDemand,
+// Utilization; at the model level: TotalSupply, TotalDemand, Utilization,
+// TotalAnticipatedSupply, RequiredCapacity, SpareCapacity, RoleCapacities —
+// keyed by VariantName. TotalCapacity is recomputed, not copied. Returns nil
+// when nothing can bind; the optimizer then holds for this model (the nil-guard
+// at each call site is that per-model hold).
+//
+// The binding analyzer (the (b)/sizing source) is:
+//   - saturation, when it votes and is live+informative (the default and the
+//     saturation+throughput case — merging saturation with itself is the
+//     identity, which is why the characterization goldens hold);
+//   - otherwise the sole enabled+live+informative non-saturation entry (the
+//     throughput-only case);
+//   - otherwise none → return nil.
+//
+// If more than one non-saturation analyzer is enabled+live+informative, this PR
+// does not define which binds; rather than guess, the model is treated as
+// unbindable and nil is returned.
+//
+// Per-variant (b)-fallback: where the binding analyzer omits a variant the (a)
+// carrier lists, the (demand, PerReplicaCapacity) pair must come from a single
+// source. Saturation's own (b) is the fallback ONLY when saturation votes
+// (satNR.Enabled) — saturation is then both the demand and the PRC source, so
+// the pair stays consistent. Under a throughput-only config (saturation present
+// as the (a) carrier but not voting) a variant the binding analyzer omits gets
+// PerReplicaCapacity = 0 and is not proactively selectable; genuine cold-starts
+// fall to the reactive scale-from-zero engine. The (a) carrier is captured up
+// front, before any voting-set prune, so the fallback source is available even
+// when saturation is non-voting.
+//
+// Builds fresh literals throughout — it never mutates the source Results or
+// their VariantCapacities slices/elements.
+func bindingAnchor(s []NamedAnalyzerResult) *domain.AnalyzerResult {
+	// (a) carrier: the saturation entry. It may be present even when it does not
+	// vote (throughput-only config), so it is located by name, not by vote.
+	var satNR *NamedAnalyzerResult
+	for i := range s {
+		if s[i].Name == domain.SaturationAnalyzerName && s[i].Result != nil {
+			satNR = &s[i]
+			break
 		}
 	}
-	return nil
+
+	// Select the binding (b)/sizing analyzer.
+	var binding *NamedAnalyzerResult
+	switch {
+	case satNR != nil && satNR.Enabled && satNR.Live && ResultIsInformative(*satNR):
+		// Saturation binds whenever it votes (default / saturation+throughput).
+		binding = satNR
+	default:
+		// Otherwise the sole enabled+live+informative non-saturation entry binds.
+		for i := range s {
+			if s[i].Name == domain.SaturationAnalyzerName {
+				continue
+			}
+			if s[i].Enabled && s[i].Live && ResultIsInformative(s[i]) {
+				if binding != nil {
+					// >1 non-saturation binding candidate is not a config this PR
+					// defines; do not guess which binds — hold this model instead.
+					return nil
+				}
+				binding = &s[i]
+			}
+		}
+	}
+	if binding == nil {
+		return nil
+	}
+
+	// Identity/(a) carrier: saturation when present; with no saturation entry at
+	// all (not a config this PR defines) fall back to binding so the merge stays
+	// well-defined.
+	aCarrier := binding
+	if satNR != nil {
+		aCarrier = satNR
+	}
+	// Whether saturation votes — gates the per-variant (b)-fallback below.
+	satEnabled := satNR != nil && satNR.Enabled
+
+	// Model-level fields: identity from the (a) carrier, sizing from binding.
+	anchor := &domain.AnalyzerResult{
+		AnalyzerName:           binding.Result.AnalyzerName,
+		ModelID:                aCarrier.Result.ModelID,
+		Namespace:              aCarrier.Result.Namespace,
+		AnalyzedAt:             aCarrier.Result.AnalyzedAt,
+		TotalSupply:            binding.Result.TotalSupply,
+		TotalDemand:            binding.Result.TotalDemand,
+		Utilization:            binding.Result.Utilization,
+		TotalAnticipatedSupply: binding.Result.TotalAnticipatedSupply,
+		RequiredCapacity:       binding.Result.RequiredCapacity,
+		SpareCapacity:          binding.Result.SpareCapacity,
+		RoleCapacities:         binding.Result.RoleCapacities,
+	}
+
+	// Per-variant merge: iterate the (a) carrier's complete variant list (it emits
+	// every configured variant), take (a) from it and (b) from the binding
+	// analyzer for the same VariantName.
+	bByName := buildCapacityMap(binding.Result.VariantCapacities)
+	merged := make([]domain.VariantCapacity, 0, len(aCarrier.Result.VariantCapacities))
+	for _, a := range aCarrier.Result.VariantCapacities {
+		out := domain.VariantCapacity{
+			VariantName:     a.VariantName,
+			AcceleratorName: a.AcceleratorName,
+			Cost:            a.Cost,
+			Role:            a.Role,
+			ReplicaCount:    a.ReplicaCount,
+			PendingReplicas: a.PendingReplicas,
+		}
+		if b, ok := bByName[a.VariantName]; ok {
+			out.PerReplicaCapacity = b.PerReplicaCapacity
+			out.Reason = b.Reason
+			out.TotalDemand = b.TotalDemand
+			out.Utilization = b.Utilization
+		} else if satEnabled {
+			// Enablement-gated fallback: saturation votes, so its own (b) is a
+			// consistent (demand, PRC) source. aCarrier is saturation here.
+			out.PerReplicaCapacity = a.PerReplicaCapacity
+			out.Reason = a.Reason
+			out.TotalDemand = a.TotalDemand
+			out.Utilization = a.Utilization
+		}
+		// else: throughput-only, binding analyzer omits this variant, no persisted
+		// throughput PRC → PerReplicaCapacity stays 0 → not proactively selectable.
+
+		// TotalCapacity is recomputed (not copied) so the invariant
+		// TotalCapacity == ReplicaCount × PerReplicaCapacity holds by construction.
+		out.TotalCapacity = float64(out.ReplicaCount) * out.PerReplicaCapacity
+		merged = append(merged, out)
+	}
+	anchor.VariantCapacities = merged
+	return anchor
+}
+
+// votingResults returns the sub-slice of the ballot whose analyzers vote in the
+// combine (RC/SC) math this cycle. Non-voting entries (e.g. a saturation entry
+// present only as the (a) carrier in a throughput-only config) are excluded.
+// The anchor build (bindingAnchor) reads the FULL ballot, not this pruned view.
+// In the default and saturation+throughput configs every entry is Enabled, so
+// this returns the same combine input set as the raw ballot.
+func votingResults(s []NamedAnalyzerResult) []NamedAnalyzerResult {
+	out := make([]NamedAnalyzerResult, 0, len(s))
+	for _, e := range s {
+		if e.Enabled {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // prcForVariant returns the PerReplicaCapacity for variant v in result r.

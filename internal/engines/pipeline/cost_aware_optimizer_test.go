@@ -12,7 +12,9 @@ import (
 )
 
 // withSatEntry adds a single-saturation AnalyzerResults to req, initialised from r.
-// Used by test fixtures so CostAwareOptimizer can find the saturation entry.
+// Used by test fixtures so the optimizer's binding anchor resolves to the
+// saturation entry. Enabled marks it as a voting member of the ballot; Live
+// lets it bind as the anchor (the engine populates both in production).
 func withSatEntry(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalingRequest {
 	if r != nil {
 		req.AnalyzerResults = []NamedAnalyzerResult{{
@@ -20,6 +22,7 @@ func withSatEntry(r *domain.AnalyzerResult, req ModelScalingRequest) ModelScalin
 			Result:    r,
 			Remaining: r.RequiredCapacity,
 			Spare:     r.SpareCapacity,
+			Enabled:   true,
 			Live:      true,
 		}}
 	}
@@ -745,6 +748,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Enabled:   true,
 					Live:      true,
 				}}
 			}
@@ -838,6 +842,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Enabled:   true,
 					Live:      true,
 				}}
 			}
@@ -887,6 +892,7 @@ var _ = Describe("CostAwareOptimizer", func() {
 					Result:    r,
 					Remaining: r.RequiredCapacity,
 					Spare:     r.SpareCapacity,
+					Enabled:   true,
 					Live:      true,
 				}}
 			}

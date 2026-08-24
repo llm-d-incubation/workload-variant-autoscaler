@@ -110,10 +110,15 @@ const (
 	// the current window's lifetime.
 	DefaultGPSMismatchClearThreshold = 3
 
-	// itlReason* are the values set on VariantCapacity.Reason by resolveITLModel.
-	// They appear in the "analyzer-result" structured log line.
+	// itlReason* are the values set on VariantCapacity.Reason. The first four are
+	// set by resolveITLModel; itlReasonScaleFromZero is set by the scale-from-zero
+	// complement. They appear in the "analyzer-result" structured log line.
 	itlReasonT1OLS     = "T1-ols"     // tier-1: OLS fit from live observations
 	itlReasonT2Default = "T2-default" // tier-2: constrained OLS with default B baseline
 	itlReasonT2Pinned  = "T2-pinned"  // tier-2: constrained OLS with previously fitted B
 	itlReasonT2Failed  = "T2-failed"  // all paths exhausted; no model for this cycle
+	// itlReasonScaleFromZero marks the PRC-only VariantCapacity emitted for a
+	// previously-live variant now at zero replicas: its per-replica capacity is the
+	// persisted last-good value, not a fresh fit. Not produced by resolveITLModel.
+	itlReasonScaleFromZero = "T-sfz"
 )

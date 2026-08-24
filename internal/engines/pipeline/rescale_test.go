@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -146,5 +148,30 @@ var _ = Describe("roleDemandGPUs", func() {
 			"A-v": {VariantName: "A-v", GPUsPerReplica: 1},
 		}
 		Expect(roleDemandGPUs(sat, stateMap, "A100", domain.RoleBoth)).To(Equal(9))
+	})
+})
+
+var _ = Describe("rescaleModelDecisions", func() {
+	// applyRescale drops anchor-less requests before grouping, so production never
+	// reaches this function with a nil anchor. The guard exists because the anchor
+	// is derived per call rather than read from a stored field, and now comes back
+	// nil for a stale, non-informative, or ambiguously bound ballot — a far wider
+	// set of inputs than the old "entry absent" case. Pin it directly: without the
+	// guard the next line dereferences the anchor and panics the optimize goroutine.
+	It("returns no decisions instead of panicking when the ballot yields no anchor", func() {
+		o := NewGreedyByScoreOptimizer()
+		free := 4
+
+		var decisions []domain.VariantDecision
+		Expect(func() {
+			// Empty ballot → bindingAnchor returns nil.
+			decisions = o.rescaleModelDecisions(
+				context.Background(),
+				ModelScalingRequest{ModelID: "A", Namespace: "ns"},
+				"A100", 8, &free,
+			)
+		}).NotTo(Panic())
+		Expect(decisions).To(BeEmpty())
+		Expect(free).To(Equal(4), "a request with no anchor must not consume the cycle's free GPUs")
 	})
 })

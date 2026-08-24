@@ -132,6 +132,10 @@ var _ = Describe("validITLModel", func() {
 		Expect(validITLModel(0.073, math.NaN())).To(BeFalse())
 	})
 
+	It("rejects Inf B", func() {
+		Expect(validITLModel(0.073, math.Inf(1))).To(BeFalse())
+	})
+
 	It("rejects a non-positive ITL at saturation", func() {
 		// A*DefaultKSat + B <= 0 with a valid positive A.
 		Expect(validITLModel(0.01, -1.0)).To(BeFalse())

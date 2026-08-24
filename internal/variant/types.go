@@ -145,6 +145,11 @@ const (
 	ReasonInvalidConfiguration = "InvalidConfiguration"
 	// ReasonSkippedProcessing indicates VA was skipped during processing
 	ReasonSkippedProcessing = "SkippedProcessing"
+	// ReasonOptimizationRefused indicates the engine declined to run the configured
+	// optimize path at all, so replicas are held at their last-good value. Unlike
+	// ReasonOptimizationSucceeded with no scaling change, this is a standing state
+	// that persists until the configuration is corrected.
+	ReasonOptimizationRefused = "OptimizationRefused"
 
 	// ReasonTargetFound indicates the scale target was successfully resolved
 	ReasonTargetFound = "TargetFound"

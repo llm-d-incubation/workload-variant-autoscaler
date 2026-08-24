@@ -837,6 +837,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Score:     1.0, // explicit: mirrors engine-populated value
 						Remaining: rA.RequiredCapacity,
 						Spare:     rA.SpareCapacity,
+						Enabled:   true,
+						Live:      true,
 					}},
 					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "a-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
@@ -852,6 +854,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Score:     1.0, // explicit: mirrors engine-populated value
 						Remaining: rB.RequiredCapacity,
 						Spare:     rB.SpareCapacity,
+						Enabled:   true,
+						Live:      true,
 					}},
 					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
@@ -907,6 +911,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 							Result:    rA,
 							Score:     1.0,
 							Remaining: rA.RequiredCapacity,
+							Enabled:   true,
+							Live:      true,
 						},
 						{
 							Name:  "throughput",
@@ -915,6 +921,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 							// its RC signal adds to the fair-share weight.
 							Result:    &domain.AnalyzerResult{RequiredCapacity: 20000},
 							Remaining: 20000,
+							Enabled:   true,
+							Live:      true,
 						},
 					},
 					VariantStates: []domain.VariantReplicaState{
@@ -930,6 +938,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Result:    rB,
 						Score:     1.0,
 						Remaining: rB.RequiredCapacity,
+						Enabled:   true,
+						Live:      true,
 					}},
 					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "b-v1", CurrentReplicas: 1, GPUsPerReplica: 2},
@@ -1321,6 +1331,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Score:     1.0,
 						Remaining: r.RequiredCapacity,
 						Spare:     r.SpareCapacity,
+						Enabled:   true,
+						Live:      true,
 					}},
 					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "pf", CurrentReplicas: 2, GPUsPerReplica: 2},
@@ -1371,6 +1383,8 @@ var _ = Describe("GreedyByScoreOptimizer", func() {
 						Score:     1.0,
 						Remaining: r.RequiredCapacity,
 						Spare:     r.SpareCapacity,
+						Enabled:   true,
+						Live:      true,
 					}},
 					VariantStates: []domain.VariantReplicaState{
 						{VariantName: "pf", CurrentReplicas: 1, GPUsPerReplica: 2},

@@ -251,20 +251,28 @@ throughput, SLO) can be plugged in without the engine package knowing the
 concrete type. Each cycle the engine iterates every registered analyzer in
 registration order and invokes its `Analyze` method.
 
-> **Scope note.** Saturation drives every scaling decision on its own.
-> Non-saturation analyzers are registered and invoked, but their results
-> are **not yet consumed** — combine semantics and per-analyzer score
-> consumption land in a follow-up PR (`multi-analyzer-optimizer`). The
-> hooks below are wired so that follow-up can hang its behavior off them
-> without further engine changes.
+> **Scope note.** Saturation drives scaling decisions only when it votes. The
+> engine runs every enabled analyzer and derives the decision anchor on demand
+> from the ballot, so three configurations follow from the `analyzers` list
+> alone:
+> - *default* (no `analyzers` list) → saturation is the sole voter and binder;
+>   behavior is unchanged from single-analyzer operation.
+> - `[saturation, throughput]` → both vote; saturation binds the anchor.
+> - `[throughput]` only → throughput binds the anchor; saturation still runs as
+>   the identity/(a) carrier but does not vote.
+>
+> Saturation always runs to supply per-variant identity metadata regardless of
+> which config is active; what the `analyzers` list changes is whether it
+> *votes*.
 
 ### Registering Analyzers
 
 Pre-registered:
 
 - The V2 saturation analyzer is pre-registered by `NewEngine` under
-  `interfaces.SaturationAnalyzerName`. It always runs and drives the
-  optimizer.
+  `interfaces.SaturationAnalyzerName`. It always runs — supplying the
+  identity/(a) carrier — but drives the optimizer only when it votes (the
+  default config, or when its name is enabled).
 
 External analyzers are registered from `cmd/main.go` via:
 
@@ -453,13 +461,18 @@ The asymmetry — anticipated supply for scale-up, steady-state `TotalSupply` fo
 
 **Per-analyzer threshold overrides.** `analyzers[].scaleUpThreshold` / `analyzers[].scaleDownBoundary` are resolved per analyzer: a per-entry override takes precedence over the model-level global. The resolved pair is applied uniformly at model level and every role for that analyzer. An opt-out flag for analyzers with non-universal calibration math is deferred to a follow-up.
 
-### Saturation Always Runs
+### Saturation as the Identity Carrier
 
-The saturation analyzer executes on every cycle regardless of any future
-`enabled` flag — its `VariantCapacities` carry `Cost` and `AcceleratorName`
-required by the optimizer for variant selection and GPU accounting. On
-this branch saturation's `RequiredCapacity` and `SpareCapacity` are the
-only signals the optimizer consumes.
+The saturation analyzer executes on every cycle regardless of the `analyzers`
+config — its `VariantCapacities` carry the (a)/identity fields (`Cost`,
+`AcceleratorName`, `Role`, replica counts) the optimizer needs for variant
+selection and GPU accounting, for every configured variant including those at
+zero replicas. Running is unconditional; *voting* is opt-in. Saturation
+contributes its `RequiredCapacity` / `SpareCapacity` to the combine math only
+when it votes — the default single-analyzer config, or when its name is
+enabled. In a `[throughput]`-only config it is present purely as the identity
+carrier: it supplies (a) for the anchor merge but is pruned from the voting
+subset and neither drives scale-up nor vetoes scale-down.
 
 ### Resilience
 

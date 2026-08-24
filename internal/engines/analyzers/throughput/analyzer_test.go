@@ -556,6 +556,32 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(ok).To(BeFalse())
 			Expect(reason).To(Equal(itlReasonT2Failed))
 		})
+
+		It("resolveITLModel returns T2-failed when the computed fit is rejected by validITLModel", func() {
+			// AvgITL below the constant baseline B (DefaultBaselineITLSec = 0.006, default path) at
+			// k=0.5 produces numerator = (0.001 - 0.006) * 0.5 = -0.0025, sumK2 = 0.25 → A = -0.01
+			// (negative, inverted slope) — a real Tier-2 fit is computed (n=1, sumK2>0) but
+			// validITLModel rejects it, unlike the existing "all idle" test which never reaches the
+			// fit at all.
+			belowBaseline := domain.ReplicaMetrics{
+				VariantName: "v1", KvUsageInstant: 0.5, KvCacheUsage: 0.5,
+				AvgITL: 0.001, AvgInputTokens: 5000, AvgOutputTokens: 200,
+				PrefixCacheHitRate: 0.1, TotalKvCapacityTokens: 1024000,
+			}
+			analyzer.Observe(ctx, time.Now(), modelID, namespace, []domain.ReplicaMetrics{belowBaseline})
+
+			_, reason, ok := analyzer.resolveITLModel(ctx,
+				func() *variantState {
+					analyzer.mu.Lock()
+					defer analyzer.mu.Unlock()
+					return analyzer.variantStates[variantKey(namespace, modelID, "v1")]
+				}(),
+				[]domain.ReplicaMetrics{belowBaseline},
+				namespace, modelID, "v1",
+			)
+			Expect(ok).To(BeFalse())
+			Expect(reason).To(Equal(itlReasonT2Failed))
+		})
 	})
 
 	Describe("Analyze — idle replicas produce no signal", func() {
@@ -2071,5 +2097,287 @@ var _ = Describe("computeLocalDemand", func() {
 		nanModel := ITLModel{A: math.NaN(), B: 0.006}
 		total := computeLocalDemand([]domain.ReplicaMetrics{replicaAt(0.5)}, shape, nanModel)
 		Expect(total).To(Equal(0.0))
+	})
+
+	It("skips a replica with non-positive TotalKvCapacityTokens", func() {
+		// Negative, not zero: the accumulated term is KvUsageInstant × capacity / KVreq / ITL, so
+		// a zero capacity contributes 0 whether or not the guard fires. Only a negative capacity
+		// makes the unguarded contribution non-zero, so only it pins the skip.
+		noCapacity := replicaAt(0.5)
+		noCapacity.TotalKvCapacityTokens = -65536
+		total := computeLocalDemand([]domain.ReplicaMetrics{noCapacity}, shape, model)
+		Expect(total).To(Equal(0.0))
+	})
+
+	It("skips a replica whose model produces a finite non-positive ITL", func() {
+		// B negative enough that A*k+B <= 0 at k=0.5 without A or B being NaN/Inf —
+		// distinct from the existing NaN-ITL case, which uses a NaN model coefficient.
+		negativeITLModel := ITLModel{A: 0.01, B: -0.1}
+		Expect(negativeITLModel.ITLAt(0.5)).To(BeNumerically("<=", 0), "fixture sanity check")
+		total := computeLocalDemand([]domain.ReplicaMetrics{replicaAt(0.5)}, shape, negativeITLModel)
+		Expect(total).To(Equal(0.0))
+	})
+})
+
+var _ = Describe("computeVariantSupply", func() {
+	shape := WorkloadShape{KVreq: 1024}
+	const itlSat = 0.05
+
+	replicaWithCap := func(capTokens int64) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{TotalKvCapacityTokens: capTokens}
+	}
+
+	It("aggregates supply across KV-capable replicas", func() {
+		// Differing capacities keep perReplica from being a copy of total, and the third replica
+		// carries no KV capacity so nKV (2) differs from len(metrics) (3) — that is what pins the
+		// mean to the KV-capable count rather than to the replica count.
+		total, perReplica, nKV := computeVariantSupply(
+			[]domain.ReplicaMetrics{replicaWithCap(65536), replicaWithCap(131072), replicaWithCap(0)},
+			shape, itlSat)
+		Expect(nKV).To(Equal(2))
+		// Σ_r DefaultKSat × KV_max_r / KVreq / itlSat over the KV-capable replicas.
+		Expect(total).To(BeNumerically("~", DefaultKSat*(65536+131072)/shape.KVreq/itlSat, 1e-6))
+		Expect(perReplica).To(BeNumerically("~", total/2, 1e-9))
+	})
+
+	It("skips a replica with non-positive TotalKvCapacityTokens", func() {
+		total, perReplica, nKV := computeVariantSupply(
+			[]domain.ReplicaMetrics{replicaWithCap(0)}, shape, itlSat)
+		Expect(nKV).To(Equal(0))
+		Expect(total).To(Equal(0.0))
+		Expect(perReplica).To(Equal(0.0))
+	})
+})
+
+// Test 7 — scale-from-zero PRC-only complement.
+//
+// Analyze()'s primary per-variant loop keys off live ReplicaMetrics, so a variant
+// that has dropped to zero replicas produces no rows and would silently vanish from
+// the capacity ballot. The scale-from-zero complement re-emits a PRC-only
+// VariantCapacity for a *previously-live* variant, carrying its persisted last-good
+// per-replica supply. A never-seen variant (no persisted supply) emits nothing, and
+// once idle-window eviction drops the persisted state the variant degrades back to
+// the never-seen case on its own.
+var _ = Describe("ThroughputAnalyzer — scale-from-zero PRC-only complement", func() {
+	const (
+		il     = 5000.0
+		ol     = 200.0
+		prefix = 0.1
+		kvMax  = int64(1024000)
+		A      = 0.073
+		B      = 0.006
+	)
+	// 10 points spanning [0.20, 0.65], spread 0.45 ≥ DefaultMinKSpread: OLS-ready.
+	kValues := []float64{0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
+
+	var (
+		analyzer  *ThroughputAnalyzer
+		ctx       context.Context
+		modelID   string
+		namespace string
+	)
+
+	BeforeEach(func() {
+		analyzer = NewThroughputAnalyzer()
+		ctx = context.Background()
+		modelID = "llama3-8b"
+		namespace = "default"
+	})
+
+	// liveReplica drives a single healthy replica at k=0.50 so a live Analyze cycle
+	// computes and persists a positive last-good per-replica supply for the variant.
+	liveReplica := func(variant string, arrivalRate float64) domain.ReplicaMetrics {
+		const k = 0.50
+		return domain.ReplicaMetrics{
+			VariantName:           variant,
+			KvCacheUsage:          k,
+			KvUsageInstant:        k,
+			AvgITL:                A*k + B,
+			AvgInputTokens:        il,
+			AvgOutputTokens:       ol,
+			PrefixCacheHitRate:    prefix,
+			TotalKvCapacityTokens: kvMax,
+			ArrivalRate:           arrivalRate,
+		}
+	}
+
+	// makePreviouslyLive runs one OLS-ready live Analyze cycle for the variant so the
+	// analyzer persists a positive lastPerReplicaSupply, and returns that value.
+	makePreviouslyLive := func(variant string) float64 {
+		injectWindowObs(analyzer, ctx, modelID, namespace, variant, il, ol, prefix, kvMax, B, kValues)
+		_, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+			ModelID:        modelID,
+			Namespace:      namespace,
+			ReplicaMetrics: []domain.ReplicaMetrics{liveReplica(variant, 5)},
+			ArrivalRate:    5,
+			VariantStates:  []domain.VariantReplicaState{{VariantName: variant, CurrentReplicas: 1, Role: domain.RoleBoth}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		st, ok := analyzer.VariantState(modelID, namespace, variant)
+		Expect(ok).To(BeTrue())
+		Expect(st.PerReplicaSupply).To(BeNumerically(">", 0))
+		return st.PerReplicaSupply
+	}
+
+	// analyzeAtZero runs an Analyze cycle with the named variants present only in
+	// VariantStates at zero live replicas (no ReplicaMetrics rows).
+	analyzeAtZero := func(variants ...string) *domain.AnalyzerResult {
+		states := make([]domain.VariantReplicaState, 0, len(variants))
+		for _, v := range variants {
+			states = append(states, domain.VariantReplicaState{VariantName: v, CurrentReplicas: 0, Role: domain.RoleBoth})
+		}
+		result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+			ModelID:       modelID,
+			Namespace:     namespace,
+			VariantStates: states,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		return result
+	}
+
+	capFor := func(result *domain.AnalyzerResult, variant string) (domain.VariantCapacity, bool) {
+		for _, vc := range result.VariantCapacities {
+			if vc.VariantName == variant {
+				return vc, true
+			}
+		}
+		return domain.VariantCapacity{}, false
+	}
+
+	It("re-emits a PRC-only capacity carrying the persisted supply for a previously-live variant now at zero replicas", func() {
+		persisted := makePreviouslyLive("v1")
+
+		result := analyzeAtZero("v1")
+
+		vc, ok := capFor(result, "v1")
+		Expect(ok).To(BeTrue())
+		Expect(vc.PerReplicaCapacity).To(BeNumerically("~", persisted, 1e-9))
+		Expect(vc.Reason).To(Equal(itlReasonScaleFromZero))
+		// PRC only: identity fields (Cost/AcceleratorName/ReplicaCount) are the anchor
+		// merge's job to source from the saturation analyzer, not TA's. Role is the
+		// exception — it is consumed by the role aggregation inside this same Analyze
+		// call, before any merge, so TA must carry it.
+		Expect(vc.Cost).To(Equal(0.0))
+		Expect(vc.AcceleratorName).To(Equal(""))
+		Expect(vc.Role).To(Equal(domain.RoleBoth))
+		Expect(vc.ReplicaCount).To(Equal(0))
+	})
+
+	It("emits nothing for a never-seen variant with no persisted supply", func() {
+		// v2 is present in VariantStates but was never analyzed live.
+		result := analyzeAtZero("v2")
+		_, ok := capFor(result, "v2")
+		Expect(ok).To(BeFalse())
+	})
+
+	It("degrades a previously-live variant to the never-seen (no-emission) case after idle-window eviction", func() {
+		makePreviouslyLive("v1")
+
+		// Advance the analyzer clock past 2×DefaultObservationMaxAge with an empty
+		// Observe: the eviction sweep drops v1's persisted state.
+		analyzer.Observe(ctx, time.Now().Add(2*DefaultObservationMaxAge+time.Minute), modelID, namespace, nil)
+		_, stillThere := analyzer.VariantState(modelID, namespace, "v1")
+		Expect(stillThere).To(BeFalse())
+
+		// A subsequent zero-replica cycle now sees v1 as never-seen → no emission.
+		result := analyzeAtZero("v1")
+		_, ok := capFor(result, "v1")
+		Expect(ok).To(BeFalse())
+	})
+
+	// A scale-from-zero entry on a disaggregated model must carry its real role.
+	// distributeDemandByRole and aggregateRoleCapacities both canonicalize an empty
+	// role to domain.RoleBoth, and they run on this same slice inside Analyze —
+	// before any anchor merge could fill the role in. A blank-role entry therefore
+	// manufactures a "both" bucket alongside prefill/decode, which (a) splits the
+	// model-level decode demand across one more role than exists, and (b) leaves the
+	// paired allocator with a role no anchor variant can satisfy.
+	Context("on a disaggregated (P/D) model", func() {
+		// makePreviouslyLiveWithRole is makePreviouslyLive for a variant whose role is
+		// not "both", so the persisted state carries that role into the zero cycle.
+		makePreviouslyLiveWithRole := func(variant, role string) {
+			injectWindowObs(analyzer, ctx, modelID, namespace, variant, il, ol, prefix, kvMax, B, kValues)
+			_, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []domain.ReplicaMetrics{liveReplica(variant, 5)},
+				ArrivalRate:    5,
+				VariantStates:  []domain.VariantReplicaState{{VariantName: variant, CurrentReplicas: 1, Role: role}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			st, ok := analyzer.VariantState(modelID, namespace, variant)
+			Expect(ok).To(BeTrue())
+			Expect(st.PerReplicaSupply).To(BeNumerically(">", 0))
+		}
+
+		It("emits the persisted role, so a zero-replica decode variant does not manufacture a phantom 'both' bucket", func() {
+			makePreviouslyLiveWithRole("v-decode", domain.RoleDecode)
+			makePreviouslyLiveWithRole("v-prefill", domain.RolePrefill)
+
+			// v-prefill stays live; v-decode drops to zero replicas this cycle.
+			result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+				ModelID:        modelID,
+				Namespace:      namespace,
+				ReplicaMetrics: []domain.ReplicaMetrics{liveReplica("v-prefill", 5)},
+				ArrivalRate:    5,
+				VariantStates: []domain.VariantReplicaState{
+					{VariantName: "v-decode", CurrentReplicas: 0, Role: domain.RoleDecode},
+					{VariantName: "v-prefill", CurrentReplicas: 1, Role: domain.RolePrefill},
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			vc, ok := capFor(result, "v-decode")
+			Expect(ok).To(BeTrue())
+			Expect(vc.Reason).To(Equal(itlReasonScaleFromZero))
+			Expect(vc.Role).To(Equal(domain.RoleDecode))
+
+			// The role breakdown stays exactly {prefill, decode} — no "both" key.
+			Expect(result.RoleCapacities).NotTo(BeNil())
+			Expect(result.RoleCapacities).To(HaveKey(domain.RoleDecode))
+			Expect(result.RoleCapacities).NotTo(HaveKey(domain.RoleBoth))
+		})
+
+		It("does not dilute per-role decode demand when a decode variant is at zero replicas", func() {
+			makePreviouslyLiveWithRole("v-decode-a", domain.RoleDecode)
+			makePreviouslyLiveWithRole("v-decode-b", domain.RoleDecode)
+			makePreviouslyLiveWithRole("v-prefill", domain.RolePrefill)
+
+			analyzeWith := func(states []domain.VariantReplicaState, live []domain.ReplicaMetrics) *domain.AnalyzerResult {
+				result, err := analyzer.Analyze(ctx, domain.AnalyzerInput{
+					ModelID:        modelID,
+					Namespace:      namespace,
+					ReplicaMetrics: live,
+					ArrivalRate:    5,
+					VariantStates:  states,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				return result
+			}
+
+			// Baseline: only the live decode variant is configured at all.
+			baseline := analyzeWith(
+				[]domain.VariantReplicaState{
+					{VariantName: "v-decode-a", CurrentReplicas: 1, Role: domain.RoleDecode},
+					{VariantName: "v-prefill", CurrentReplicas: 1, Role: domain.RolePrefill},
+				},
+				[]domain.ReplicaMetrics{liveReplica("v-decode-a", 5), liveReplica("v-prefill", 5)},
+			)
+
+			// Same traffic, but a second decode variant sits at zero replicas. It joins
+			// the decode role rather than adding a role, so decode's share is unchanged.
+			withZero := analyzeWith(
+				[]domain.VariantReplicaState{
+					{VariantName: "v-decode-a", CurrentReplicas: 1, Role: domain.RoleDecode},
+					{VariantName: "v-decode-b", CurrentReplicas: 0, Role: domain.RoleDecode},
+					{VariantName: "v-prefill", CurrentReplicas: 1, Role: domain.RolePrefill},
+				},
+				[]domain.ReplicaMetrics{liveReplica("v-decode-a", 5), liveReplica("v-prefill", 5)},
+			)
+
+			Expect(baseline.RoleCapacities[domain.RoleDecode].TotalDemand).To(BeNumerically(">", 0))
+			Expect(withZero.RoleCapacities[domain.RoleDecode].TotalDemand).To(
+				BeNumerically("~", baseline.RoleCapacities[domain.RoleDecode].TotalDemand, 1e-9))
+		})
 	})
 })

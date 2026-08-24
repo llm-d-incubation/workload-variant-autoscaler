@@ -37,8 +37,8 @@ over it via shared free functions in `internal/engines/pipeline/`.
                            ▼
 ┌──────────────────────────────────────────────────────────┐
 │ Engine: run analyzers, build per-analyzer slice          │
-│ Saturation V2 (always first), then each registered       │
-│ non-saturation analyzer in registration order:           │
+│ Saturation V2 (always run — the (a)/identity carrier),   │
+│ then each registered non-saturation analyzer:            │
 │   • skip if Enabled:false                                │
 │   • Analyze(ctx, input) → *AnalyzerResult                │
 │   • applyUniversalThreshold(result, scaleUp, scaleDown)  │
@@ -161,9 +161,15 @@ no entry at all does not run and is not included in the result slice,
 exactly as if `enabled: false` had been set. This prevents a
 registered-but-unconfigured analyzer from returning `SpareCapacity=0` and
 silently vetoing scale-down, since the per-role scale-down decision requires
-every analyzer in the slice to agree. Saturation is exempt from this gate —
-it is always run, independent of `analyzers` config, because the engine
-identifies it by name before this check applies.
+every voting analyzer in the slice to agree. Saturation is always run
+regardless of `analyzers` config — the engine identifies it by name and
+appends it as the identity/(a) carrier that supplies per-variant metadata
+(`Cost`, `AcceleratorName`, `Role`) for every configured variant. Its *vote*,
+however, is opt-in like any other analyzer's: saturation votes in the combine
+math only in the default single-analyzer config (no explicit `analyzers` list)
+or when its name is explicitly enabled. A `[throughput]`-only config leaves
+saturation present as a non-voting carrier — it is pruned from the voting
+subset (`votingResults`) and neither vetoes nor constrains scale-down.
 
 ---
 
@@ -234,9 +240,14 @@ analyzer-written values are discarded.
 6. Each result is wrapped in a `NamedAnalyzerResult{Name, Result, Score,
    Remaining, Spare}` and appended to the `[]NamedAnalyzerResult` slice.
    `Remaining = RC` and `Spare = SC` after the post-step.
-7. Saturation is always first. Its `VariantCapacities` entries carry `Cost`,
-   `AcceleratorName`, and `Role` used downstream by the optimizer and
-   enforcer.
+7. Saturation supplies the (a)/identity fields. Its `VariantCapacities`
+   entries carry `Cost`, `AcceleratorName`, and `Role` for every configured
+   variant. The optimizer does not read these off the saturation entry
+   directly: the anchor it consumes is a per-variant merge (`bindingAnchor`,
+   derived on demand) that takes the (a) identity fields from saturation and
+   the (b) sizing fields (`PerReplicaCapacity`, demand) from whichever
+   analyzer binds — saturation when it votes, otherwise the sole enabled
+   non-saturation analyzer. Slice position is not significant.
 
 ---
 
@@ -282,17 +293,23 @@ capacity — so this reason-based check, not an engine-level error signal, is
 what actually detects a durably-broken analyzer.
 
 Within the multi-analyzer engine path (`runAnalyzersAndScore`), this
-liveness filter applies uniformly to every registered analyzer, including
+liveness filter applies uniformly to every *voting* analyzer, including
 saturation's own token-capacity signal — there is no name-based exemption
-inside the scale-down gate. (Saturation's separate role as the shared
-metrics-collection layer — cache size, replica cost, etc., feeding every
-analyzer and the cost optimizer — is unaffected; that collection either
-succeeds for everyone or, if it fails, every analyzer ends up non-live and
-the safety floor below applies.) The queueing-model optimize path
-(`optimizeQueueingModel`) is a separate, older code path that does not yet
-run through this liveness tracking; its `NamedAnalyzerResult` sets `Live:
-true` statically so it keeps scaling down as before. It will pick up real
-liveness tracking when it becomes a first-class multi-analyzer participant.
+inside the scale-down gate. The gate runs over the voting subset
+(`votingResults`, the ballot entries whose analyzer is enabled this cycle):
+saturation is subject to it exactly when it votes (default single-analyzer
+config, or when its name is explicitly enabled), and a non-voting saturation
+carrier is excluded from the vote just like any other disabled analyzer.
+(Saturation's separate role as the shared metrics-collection layer — cache
+size, replica cost, etc., feeding every analyzer and the cost optimizer — is
+unaffected; that collection either succeeds for everyone or, if it fails,
+every analyzer ends up non-live and the safety floor below applies.) The
+queueing-model optimize path is no longer dispatched: when a queueing-model
+ConfigMap is present the engine refuses that path — it logs an error and holds
+each model at its last-good replica count for the cycle rather than running
+the older, un-tracked optimizer. The path's code is retained but parked;
+re-enabling it is a separate follow-up that would make the queueing model a
+first-class, liveness-tracked multi-analyzer participant.
 
 Liveness reflects whether an analyzer has a current *capacity* (supply-side)
 signal — it does not gate on the *demand* signal. A falsely-low demand value
@@ -327,10 +344,46 @@ apply to scale-up — a non-live analyzer contributes `Remaining == 0`
 (from `RequiredCapacity == 0`), which is already harmless to the max-across-
 analyzers formula.
 
-The saturation entry in the slice is also the keeper of per-variant metadata
-(`Cost`, `AcceleratorName`, `Role`) that the optimizer reads from
-`VariantCapacities`. Future work will extract per-variant metadata collection
-out of the saturation result so each analyzer owns only its own signals.
+The optimizer never reads per-variant metadata straight off the saturation
+entry. It consumes an **anchor** built on demand by `bindingAnchor`: a fresh,
+per-variant `AnalyzerResult` merged by `VariantName` from the (a)/identity
+fields (`Cost`, `AcceleratorName`, `Role`, replica counts) that saturation
+supplies for every configured variant, plus the (b)/sizing fields
+(`PerReplicaCapacity`, demand) from whichever analyzer binds. Nothing is
+stored — the merge is recomputed each time it is needed — and when nothing
+can bind (an empty ballot, no enabled-and-live-and-informative analyzer, or an
+ambiguous set of binding candidates) `bindingAnchor` returns `nil` and the
+optimizer holds that model unchanged for the cycle.
+
+### Scale-from-zero and zero-replica variants
+
+The throughput analyzer computes per-replica capacity from *live* replica
+metrics, so a variant that has scaled to zero produces no capacity row and
+would drop out of the anchor merge — leaving it unselectable for a proactive
+scale-up. To keep a returning variant selectable, the throughput analyzer
+emits a per-replica-capacity-only fallback (`Reason: "T-sfz"`) for any variant
+it observed live earlier, carrying that variant's persisted last-good
+per-replica supply. It emits only the (b)/sizing field: `Cost`,
+`AcceleratorName`, and `Role` remain saturation's (a)/identity, supplied
+through the merge. A variant the throughput analyzer has never seen gets no
+fallback — its `PerReplicaCapacity` stays zero and it is not proactively
+selectable; the reactive `scalefromzero` engine still covers genuine
+cold-starts. The persisted supply self-expires on the analyzer's idle window
+(the observation-max-age eviction, ~60 min), so a long-idle variant degrades
+back to the never-seen case on its own.
+
+**Known limitation.** `Cost` always comes from saturation's (a)/identity, and
+saturation reports `Cost = 0` for a variant currently at zero replicas. A
+returning variant therefore has a cost-efficiency of `0 / PerReplicaCapacity`
+and ranks cheapest, so the cost optimizer picks it first on scale-up. This is
+a pre-existing saturation behavior — it affects every config with a returning
+zero-replica variant, and resolving it means fixing that separate saturation
+`Cost = 0` behavior, which is out of scope here. Scale-from-zero still
+functions (the variant is selected, if eagerly); only cost *priority* is
+affected. Because no cooldown or grace period exists in the cost optimizer,
+the choice can flap while load oscillates across the scale-up/scale-down
+boundary, or persist as a costlier-than-ideal allocation while load stays
+high. That flapping gap is pre-existing and not introduced by this mechanism.
 
 ---
 

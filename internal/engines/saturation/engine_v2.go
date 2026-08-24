@@ -92,9 +92,13 @@ const analyzerLivenessStaleCycles = 3
 //
 // The engine applies applyUniversalThreshold to every analyzer (saturation and
 // all registered non-saturation analyzers) and collects the calibrated results
-// into a per-analyzer slice returned to the optimizer. Saturation is always the
-// first entry; it is the keeper of per-variant metadata (Cost, AcceleratorName,
-// Role) until a future pre-analysis-extraction PR separates that concern.
+// into a per-analyzer slice returned to the optimizer. Each entry is tagged with
+// its enablement (Enabled — whether it votes in the combine RC/SC math this
+// cycle) and liveness (Live). Order is not significant: the anchor is derived on
+// demand from the ballot (bindingAnchor), and combine math consumes only the
+// voting subset (votingResults). Saturation is always appended as the
+// identity/(a) carrier — it supplies per-variant metadata (Cost, AcceleratorName,
+// Role) for every configured variant — but it votes only when enabled.
 func (e *Engine) runAnalyzersAndScore(
 	ctx context.Context,
 	modelID, namespace string,
@@ -145,8 +149,32 @@ func (e *Engine) runAnalyzersAndScore(
 		ArrivalRate:    arrivalRate,
 	}
 
-	// Collect per-analyzer results. Saturation is first; each non-saturation
-	// analyzer is run, calibrated with its resolved thresholds, and appended.
+	// Whether saturation votes in the combine (RC/SC) math this cycle. It always
+	// votes in the default single-analyzer config (no explicit analyzer list) and
+	// otherwise votes only when its name is enabled. When it does not vote it is
+	// still appended below as the identity/(a) carrier — present in the ballot,
+	// but pruned from the voting subset by votingResults.
+	satVotes := len(config.Analyzers) == 0 || effectiveEnabled(domain.SaturationAnalyzerName, config)
+
+	// An explicit analyzer list that omits saturation is a supported configuration,
+	// but it is also a real change in safety posture and easy to arrive at without
+	// meaning to. Saturation stops contributing to the combine, so it can no longer
+	// veto a scale-down: a demand-driven analyzer reading zero demand (EPP not
+	// scraped for a window, say) will shed replicas with nothing holding it back,
+	// even while saturation itself sees KV cache near capacity. Say so plainly
+	// rather than leaving it to the docs.
+	if !satVotes {
+		logger.Info("saturation analyzer is absent from the configured analyzer list: it will not vote and cannot veto scale-down for this model",
+			"modelID", modelID,
+			"namespace", namespace,
+		)
+	}
+
+	// Collect per-analyzer results. Each entry carries its Enabled tag; order is
+	// not significant. Saturation is appended first purely as a code artifact (it
+	// is the (a) carrier), tagged Enabled: satVotes; each enabled non-saturation
+	// analyzer is run, calibrated with its resolved thresholds, and appended
+	// tagged Enabled: true.
 	namedResults = []pipeline.NamedAnalyzerResult{{
 		Name:              domain.SaturationAnalyzerName,
 		Result:            baseResult,
@@ -155,9 +183,13 @@ func (e *Engine) runAnalyzersAndScore(
 		Spare:             baseResult.SpareCapacity,
 		ScaleUpThreshold:  satUp,
 		ScaleDownBoundary: satDown,
+		Enabled:           satVotes,
 	}}
 	for _, entry := range e.analyzersSnapshot {
 		if entry.name == domain.SaturationAnalyzerName {
+			// Reuse guard, not a decision gate: saturation is already appended
+			// above (as the (a) carrier). Its vote is decided by satVotes there,
+			// not by skipping it here.
 			continue
 		}
 		if !effectiveEnabled(entry.name, config) {
@@ -177,6 +209,7 @@ func (e *Engine) runAnalyzersAndScore(
 			Spare:             result.SpareCapacity,
 			ScaleUpThreshold:  up,
 			ScaleDownBoundary: down,
+			Enabled:           true,
 		})
 	}
 	e.updateLivenessAndSetLive(ctx, namespace, modelID, namedResults)
@@ -391,8 +424,10 @@ func resolveThresholds(analyzerName string, cfg config.SaturationScalingConfig) 
 // not yet defaulted). An analyzer registered in code but ABSENT from cfg.Analyzers
 // does NOT participate — this prevents a registered-but-unconfigured analyzer (e.g.
 // throughput) from returning SpareCapacity=0 and silently vetoing scale-down.
-// Saturation is exempt: it is guarded by the SaturationAnalyzerName check upstream
-// (engine_v2.go ~L136) before effectiveEnabled is ever called.
+// Saturation is handled separately: it is always appended as the identity/(a)
+// carrier, and whether it votes is decided by satVotes, which consults this
+// function for the saturation name. The per-analyzer loop skips the saturation
+// name as a reuse guard (so it is not appended twice), not as a decision gate.
 func effectiveEnabled(analyzerName string, cfg config.SaturationScalingConfig) bool {
 	for _, aw := range cfg.Analyzers {
 		if aw.EffectiveType() == analyzerName {
@@ -499,21 +534,26 @@ func applyUniversalThreshold(r *domain.AnalyzerResult, scaleUp, scaleDown float6
 func computeCurrentGPUUsage(requests []pipeline.ModelScalingRequest) map[string]int {
 	usage := make(map[string]int)
 	for _, req := range requests {
-		var satEntry *domain.AnalyzerResult
+		// The saturation result is the per-variant identity carrier (VariantName,
+		// AcceleratorName, topology) and is present in every ballot even when
+		// saturation does not vote. Current physical GPU usage is a topology lookup
+		// (CurrentReplicas × GPUs-per-replica), not a voting or ordering decision, so
+		// it reads that carrier directly by name.
+		var satCarrier *domain.AnalyzerResult
 		for _, e := range req.AnalyzerResults {
 			if e.Name == domain.SaturationAnalyzerName {
-				satEntry = e.Result
+				satCarrier = e.Result
 				break
 			}
 		}
-		if satEntry == nil {
+		if satCarrier == nil {
 			continue
 		}
 		stateMap := make(map[string]domain.VariantReplicaState, len(req.VariantStates))
 		for _, s := range req.VariantStates {
 			stateMap[s.VariantName] = s
 		}
-		for _, vc := range satEntry.VariantCapacities {
+		for _, vc := range satCarrier.VariantCapacities {
 			state := stateMap[vc.VariantName]
 			gpusPerReplica := state.GPUsPerReplica
 			if gpusPerReplica <= 0 {
@@ -538,21 +578,23 @@ func computeCurrentGPUUsageByNamespace(requests []pipeline.ModelScalingRequest) 
 			perType = make(map[string]int)
 			usage[req.Namespace] = perType
 		}
-		var satEntry *domain.AnalyzerResult
+		// Topology lookup of the always-present saturation identity carrier (see
+		// computeCurrentGPUUsage); not a voting or ordering decision.
+		var satCarrier *domain.AnalyzerResult
 		for _, e := range req.AnalyzerResults {
 			if e.Name == domain.SaturationAnalyzerName {
-				satEntry = e.Result
+				satCarrier = e.Result
 				break
 			}
 		}
-		if satEntry == nil {
+		if satCarrier == nil {
 			continue
 		}
 		stateMap := make(map[string]domain.VariantReplicaState, len(req.VariantStates))
 		for _, s := range req.VariantStates {
 			stateMap[s.VariantName] = s
 		}
-		for _, vc := range satEntry.VariantCapacities {
+		for _, vc := range satCarrier.VariantCapacities {
 			state := stateMap[vc.VariantName]
 			gpusPerReplica := state.GPUsPerReplica
 			if gpusPerReplica <= 0 {

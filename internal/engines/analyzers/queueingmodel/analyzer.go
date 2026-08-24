@@ -285,6 +285,12 @@ func (a *QueueingModelAnalyzer) computeAllVariantCapacities(
 			VariantName:     variantName,
 			AcceleratorName: variantAccel[variantName],
 			Cost:            variantCost[variantName],
+			// Role must be carried: consumers canonicalize a blank role to
+			// domain.RoleBoth, which on a disaggregated model collapses prefill and
+			// decode into one bucket and lets the optimizer shed them
+			// interchangeably. This path is parked (the engine refuses to dispatch
+			// it today), so this is here for whoever re-enables it.
+			Role:            variantState.Role,
 			ReplicaCount:    readyCount,
 			PendingReplicas: variantState.PendingReplicas,
 
@@ -386,6 +392,7 @@ func (a *QueueingModelAnalyzer) computeAllVariantCapacities(
 			VariantName:     variantName,
 			AcceleratorName: variantAccel[variantName],
 			Cost:            variantCost[variantName], // TODO: multiply by numReplicas?
+			Role:            variantState.Role,        // see errorVariantCapacity above
 			ReplicaCount:    readyCount,
 			PendingReplicas: variantState.PendingReplicas,
 

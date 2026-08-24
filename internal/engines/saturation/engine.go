@@ -209,10 +209,11 @@ type Engine struct {
 
 	// analyzersSnapshot is the frozen, registration-ordered view that
 	// runAnalyzersAndScore iterates. Built from analyzers in StartOptimizeLoop
-	// before the goroutine launches. Saturation always runs and drives scaling
-	// decisions; other registered analyzers are invoked but their results are
-	// not consumed yet — combine and per-analyzer threshold logic lands in
-	// follow-up PRs.
+	// before the goroutine launches. Saturation always runs to supply the
+	// identity/(a) carrier; each enabled analyzer's result is consumed — it
+	// votes in the combine math and may bind the anchor. Iteration order is not
+	// significant: the anchor is derived on demand and the combine consumes only
+	// the voting subset.
 	analyzersSnapshot []analyzerEntry
 
 	// started transitions to true in StartOptimizeLoop. Late RegisterAnalyzer
@@ -573,9 +574,21 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		attribute.Bool(tracing.AttrScaleToZero, e.Config.ScaleToZeroEnabled()),
 		attribute.Int(tracing.AttrVariantCount, len(activeVAs)),
 	)
+
+	// optimizationRefused marks a cycle in which the engine declined to run the
+	// configured optimize path at all, as opposed to running it and finding nothing
+	// to change. It is threaded into applySaturationDecisions so the held VAs report
+	// the hold instead of reporting a healthy no-op — without it, an operator whose
+	// cluster has stopped autoscaling entirely sees OptimizationReady=True on every
+	// VA and has only the controller log to go on.
+	optimizationRefused := false
 	switch analyzerName {
 	case domain.QueueingModelAnalyzerName:
-		allDecisions = e.optimizeQueueingModel(ctx, modelGroups, currentAllocations)
+		// Refuse the queueing-model path loudly and leave allDecisions empty; the
+		// unconditional applySaturationDecisions below then holds each model at its
+		// last-good replicas and still emits the scaling metric this cycle.
+		e.refuseQueueingModel(ctx, modelGroups)
+		optimizationRefused = true
 	case domain.SaturationAnalyzerName:
 		allDecisions = e.optimizeV2(ctx, modelGroups, currentAllocations)
 	default:
@@ -592,7 +605,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	} else {
 		logger.Info("No scaling decisions to apply, updating VA status with metrics")
 	}
-	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations)
+	e.applySaturationDecisions(ctx, allDecisions, vaMap, currentAllocations, optimizationRefused)
 
 	logger.Info("Optimization completed successfully",
 		"mode", mode,
@@ -642,6 +655,31 @@ func (e *Engine) recordEvent(
 	e.Recorder.Event(va, eventType, reason, message)
 	if e.vaEventTracker != nil {
 		e.vaEventTracker[key] = true
+	}
+}
+
+// optimizationRefusedMessage is the single message used for both the
+// TypeOptimizationReady condition and the K8s event raised when the engine
+// declines to run the configured optimize path. Keeping it a constant (rather
+// than a per-cycle formatted string) lets the API server's event aggregator
+// collapse repeat emissions into one entry with a rising count.
+const optimizationRefusedMessage = "Optimization refused for the configured analyzer; replicas held at last-good value"
+
+// recordOptimizationRefusedEvent raises the refusal Warning on every variant the
+// engine is holding. It is called from the refusing dispatch path, ahead of
+// applySaturationDecisions, so the refusal wins each VA's one-event-per-cycle
+// budget over lower-priority notices.
+func (e *Engine) recordOptimizationRefusedEvent(
+	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
+) {
+	if e.Recorder == nil {
+		return
+	}
+	for _, modelVAs := range modelGroups {
+		for i := range modelVAs {
+			e.recordEvent(&modelVAs[i], corev1.EventTypeWarning,
+				constants.K8SEventOptimizationRefused, optimizationRefusedMessage)
+		}
 	}
 }
 
@@ -1600,11 +1638,15 @@ func (e *Engine) prepareModelData(
 }
 
 // applySaturationDecisions updates VA status and emits metrics based on Saturation decisions.
+// refused reports that the engine declined to run the configured optimize path this
+// cycle, so an absent decision means "held at last-good replicas", not "ran and found
+// nothing to change"; the two are reported differently on TypeOptimizationReady.
 func (e *Engine) applySaturationDecisions(
 	ctx context.Context,
 	decisions []domain.VariantDecision,
 	vaMap map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	currentAllocations map[string]*domain.Allocation,
+	refused bool,
 ) {
 	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanActuate)
 	span.SetAttributes(
@@ -1678,17 +1720,27 @@ func (e *Engine) applySaturationDecisions(
 			// Fallback for new VAs without prior status or collected metrics:
 			// resolve accelerator from deployment nodeSelector/nodeAffinity or VA label,
 			// and use current deployment replicas as target to avoid unintended scaling.
-			if !constants.IsAcceleratorResolved(acceleratorName) {
+			//
+			// The scale target is consulted whenever EITHER is missing, not only when
+			// the accelerator is unresolved. targetReplicas is still 0 here if the VA
+			// has no prior DesiredOptimizedAlloc — currentAllocations above is never
+			// populated — and emitting a desired-replicas of 0 for a variant we are
+			// merely holding tells KEDA/HPA to scale it to zero. Reading the live
+			// scale target holds it at what it is actually running, including a
+			// legitimate 0.
+			if !constants.IsAcceleratorResolved(acceleratorName) || targetReplicas == 0 {
 				scaleTargetName := updateVa.GetScaleTargetName()
 				if scaleTargetName != "" {
 					var scaleTarget scaletarget.ScaleTargetAccessor
 					var err error
 					if scaleTarget, err = scaletarget.FetchScaleTarget(ctx, e.client, va.Name, va.Spec.ScaleTargetRef.Kind, scaleTargetName, va.Namespace); err == nil {
-						acceleratorName = accel.GetAcceleratorNameFromScaleTarget(&updateVa, scaleTarget)
+						if !constants.IsAcceleratorResolved(acceleratorName) {
+							acceleratorName = accel.GetAcceleratorNameFromScaleTarget(&updateVa, scaleTarget)
+						}
 						if targetReplicas == 0 && scaleTarget.GetReplicas() != nil {
 							targetReplicas = int(*scaleTarget.GetReplicas())
 						}
-					} else {
+					} else if !constants.IsAcceleratorResolved(acceleratorName) {
 						// If scaleTarget fetch fails, try VA label directly
 						acceleratorName = accel.GetAcceleratorNameFromScaleTarget(&updateVa, nil)
 					}
@@ -1741,28 +1793,46 @@ func (e *Engine) applySaturationDecisions(
 		updateVa.Status.Actuation.Applied = false // Reset applied status until Actuator handles it (if needed)
 
 		// Set condition based on decision characteristics (or lack thereof)
-		if hasDecision {
-			switch {
-			case decision.SafetyOverride:
-				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
-					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
-					metav1.ConditionTrue,
-					"SaturationSafetyOverride",
-					"saturation safety override: "+reason)
-			case decision.SaturationOnly:
-				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
-					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
-					metav1.ConditionTrue,
-					"SaturationOnlyMode",
-					fmt.Sprintf("saturation-only decision: %s (target: %d replicas)", reason, targetReplicas))
-			default:
-				llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
-					llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
-					metav1.ConditionTrue,
-					llmdVariantAutoscalingV1alpha1.ReasonOptimizationSucceeded,
-					fmt.Sprintf("Hybrid mode: %s (target: %d replicas)", reason, targetReplicas))
-			}
-		} else {
+		switch {
+		case hasDecision && decision.SafetyOverride:
+			llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
+				llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
+				metav1.ConditionTrue,
+				"SaturationSafetyOverride",
+				"saturation safety override: "+reason)
+		case hasDecision && decision.SaturationOnly:
+			llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
+				llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
+				metav1.ConditionTrue,
+				"SaturationOnlyMode",
+				fmt.Sprintf("saturation-only decision: %s (target: %d replicas)", reason, targetReplicas))
+		case hasDecision:
+			llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
+				llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
+				metav1.ConditionTrue,
+				llmdVariantAutoscalingV1alpha1.ReasonOptimizationSucceeded,
+				fmt.Sprintf("Hybrid mode: %s (target: %d replicas)", reason, targetReplicas))
+		case refused:
+			// The optimize path was refused, so this VA is frozen at its last-good
+			// replica count for as long as the configuration stands, and must not
+			// report the healthy steady-state reason the default arm sets.
+			//
+			// Like every other arm of this switch, the condition is set on a copy
+			// that is discarded at the end of the iteration: variants are
+			// synthesized in-memory, so there is no CRD status to patch and
+			// nothing in the tree reads TypeOptimizationReady back. It is kept
+			// here for consistency with its siblings and for whenever status
+			// reporting is wired up again. The operator-visible half of this
+			// signal is the Warning event, raised by the refusing path itself
+			// (recordOptimizationRefusedEvent) ahead of this loop so it claims
+			// each VA's one-event-per-cycle slot before lesser notices such as an
+			// unresolved accelerator.
+			llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
+				llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,
+				metav1.ConditionFalse,
+				llmdVariantAutoscalingV1alpha1.ReasonOptimizationRefused,
+				optimizationRefusedMessage)
+		default:
 			// No active decision (just refreshing)
 			llmdVariantAutoscalingV1alpha1.SetCondition(&updateVa,
 				llmdVariantAutoscalingV1alpha1.TypeOptimizationReady,

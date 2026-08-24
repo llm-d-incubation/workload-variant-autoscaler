@@ -114,6 +114,7 @@ const (
 	K8SEventMetricsUnavailable                = "MetricsUnavailable"
 	K8SEventScaledToZero                      = "ScaledToZero"
 	K8SEventOptimizationFailed                = "OptimizationFailed"
+	K8SEventOptimizationRefused               = "OptimizationRefused"
 	K8SEventUnattributedReadyPods             = "UnattributedReadyPods"
 	K8SEventThroughputAnalyzerRestartRequired = "ThroughputAnalyzerRestartRequired"
 	EnforcerPolicyTypeScaleToZero             = "scale_to_zero"

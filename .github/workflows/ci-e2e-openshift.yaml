@@ -426,7 +426,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25.x"
+          go-version-file: go.mod
           cache-dependency-path: ./go.sum
       - name: Verify Go toolchain
         run: deploy/ci-e2e-openshift/verify-go-toolchain.sh

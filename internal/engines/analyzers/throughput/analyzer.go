@@ -382,6 +382,45 @@ func (a *ThroughputAnalyzer) Analyze(
 		})
 	}
 
+	// Scale-from-zero complement: the loop above keys off byVariant, which only has
+	// entries for variants with live replicas this cycle, so a variant that has
+	// scaled to zero contributes nothing and is not a selectable candidate. Iterate
+	// the full variant list (input.VariantStates enumerates every configured variant,
+	// zero-replica included) and, for a variant absent from byVariant that TA saw
+	// live before, emit a PRC-only capacity carrying its persisted last-good
+	// per-replica supply. That keeps a previously-live variant proactively selectable
+	// for scale-from-zero without fabricating a baseline for one TA has never sized.
+	// Cost, AcceleratorName, and ReplicaCount are deliberately left unset: they are
+	// identity fields the anchor merge sources from the saturation entry for the same
+	// variant, not values TA is entitled to emit. Role is the exception and must be
+	// carried: this slice is consumed by distributeDemandByRole and
+	// aggregateRoleCapacities below, before any anchor merge runs, and both
+	// canonicalize an empty role to domain.RoleBoth. On a disaggregated model a
+	// blank-role entry would therefore manufacture a phantom "both" bucket — which
+	// dilutes each role's demand share and leaves the paired allocator unable to pick
+	// a variant for it — so the persisted role is emitted, exactly as the live loop
+	// above does. A never-seen variant (no persisted supply) gets nothing, so its
+	// per-replica capacity stays zero and it is not proactively selectable; the
+	// reactive scale-from-zero engine covers genuine cold-starts. Persisted supply
+	// self-expires on the same idle window as the rest of the per-variant state, so a
+	// long-idle variant degrades to the never-seen case.
+	for _, vs := range input.VariantStates {
+		if _, alreadyLive := byVariant[vs.VariantName]; alreadyLive {
+			continue
+		}
+		key := variantKey(input.Namespace, input.ModelID, vs.VariantName)
+		st, ok := a.variantStates[key]
+		if !ok || st.lastPerReplicaSupply <= 0 {
+			continue
+		}
+		variantCapacities = append(variantCapacities, domain.VariantCapacity{
+			VariantName:        vs.VariantName,
+			Role:               st.role,
+			PerReplicaCapacity: st.lastPerReplicaSupply,
+			Reason:             itlReasonScaleFromZero,
+		})
+	}
+
 	// Model-level supply totals computed from the per-variant slice.
 	// TotalAnticipatedSupply is published so the engine's post-step can compute RC/SC.
 	totalSupply := aggregation.SumTotalSupply(variantCapacities)
@@ -522,8 +561,9 @@ func (a *ThroughputAnalyzer) getOrCreateVariantState(key string) *variantState {
 //     k* = 0 (idle) carry no ITL signal and are excluded.
 //
 // When replicas are present but all are idle (k* = 0), both tiers fail and we return (zero, false).
-// A future tier-3 (knowledge store) path for the scale-from-zero case will be added once Analyze()
-// is extended to iterate variants with state but no current replica metrics.
+// A variant that has dropped to zero replicas is handled separately by the scale-from-zero
+// complement in Analyze(), which re-emits the persisted last-good per-replica supply rather than
+// re-deriving an ITL model here; resolveITLModel is only consulted for variants with live replicas.
 //
 // Must be called with a.mu held.
 func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []domain.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, string, bool) {

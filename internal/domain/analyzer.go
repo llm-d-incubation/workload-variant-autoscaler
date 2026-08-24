@@ -148,7 +148,8 @@ type VariantCapacity struct {
 	// variant's per-replica capacity was computed. Empty for analyzers that
 	// do not set it. Saturation V2 uses "P0-store", "P1-obs", "P2-hist",
 	// "P3-k2", "P4-k1", "no-data", "error". Throughput uses "T1-ols",
-	// "T2-pinned", "T2-default", "T2-failed".
+	// "T2-pinned", "T2-default", "T2-failed", and "T-sfz" (scale-from-zero:
+	// persisted last-good per-replica supply for a variant now at zero replicas).
 	Reason string
 
 	// TotalCapacity is ReplicaCount × PerReplicaCapacity.

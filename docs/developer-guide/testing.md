@@ -183,6 +183,113 @@ make test-e2e-full
 
 See the [E2E Test Suite README](../../test/e2e/README.md) for full configuration options and examples.
 
+### Direct KEDA+EPP guide contract
+
+`test-e2e-keda-epp-guide-with-setup` is a narrow, controller-free contract for
+the canonical KEDA+EPP guide in the `llm-d/llm-d` repository. It qualifies an
+optimized-baseline-compatible KEDA+EPP guide topology, not the full
+optimized-baseline behavior. The deploy target
+composes the existing `deploy-e2e-infra` lifecycle with `DEPLOY_WVA=false` and
+`SCALER_BACKEND=keda`; it does not deploy the WVA controller, copy the guide's
+autoscaling resources into this repository, or provide a generic guide runner.
+
+Run the complete fresh-cluster lifecycle with one command:
+
+```bash
+# Optional: materialize the selected revision from a nearby read-only checkout.
+export LLMD_SOURCE=../llm-d
+make test-e2e-keda-epp-guide-with-setup LLMD_SOURCE="${LLMD_SOURCE:-}"
+```
+
+The simulator is CPU-only: its Deployment has no GPU resource request even
+though its canonical guide labels and name describe the NVIDIA GPU variant.
+`CLUSTER_GPUS=0` therefore exercises the contract without a GPU. Never point
+this flow at an existing or shared cluster. The exact current Kind context,
+absence of the guide namespaces, and absence of KEDA are checked before
+deployment; the whole fresh cluster remains the final cleanup guarantee.
+The deploy target installs this guide-owned simulator after the existing
+Prometheus, KEDA, and EPP infrastructure, waits for its single replica to be
+Ready, and only then applies the canonical `TriggerAuthentication` and
+`ScaledObject`. The test observes that pre-created Deployment and deletes it
+during its isolated cleanup.
+
+Current official llm-d `main` is the normal source. At the start of each guide
+setup, the deploy target resolves `main` from the official llm-d repository
+exactly once to a full immutable commit SHA, logs that SHA, and uses only that
+revision for canonical rendering, deployment, and the remainder of the run.
+This intentionally exposes llm-d/WVA drift when a later run selects a newer
+`main` revision.
+
+Set `LLMD_SOURCE_SHA=<full SHA>` only as an explicit pin for reproducibility,
+debugging, compatibility investigation, or temporary stabilization. The pin
+takes precedence over `main` resolution and is not the normal operating mode.
+`LLMD_SOURCE` is optional and never selects a revision: when set, it only
+materializes the already selected commit from that read-only checkout without
+reading or changing its checked-out branch, `HEAD`, local `main`, or tracking
+refs. If the selected object is absent, setup fails rather than falling back to
+another revision. When `LLMD_SOURCE` is empty, the selected immutable commit is
+downloaded into temporary storage.
+
+With either source location, the target layers exactly the current canonical
+router base, optimized-baseline topology, monitoring, and KEDA+EPP queue
+values, followed by one WVA-owned deterministic Kind override. The historical
+WVA v0.8.1 base and optimized-baseline values remain defaults for existing
+callers but do not participate in this guide path. It applies the canonical
+`TriggerAuthentication` and `ScaledObject` through a temporary Kustomize
+overlay. The temporary overlay changes the environment-specific namespace and
+Prometheus endpoint. The canonical trigger queries, thresholds, replica bounds,
+scale target, HPA behavior, and authentication wiring remain unchanged.
+
+The deployed and tested inputs are:
+
+| Input | Required value |
+|-------|----------------|
+| Environment | `kind-emulator` |
+| WVA controller | disabled with `DEPLOY_WVA=false` |
+| llm-d namespace | `llm-d-optimized-baseline` |
+| Prometheus namespace | `workload-variant-autoscaler-monitoring` |
+| KEDA namespace | `keda-system` |
+| EPP Service | `optimized-baseline-epp` |
+| Model | `Qwen/Qwen3-32B` |
+
+For this disposable Kind flow, KEDA `2.20.0` is installed with WVA-owned Kind
+values that mount the Prometheus public CA into the KEDA operator trust
+store. The Prometheus serving key remains only in the monitoring namespace;
+the KEDA operator namespace and `keda-prometheus-auth` Secret receive only the
+public CA. This is a Kind-only TLS compatibility boundary, not production
+authentication guidance and not an OpenShift configuration.
+
+The `keda-epp-guide` job in `.github/workflows/ci-pr-checks.yaml` runs this same
+fresh Kind lifecycle for WVA pull requests. The target selects only Ginkgo label
+`keda-epp-guide`; WVA smoke, scale-from-zero, and controller-dependent specs are
+excluded. The guide spec uses semantically named bounds: 120 seconds for
+simulator readiness, 60 seconds for request startup and probe completion, 90
+seconds for metric observation, 180 seconds for stabilization, and 300 seconds
+for the scale transition. Individual Kubernetes API and bounded log calls use a
+10-second timeout; normal and quick polling use five and two seconds.
+
+The complete request-bearing observation budget has a conservative 20-minute
+cap. Flow Control `defaultRequestTTL`, the simulator response time, and curl
+`--max-time` remain aligned at 1500 seconds (25 minutes), so the stimulus lives
+strictly longer than that cap. Ginkgo is bounded at 65 minutes and Go at 70
+minutes, leaving room for suite preflight and diagnostics. The CI job remains
+bounded at 120 minutes, containing setup, the Go boundary, final diagnostics,
+and fresh-cluster cleanup.
+
+The repository-default Kind image currently uses Kubernetes v1.32. KEDA 2.20 does
+not list Kubernetes v1.32 in its tested compatibility matrix,
+even though KEDA's deployment prerequisites allow Kubernetes 1.30 and newer.
+Treat that pairing as a CI compatibility risk, not as evidence
+of official KEDA support; this lane intentionally does not
+carry an unvalidated Kubernetes v1.33 override.
+
+This contract proves the request → EPP Flow Control → queue/running metrics →
+Prometheus → secure KEDA external metrics → KEDA-owned HPA → Deployment chain
+and one bounded `1 -> 2` transition. It deliberately excludes nightly or
+stable-promotion qualification, sustained or performance load, scale-down,
+post-scale inference, real models, GPUs, KV-event routing, and OpenShift/Thanos
+behavior.
+
 ### Quick Start
 
 ```bash

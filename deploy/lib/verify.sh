@@ -11,14 +11,19 @@ verify_deployment() {
 
     local all_good=true
 
-    # --- WVA
-    log_info "Checking WVA controller pods..."
     sleep "$DEFAULT_VERIFY_STARTUP_SLEEP_SECONDS"
-    if kubectl get pods -n "$WVA_NS" -l "$WVA_CONTROLLER_LABEL_SELECTOR" 2>/dev/null | grep -q Running; then
-        log_success "WVA controller is running"
+
+    # --- WVA
+    if [ "${DEPLOY_WVA:-true}" = "true" ]; then
+        log_info "Checking WVA controller pods..."
+        if kubectl get pods -n "$WVA_NS" -l "$WVA_CONTROLLER_LABEL_SELECTOR" 2>/dev/null | grep -q Running; then
+            log_success "WVA controller is running"
+        else
+            log_warning "WVA controller may still be starting"
+            all_good=false
+        fi
     else
-        log_warning "WVA controller may still be starting"
-        all_good=false
+        log_info "Skipping WVA controller verification (DEPLOY_WVA=false)"
     fi
 
     # --- Monitoring

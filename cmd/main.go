@@ -105,6 +105,11 @@ func main() {
 	configFilePath := flag.String("config-file", "", "Path to the YAML configuration file. "+
 		"When set, the main configuration is read from this file instead of a Kubernetes ConfigMap.")
 
+	disableCRDAutoRestart := flag.Bool("disable-crd-auto-restart", false,
+		"Disable automatically restarting the controller when an optional CRD (KEDA ScaledObject or "+
+			"LeaderWorkerSet) is installed after startup. When set, enabling support for a CRD installed "+
+			"later requires a manual controller restart.")
+
 	flag.String("metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -196,6 +201,12 @@ func main() {
 		setupLog.Info("OpenTelemetry tracing disabled (set OTEL_TRACES_EXPORTER to enable)")
 	}
 
+	restartNote := "support requires a controller restart, which happens automatically if the CRD is installed later"
+	if *disableCRDAutoRestart {
+		restartNote = "support requires a manual controller restart after the CRD is installed " +
+			"(automatic restart disabled via --disable-crd-auto-restart)"
+	}
+
 	// Conditionally add LeaderWorkerSet scheme if CRD exists
 	lwsEnabled := crd.CheckLeaderWorkerSetCRD(restConfig, setupLog)
 	if lwsEnabled {
@@ -205,7 +216,7 @@ func main() {
 		}
 		setupLog.Info("LeaderWorkerSet CRD detected - support enabled")
 	} else {
-		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
+		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode); " + restartNote)
 	}
 
 	// Detect KEDA for annotation-based ScaledObject discovery
@@ -213,11 +224,26 @@ func main() {
 	if kedaEnabled {
 		setupLog.Info("KEDA ScaledObject CRD detected - annotation-based ScaledObject discovery enabled")
 	} else {
-		setupLog.Info("KEDA ScaledObject CRD not found - annotation-based discovery limited to HPAs")
+		setupLog.Info("KEDA ScaledObject CRD not found - annotation-based discovery limited to HPAs; " + restartNote)
 	}
 	// Gate the pod locator's ScaledObject lookups on KEDA availability. Set before
 	// the saturation engine goroutine constructs its locator.
 	locator.SetKEDAEnabled(kedaEnabled)
+
+	crdTargets := []crd.Target{
+		{
+			CRDName:       "leaderworkersets.leaderworkerset.x-k8s.io",
+			GroupVersion:  "leaderworkerset.x-k8s.io/v1",
+			Kind:          "LeaderWorkerSet",
+			PresentAtBoot: lwsEnabled,
+		},
+		{
+			CRDName:       "scaledobjects.keda.sh",
+			GroupVersion:  "keda.sh/v1alpha1",
+			Kind:          "ScaledObject",
+			PresentAtBoot: kedaEnabled,
+		},
+	}
 
 	tlsOpts := []func(*tls.Config){
 		func(c *tls.Config) {
@@ -639,6 +665,14 @@ func main() {
 		setupLog.Info("Coordinator disabled (experimental feature; set EXPERIMENTAL_COORDINATOR_ENABLED=true to enable)")
 	}
 
+	if *disableCRDAutoRestart {
+		setupLog.Info("Automatic restart on post-startup CRD installation is disabled " +
+			"(--disable-crd-auto-restart); install-then-restart must be performed manually")
+	} else if err := mgr.Add(crd.NewWatcher(restConfig, crdTargets)); err != nil {
+		setupLog.Error(err, "unable to add CRD watcher to manager")
+		os.Exit(1)
+	}
+
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")
 		if err := mgr.Add(metricsCertWatcher); err != nil {
@@ -690,6 +724,10 @@ func main() {
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		if errors.Is(err, crd.ErrRestartRequired) {
+			setupLog.Info("restarting to enable support for a CRD installed after startup", "reason", err.Error())
+			os.Exit(1)
+		}
 		setupLog.Error(err, "problem running manager")
 		flushTracing()
 		os.Exit(1)
