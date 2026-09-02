@@ -38,4 +38,12 @@ const (
 	// MediumOutputThreshold is the upper bound (exclusive) for the "medium"
 	// output-length bucket used for k2 history keying.
 	MediumOutputThreshold = 500
+
+	// ShortInputThreshold and MediumInputThreshold bucket prompt lengths. They are
+	// separate from the output thresholds because prompts are an order of magnitude
+	// longer: bucketing input at 100/500 would put almost every real workload in one
+	// bucket, so a 600-token prompt and a 4000-token one would calibrate each other's
+	// ceiling despite being different services on the same hardware.
+	ShortInputThreshold  = 500
+	MediumInputThreshold = 2000
 )

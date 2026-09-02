@@ -1114,3 +1114,94 @@ var _ = Describe("namespace constraint merge helpers", func() {
 		})
 	})
 })
+
+// The scale-down floor. Round 1 of the rate-anchored validation shed a variant from
+// two replicas to one while arrivals were unchanged and the pair was serving them
+// comfortably, and the token-space figures could not see it: demand in resident
+// tokens is measured at the current replica count and does not survive the removal
+// being evaluated.
+var _ = Describe("Service-rate floor on scale-down", func() {
+	variant := func(name string, mu, lambda float64) domain.VariantCapacity {
+		return domain.VariantCapacity{
+			VariantName:           name,
+			Role:                  domain.RoleBoth,
+			PerReplicaCapacity:    320_000,
+			ServiceRatePerReplica: mu,
+			ArrivalRate:           lambda,
+		}
+	}
+
+	shed := func(variants []domain.VariantCapacity, targets map[string]int, want int) map[string]int {
+		scaleDownVariantSet(context.Background(), variants, targets, nil, honorRateFloor, 0.6,
+			func(vc domain.VariantCapacity) int { return want },
+			func(vc domain.VariantCapacity, n int) {})
+		return targets
+	}
+
+	It("refuses to shed below what arrivals require", func() {
+		// lambda = 24 req/s, boundary 0.60, mu = 19.5 => the role needs 40 req/s of
+		// service rate, which two replicas (39) barely miss and one (19.5) misses by
+		// half. The token model asked for one; this must hold at two.
+		targets := shed([]domain.VariantCapacity{variant("v1", 19.5, 24)},
+			map[string]int{"v1": 2}, 1)
+		Expect(targets["v1"]).To(Equal(2))
+	})
+
+	It("still sheds what the rates say is genuinely spare", func() {
+		// Four replicas against the same 40 req/s requirement: 78 available, 38 spare,
+		// and a replica is worth 19.5 — so exactly one can go. Two would leave 39,
+		// under the requirement, and the floor stops at one even though the caller
+		// asked for two.
+		targets := shed([]domain.VariantCapacity{variant("v1", 19.5, 24)},
+			map[string]int{"v1": 4}, 2)
+		Expect(targets["v1"]).To(Equal(3))
+	})
+
+	It("constrains the aggregate, not each variant, across a role", func() {
+		// Two variants on different hardware serving one stream. Shedding from the
+		// expensive one is fine while the cheap one still covers the requirement —
+		// the cost ordering decides which, the floor only decides how many.
+		fast := variant("fast", 30, 30)
+		fast.Cost = 100
+		slow := variant("slow", 10, 10)
+		slow.Cost = 10
+		targets := shed([]domain.VariantCapacity{fast, slow},
+			map[string]int{"fast": 2, "slow": 2}, 2)
+		// Available 80 against a requirement of 66.7 leaves 13.3 spare. A fast replica
+		// is worth 30 and cannot be given up; a slow one is worth 10 and can. So the
+		// expensive variant is held and the cheap one sheds — the floor inverting the
+		// cost preference, which is correct: you cannot remove capacity you need just
+		// because it is the capacity you would rather not pay for.
+		Expect(targets["fast"]).To(Equal(2))
+		Expect(targets["slow"]).To(Equal(1))
+	})
+
+	It("does nothing when any variant holding replicas has no measured rate", func() {
+		// Partial knowledge understates what the role can serve, which would hold
+		// replicas that are not needed. Treated as no knowledge.
+		known := variant("known", 19.5, 24)
+		unknown := variant("unknown", 0, 0)
+		targets := shed([]domain.VariantCapacity{known, unknown},
+			map[string]int{"known": 2, "unknown": 2}, 1)
+		Expect(targets["known"]).To(Equal(1))
+		Expect(targets["unknown"]).To(Equal(1))
+	})
+
+	It("yields to GPU rebalancing, which is what prioritisation means", func() {
+		// Same state the first case holds at two replicas — but this caller is
+		// reclaiming GPUs for a model that needs them more, and the floor is a safety
+		// net for a decision nobody asked for, not a veto over one that was.
+		targets := map[string]int{"v1": 2}
+		scaleDownVariantSet(context.Background(),
+			[]domain.VariantCapacity{variant("v1", 19.5, 24)}, targets, nil, overrideRateFloor, 0.6,
+			func(vc domain.VariantCapacity) int { return 1 },
+			func(vc domain.VariantCapacity, n int) {})
+		Expect(targets["v1"]).To(Equal(1))
+	})
+
+	It("does nothing when the estimator is off", func() {
+		targets := shed([]domain.VariantCapacity{variant("v1", 0, 0)},
+			map[string]int{"v1": 3}, 2)
+		Expect(targets["v1"]).To(Equal(1), "unchanged from the token-space decision")
+	})
+})

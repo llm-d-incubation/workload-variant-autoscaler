@@ -54,6 +54,19 @@ const (
 	// Source: vllm:kv_cache_usage_perc (gauge)
 	QueryKvUsageInstant = "kv_usage_instant"
 
+	// QueryQueueLengthInstant is the query name for the instantaneous count of
+	// requests waiting on a replica, as opposed to QueryQueueLength which is that
+	// count's peak over the last minute.
+	QueryQueueLengthInstant = "queue_length_instant"
+
+	// QueryPromptTokenRate is the query name for per-pod prompt-processing rate, the
+	// service rate of a prefill replica.
+	QueryPromptTokenRate = "prompt_token_rate"
+
+	// QueryInferenceTime is the query name for average time a request spends being
+	// served, excluding time queued. vLLM only — see inferenceTimeQuery.
+	QueryInferenceTime = "inference_time"
+
 	// QueryRequestRate is the query name for the engine-side request completion
 	// rate per pod (req/s), derived from the generation tokens histogram count.
 	// It is engine-agnostic: the vLLM variant reads
@@ -129,33 +142,11 @@ func RegisterThroughputAnalyzerQueries(sourceRegistry *source.SourceRegistry) {
 		Description: "Observed generation (decode) token rate per pod (tokens/sec), proxy for μ_dec^obs",
 	})
 
-	// Per-pod instantaneous KV cache utilization (0.0–1.0).
-	// Does NOT use max_over_time: the throughput analyzer needs the current
-	// operating point k*, not the worst-case peak used by the saturation analyzer.
-	// Preserves instance (IP:port for composite key), pod (for pod lookup),
-	// and llm_d_ai_variant (for direct pod-to-VA mapping).
-	registry.MustRegister(source.QueryTemplate{
-		Name:        QueryKvUsageInstant,
-		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod, llm_d_ai_variant) (vllm:kv_cache_usage_perc{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
-		Description: "Instantaneous KV cache utilization per pod (0.0–1.0), used as k* in the ITL model",
-	})
-
-	// Per-pod vLLM request completion rate (req/s).
-	// Derived from the generation tokens histogram _count (increments once per
-	// completed request). Used as a fallback for λ_dec when EPP/scheduler metrics
-	// are unavailable; per variant V, the analyzer falls back to:
-	//   λ_dec_fallback = Σ_{r∈V}(RequestRate_r × AvgOutputTokens_r)
-	// Preserves instance (IP:port for composite key), pod (for pod lookup),
-	// and llm_d_ai_variant (for direct pod-to-VA mapping).
-	registry.MustRegister(source.QueryTemplate{
-		Name:        QueryRequestRate,
-		Type:        source.QueryTypePromQL,
-		Template:    `sum by (instance, pod, llm_d_ai_variant) (rate(vllm:request_generation_tokens_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
-		Description: "vLLM request completion rate per pod (req/s); fallback for λ_dec when EPP metrics are unavailable",
-	})
+	// Shared with the V2 saturation analyzer's rate-anchored capacity estimator,
+	// which registers them unconditionally. Whichever registrar runs first wins;
+	// the second is a no-op. See registration/rate_capacity.go.
+	registerIfAbsent(registry, kvUsageInstantQuery())
+	registerIfAbsent(registry, requestRateQuery())
 
 	// Model-level request arrival rate (requests/sec), summed across the whole
 	// model. Same status="success" filter as QuerySchedulerDispatchRate, but
@@ -187,21 +178,6 @@ func registerSGLangThroughputAnalyzerQueries(registry *source.QueryList) {
 		Description: "Observed generation (decode) token rate per pod (tokens/sec), proxy for μ_dec^obs (SGLang)",
 	})
 
-	// Per-pod instantaneous KV cache utilization (0.0-1.0), no max_over_time.
-	registerForEngine(registry, inferenceengine.EngineSGLang, source.QueryTemplate{
-		Name:        QueryKvUsageInstant,
-		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod, llm_d_ai_variant) (sglang:token_usage{namespace="{{.namespace}}",model_name="{{.modelID}}"})`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
-		Description: "Instantaneous KV cache utilization per pod (0.0-1.0), used as k* in the ITL model (SGLang)",
-	})
-
-	// Per-pod request completion rate (req/s) from the generation histogram count.
-	registerForEngine(registry, inferenceengine.EngineSGLang, source.QueryTemplate{
-		Name:        QueryRequestRate,
-		Type:        source.QueryTypePromQL,
-		Template:    `sum by (instance, pod, llm_d_ai_variant) (rate(sglang:generation_tokens_histogram_count{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))`,
-		Params:      []string{source.ParamNamespace, source.ParamModelID},
-		Description: "Request completion rate per pod (req/s); fallback for λ_dec when EPP metrics are unavailable (SGLang)",
-	})
+	registerForEngineIfAbsent(registry, inferenceengine.EngineSGLang, sglangKvUsageInstantQuery())
+	registerForEngineIfAbsent(registry, inferenceengine.EngineSGLang, sglangRequestRateQuery())
 }

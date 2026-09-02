@@ -10,17 +10,23 @@ const learnedFromLive = "live"
 type k2Source int
 
 const (
-	k2SrcObserved   k2Source = iota + 1 // queue saturated: tokensInUse
-	k2SrcHistorical                     // rolling average from prior observations
-	k2SrcDerived                        // estimated from deployment args
-	k2SrcFallback                       // fallback to k1 (memory-bound)
+	k2SrcObserved      k2Source = iota + 1 // queue saturated: tokensInUse
+	k2SrcHistorical                        // rolling average from prior observations
+	k2SrcDerived                           // estimated from deployment args
+	k2SrcFallback                          // fallback to k1 (memory-bound)
+	k2SrcRateAnchored                      // rate-anchored: carrying the bucket's learned token ceiling
+	k2SrcRateBacklog                       // rate-anchored: at its limit this cycle
+	k2SrcRateResidence                     // rate-anchored: ceiling scaled to this cycle's operating point
 )
 
 var k2Labels = map[k2Source]string{
-	k2SrcObserved:   "P1-obs",
-	k2SrcHistorical: "P2-hist",
-	k2SrcDerived:    "P3-k2",
-	k2SrcFallback:   "P4-k1",
+	k2SrcObserved:      "P1-obs",
+	k2SrcHistorical:    "P2-hist",
+	k2SrcDerived:       "P3-k2",
+	k2SrcFallback:      "P4-k1",
+	k2SrcRateAnchored:  "RATE-learned",
+	k2SrcRateBacklog:   "RATE-now",
+	k2SrcRateResidence: "RATE-W",
 }
 
 const (
@@ -44,7 +50,12 @@ type ReplicaCapacity struct {
 	ComputeBoundCapacity  int64    // k2: compute/scheduling-limited capacity
 	K2Priority            k2Source // how k2 was computed
 	EffectiveCapacity     int64    // min(k1, k2)
-	IsSaturated           bool
+	// ServiceRate is the bucket's measured requests per second per replica, or 0
+	// when nothing has been calibrated. Carried per replica only because this is
+	// where the bucket key is already in hand; every replica of a variant reports
+	// the same figure.
+	ServiceRate float64
+	IsSaturated bool
 	// ReplicaDemand is the replica's resident KV tokens — TokensInUse on the main
 	// path, kvCacheUsage * effectiveCapacity on the fallback path — plus the
 	// role-aware waiting-queue footprint: queueLength * avgInputTokens for
@@ -62,6 +73,21 @@ type ReplicaCapacity struct {
 //	"short"  — avgOutput in [0, 100)
 //	"medium" — avgOutput in [100, 500)
 //	"long"   — avgOutput >= 500
+
+// classifyInputLength buckets a prompt length. Separate from classifyOutputLength
+// because the two distributions differ by an order of magnitude — see the threshold
+// constants.
+func classifyInputLength(avgInputTokens float64) string {
+	switch {
+	case avgInputTokens < ShortInputThreshold:
+		return "short"
+	case avgInputTokens < MediumInputThreshold:
+		return "medium"
+	default:
+		return "long"
+	}
+}
+
 func classifyOutputLength(avgOutputTokens float64) string {
 	switch {
 	case avgOutputTokens < ShortOutputThreshold:

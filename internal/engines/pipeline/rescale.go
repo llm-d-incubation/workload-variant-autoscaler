@@ -406,7 +406,9 @@ func reclaimRole(
 ) {
 	remaining := deltaGPUs
 	sorted := sortVariantsForScaleDown(s, variantsForRole(variants, role))
-	scaleDownVariantSet(ctx, sorted, targets, stateMap,
+	// Prioritisation wins here: this reclaim exists because another model needs the
+	// GPUs more, and the service-rate floor must not veto that.
+	scaleDownVariantSet(ctx, sorted, targets, stateMap, overrideRateFloor, 0,
 		func(vc domain.VariantCapacity) int {
 			g := gpusPerReplicaFromState(stateMap, vc.VariantName)
 			if remaining <= 0 || g <= 0 {

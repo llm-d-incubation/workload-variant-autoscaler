@@ -31,6 +31,8 @@ var EngineSpecificQueries = []string{
 	QueryAvgITL,
 	QueryGenerationTokenRate,
 	QueryKvUsageInstant,
+	QueryQueueLengthInstant,
+	QueryPromptTokenRate,
 	QueryRequestRate,
 	QueryModelRequestCount,
 }

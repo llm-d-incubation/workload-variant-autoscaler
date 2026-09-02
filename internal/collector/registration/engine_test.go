@@ -38,6 +38,7 @@ var _ = Describe("SGLang query registration", func() {
 		RegisterSaturationQueries(registry)
 		RegisterQueueingModelQueries(registry)
 		RegisterThroughputAnalyzerQueries(registry)
+		RegisterRateCapacityQueries(registry)
 		RegisterScaleToZeroQueries(registry)
 	})
 

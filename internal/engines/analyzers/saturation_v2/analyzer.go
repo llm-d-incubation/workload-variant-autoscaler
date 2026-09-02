@@ -26,15 +26,76 @@ type SaturationAnalyzer struct {
 	// TODO: check if we need to use other model parameters as key in the future.
 	computeCapacityHistory map[string]*rollingAverage
 	capacityStore          *CapacityKnowledgeStore
+
+	// serviceRates holds what has been learned per workload bucket for the
+	// rate-anchored k2 estimator: the service rate under backlog and the token
+	// ceiling measured at the limit. Nil unless that estimator is enabled, which is
+	// what keeps the occupancy-based path byte-identical when the flag is off.
+	serviceRates *bucketStore
+	// arrivals smooths per-replica arrival rates over a residence time so they are
+	// comparable with the completion-derived service rate. Allocated with
+	// serviceRates.
+	arrivals *arrivalSmoother
+	// arrivalPeaks holds each variant's summed arrival rate at its maximum over a
+	// short window, so the floor cannot be weakened by the measurement artefact a
+	// scale-down itself produces. Allocated with serviceRates.
+	arrivalPeaks *peakWindow
+	// clock is time.Now in production. The rate-anchored estimator weights its
+	// averages by the real gap between cycles, so tests that drive several cycles in
+	// a row need to advance time to exercise it at all.
+	clock func() time.Time
+}
+
+// Option configures a SaturationAnalyzer at construction.
+type Option func(*SaturationAnalyzer)
+
+// withRateAnchoredK2 selects the rate-anchored compute-capacity estimator. It is
+// unexported on purpose: the switch is EnableRateAnchoredK2, a build-time constant
+// in rate_capacity.go, not an operator-facing setting. Tests use this to exercise
+// the estimator while the constant is off.
+func withRateAnchoredK2(enabled bool) Option { //nolint:unparam // tests pass true; the parameter documents the switch
+	return func(a *SaturationAnalyzer) {
+		if enabled {
+			a.serviceRates = newBucketStore()
+			a.arrivals = newArrivalSmoother()
+			a.arrivalPeaks = newPeakWindow()
+		}
+	}
+}
+
+// withClock replaces time.Now for tests that need to drive successive cycles.
+func withClock(clock func() time.Time) Option {
+	return func(a *SaturationAnalyzer) {
+		a.clock = clock
+	}
+}
+
+// now reads the analyzer's clock, tolerating a zero value so an analyzer built
+// without the constructor still works.
+func (a *SaturationAnalyzer) now() time.Time {
+	if a.clock == nil {
+		return time.Now()
+	}
+	return a.clock()
 }
 
 // NewSaturationAnalyzer creates a new V2 saturation analyzer backed by the
 // given capacity store.
-func NewSaturationAnalyzer(store *CapacityKnowledgeStore) *SaturationAnalyzer {
-	return &SaturationAnalyzer{
+func NewSaturationAnalyzer(store *CapacityKnowledgeStore, opts ...Option) *SaturationAnalyzer {
+	a := &SaturationAnalyzer{
 		computeCapacityHistory: make(map[string]*rollingAverage),
 		capacityStore:          store,
+		clock:                  time.Now,
 	}
+	if EnableRateAnchoredK2 {
+		a.serviceRates = newBucketStore()
+		a.arrivals = newArrivalSmoother()
+		a.arrivalPeaks = newPeakWindow()
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // Name returns the analyzer identifier for logging and result metadata.
@@ -77,6 +138,20 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input domain.AnalyzerI
 		rolesByVariant[vs.VariantName] = vs.Role
 	}
 
+	// Fold what last cycle observed and publish this cycle's operating point before
+	// any replica is looked at — see BeginCycle.
+	if a.serviceRates != nil {
+		a.serviceRates.BeginCycle(a.now())
+	}
+
+	// The request shape that keys a workload bucket is a property of the variant, not
+	// of whichever replica happens to be reporting — see variantShape. Only the
+	// rate-anchored estimator consumes it, so with that off this costs nothing.
+	var shapes map[string]variantShape
+	if a.serviceRates != nil {
+		shapes = variantShapes(input.ReplicaMetrics)
+	}
+
 	// Phase 1: Per-replica capacity computation
 	replicaCapacities := make([]ReplicaCapacity, 0, len(input.ReplicaMetrics))
 	for _, rm := range input.ReplicaMetrics {
@@ -86,7 +161,8 @@ func (a *SaturationAnalyzer) Analyze(ctx context.Context, input domain.AnalyzerI
 		default:
 		}
 		gpuCount := gpusByVariant[rm.VariantName]
-		rc := a.computeReplicaCapacity(rm, satConfig, input.ModelID, input.Namespace, gpuCount, rolesByVariant[rm.VariantName])
+		rc := a.computeReplicaCapacity(rm, satConfig, input.ModelID, input.Namespace, gpuCount,
+			rolesByVariant[rm.VariantName], shapes[rm.VariantName])
 		if rc != nil {
 			replicaCapacities = append(replicaCapacities, *rc)
 		}
@@ -150,6 +226,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	modelID, namespace string,
 	gpuCount int,
 	role string,
+	shape variantShape,
 ) *ReplicaCapacity {
 	if rm.TotalKvCapacityTokens <= 0 {
 		// TODO: implement proper demand estimation when vllm:cache_config_info is absent.
@@ -181,10 +258,38 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		engineParams,
 		k1,
 	)
+	// Rate-anchored estimate takes precedence when enabled and answerable. It runs
+	// after computeK2 so the occupancy history keeps being maintained, which keeps
+	// the two estimators comparable in the same run.
+	//
+	// What it returns is a per-bucket ceiling measured at the limit, identical for
+	// every replica of the variant and stable across cycles — see rateAnchoredK2 for
+	// why anything per-replica or per-cycle was unusable downstream.
+	var rateReference int64
+	// One timestamp for the whole replica: everything computed here belongs to the
+	// same cycle, and reading the clock twice would place the two halves in different
+	// ones.
+	now := a.now()
+	if rateK2, ref, rateSrc, ok := a.rateAnchoredK2(rm, modelID, role, gpuCount, shape, k1,
+		config.QueueLengthThreshold, now); ok {
+		k2, rateReference, k2Priority = rateK2, ref, rateSrc
+	}
 
 	effectiveCapacity := k1
 	if k2 < k1 {
 		effectiveCapacity = k2
+	}
+
+	// What the store keeps is not what this cycle scaled on. The rate-anchored
+	// capacity moves with contention by design, while the store feeds variants with
+	// no live replicas and cross-variant estimation — both of which need the
+	// load-independent measurement.
+	storedCapacity := effectiveCapacity
+	if rateReference > 0 {
+		storedCapacity = k1
+		if rateReference < k1 {
+			storedCapacity = rateReference
+		}
 	}
 
 	isSaturated := replicaDemand >= effectiveCapacity
@@ -201,12 +306,13 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		NumGpuBlocks:          rm.NumGpuBlocks,
 		BlockSize:             rm.BlockSize,
 		TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
-		EffectiveCapacity:     effectiveCapacity,
+		EffectiveCapacity:     storedCapacity,
 		EngineParams:          existingParams,
 		LearnedFrom:           learnedFromLive,
 	})
 
 	return &ReplicaCapacity{
+		ServiceRate:           a.serviceRate(modelID, role, gpuCount, rm.AcceleratorName, shape, now),
 		PodName:               rm.PodName,
 		VariantName:           rm.VariantName,
 		AcceleratorName:       rm.AcceleratorName,
@@ -387,6 +493,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 		pendingCount := vs.PendingReplicas
 
 		var capacityLabel string
+		var serviceRatePerReplica float64
 		if len(replicas) > 0 {
 			// len(replicas) counts vLLM engine instances (DP ranks), not pods: a DP=8
 			// pod hosts 8 independently-capacitied instances. Using the pod count would
@@ -418,6 +525,17 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 				accelerator = replicas[0].AcceleratorName
 			}
 			capacityLabel = k2SourceLabel(replicas)
+			// The lowest figure across the variant's replicas, and zero if any replica
+			// has none. Taking whichever replica came first would have been
+			// order-dependent — ReplicaMetrics is built by ranging a map — and a
+			// replica reporting nothing means the variant is only partly measured,
+			// which the floor treats as not measured at all.
+			serviceRatePerReplica = replicas[0].ServiceRate
+			for _, rc := range replicas[1:] {
+				if rc.ServiceRate < serviceRatePerReplica {
+					serviceRatePerReplica = rc.ServiceRate
+				}
+			}
 		} else if rec := a.capacityStore.Get(namespace, modelID, vs.VariantName); rec != nil && rec.EffectiveCapacity > 0 {
 			// No ready replicas — use stored capacity, enhanced with k2 derivation
 			// for deployment-derived records when workload data is available.
@@ -431,6 +549,35 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			capacityLabel = satReasonNoData
 		}
 
+		// The rate-space pair the optimizer needs to evaluate a scale-down. Arrivals
+		// are summed over the variant's own replicas: they are what this variant is
+		// actually being asked to serve. Without EPP the dispatch rate is absent and
+		// completions stand in — a substitution that is only wrong under backlog,
+		// which is not a state anything is considering a scale-down in.
+		var arrivals float64
+		for _, rm := range inputMetrics {
+			if rm.VariantName != vs.VariantName {
+				continue
+			}
+			if rm.ArrivalRate > 0 {
+				arrivals += rm.ArrivalRate
+			} else {
+				// Same role-aware choice the service rate makes: a prefill replica
+				// completes few or no generations, so falling back to the generation
+				// rate would read its arrivals as zero and silently disable the floor
+				// for the role that needs it most.
+				arrivals += completionRate(rm, vs.Role)
+			}
+		}
+		// Held at its recent maximum: see ArrivalPeakWindow for why the sum dips
+		// precisely when a scale-down is in progress.
+		if a.arrivalPeaks != nil && arrivals > 0 {
+			arrivals = a.arrivalPeaks.Observe(namespace+"|"+modelID+"|"+vs.VariantName, arrivals, a.now())
+		}
+		if serviceRatePerReplica <= 0 || arrivals <= 0 {
+			serviceRatePerReplica, arrivals = 0, 0
+		}
+
 		totalCapacity := float64(replicaCount) * perReplicaCapacity
 
 		var utilization float64
@@ -439,6 +586,9 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 		}
 
 		result = append(result, domain.VariantCapacity{
+			ServiceRatePerReplica: serviceRatePerReplica,
+			ArrivalRate:           arrivals,
+
 			VariantName:        vs.VariantName,
 			AcceleratorName:    accelerator,
 			Cost:               cost,

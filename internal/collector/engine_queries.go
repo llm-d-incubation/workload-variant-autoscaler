@@ -29,14 +29,22 @@ var engineSpecificReplicaQueries = []string{
 	registration.QueryAvgITL,
 	registration.QueryGenerationTokenRate,
 	registration.QueryKvUsageInstant,
+	registration.QueryQueueLengthInstant,
+	registration.QueryPromptTokenRate,
 	registration.QueryRequestRate,
 }
 
 // agnosticReplicaQueries are the logical query names collected per replica whose
 // metric source is engine-independent (the EPP inference scheduler). They are
 // refreshed once and shared across engines.
+//
+// QueryInferenceTime sits here for a different reason: it is vLLM-only, and no engine
+// prefix is wanted for it. Listing it as engine-specific would oblige an SGLang form
+// that does not exist; left here, the bare query returns nothing on SGLang and the
+// analyzer derives the value instead.
 var agnosticReplicaQueries = []string{
 	registration.QuerySchedulerDispatchRate,
+	registration.QueryInferenceTime,
 }
 
 // buildEngineQueryList returns the physical query names to refresh for the given

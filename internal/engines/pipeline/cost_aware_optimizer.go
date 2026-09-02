@@ -105,6 +105,21 @@ func costGreedyRolePick(
 	return "", 0
 }
 
+// rateFloorPolicy says whether a scale-down must respect the service-rate floor.
+//
+// The routine optimizer honours it: shedding into a state arrivals cannot sustain is
+// the failure it exists to prevent. GPU rebalancing overrides it, because the whole
+// point of reclaiming a replica is that some other model needs the GPU more — a
+// variant refusing to give one up because its own traffic wants it is the argument
+// prioritisation exists to settle. The floor is a safety net for a decision nobody
+// asked for, not a veto over one that was.
+type rateFloorPolicy bool
+
+const (
+	honorRateFloor    rateFloorPolicy = true
+	overrideRateFloor rateFloorPolicy = false
+)
+
 // scaleDownVariantSet sheds replicas from sortedVariants (PRE-SORTED cost-desc,
 // cheapest last). minReplicas floor and cheapest-at-1 protection are enforced
 // here. maxRemovable returns how many replicas of vc the caller permits to remove;
@@ -114,10 +129,17 @@ func scaleDownVariantSet(
 	sortedVariants []domain.VariantCapacity,
 	targets map[string]int,
 	states map[string]domain.VariantReplicaState,
+	floorPolicy rateFloorPolicy,
+	boundary float64,
 	maxRemovable func(vc domain.VariantCapacity) int,
 	onRemove func(vc domain.VariantCapacity, n int),
 ) {
 	logger := ctrl.LoggerFrom(ctx)
+	var available, required float64
+	var rateKnown bool
+	if floorPolicy == honorRateFloor {
+		available, required, rateKnown = roleServiceRate(sortedVariants, targets, boundary)
+	}
 	for i, vc := range sortedVariants {
 		if vc.PerReplicaCapacity <= 0 {
 			continue
@@ -137,6 +159,26 @@ func scaleDownVariantSet(
 		if n > removable {
 			n = removable
 		}
+		// Rate floor: shedding must not take the role's aggregate service rate below
+		// what arrivals require. The token-space figures cannot answer this, because
+		// demand in resident tokens is measured at the current replica count and does
+		// not survive the removal being evaluated — residence rises, occupancy per
+		// replica rises with it, and past a point a queue appears from nothing.
+		// Arrivals do not move when replicas do, so the same question asked in rate
+		// space has an answer that holds. Only the aggregate is constrained; which
+		// variant gives up a replica is still the cost ordering's decision.
+		if rateKnown && vc.ServiceRatePerReplica > 0 {
+			affordable := int((available - required) / vc.ServiceRatePerReplica)
+			if affordable < 0 {
+				affordable = 0
+			}
+			if n > affordable {
+				logger.V(logging.DEBUG).Info("scale-down: held by service-rate floor",
+					"variant", vc.VariantName, "wanted", n, "allowed", affordable,
+					"availableRate", available, "requiredRate", required)
+				n = affordable
+			}
+		}
 		// cheapest-at-1: the last (cheapest) variant is protected at 1 only when no
 		// more-expensive variant still holds replicas (#1237's positional rule).
 		if i == len(sortedVariants)-1 && current-n < 1 && !anyHasReplicas(sortedVariants[:i], targets) {
@@ -146,10 +188,51 @@ func scaleDownVariantSet(
 			continue
 		}
 		targets[vc.VariantName] = current - n
+		available -= float64(n) * vc.ServiceRatePerReplica
 		onRemove(vc, n)
 		logger.V(logging.DEBUG).Info("scale-down: removed replicas",
 			"variant", vc.VariantName, "removed", n, "cost", vc.Cost)
 	}
+}
+
+// roleServiceRate sums what this role's variants can serve and what their arrivals
+// require, and reports whether the figures are complete enough to act on.
+//
+// Completeness matters: a variant holding replicas without a calibrated service rate
+// contributes nothing to the available side while its traffic still counts on the
+// required side, which would understate the role and hold replicas that are not
+// needed. Partial knowledge is treated as no knowledge.
+func roleServiceRate(variants []domain.VariantCapacity, targets map[string]int,
+	boundary float64) (available, required float64, known bool) {
+	if boundary <= 0 {
+		return 0, 0, false
+	}
+	var arrivals float64
+	for _, vc := range variants {
+		n := targets[vc.VariantName]
+		if n <= 0 {
+			continue
+		}
+		if vc.ServiceRatePerReplica <= 0 {
+			return 0, 0, false
+		}
+		available += float64(n) * vc.ServiceRatePerReplica
+		arrivals += vc.ArrivalRate
+	}
+	return available, arrivals / boundary, arrivals > 0
+}
+
+// scaleDownBoundaryOf returns the resolved scale-down boundary the engine used. It is
+// taken from the analyzer results rather than from configuration because a per-analyzer
+// override makes the global value the wrong one, and the resolved figure is what
+// produced the spare-capacity numbers this loop is acting on.
+func scaleDownBoundaryOf(s []NamedAnalyzerResult) float64 {
+	for _, nr := range s {
+		if nr.ScaleDownBoundary > 0 {
+			return nr.ScaleDownBoundary
+		}
+	}
+	return 0
 }
 
 // sortVariantsForScaleDown orders a role's variants for cost-greedy scale-down:
@@ -441,7 +524,7 @@ func scaleDownRoleIterated(
 			continue
 		}
 		sorted := sortVariantsForScaleDown(s, roleVCs)
-		scaleDownVariantSet(ctx, sorted, targets, states,
+		scaleDownVariantSet(ctx, sorted, targets, states, honorRateFloor, scaleDownBoundaryOf(s),
 			func(vc domain.VariantCapacity) int {
 				return safeRemovalReplicasForRole(s, vc.VariantName, role)
 			},

@@ -302,6 +302,11 @@ func NewEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 	// when V1 is active — they're just query templates with no runtime cost.
 	registration.RegisterSaturationQueries(metricsRegistry)
 
+	// Per-pod completion rate and instantaneous KV utilization. Registered
+	// unconditionally: the rate-anchored capacity estimator needs them and must
+	// not depend on the throughput analyzer being enabled.
+	registration.RegisterRateCapacityQueries(metricsRegistry)
+
 	// Register scale-to-zero queries in the metrics registry
 	registration.RegisterScaleToZeroQueries(metricsRegistry)
 
