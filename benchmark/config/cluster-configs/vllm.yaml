@@ -1,0 +1,181 @@
+# BACKEND OVERLAY — real vLLM on GPU
+# Apply with: --cluster-config benchmark/config/cluster-configs/vllm.yaml
+#
+# Priority backend. Runs the real vLLM serving stack on GPUs with NixlConnector
+# P/D KV transfer, mirroring the upstream llm-d pd-disaggregation guide. Native
+# vllm: Prometheus metrics drive the scenario's KEDA scaling strategy unchanged.
+#
+# This is a STARTING POINT for a real GPU cluster; tune for your hardware:
+#   - accelerator.count / decode.parallelism.tensor (TP size)
+#   - decode/prefill resources (GPU memory, CPU)
+#   - affinity.nodeSelector (GPU product label)
+#   - model (swap facebook/opt-125m for a larger model as capacity allows)
+#
+# Merge note: dicts deep-merge, lists replace wholesale. `vllmCommon.volumes`
+# below fully replaces the scenario's shared-memory-only list (adds shared-config
+# required by the preprocess initContainer). This overlay never sets `keda`.
+
+# GPU scheduling. Uncomment nodeSelector to pin to a GPU product.
+affinity:
+  enabled: false
+  # enabled: true
+  # nodeSelector:
+  #   nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3   # OpenShift
+  #   # gpu.nvidia.com/model: H200                     # Kubernetes
+  #   # cloud.google.com/gke-accelerator: nvidia-h100-80gb  # GKE
+
+accelerator:
+  count: 1
+  profile: auto
+  resource: auto
+
+model:
+  gpuMemoryUtilization: 0.90
+  blockSize: 128
+
+images:
+  vllm:
+    repository: ghcr.io/llm-d/llm-d-cuda
+    tag: auto
+
+# shared-config carries llmdbench_env.sh written by the preprocess initContainer;
+# dshm is vLLM's shared-memory scratch. Replaces the scenario's dshm-only list.
+vllmCommon:
+  networkResource: "auto"
+  networkNr: "1"
+  volumes:
+    - name: shared-config
+      type: emptyDir
+      emptyDir: {}
+    - name: dshm
+      type: emptyDir
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  volumeMounts:
+    - name: shared-config
+      mountPath: /shared-config
+    - name: dshm
+      mountPath: /dev/shm
+
+decode:
+  accelerator:
+    count: 1
+  parallelism:
+    tensor: 1
+    data: 1
+    dataLocal: 1
+    workers: 1
+  resources:
+    limits:
+      memory: 32Gi
+      cpu: "8"
+    requests:
+      memory: 32Gi
+      cpu: "8"
+  initContainers:
+    - name: preprocess
+      imageKey: benchmark
+      imagePullPolicy: Always
+      command: ["set_llmdbench_environment.py", "-e", "/shared-config/llmdbench_env.sh", "-i"]
+      volumeMounts:
+        - name: shared-config
+          mountPath: /shared-config
+  extraEnvVars:
+    - name: NVSHMEM_DEBUG
+      value: "none"
+    - name: NCCL_DEBUG
+      value: "WARN"
+    - name: NIXL_LOG_LEVEL
+      value: debug
+    - name: UCX_MAX_RMA_RAILS
+      value: "1"
+  extraContainerConfig:
+    securityContext:
+      capabilities:
+        add:
+          - "IPC_LOCK"
+          - "SYS_RAWIO"
+          - "NET_ADMIN"
+          - "NET_RAW"
+      runAsGroup: 0
+      runAsUser: 0
+    imagePullPolicy: Always
+  vllm:
+    customCommand: |
+      ${accelerator.runtimePreamble}
+      . /shared-config/llmdbench_env.sh
+      vllm serve /model-cache/$MODEL_PATH \
+      --host 0.0.0.0 \
+      --served-model-name $MODEL_NAME \
+      --port $VLLM_METRICS_PORT \
+      --block-size $VLLM_BLOCK_SIZE \
+      --max-model-len $VLLM_MAX_MODEL_LEN \
+      --tensor-parallel-size $TP_SIZE \
+      --gpu-memory-utilization $VLLM_ACCELERATOR_MEM_UTIL \
+      --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_both"${accelerator.kvBufferDeviceJson}}' \
+      --disable-uvicorn-access-log \
+      --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+      ${accelerator.dtypeArgs} \
+      ${accelerator.executionArgs}
+
+prefill:
+  accelerator:
+    count: 1
+  parallelism:
+    tensor: 1
+    data: 1
+    dataLocal: 1
+    workers: 1
+  resources:
+    limits:
+      memory: 32Gi
+      cpu: "8"
+    requests:
+      memory: 32Gi
+      cpu: "8"
+  initContainers:
+    - name: preprocess
+      imageKey: benchmark
+      imagePullPolicy: Always
+      command: ["set_llmdbench_environment.py", "-e", "/shared-config/llmdbench_env.sh", "-i"]
+      volumeMounts:
+        - name: shared-config
+          mountPath: /shared-config
+  extraEnvVars:
+    - name: NVSHMEM_DEBUG
+      value: "none"
+    - name: NCCL_DEBUG
+      value: "WARN"
+    - name: NIXL_LOG_LEVEL
+      value: debug
+    - name: UCX_MAX_RMA_RAILS
+      value: "1"
+  extraContainerConfig:
+    securityContext:
+      capabilities:
+        add:
+          - "IPC_LOCK"
+          - "SYS_RAWIO"
+          - "NET_ADMIN"
+          - "NET_RAW"
+      runAsGroup: 0
+      runAsUser: 0
+    imagePullPolicy: Always
+  vllm:
+    customCommand: |
+      ${accelerator.runtimePreamble}
+      . /shared-config/llmdbench_env.sh
+      vllm serve /model-cache/$MODEL_PATH \
+      --host 0.0.0.0 \
+      --served-model-name $MODEL_NAME \
+      --port $VLLM_INFERENCE_PORT \
+      --block-size $VLLM_BLOCK_SIZE \
+      --max-model-len $VLLM_MAX_MODEL_LEN \
+      --tensor-parallel-size $TP_SIZE \
+      --gpu-memory-utilization $VLLM_ACCELERATOR_MEM_UTIL \
+      --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_both"${accelerator.kvBufferDeviceJson}}' \
+      --disable-uvicorn-access-log \
+      --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+      ${accelerator.dtypeArgs} \
+      ${accelerator.executionArgs}

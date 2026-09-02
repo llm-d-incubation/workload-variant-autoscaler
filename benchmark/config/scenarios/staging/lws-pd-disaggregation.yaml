@@ -1,0 +1,282 @@
+# LWS P/D DISAGGREGATION — WIP autoscaling scenario (BACKEND-AGNOSTIC)
+# Multinode (LeaderWorkerSet) variant of the pd-disaggregation guide, mirroring
+# wide-ep-lws-nvidia-gpu-vllm-glm-5-2-v2-{prefill,decode-ll} topology.
+#
+# STAGING: exercised primarily with the inference-sim / vllm-sim-* backends; the
+# real-vLLM multinode path is not yet validated here.
+#
+# Backend-agnostic like scenarios/guides/pd-disaggregation.yaml — pick a backend
+# via `--cluster-config benchmark/config/cluster-configs/<backend>.yaml`.
+# Differences from the guide scenario:
+#   - multinode.enabled: true — deploys LeaderWorkerSet instead of Deployments
+#   - parallelism.workers: 2 — LWS group size (1 leader + 1 worker)
+#   - keda scaleTargetRef.kind: LeaderWorkerSet
+#   - podmonitor relabelings stamp a `role` label
+
+scenario:
+  - name: "lws-pd-disaggregation"
+
+    kustomize:
+      enabled: false
+      guideName: "pd-disaggregation"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}
+      patches: []
+
+    model:
+      name: Qwen/Qwen3-32B      # served model id + harness request/tokenizer; must equal huggingfaceId
+      shortName: qwen3-32b
+      path: models/Qwen/Qwen3-32B
+      huggingfaceId: Qwen/Qwen3-32B
+      maxModelLen: 16384
+      size: 2Gi
+
+    # =========================================================================
+    # MULTINODE (LWS)
+    # =========================================================================
+    multinode:
+      enabled: true
+
+    modelservice:
+      enabled: true
+
+      uriProtocol: hf
+
+      gateway:
+        className: epponly
+
+      routing:
+        connector: nixlv2
+
+      router:
+        epp:
+          replicas: 1
+          pluginsConfigFile: "pd-config.yaml"
+          pluginsCustomConfig:
+            pd-config.yaml: |
+              apiVersion: llm-d.ai/v1alpha1
+              kind: EndpointPickerConfig
+              plugins:
+              - type: disagg-headers-handler
+              - type: always-disagg-pd-decider
+              - type: disagg-profile-handler
+                parameters:
+                  deciderPluginName: always-disagg-pd-decider
+              - type: prefill-filter
+              - type: decode-filter
+              - type: prefix-cache-scorer
+              - type: queue-scorer
+              - type: kv-cache-utilization-scorer
+              - type: active-request-scorer
+              schedulingProfiles:
+              - name: prefill
+                plugins:
+                - pluginRef: prefill-filter
+                - pluginRef: prefix-cache-scorer
+                  weight: 3
+                - pluginRef: queue-scorer
+                  weight: 2
+                - pluginRef: kv-cache-utilization-scorer
+                  weight: 2
+              - name: decode
+                plugins:
+                - pluginRef: decode-filter
+                - pluginRef: active-request-scorer
+                  weight: 2
+                - pluginRef: prefix-cache-scorer
+                  weight: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        proxy:
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+        monitoring:
+          prometheus:
+            enabled: true
+
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+
+    decode:
+      replicas: 1
+      accelerator:
+        count: 1                 # per-role accelerator count; backend overlays override (0 for CPU sims)
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 2
+      extraContainerConfig:
+        ports:
+          - containerPort: 8200
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: decode
+            action: replace
+
+    prefill:
+      enabled: true
+      replicas: 1
+      accelerator:
+        count: 1                 # per-role accelerator count; backend overlays override (0 for CPU sims)
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 2
+      extraContainerConfig:
+        ports:
+          - containerPort: 8000
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: prefill
+            action: replace
+
+    standalone:
+      enabled: false
+
+    # =========================================================================
+    # SCALING STRATEGY (KEDA) — LeaderWorkerSet target, native vLLM metrics.
+    # =========================================================================
+    keda:
+      enabled: true
+      namespace: ""
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects:
+      - name: lws-pd-disaggregation-decode
+        scaleTargetRef:
+          apiVersion: leaderworkerset.x-k8s.io/v1
+          kind: LeaderWorkerSet
+          name: ${model.idLabel}-decode
+        minReplicas: 1
+        maxReplicas: 4
+        unsafeSsl: true
+        triggers:
+          - name: vllm-queue-size
+            type: prometheus
+            query: 'max(vllm:num_requests_waiting{model_name="${model.name}", role="decode"})'
+            threshold: "20"
+            metricType: AverageValue
+          - name: vllm-kv-utilization
+            type: prometheus
+            query: 'max(vllm:kv_cache_usage_perc{model_name="${model.name}", role="decode"})'
+            threshold: "0.95"
+            metricType: AverageValue
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 10
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 20
+          scaleDown:
+            stabilizationWindowSeconds: 10
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 20
+      - name: lws-pd-disaggregation-prefill
+        scaleTargetRef:
+          apiVersion: leaderworkerset.x-k8s.io/v1
+          kind: LeaderWorkerSet
+          name: ${model.idLabel}-prefill
+        minReplicas: 1
+        maxReplicas: 4
+        unsafeSsl: true
+        triggers:
+          - name: vllm-queue-size
+            type: prometheus
+            query: 'max(vllm:num_requests_waiting{model_name="${model.name}", role="prefill"})'
+            threshold: "20"
+            metricType: AverageValue
+          - name: vllm-kv-utilization
+            type: prometheus
+            query: 'max(vllm:kv_cache_usage_perc{model_name="${model.name}", role="prefill"})'
+            threshold: "0.95"
+            metricType: AverageValue
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 10
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 20
+          scaleDown:
+            stabilizationWindowSeconds: 10
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 20
+
+    vllmCommon:
+      shmMemory: 500Mi
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 500Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    storage:
+      workloadPvc:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+      modelPvc:
+        size: 2Gi
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+
+    timeouts:
+      controlWait: 300
+      harnessWait: 900000
+
+    workDir: "~/data/lws-pd-disaggregation"
+
+    harness:
+      name: inference-perf
+      experimentProfile: sanity_random.yaml
+      pvcSize: 3Gi
+      resources:
+        cpu: "1"
+        memory: 2Gi

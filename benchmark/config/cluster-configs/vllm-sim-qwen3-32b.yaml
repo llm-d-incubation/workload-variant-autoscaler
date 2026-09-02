@@ -1,0 +1,205 @@
+# BACKEND OVERLAY — vLLM CPU + latency-simulation plugin (no GPU), Qwen3-32B on H100 SXM5
+# Apply with: --cluster-config benchmark/config/cluster-configs/vllm-sim-qwen3-32b.yaml
+#
+# Priority backend. Runs the real vLLM serving stack on CPU with the model
+# forward pass replaced by github.com/lionelvillard/vllm-simulated-model, so
+# native vllm: Prometheus metrics are available for the scenario's KEDA strategy.
+#   - initContainer copies the plugin from ghcr.io/lionelvillard/vllm-sim-deps
+#     into /plugins; PYTHONPATH=/plugins loads SimulatedForCausalLM and
+#     SimulatedNixlConnector at vLLM startup.
+#   - SimulatedForCausalLM config.json is mounted from a ConfigMap at /model;
+#     vLLM reads it with --load-format=dummy (no weight download).
+#   - SimulatedNixlConnector simulates P/D KV-transfer latency (no tensor move).
+#
+# This overlay is model-specific: the config.json (architecture + physics latency
+# calibration) and the KV-cache sizing below are tuned for Qwen3-32B on H100 SXM5.
+# Copy this file and swap the config.json / sizing to model another model.
+#
+# Tokenizer note: `--tokenizer=Qwen/Qwen3-32B` downloads the tokenizer (~11 MB)
+# from HuggingFace on first run; internet access required (model is not gated).
+#
+# KV-cache sizing note: SimulatedForCausalLM builds real vLLM Attention layers, so
+# vLLM allocates a genuine KV cache. On CPU, vLLM ignores gpu_memory_utilization
+# and sizes the KV cache directly from VLLM_CPU_KVCACHE_SPACE (GiB) — model weights
+# are NOT loaded (dummy), so they do not consume it. To emulate an H100 80 GB card
+# serving Qwen3-32B we set it to (80 GB − weights):
+#   weights(bf16) = ~32.8 B params x 2 B ~= 65 GB  =>  KV ~= 80 - 65 = 15 GiB
+# (Real vLLM would also apply gpu_memory_utilization < 1.0 and subtract peak
+# activations, so live usable KV is somewhat lower; 15 GiB is an upper bound.)
+# Because this KV cache is real CPU RAM, the pod memory limit must exceed it:
+# 15 GiB KV + runtime/activation overhead => 20Gi.
+#
+# Merge note: dicts deep-merge, lists replace wholesale. This overlay never sets
+# `keda`.
+
+affinity:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+
+accelerator:
+  count: 0
+  memory: 80
+
+model:
+  gpuMemoryUtilization: 0.5
+
+images:
+  vllm:
+    repository: vllm/vllm-openai-cpu
+    tag: v0.27.0-x86_64
+
+decode:
+  mountModelVolume: false
+  accelerator:
+    count: 0
+  resources:
+    limits:
+      memory: 20Gi
+      cpu: "4"
+    requests:
+      memory: 20Gi
+      cpu: "4"
+  initContainers:
+    - name: install-plugin
+      image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+      imagePullPolicy: Always
+      command:
+        - sh
+        - -c
+        - cp -r /plugins/* /mnt/plugins/
+      volumeMounts:
+        - name: plugins
+          mountPath: /mnt/plugins
+  extraEnvVars:
+    - name: PYTHONPATH
+      value: "/plugins"
+    - name: VLLM_CPU_KVCACHE_SPACE
+      value: "15"
+    - name: VLLM_CPU_OMP_THREADS_BIND
+      value: "0-3"
+    - name: HF_HOME
+      value: "/tmp/huggingface"
+  additionalVolumeMounts:
+    - name: plugins
+      mountPath: /plugins
+    - name: vllm-sim-model-config
+      mountPath: /model
+      readOnly: true
+  additionalVolumes:
+    - name: plugins
+      type: emptyDir
+    - name: vllm-sim-model-config
+      type: configMap
+      configMap:
+        name: vllm-sim-model-config
+  vllm:
+    customCommand: >-
+      vllm serve /model
+      --tokenizer=Qwen/Qwen3-32B
+      --load-format=dummy
+      --max-model-len=8192
+      --host=0.0.0.0
+      --served-model-name=Qwen/Qwen3-32B
+      --port=$VLLM_METRICS_PORT
+      --gpu-memory-utilization=0.5
+      --enforce-eager
+      --no-enable-log-requests
+      --disable-uvicorn-access-log
+      --kv-transfer-config
+      '{"kv_connector":"SimulatedNixlConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"bandwidth_gbps":100,"handshake_ms":2}}'
+
+prefill:
+  mountModelVolume: false
+  accelerator:
+    count: 0
+  resources:
+    limits:
+      memory: 20Gi
+      cpu: "4"
+    requests:
+      memory: 20Gi
+      cpu: "4"
+  initContainers:
+    - name: install-plugin
+      image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+      imagePullPolicy: Always
+      command:
+        - sh
+        - -c
+        - cp -r /plugins/* /mnt/plugins/
+      volumeMounts:
+        - name: plugins
+          mountPath: /mnt/plugins
+  extraEnvVars:
+    - name: PYTHONPATH
+      value: "/plugins"
+    - name: VLLM_CPU_KVCACHE_SPACE
+      value: "15"
+    - name: VLLM_CPU_OMP_THREADS_BIND
+      value: "0-3"
+    - name: HF_HOME
+      value: "/tmp/huggingface"
+  additionalVolumeMounts:
+    - name: plugins
+      mountPath: /plugins
+    - name: vllm-sim-model-config
+      mountPath: /model
+      readOnly: true
+  additionalVolumes:
+    - name: plugins
+      type: emptyDir
+    - name: vllm-sim-model-config
+      type: configMap
+      configMap:
+        name: vllm-sim-model-config
+  vllm:
+    customCommand: >-
+      vllm serve /model
+      --tokenizer=Qwen/Qwen3-32B
+      --load-format=dummy
+      --max-model-len=8192
+      --host=0.0.0.0
+      --served-model-name=Qwen/Qwen3-32B
+      --port=$VLLM_INFERENCE_PORT
+      --gpu-memory-utilization=0.5
+      --enforce-eager
+      --no-enable-log-requests
+      --disable-uvicorn-access-log
+      --kv-transfer-config
+      '{"kv_connector":"SimulatedNixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"bandwidth_gbps":100,"handshake_ms":2}}'
+
+# SimulatedForCausalLM config.json (Qwen3-32B, physics latency calibrated for
+# H100 SXM5). vLLM reads it from /model.
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: vllm-sim-model-config
+    data:
+      config.json: |
+        {
+          "architectures": ["SimulatedForCausalLM"],
+          "model_type": "qwen3",
+          "hidden_size": 5120,
+          "num_hidden_layers": 64,
+          "num_attention_heads": 64,
+          "num_key_value_heads": 8,
+          "head_dim": 128,
+          "intermediate_size": 25600,
+          "vocab_size": 151936,
+          "max_position_embeddings": 40960,
+          "eos_token_id": 151645,
+          "torch_dtype": "bfloat16",
+          "latency": {
+            "type": "physics",
+            "hardware": {
+              "peak_tflops": 989.0,
+              "hbm_gbps": 3350.0,
+              "weight_dtype": "bfloat16"
+            },
+            "beta": [3.119229, 1.182904, 0.146612],
+            "tp": 1,
+            "deterministic_length": true
+          }
+        }
