@@ -76,6 +76,14 @@ patches:
     - op: replace
       path: /spec/endpoints/0/tlsConfig/insecureSkipVerify
       value: false
+    # serverName must match the SAN of the service-ca-issued serving cert, which
+    # is scoped to the metrics Service's actual namespace
+    # (wva-controller-manager-metrics-service.<namespace>.svc). The <namespace>
+    # segment below is only a placeholder: each openshift overlay rewrites it to
+    # its own deploy namespace via a `replacements` block, because the namespace
+    # is not known here at component-evaluation time. A stale literal here fails
+    # TLS verification and silently drops all wva_* metrics when WVA is deployed
+    # to any namespace other than the placeholder. See issue #1514.
     - op: add
       path: /spec/endpoints/0/tlsConfig/serverName
       value: wva-controller-manager-metrics-service.wva-system.svc
