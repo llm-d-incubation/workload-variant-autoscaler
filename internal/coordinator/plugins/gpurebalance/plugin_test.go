@@ -120,6 +120,28 @@ func makeGPUQuota(name, ns string, gpus int64) *corev1.ResourceQuota {
 	}
 }
 
+// makeScopedGPUQuota builds a ResourceQuota carrying a GPU limit that only
+// applies to the subset of pods selected by scope.
+func makeScopedGPUQuota(name, ns string, gpus int64, scope corev1.ResourceQuotaScope) *corev1.ResourceQuota {
+	rq := makeGPUQuota(name, ns, gpus)
+	rq.Spec.Scopes = []corev1.ResourceQuotaScope{scope}
+	return rq
+}
+
+// makeScopeSelectorGPUQuota builds a ResourceQuota carrying a GPU limit that
+// only applies to pods matching a scopeSelector.
+func makeScopeSelectorGPUQuota(name, ns string, gpus int64, priorityClass string) *corev1.ResourceQuota {
+	rq := makeGPUQuota(name, ns, gpus)
+	rq.Spec.ScopeSelector = &corev1.ScopeSelector{
+		MatchExpressions: []corev1.ScopedResourceSelectorRequirement{{
+			ScopeName: corev1.ResourceQuotaScopePriorityClass,
+			Operator:  corev1.ScopeSelectorOpIn,
+			Values:    []string{priorityClass},
+		}},
+	}
+	return rq
+}
+
 func newPlugin(t *testing.T, queues map[string]float64, errs map[string]error, objs ...client.Object) (*Plugin, client.Client) {
 	t.Helper()
 	scheme := newTestScheme(t)
@@ -714,5 +736,96 @@ func TestSetMaxReplicas_GivesUpAfterMaxRetries(t *testing.T) {
 	}
 	if got := getMaxReplicas(t, c, hpa); got != 5 {
 		t.Errorf("maxReplicas = %d, want 5 (unchanged)", got)
+	}
+}
+
+// TestNamespaceGPUQuota_MultipleQuotasUsesMinimum verifies that when a namespace
+// carries more than one GPU-bearing ResourceQuota the effective budget is the
+// smallest hard limit, since a pod must satisfy every applicable quota.
+func TestNamespaceGPUQuota_MultipleQuotasUsesMinimum(t *testing.T) {
+	// Names are chosen so that the larger quota sorts first in List order, which
+	// is what the previous first-match behaviour would have returned.
+	p, _ := newPlugin(t, nil, nil,
+		makeGPUQuota("a-large", "ns", 32),
+		makeGPUQuota("b-small", "ns", 8),
+	)
+
+	got, err := p.namespaceGPUQuota(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 8 {
+		t.Errorf("namespaceGPUQuota = %d, want 8 (minimum across quotas)", got)
+	}
+}
+
+// TestNamespaceGPUQuota_IgnoresScopedQuota verifies that a ResourceQuota
+// restricted by spec.scopes is not treated as the namespace-wide GPU budget.
+func TestNamespaceGPUQuota_IgnoresScopedQuota(t *testing.T) {
+	p, _ := newPlugin(t, nil, nil,
+		makeScopedGPUQuota("a-scoped", "ns", 4, corev1.ResourceQuotaScopeBestEffort),
+		makeGPUQuota("b-namespace-wide", "ns", 16),
+	)
+
+	got, err := p.namespaceGPUQuota(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 16 {
+		t.Errorf("namespaceGPUQuota = %d, want 16 (scoped quota must not lower the budget)", got)
+	}
+}
+
+// TestNamespaceGPUQuota_IgnoresScopeSelectorQuota is the spec.scopeSelector
+// counterpart of the spec.scopes case.
+func TestNamespaceGPUQuota_IgnoresScopeSelectorQuota(t *testing.T) {
+	p, _ := newPlugin(t, nil, nil,
+		makeScopeSelectorGPUQuota("a-scoped", "ns", 2, "high-priority"),
+		makeGPUQuota("b-namespace-wide", "ns", 12),
+	)
+
+	got, err := p.namespaceGPUQuota(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 12 {
+		t.Errorf("namespaceGPUQuota = %d, want 12 (scopeSelector quota must not lower the budget)", got)
+	}
+}
+
+// TestNamespaceGPUQuota_OnlyScopedQuotaYieldsNoBudget verifies that when every
+// GPU-bearing quota is scoped there is no namespace-wide budget to report, which
+// makes Tick skip the namespace rather than rebalance against a partial limit.
+func TestNamespaceGPUQuota_OnlyScopedQuotaYieldsNoBudget(t *testing.T) {
+	p, _ := newPlugin(t, nil, nil,
+		makeScopedGPUQuota("scoped", "ns", 4, corev1.ResourceQuotaScopeBestEffort),
+	)
+
+	got, err := p.namespaceGPUQuota(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("namespaceGPUQuota = %d, want 0 (only scoped quotas present)", got)
+	}
+}
+
+// TestNamespaceGPUQuota_IgnoresQuotasWithoutGPUField verifies that quotas which
+// do not constrain GPUs are not considered when computing the minimum.
+func TestNamespaceGPUQuota_IgnoresQuotasWithoutGPUField(t *testing.T) {
+	cpuOnly := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "a-cpu-only", Namespace: "ns"},
+		Spec: corev1.ResourceQuotaSpec{
+			Hard: corev1.ResourceList{corev1.ResourceCPU: *resource.NewQuantity(2, resource.DecimalSI)},
+		},
+	}
+	p, _ := newPlugin(t, nil, nil, cpuOnly, makeGPUQuota("b-gpu", "ns", 6))
+
+	got, err := p.namespaceGPUQuota(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 6 {
+		t.Errorf("namespaceGPUQuota = %d, want 6", got)
 	}
 }
